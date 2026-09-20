@@ -83,9 +83,12 @@ None of the contracts are deployed yet, and none have been audited. See
 Inspector runs eight checks against a token's contract: source verification, ownership,
 privileged functions (mint, blacklist, fee, limit, pause), proxy upgradeability, holder
 concentration, liquidity, liquidity lock, and reliance on `PREVRANDAO`. It reports "N of 8 checks
-pass" plus an evidence link per finding — never a numeric score. When a read fails (the explorer
-doesn't answer, a pool lookup times out), the affected check reads "unknown" rather than guessing
-pass or fail.
+pass" plus an evidence link per finding — never a numeric score — and, whenever some checks
+couldn't be resolved, says so explicitly ("5 of 8 checks pass · 3 couldn't be checked") rather than
+folding an unknown into either a pass or a fail. A missing or unreadable owner never turns a
+privileged function into a "can't be called" pass: if the contract has no `owner()`/`getOwner()`
+but does have privileged functions, both the ownership and privileges findings read "unknown", not
+"pass" — the same rule that applies to any other failed or missing read.
 
 ## Known limits
 
@@ -96,6 +99,9 @@ pass or fail.
   and Aerodrome aren't scanned yet.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
   indexer, which arrives with Radar.
+- A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
+  Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
+  the name.
 - Bridge offers EVM chains only (Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, and their
   testnets) — no Solana in R0, since that needs a second, non-EVM wallet adapter this app doesn't
   have. Bridge shows the source/burn/mint steps App Kit's settled result reports; it doesn't yet

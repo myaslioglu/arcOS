@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inFlightGate, rateLimiter } from "../rate-limit";
+import { clientKey, inFlightGate, rateLimiter } from "../rate-limit";
 
 describe("rateLimiter", () => {
   it("allows `limit` calls then refuses with a positive whole-second retryAfterSec", () => {
@@ -64,5 +64,50 @@ describe("inFlightGate", () => {
     const gate = inFlightGate(1, () => new Error("busy"));
     await expect(gate.run(() => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
     await expect(gate.run(() => Promise.resolve("ok"))).resolves.toBe("ok");
+  });
+});
+
+describe("clientKey", () => {
+  it("prefers x-vercel-forwarded-for over everything else", () => {
+    const h = new Headers({ "x-vercel-forwarded-for": "203.0.113.9", "x-forwarded-for": "1.2.3.4, 5.6.7.8", "x-real-ip": "9.9.9.9" });
+    expect(clientKey(h)).toBe("203.0.113.9");
+  });
+
+  it("uses the RIGHTMOST entry of x-forwarded-for — the hop the nearest trusted proxy added", () => {
+    const h = new Headers({ "x-forwarded-for": "client-spoofed, 10.0.0.1, 198.51.100.7" });
+    expect(clientKey(h)).toBe("198.51.100.7");
+  });
+
+  it("falls back to x-real-ip when there's no forwarded-for chain", () => {
+    const h = new Headers({ "x-real-ip": "203.0.113.5" });
+    expect(clientKey(h)).toBe("203.0.113.5");
+  });
+
+  it("falls back to \"unknown\" when nothing is present", () => {
+    expect(clientKey(new Headers())).toBe("unknown");
+  });
+
+  it("trims and lowercases", () => {
+    const h = new Headers({ "x-real-ip": "  2001:DB8::1  " });
+    expect(clientKey(h)).not.toContain(" ");
+    expect(clientKey(h)).toBe(clientKey(h).toLowerCase());
+  });
+
+  it("collapses an IPv6 address to its /64 prefix, so two addresses in the same block share a key", () => {
+    const a = clientKey(new Headers({ "x-real-ip": "2001:db8:85a3:1111:aaaa:bbbb:cccc:dddd" }));
+    const b = clientKey(new Headers({ "x-real-ip": "2001:db8:85a3:1111:ffff:1234:5678:9abc" }));
+    const c = clientKey(new Headers({ "x-real-ip": "2001:db8:85a3:2222::1" }));
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
+
+  it("treats an IPv6 address compressed with \"::\" the same as its expanded form", () => {
+    const compressed = clientKey(new Headers({ "x-real-ip": "2001:db8::1" }));
+    const expanded = clientKey(new Headers({ "x-real-ip": "2001:db8:0:0:0:0:0:1" }));
+    expect(compressed).toBe(expanded);
+  });
+
+  it("leaves an IPv4 address alone", () => {
+    expect(clientKey(new Headers({ "x-real-ip": "203.0.113.5" }))).toBe("203.0.113.5");
   });
 });

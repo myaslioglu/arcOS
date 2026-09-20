@@ -10,7 +10,10 @@ import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/she
 import { inspectInput } from "@/lib/inspect-input";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
+import { passLine } from "@/lib/proof";
 import { FindingRow } from "./FindingRow";
+
+const ATTACKER_NAME_LINE = "The name and symbol are chosen by whoever deployed this contract and can imitate another token. Check the address.";
 
 export default function InspectorWindow({ winId, params }: AppProps) {
   const chain = activeChain();
@@ -19,19 +22,23 @@ export default function InspectorWindow({ winId, params }: AppProps) {
   const [draft, setDraft] = useState(params.token ?? "");
   const token = isAddress(params.token ?? "", { strict: false }) ? (params.token as Address) : null;
 
-  const { data: report, error, isFetching } = useQuery({
+  const { data: report, error } = useQuery({
     queryKey: ["inspect", chain.id, token?.toLowerCase()],
     enabled: token !== null && client !== undefined,
     staleTime: 5 * 60_000,
     retry: false,
-    queryFn: () => inspect(inspectInput(token!, client!)),
+    // trackEvent lives INSIDE queryFn on purpose: queryFn only runs on a genuine network fetch,
+    // never on a cache hit — so reopening a window onto an already-cached report never re-fires
+    // the analytics event.
+    queryFn: async () => {
+      const r = await inspect(inspectInput(token!, client!));
+      trackEvent("inspect_run", { passed: r.passed, total: r.total });
+      return r;
+    },
   });
 
   useEffect(() => {
-    if (report) {
-      setTitle(winId, `Inspector — ${report.token.symbol ?? shortAddress(report.address)}`);
-      trackEvent("inspect_run", { passed: report.passed, total: report.total });
-    }
+    if (report) setTitle(winId, `Inspector — ${report.token.symbol ?? shortAddress(report.address)}`);
   }, [report, setTitle, winId]);
 
   const { over, props: dropProps } = useDropTarget(["token"], (item) => open("inspector", dropParams(item)));
@@ -75,7 +82,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {!token && <p className="text-muted">Paste a token address, or drag a token here from Finder.</p>}
-        {token && isFetching && !report && <p className="text-muted">Reading the contract…</p>}
+        {token && !report && !error && <p className="text-muted">Reading the contract…</p>}
         {error && (
           <p className="text-accent-3-text">
             {error instanceof NotAContract ? "No contract at that address." : "Couldn't reach the network. Try again."}
@@ -93,9 +100,10 @@ export default function InspectorWindow({ winId, params }: AppProps) {
                 </a>
               </div>
               <span className="shrink-0 rounded-md bg-surface-2 px-2 py-1 text-xs">
-                {report.passed} of {report.total} checks pass
+                {passLine(report)}
               </span>
             </div>
+            <p className="mt-1 text-xs text-muted">{ATTACKER_NAME_LINE}</p>
             {!report.explorerReachable && (
               <p className="mt-2 text-xs text-muted">{"The explorer didn't answer, so some checks are marked unknown."}</p>
             )}
