@@ -6,6 +6,23 @@ All commands below are run from `packages/contracts` inside the `arc-os` repo. O
 
     cd packages/contracts
 
+## Before you deploy
+
+`ARCOS_FEE_RECIPIENT` must be a plain payable address — an EOA, or a multisig whose `receive()`/fallback
+can't revert. Every paid action in these contracts (`TokenFactory.createToken`, `Multisend.sendNative`,
+`Multisend.sendToken`) forwards the fee to this address in the same call and reverts the whole transaction
+if that transfer fails (`FeeTransferFailed`). A recipient that can't receive value — a contract with no
+`receive()`, one that reverts on receipt, or (on Arc) one that's been blocklisted — makes every paid action
+revert until the owner calls `FeeController.setRecipient` with a working address. There is no other way to
+recover; `FeeController`, `TokenFactory` and `Multisend` are all non-upgradeable.
+
+**Known open question:** if a native-value *recipient* inside a `Multisend.sendNative` drop (not the fee
+recipient) is blocklisted on Arc, does only that row fail (skip and refund, the same as any other failed
+transfer) or does the whole transaction revert? This can't be verified locally — a blocklist is an Arc
+network policy, not something Anvil or a local fork can reproduce. Test it on testnet against a
+Circle-documented blocklisted test address, if one is published, before relying on the per-row failure
+behavior in the UI.
+
 ## Once: store the deployer key in Foundry's encrypted keystore
 
     npx cast wallet import arcos-deployer --interactive

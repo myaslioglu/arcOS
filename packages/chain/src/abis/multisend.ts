@@ -146,13 +146,19 @@ export const multisendAbi = [
         "internalType": "uint256"
       },
       {
-        "name": "delivered",
+        "name": "deliveredAmount",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
       },
       {
-        "name": "failed",
+        "name": "failedAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "failedCount",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -164,6 +170,12 @@ export const multisendAbi = [
     "type": "event",
     "name": "TransferFailed",
     "inputs": [
+      {
+        "name": "index",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
       {
         "name": "recipient",
         "type": "address",
@@ -219,5 +231,21 @@ export const multisendAbi = [
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroAmount",
+    "inputs": [
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ZeroFeeController",
+    "inputs": []
   }
 ] as const;
