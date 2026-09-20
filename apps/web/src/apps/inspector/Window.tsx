@@ -45,7 +45,12 @@ export default function InspectorWindow({ winId, params }: AppProps) {
 
   const share = async () => {
     const url = `${window.location.origin}/t/${report!.address}`;
-    await navigator.clipboard.writeText(url);
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      notify("Couldn't copy the link. It's " + url, "warn", 8000);
+      return;
+    }
     trackEvent("proof_share");
     notify("Proof page link copied");
   };
