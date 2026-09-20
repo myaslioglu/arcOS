@@ -15,7 +15,8 @@
     "eslint-config-next": "16.3.5"
   },
   "overrides": {
-    "ws@>=8.0.0 <8.21.0": "^8.21.3"
+    "ws@>=8.0.0 <8.21.0": "^8.21.3",
+    "toml": "^4.2.0"
   },
   "allowScripts": {
     "@foundry-rs/forge@1.7.1": true,
