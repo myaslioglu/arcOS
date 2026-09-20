@@ -233,4 +233,32 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
     expect(find(r, "holders")).toMatchObject({ status: "fail", title: "Top 10 wallets hold 50.4%" });
   });
+
+  it("says unknown — not pass — when the owner's own code fetch fails at the network level", async () => {
+    const r = await run({
+      code: { [TOKEN]: MINTABLE },
+      reads: { [`${TOKEN}.owner()`]: OWNER },
+      codeErrors: { [OWNER]: new Error("ETIMEDOUT") },
+    });
+    expect(find(r, "ownership").status).toBe("unknown");
+    expect(find(r, "privileges").status).toBe("unknown");
+  });
+
+  it("still resolves when a clone's implementation fetch rejects, marking privileges and prevrandao unknown", async () => {
+    const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+    const r = await run({ code: { [TOKEN]: clone }, codeErrors: { [IMPL]: new Error("ETIMEDOUT") } });
+    expect(find(r, "proxy")).toMatchObject({ status: "pass", title: "Minimal proxy — not upgradeable" });
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "prevrandao").status).toBe("unknown");
+  });
+
+  it("ranks holders by value, not by the order the explorer returned them, across a full page", async () => {
+    const holderAddr = (i: number) => `0x${i.toString(16).padStart(40, "0")}`;
+    const holders = explorer({
+      topHolders: async () =>
+        Array.from({ length: 12 }, (_, i) => ({ address: holderAddr(i + 1), isContract: false, name: null, value: BigInt(i + 1) })),
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
+    expect(find(r, "holders")).toMatchObject({ status: "pass", title: "Top 10 wallets hold 7.5%" });
+  });
 });

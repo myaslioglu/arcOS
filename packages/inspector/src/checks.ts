@@ -30,6 +30,7 @@ const ownableAbi = parseAbi(["function owner() view returns (address)", "functio
 const v2FactoryAbi = parseAbi(["function getPair(address,address) view returns (address)"]);
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
 
+const PROXY_LOGIC_UNREADABLE = "This is a minimal proxy and its implementation's code couldn't be fetched.";
 const ZERO = "0x0000000000000000000000000000000000000000";
 const GRANT_ROLE = "0x2f2ff15d";
 const lower = (a: string) => a.toLowerCase();
@@ -136,7 +137,7 @@ const PRIVILEGE_TITLE: Record<PrivilegeCategory, string> = {
 export function checkPrivileges(input: InspectInput, logicCode: string | null, abi: readonly unknown[] | null, owner: Owner): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=write_contract`;
   if (logicCode === null) {
-    return finding("privileges", "unknown", "Couldn't read the contract's logic", "This is a minimal proxy and its implementation's code couldn't be fetched.", { evidenceUrl: url });
+    return finding("privileges", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE, { evidenceUrl: url });
   }
   const found: Privilege[] = abi ? privilegesFromAbi(abi) : privilegesFromSelectors(extractSelectors(logicCode));
   const list = found.map((p) => p.signature).join(", ");
@@ -225,7 +226,7 @@ export async function checkLpLock(input: InspectInput, pools: Pool[] | null): Pr
 
 export function checkPrevrandao(input: InspectInput, logicCode: string | null): Finding {
   if (logicCode === null) {
-    return finding("prevrandao", "unknown", "Couldn't read the contract's logic", "This is a minimal proxy and its implementation's code couldn't be fetched.");
+    return finding("prevrandao", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE);
   }
   return usesOpcode(logicCode, 0x44)
     ? finding("prevrandao", "warn", "Uses PREVRANDAO, which is always 0 on Arc", "Any randomness derived from it is predictable.", { evidenceUrl: "https://docs.arc.io/arc/references/evm-differences" })
