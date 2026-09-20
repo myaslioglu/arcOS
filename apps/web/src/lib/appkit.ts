@@ -3,7 +3,7 @@ import type { Connector } from "wagmi";
 import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 import { formatUsdc, parseUsdc, activeNetwork, type Address } from "@arcos/chain";
 
-export const ARC_CHAIN_NAME = activeNetwork() === "mainnet" ? "Arc" : "Arc_Testnet";
+export const ARC_CHAIN_NAME: "Arc" | "Arc_Testnet" = activeNetwork() === "mainnet" ? "Arc" : "Arc_Testnet";
 export const SWAP_FEE_BPS = 20;
 export const SWAP_TOKENS = ["USDC", "EURC", "cirBTC"] as const;
 
