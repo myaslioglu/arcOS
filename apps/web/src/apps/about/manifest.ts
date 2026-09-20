@@ -11,5 +11,4 @@ export const about: AppManifest = {
   load: () => import("./Window"),
   requiresWallet: false,
   release: "r0",
-  pinned: true,
 };
