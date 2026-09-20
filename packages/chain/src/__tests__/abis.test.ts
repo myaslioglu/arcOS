@@ -20,6 +20,10 @@ describe("abis", () => {
     expect(fns).toContain("recipient");
   });
 
+  it("feeControllerAbi's renounceOwnership is permanently disabled", () => {
+    expect(names(feeControllerAbi, "error")).toContain("RenounceDisabled");
+  });
+
   it("tokenFactoryAbi exposes the functions and events the app calls", () => {
     const fns = names(tokenFactoryAbi, "function");
     expect(fns).toContain("createToken");

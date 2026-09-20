@@ -16,6 +16,10 @@ if that transfer fails (`FeeTransferFailed`). A recipient that can't receive val
 revert until the owner calls `FeeController.setRecipient` with a working address. There is no other way to
 recover; `FeeController`, `TokenFactory` and `Multisend` are all non-upgradeable.
 
+Ownership of `FeeController` can be transferred but not renounced. `setRecipient` is that recovery lever, so
+`renounceOwnership()` always reverts; use `transferOwnership`/`acceptOwnership` instead if `ARCOS_OWNER` ever
+needs to change.
+
 `Multisend`'s fee prices the ATTEMPT, not the outcome: `quote(recipients)` is charged per row submitted in
 the batch, including rows that go on to fail (and get refunded, for native; left with the sender, for
 ERC-20) — it is not reduced or refunded for failed rows.
