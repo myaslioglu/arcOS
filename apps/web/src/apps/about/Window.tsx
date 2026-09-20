@@ -44,6 +44,7 @@ export default function AboutWindow() {
       </dl>
 
       <p className="mt-4 text-muted">Contracts are not upgradeable and hold no funds between transactions.</p>
+      <p className="mt-2 text-muted">These contracts haven&apos;t been audited by a third party.</p>
 
       <ul className="mt-4 grid gap-1 text-xs text-faint">
         <li>{'Explorer data can be unavailable; when it is, checks read "unknown" instead of pass or fail.'}</li>

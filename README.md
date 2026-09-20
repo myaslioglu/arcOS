@@ -95,12 +95,12 @@ pass or fail.
 - Liquidity and lock checks cover Uniswap v2 and v3 pools against USDC and EURC only. Uniswap v4
   and Aerodrome aren't scanned yet.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
-  indexer, planned for a later release.
+  indexer, which arrives with Radar.
 - Bridge offers EVM chains only (Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, and their
   testnets) — no Solana in R0, since that needs a second, non-EVM wallet adapter this app doesn't
   have. Bridge shows the source/burn/mint steps App Kit's settled result reports; it doesn't yet
-  show live per-step progress while a transfer is still in flight (see
-  `.superpowers/sdd/task-20-report.md` for why).
+  show live per-step progress while a transfer is still in flight, since App Kit's `kit.bridge()`
+  call only resolves once the transfer settles rather than streaming per-step events.
 - The contracts are unaudited.
 
 ## Security

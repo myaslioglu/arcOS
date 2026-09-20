@@ -13,11 +13,13 @@ report those upstream.
 
 ## Reporting a vulnerability
 
-Email security@yaslioglu.com with a description of the issue, the steps to reproduce it, and its
-impact. Include a contract address and network if the issue is on-chain.
+Open the repository's Security tab and choose "Report a vulnerability". That opens a private
+advisory only the maintainers can see. Please don't open a public issue for a security problem.
+Include a description of the issue, the steps to reproduce it, its impact, and a contract address
+and network if the issue is on-chain.
 
-Please don't open a public GitHub issue for a security report, and don't test a finding against
-mainnet contracts or real funds beyond what's needed to demonstrate it.
+Don't test a finding against mainnet contracts or real funds beyond what's needed to demonstrate
+it.
 
 There's no bounty program at this time.
 
