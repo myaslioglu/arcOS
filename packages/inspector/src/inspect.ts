@@ -30,8 +30,10 @@ export async function inspect(input: InspectInput): Promise<Report> {
   if (!code) throw new NotAContract(address);
 
   const cloneOf = minimalProxyTarget(code);
-  const logicCode = (cloneOf && (await reader.getCode(cloneOf))) || code;
-  const selectors = extractSelectors(logicCode);
+  // For a clone, NEVER fall back to its own trampoline bytecode — that's not the logic that runs.
+  const implCode = cloneOf ? await reader.getCode(cloneOf).catch(() => null) : null;
+  const logicCode = cloneOf ? implCode : code;
+  const selectors = extractSelectors(logicCode ?? "0x");
 
   let explorerReachable = explorer !== null;
   const ask = async <T>(call: () => Promise<T>): Promise<T | null> => {
@@ -49,8 +51,8 @@ export async function inspect(input: InspectInput): Promise<Report> {
     ask<TokenInfo | null>(() => explorer!.token(address)),
     ask<Holder[]>(() => explorer!.topHolders(address)),
     resolveOwner(reader, address, selectors),
-    findPools(input).catch(() => []),
-    reader.blockNumber(),
+    findPools(input).catch(() => null),
+    reader.blockNumber().catch(() => null),
   ]);
 
   const readOr = async <T>(fn: string, fallback: T): Promise<T> => (reader.read(address, erc20Abi, fn) as Promise<T>).catch(() => fallback);
@@ -81,7 +83,7 @@ export async function inspect(input: InspectInput): Promise<Report> {
     passed: findings.filter((f) => f.status === "pass").length,
     total: findings.length,
     explorerReachable,
-    blockNumber: blockNumber.toString(),
+    blockNumber: blockNumber === null ? "unknown" : blockNumber.toString(),
     generatedAt: (input.now?.() ?? new Date()).toISOString(),
   };
 }

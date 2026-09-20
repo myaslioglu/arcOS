@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DexConfig } from "@arcos/chain";
 import { ExplorerUnavailable, type ExplorerSource } from "../explorer";
 import { NotAContract, inspect } from "../inspect";
-import type { ChainReader, Finding, Report } from "../types";
+import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const IMPL = "0x2222222222222222222222222222222222222222";
@@ -18,18 +18,33 @@ const PLAIN = "0x63a9059cbb00"; // PUSH4 transfer · STOP
 const MINTABLE = "0x6340c10f1900"; // PUSH4 mint(address,uint256) · STOP
 const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] };
 
-type Fake = { code?: Record<string, string>; storage?: Record<string, string>; reads?: Record<string, unknown> };
+type Fake = {
+  code?: Record<string, string>;
+  storage?: Record<string, string>;
+  reads?: Record<string, unknown>;
+  blockNumberError?: Error;
+  codeErrors?: Record<string, Error>;
+};
 
 function reader(f: Fake): ChainReader {
   return {
-    getCode: async (a) => (f.code?.[a.toLowerCase()] as `0x${string}` | undefined) ?? null,
+    getCode: async (a) => {
+      const err = f.codeErrors?.[a.toLowerCase()];
+      if (err) throw err;
+      return (f.code?.[a.toLowerCase()] as `0x${string}` | undefined) ?? null;
+    },
     getStorageAt: async (a, slot) => (f.storage?.[`${a.toLowerCase()}:${slot}`] as `0x${string}` | undefined) ?? null,
     read: async (a, _abi, fn, args = []) => {
       const key = `${a.toLowerCase()}.${fn}(${args.map((x) => String(x).toLowerCase()).join(",")})`;
-      if (!f.reads || !(key in f.reads)) throw new Error(`execution reverted: ${key}`);
-      return f.reads[key];
+      if (!f.reads || !(key in f.reads)) throw new CallReverted();
+      const value = f.reads[key];
+      if (value instanceof Error) throw value;
+      return value;
     },
-    blockNumber: async () => 123n,
+    blockNumber: async () => {
+      if (f.blockNumberError) throw f.blockNumberError;
+      return 123n;
+    },
   };
 }
 
@@ -153,5 +168,69 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: PLAIN } });
     expect(find(r, "liquidity").status).toBe("unknown");
     expect(find(r, "lp-lock").status).toBe("unknown");
+  });
+
+  it("says unknown — not pass — when the owner read fails at the network level", async () => {
+    const r = await run({ code: { [TOKEN]: MINTABLE }, reads: { [`${TOKEN}.owner()`]: new Error("ETIMEDOUT"), [`${TOKEN}.getOwner()`]: new Error("ETIMEDOUT") } });
+    expect(find(r, "ownership").status).toBe("unknown");
+    expect(find(r, "privileges").status).toBe("unknown");
+  });
+
+  it("still passes privileges with an unknown owner when there is nothing privileged to call", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.owner()`]: new Error("ETIMEDOUT"), [`${TOKEN}.getOwner()`]: new Error("ETIMEDOUT") } });
+    expect(find(r, "ownership").status).toBe("unknown");
+    expect(find(r, "privileges").status).toBe("pass");
+  });
+
+  it("never judges a clone by its own trampoline bytecode", async () => {
+    const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+    const r = await run({ code: { [TOKEN]: clone }, reads: { [`${TOKEN}.owner()`]: OWNER } }); // implementation code missing
+    expect(find(r, "proxy").status).toBe("pass");
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "prevrandao").status).toBe("unknown");
+  });
+
+  it("survives a failing blockNumber call", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, blockNumberError: new Error("boom") });
+    expect(r.blockNumber).toBe("unknown");
+    expect(r.total).toBe(8);
+  });
+
+  it("says unknown when pool discovery fails at the network level", async () => {
+    const reads = { [`${V2}.getPair(${TOKEN},${USDC})`]: new Error("ETIMEDOUT"), [`${TOKEN}.totalSupply()`]: 1000n };
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
+    expect(find(r, "liquidity").status).toBe("unknown");
+    expect(find(r, "lp-lock").status).toBe("unknown");
+    expect(find(r, "holders").status).toBe("unknown");
+  });
+
+  it("says unknown when an LP balance read fails at the network level", async () => {
+    const reads = {
+      [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
+      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      [`${PAIR}.totalSupply()`]: 100n,
+      [`${PAIR}.balanceOf(${ZERO})`]: new Error("ETIMEDOUT"),
+      [`${PAIR}.balanceOf(${DEAD})`]: 100n,
+    };
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
+    expect(find(r, "lp-lock").status).toBe("unknown");
+  });
+
+  it("offers no fix on an lp-lock it couldn't check", async () => {
+    const POOL3 = "0x7777777777777777777777777777777777777777";
+    const reads = { [`${V3}.getPool(${TOKEN},${USDC},3000)`]: POOL3, [`${USDC}.balanceOf(${POOL3})`]: 5_000_000_000n };
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
+    expect(find(r, "lp-lock")).toMatchObject({ status: "unknown", fixAppId: null });
+  });
+
+  it("ranks holders itself and shows one decimal when it matters", async () => {
+    const holders = explorer({
+      topHolders: async () => [
+        { address: "0x8888888888888888888888888888888888888888", isContract: false, name: null, value: 4n },
+        { address: OWNER, isContract: false, name: null, value: 500n },
+      ],
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
+    expect(find(r, "holders")).toMatchObject({ status: "fail", title: "Top 10 wallets hold 50.4%" });
   });
 });
