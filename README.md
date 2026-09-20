@@ -13,10 +13,10 @@ Automated analysis, not investment advice.
 | Inspector | Reads a token's contract and reports what it can do to holders | Live |
 | Mint | Creates a fixed-supply, mintable or burnable token | Needs deployed contracts |
 | Drop | Sends a token to many wallets in one or more transactions | Needs deployed contracts |
+| Swap | USDC, EURC and cirBTC | Live |
+| Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
 | About | What ARC.os is, read from inside the app | Live |
-| Swap | USDC, EURC and cirBTC | Coming soon |
-| Bridge | Move USDC to and from Arc | Coming soon |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
@@ -26,9 +26,12 @@ Automated analysis, not investment advice.
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are not deployed yet — both windows show
 "isn't deployed on this network yet" until they are (see `packages/contracts/DEPLOY.md`). Swap and
-Bridge are held back because Circle's App Kit SDK currently pulls in dependencies with
-high-severity `npm audit` findings; they stay coming-soon manifests until that's resolved, rather
-than shipping with a known vulnerable dependency.
+Bridge run on Circle's App Kit SDK in keyless mode (no Circle API key ships to the browser) and
+charge a 0.20% platform fee, split 90/10 between `NEXT_PUBLIC_FEE_RECIPIENT` and Arc, when that
+address is set — with it unset, both apps still work and simply charge no fee. Installing App Kit
+requires one dependency exception (a transitive `toml` advisory forced to a patched major via an
+npm `overrides` entry); see [SECURITY.md](./SECURITY.md#dependency-exceptions) for exactly what,
+why, and the condition for removing it.
 
 ## Run it
 
@@ -93,7 +96,11 @@ pass or fail.
   and Aerodrome aren't scanned yet.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
   indexer, planned for a later release.
-- Swap and Bridge aren't available yet (see above).
+- Bridge offers EVM chains only (Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, and their
+  testnets) — no Solana in R0, since that needs a second, non-EVM wallet adapter this app doesn't
+  have. Bridge shows the source/burn/mint steps App Kit's settled result reports; it doesn't yet
+  show live per-step progress while a transfer is still in flight (see
+  `.superpowers/sdd/task-20-report.md` for why).
 - The contracts are unaudited.
 
 ## Security

@@ -48,7 +48,8 @@ export default function AboutWindow() {
       <ul className="mt-4 grid gap-1 text-xs text-faint">
         <li>{'Explorer data can be unavailable; when it is, checks read "unknown" instead of pass or fail.'}</li>
         <li>{"Liquidity and lock checks cover Uniswap v2/v3 against USDC and EURC only; v4 and Aerodrome aren't scanned yet."}</li>
-        <li>{"Swap and Bridge are coming soon — Circle's App Kit currently pulls in dependencies with high-severity audit findings."}</li>
+        <li>{"Swap and Bridge run on Circle's App Kit in keyless mode and charge a 0.20% platform fee, split 90/10 with Arc, only when a fee recipient is configured."}</li>
+        <li>{"Bridge covers EVM chains only — no Solana yet, and it shows each step once a transfer settles rather than live progress while it's in flight."}</li>
       </ul>
 
       {REPO_URL && (

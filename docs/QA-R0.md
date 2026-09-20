@@ -8,9 +8,12 @@ Rabby, etc. — WalletConnect is not supported) holding testnet USDC from
 https://faucet.circle.com, and the contracts deployed per `packages/contracts/DEPLOY.md`, so it
 is left for the owner to run once those two things exist.
 
-Swap and Bridge are **not** part of this script: they are coming-soon manifests, not working
-apps, because Circle's App Kit SDK currently pulls in dependencies with high-severity `npm audit`
-findings and that hasn't been resolved (see the "Coming soon" section below).
+Swap needs the same testnet wallet as the rest of this script. Bridge additionally needs that
+wallet holding testnet USDC on an EVM testnet other than Arc (Ethereum Sepolia is the one used
+below) — get it from https://faucet.circle.com or the relevant chain's own faucet — and, if you
+want to see it charge a fee, `NEXT_PUBLIC_FEE_RECIPIENT` set to an address you can check the
+balance of afterward. Both run against Circle's App Kit SDK in keyless mode (see the "Swap and
+Bridge" section below for what to check, including the fee split).
 
 ## Desktop **(no wallet needed)**
 
@@ -139,22 +142,67 @@ findings and that hasn't been resolved (see the "Coming soon" section below).
     directly): the proof page shows the token's own name/symbol and findings, and the badge SVG
     reflects the same check counts as the Inspector window.
 
-## Coming soon
+## Swap and Bridge
 
-34. Swap and Bridge appear as greyed tray/dock icons. Clicking one shows a toast — "Swap isn't
-    available yet." / "Bridge isn't available yet." — and nothing opens. They stay unshipped
-    because Circle's App Kit SDK currently pulls in dependencies with high-severity `npm audit`
-    findings and the project owner hasn't decided how to proceed; do not test them as working
-    features.
+34. Open Swap with the wallet disconnected: the same "Connect a wallet to use this app." gate as
+    every other trading app.
+35. Connect, open Swap: pick USDC → EURC, type "1". Within about 400ms of the last keystroke an
+    estimate appears — "You receive (estimated)" fills in, plus a "Minimum received" line and any
+    fee lines App Kit's estimate itself reports. Picking EURC as the "You send" token (matching
+    what's already selected as "You receive") swaps the two instead of letting both read EURC;
+    the "Flip" button does the same swap directly. If `NEXT_PUBLIC_FEE_RECIPIENT` is set, a
+    "Platform fee 0.20%" line is present; if it's unset (or malformed), that line is absent and no
+    fee is charged — confirm both states by toggling the env var and restarting `npm run dev`.
+36. Type "1,5" into the amount box: `"1,5" isn't a number` appears (a comma is never read as a
+    decimal point) and Swap is disabled. Clear it and type a valid amount to confirm the message
+    clears and Swap re-enables.
+37. Click Swap: one or two wallet prompts (App Kit handles any allowance itself — permit signature
+    or an approve transaction — before the swap transaction). While it's in flight the button
+    reads "Waiting for your wallet…" and the form is locked; a second click, or opening a second
+    Swap window, does nothing until this one finishes. Once it lands: "Swap complete", the
+    transaction hash (linking to `explorer.testnet.arc.io`), and the received amount if App Kit's
+    result reports one. If `NEXT_PUBLIC_FEE_RECIPIENT` was set, check that address's USDC balance
+    increased by about 0.0018 USDC on a 1 USDC swap (0.20% minus Arc's 10% share — i.e. the
+    recipient keeps 90% of the 0.20% fee).
+38. Close the Swap window mid-swap (right after clicking Swap, before it resolves) and reopen it:
+    the in-flight state — or the result, once it lands — is still there, not a blank form. This is
+    the session store surviving the window unmounting, the same pattern Drop uses.
+39. Open Bridge with the wallet disconnected: the same connect gate.
+40. Connect, open Bridge: "To Arc" is selected by default, "From" defaults to the first EVM chain
+    in the list (Ethereum Sepolia on testnet). Check the chain select lists exactly six EVM chains
+    (no Solana) matching the active network (mainnet or testnet, never a mix). Type "1" in Amount:
+    "Fee 0.002 USDC (0.20%) · added on top" appears when `NEXT_PUBLIC_FEE_RECIPIENT` is set, absent
+    when it isn't.
+41. Click Bridge with the wallet on Arc Testnet and "To Arc" / Ethereum Sepolia selected: the
+    wallet is prompted to switch to Ethereum Sepolia (App Kit's adapter drives this itself), then
+    to approve/burn there; depending on whether Circle's Forwarder relays the mint, either no
+    further prompt is needed or the wallet is asked to switch back to Arc Testnet for one more
+    signature. This can take a few minutes — the window says so and stays usable. Once it
+    settles: each step App Kit's result reports (its name, state, and — where present — a
+    transaction hash linking to that chain's own explorer) is listed, and the headline reads
+    "Bridge complete", "Still finishing on the destination chain", or "Bridge didn't complete"
+    depending on the result's `state` — never a guessed "complete" the SDK didn't actually report.
+    If `NEXT_PUBLIC_FEE_RECIPIENT` was set, confirm that address's USDC balance on Ethereum Sepolia
+    (the source chain — bridge fees are charged there, added on top of the transfer) increased by
+    about 0.0018 USDC.
+42. Close the Bridge window mid-transfer and reopen it (or open a fresh Bridge window): the
+    in-flight state, or the settled result, is still there — closing the window never orphans a
+    transfer that already burned funds on the source chain. Closing or reloading the tab itself
+    prompts the browser's native "leave site?" warning while a bridge is in flight.
+43. Known simplification, not a bug: Bridge shows live progress only as "Bridging — this can take
+    a few minutes" while the SDK's single `kit.bridge()` call is in flight, then the full step list
+    once it settles — it does not subscribe to App Kit's per-step event stream for a live
+    approve/burn/attest/mint ticker. See `.superpowers/sdd/task-20-report.md` for why.
 
 ## Phone width
 
-35. At about 390px wide with touch emulation: the desktop becomes a single searchable list of
+44. At about 390px wide with touch emulation: the desktop becomes a single searchable list of
     every app grouped by the same four categories; tapping an app opens it full screen; the
-    minimize (–) control returns to the list; Inspector's, Mint's and Drop's forms fit the width
-    with no horizontal scrolling. (Verified for Inspector as shipped, and for Mint and Drop with
-    their wallet/deployment gates temporarily bypassed locally and reverted — see
-    `.superpowers/sdd/task-21-report.md`.)
+    minimize (–) control returns to the list; Inspector's, Mint's, Drop's, Swap's and Bridge's
+    forms fit the width with no horizontal scrolling. (Verified for Inspector as shipped, for Mint
+    and Drop with their wallet/deployment gates temporarily bypassed locally and reverted — see
+    `.superpowers/sdd/task-21-report.md` — and for Swap and Bridge the same way, see
+    `.superpowers/sdd/task-20-report.md`.)
 
 ## Before mainnet — gate list
 
