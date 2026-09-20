@@ -20,6 +20,9 @@ contract MintableToken is ERC20, Ownable {
         uint256 cap_,
         address holder
     ) ERC20(name_, symbol_) Ownable(holder) {
+        // This contract is deployable directly (not just through TokenFactory, which already enforces this),
+        // so the invariant "totalSupply() <= cap" must hold from construction, not just from mint() onward.
+        if (supply > cap_) revert CapExceeded();
         _DECIMALS = decimals_;
         cap = cap_;
         _mint(holder, supply);

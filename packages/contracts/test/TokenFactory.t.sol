@@ -283,6 +283,21 @@ contract TokenFactoryTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // MintableToken and MintableBurnableToken are standalone contracts in a public repo: they can be
+    // deployed directly, bypassing the factory entirely, with a starting supply above the cap they name.
+    // ---------------------------------------------------------------------
+
+    function test_mintableToken_directDeploy_supplyAboveCap_revertsCapExceeded() public {
+        vm.expectRevert(MintableToken.CapExceeded.selector);
+        new MintableToken("Duke", "DUKE", 18, 2_000_000 ether, 1_000_000 ether, creator);
+    }
+
+    function test_mintableBurnableToken_directDeploy_supplyAboveCap_revertsCapExceeded() public {
+        vm.expectRevert(MintableBurnableToken.CapExceeded.selector);
+        new MintableBurnableToken("Duke", "DUKE", 18, 2_000_000 ether, 1_000_000 ether, creator);
+    }
+
+    // ---------------------------------------------------------------------
     // A reverting fee recipient blocks createToken; fixing the recipient unblocks it
     // ---------------------------------------------------------------------
 
@@ -374,6 +389,38 @@ contract TokenFactoryTest is Test {
         assertEq(IERC20Metadata(token).name(), unicode"Türk Lirası");
     }
 
+    function test_name_rejectsLeadingSpace() public {
+        TokenFactory.TokenParams memory p = _params(false, false, 0);
+        p.name = " Duke";
+        vm.prank(creator);
+        vm.expectRevert(TokenFactory.BadName.selector);
+        factory.createToken{value: FEE}(p);
+    }
+
+    function test_name_rejectsTrailingSpace() public {
+        TokenFactory.TokenParams memory p = _params(false, false, 0);
+        p.name = "Duke ";
+        vm.prank(creator);
+        vm.expectRevert(TokenFactory.BadName.selector);
+        factory.createToken{value: FEE}(p);
+    }
+
+    function test_name_rejectsAllSpaces() public {
+        TokenFactory.TokenParams memory p = _params(false, false, 0);
+        p.name = _repeat(" ", 64);
+        vm.prank(creator);
+        vm.expectRevert(TokenFactory.BadName.selector);
+        factory.createToken{value: FEE}(p);
+    }
+
+    function test_name_acceptsInteriorSpace() public {
+        TokenFactory.TokenParams memory p = _params(false, false, 0);
+        p.name = "Duke Token";
+        vm.prank(creator);
+        address token = factory.createToken{value: FEE}(p);
+        assertEq(IERC20Metadata(token).name(), "Duke Token");
+    }
+
     function test_symbol_rejectsSpace() public {
         TokenFactory.TokenParams memory p = _params(false, false, 0);
         p.symbol = "BAD SYM";
@@ -396,6 +443,20 @@ contract TokenFactoryTest is Test {
         vm.prank(creator);
         address token = factory.createToken{value: FEE}(p);
         assertEq(IERC20Metadata(token).symbol(), "USD-T_2.0");
+    }
+
+    function test_symbol_16BytesPasses_17BytesReverts() public {
+        TokenFactory.TokenParams memory p = _params(false, false, 0);
+        p.symbol = _repeat("A", 16);
+        vm.prank(creator);
+        address token = factory.createToken{value: FEE}(p);
+        assertEq(IERC20Metadata(token).symbol(), _repeat("A", 16));
+
+        p = _params(false, false, 0);
+        p.symbol = _repeat("A", 17);
+        vm.prank(creator);
+        vm.expectRevert(TokenFactory.BadSymbol.selector);
+        factory.createToken{value: FEE}(p);
     }
 
     // ---------------------------------------------------------------------
@@ -427,6 +488,30 @@ contract TokenFactoryTest is Test {
 
     function test_tokenCountOf_zeroForStranger() public view {
         assertEq(factory.tokenCountOf(address(this)), 0);
+    }
+
+    /// count = type(uint256).max must not make `start + count` overflow; the slice clamps at the list end.
+    function test_tokensOfSlice_maxCount_doesNotOverflow_start0() public {
+        vm.startPrank(creator);
+        address t0 = factory.createToken{value: FEE}(_params(false, false, 0));
+        address t1 = factory.createToken{value: FEE}(_params(false, false, 0));
+        vm.stopPrank();
+
+        address[] memory slice = factory.tokensOfSlice(creator, 0, type(uint256).max);
+        assertEq(slice.length, 2);
+        assertEq(slice[0], t0);
+        assertEq(slice[1], t1);
+    }
+
+    function test_tokensOfSlice_maxCount_doesNotOverflow_start1() public {
+        vm.startPrank(creator);
+        factory.createToken{value: FEE}(_params(false, false, 0));
+        address t1 = factory.createToken{value: FEE}(_params(false, false, 0));
+        vm.stopPrank();
+
+        address[] memory slice = factory.tokensOfSlice(creator, 1, type(uint256).max);
+        assertEq(slice.length, 1);
+        assertEq(slice[0], t1);
     }
 
     // ---------------------------------------------------------------------

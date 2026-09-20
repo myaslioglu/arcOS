@@ -144,10 +144,13 @@ contract TokenFactory {
 
     /// @dev `isArcosToken` is a provenance marker apps rely on to say "this token was created here", so the
     /// content that can end up in it is restricted on-chain rather than left to a front end. Every byte must
-    /// be >= 0x20 and != 0x7F (no ASCII control characters); multi-byte UTF-8 is otherwise unrestricted.
+    /// be >= 0x20 and != 0x7F (no ASCII control characters); multi-byte UTF-8 is otherwise unrestricted. The
+    /// first and last byte must not be a space (0x20) either, so a name can't be padded into looking blank
+    /// or into colliding with a trimmed display of a different name.
     function _validateName(string calldata name) private pure {
         bytes memory b = bytes(name);
         if (b.length == 0 || b.length > 64) revert BadName();
+        if (b[0] == 0x20 || b[b.length - 1] == 0x20) revert BadName();
         for (uint256 i; i < b.length; ++i) {
             bytes1 c = b[i];
             if (c < 0x20 || c == 0x7F) revert BadName();
