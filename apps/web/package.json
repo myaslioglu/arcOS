@@ -11,12 +11,15 @@
   },
   "dependencies": {
     "@arcos/chain": "*",
+    "@arcos/inspector": "*",
     "@arcos/shell": "*",
     "@tanstack/react-query": "^5.103.1",
+    "@vercel/analytics": "^2.0.1",
     "lucide-react": "^1.21.0",
     "next": "16.3.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "server-only": "^0.0.1",
     "viem": "2.56.8",
     "wagmi": "^2.19.5"
   },
