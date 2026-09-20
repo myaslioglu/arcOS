@@ -33,6 +33,7 @@ export interface ExplorerSource {
 }
 
 type Json = Record<string, unknown>;
+const obj = (v: unknown): Json => (typeof v === "object" && v !== null ? (v as Json) : {});
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
 const int = (v: unknown): number | null => {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
@@ -40,7 +41,8 @@ const int = (v: unknown): number | null => {
 };
 const big = (v: unknown): bigint => {
   try {
-    return BigInt(typeof v === "string" || typeof v === "number" ? v : 0);
+    const n = BigInt(typeof v === "string" || typeof v === "number" ? v : 0);
+    return n < 0n ? 0n : n;
   } catch {
     return 0n;
   }
@@ -53,7 +55,7 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
     try {
       res = await fetchFn(`${apiUrl}${path}`, { headers: { accept: "application/json" } });
     } catch (e) {
-      throw new ExplorerUnavailable(null, `Explorer unreachable: ${(e as Error).message}`);
+      throw new ExplorerUnavailable(null, `Explorer unreachable: ${e instanceof Error ? e.message : String(e)}`);
     }
     if (res.status === 404) return null;
     if (!res.ok) throw new ExplorerUnavailable(res.status, `Explorer answered ${res.status}`);
@@ -68,13 +70,15 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
     async contract(address) {
       const j = (await get(`/smart-contracts/${address}`)) as Json | null;
       if (!j) return { verified: false, name: null, abi: null, proxyType: null, implementations: [] };
-      const impls = Array.isArray(j.implementations) ? (j.implementations as Json[]) : [];
+      const impls = Array.isArray(j.implementations) ? (j.implementations as unknown[]) : [];
       return {
         verified: j.is_verified === true,
         name: str(j.name),
         abi: Array.isArray(j.abi) ? (j.abi as unknown[]) : null,
         proxyType: str(j.proxy_type),
-        implementations: impls.map((i) => str(i.address_hash) ?? str(i.address)).filter((a): a is string => a !== null),
+        implementations: impls
+          .map((i) => str(obj(i).address_hash) ?? str(obj(i).address))
+          .filter((a): a is string => a !== null),
       };
     },
     async token(address) {
@@ -90,18 +94,20 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
     },
     async topHolders(address) {
       const j = (await get(`/tokens/${address}/holders`)) as Json | null;
-      const items = j && Array.isArray(j.items) ? (j.items as Json[]) : [];
-      return items.flatMap((it) => {
-        const a = (it.address ?? {}) as Json;
+      const items = j && Array.isArray(j.items) ? (j.items as unknown[]) : [];
+      return items.flatMap((raw) => {
+        const it = obj(raw);
+        const a = obj(it.address);
         const hash = str(a.hash);
         return hash ? [{ address: hash, isContract: a.is_contract === true, name: str(a.name), value: big(it.value) }] : [];
       });
     },
     async tokenBalances(address) {
       const j = await get(`/addresses/${address}/token-balances`);
-      const items = Array.isArray(j) ? (j as Json[]) : [];
-      return items.flatMap((it) => {
-        const t = (it.token ?? {}) as Json;
+      const items = Array.isArray(j) ? (j as unknown[]) : [];
+      return items.flatMap((raw) => {
+        const it = obj(raw);
+        const t = obj(it.token);
         const hash = str(t.address_hash) ?? str(t.address);
         const decimals = int(t.decimals);
         if (t.type !== "ERC-20" || !hash || decimals === null) return [];

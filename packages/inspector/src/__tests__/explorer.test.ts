@@ -63,4 +63,18 @@ describe("blockscoutSource", () => {
     ]);
     expect(await src.tokenBalances(T)).toEqual([{ address: "0xCCC", name: "Duke", symbol: "DUKE", decimals: 18, value: 5n }]);
   });
+
+  it("skips malformed array elements instead of throwing", async () => {
+    const src = blockscoutSource(API, fakeFetch({
+      [`/smart-contracts/${T}`]: json({ is_verified: true, name: "X", abi: null, proxy_type: null, implementations: [null, 7, { address_hash: "0xAAA" }] }),
+      [`/tokens/${T}/holders`]: json({ items: [null, "junk", { address: null, value: "5" }, { address: { hash: "0xBBB", is_contract: false, name: null }, value: "-3" }, { address: { hash: "0xCCC", is_contract: false, name: null }, value: "10" }] }),
+      [`/addresses/${T}/token-balances`]: json([null, 42, { token: null, value: "1" }, { token: { address_hash: "0xDDD", name: "D", symbol: "D", decimals: "18", type: "ERC-20" }, value: "2.5" }]),
+    }));
+    expect((await src.contract(T)).implementations).toEqual(["0xAAA"]);
+    expect(await src.topHolders(T)).toEqual([
+      { address: "0xBBB", isContract: false, name: null, value: 0n },
+      { address: "0xCCC", isContract: false, name: null, value: 10n },
+    ]);
+    expect(await src.tokenBalances(T)).toEqual([{ address: "0xDDD", name: "D", symbol: "D", decimals: 18, value: 0n }]);
+  });
 });
