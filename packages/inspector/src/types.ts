@@ -28,8 +28,11 @@ export type Report = {
   network: NetworkId;
   token: { name: string | null; symbol: string | null; decimals: number | null; totalSupply: string | null };
   findings: Finding[];
+  /** Kept for compatibility: passed === counts.pass, total === findings.length. */
   passed: number;
   total: number;
+  /** The same numbers, broken out by status — every surface should show `unknown` explicitly rather than folding it into "not pass". */
+  counts: { pass: number; warn: number; fail: number; unknown: number };
   explorerReachable: boolean;
   blockNumber: string;
   generatedAt: string;
