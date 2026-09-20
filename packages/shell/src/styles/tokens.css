@@ -1,0 +1,66 @@
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #060609;
+  --bg-2: #0a0a10;
+  --surface: #0e0e15;
+  --surface-2: #14141d;
+  --border: #20202b;
+  --border-2: #2b2b39;
+  --fg: #e9e9f0;
+  --muted: #8b8b9c;
+  --faint: #5a5a6b;
+  --accent: #34e1ff;
+  --accent-2: #45e08a;
+  --accent-3: #f6b73c;
+  /* Text-safe twins of the two signal hues.
+     On dark they are already 11.2:1 and 10.8:1, so they are the same colour;
+     the light theme substitutes darker ones below. Use --accent-N for graphics
+     and --accent-N-text for anything a reader has to read. */
+  --accent-text: var(--accent);
+  --accent-2-text: var(--accent-2);
+  --accent-3-text: var(--accent-3);
+  --grad-a: rgba(52, 225, 255, 0.10);
+  --grad-b: rgba(69, 224, 138, 0.08);
+  --grad-c: rgba(246, 183, 60, 0.05);
+  --grid-line: rgba(32, 32, 43, 0.6);
+  --noise-opacity: 0.035;
+  --shadow-nav: rgba(0, 0, 0, 0.7);
+  --scroll-thumb-hover: #3a3a4a;
+  --selection-fg: #ffffff;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --bg-2: #eef0f3;
+  --surface: #ffffff;
+  --surface-2: #f2f3f6;
+  --border: #e2e4ea;
+  --border-2: #cfd2db;
+  --fg: #14161c;
+  --muted: #555a66;
+  /* Both clear 4.5:1 on all three light surfaces (#ffffff, #f6f7f9,
+     #f2f3f6). The previous pair sat at 2.9-3.7, which reads fine at display
+     sizes but fails AA for the 11px labels these two are mostly used on. */
+  --faint: #6b6f79;
+  --accent: #00799a;
+  --accent-2: #0c8a4e;
+  --accent-3: #b97309;
+  /* The graphic hues sit at 4.4:1 and 3.8:1 on white — fine for a chart line,
+     short of AA for a sentence. These clear 5.0:1 on white and 4.7:1 on the
+     page background. */
+  /* On a tinted chip (--accent at 10%) the plain accent lands at 4.07:1;
+     this clears 4.5 there and 5.5 on the page. */
+  --accent-text: #006e85;
+  --accent-2-text: #0b8048;
+  --accent-3-text: #9d6208;
+  --grad-a: rgba(0, 121, 154, 0.10);
+  --grad-b: rgba(12, 138, 78, 0.08);
+  --grad-c: rgba(185, 115, 9, 0.06);
+  --grid-line: rgba(180, 186, 200, 0.5);
+  --noise-opacity: 0.025;
+  --shadow-nav: rgba(15, 18, 30, 0.12);
+  --scroll-thumb-hover: #b6bcc8;
+  --selection-fg: #ffffff;
+}

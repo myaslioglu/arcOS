@@ -1,4 +1,27 @@
 @import "tailwindcss";
+@import "@arcos/shell/styles/tokens.css";
+@source "../../../../packages/shell/src";
 
-:root { color-scheme: light; }
-body { margin: 0; }
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-2: var(--border-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-3: var(--accent-3);
+  --color-accent-text: var(--accent-text);
+  --color-accent-2-text: var(--accent-2-text);
+  --color-accent-3-text: var(--accent-3-text);
+
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
