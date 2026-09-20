@@ -39,6 +39,20 @@ describe("parseUsdc", () => {
     expect(code("1e6")).toBe("format");
     expect(code("0.1234567")).toBe("precision");
   });
+
+  it("treats a comma as a thousands separator only, never as a decimal point", () => {
+    expect(parseUsdc("1,234.5")).toBe(12345n * 10n ** 17n);
+    expect(parseUsdc("1,000,000")).toBe(10n ** 24n);
+    expect(parseUsdc("12,345")).toBe(12345n * 10n ** 18n);
+    for (const bad of ["1,5", "1,50", "1,,2.5", ",5", "5,", "1000,000", "1,2345", "1.5,000"]) {
+      expect(() => parseUsdc(bad), bad).toThrowError(AmountError);
+      try {
+        parseUsdc(bad);
+      } catch (e) {
+        expect((e as AmountError).code, bad).toBe("format");
+      }
+    }
+  });
 });
 
 describe("unit conversion", () => {

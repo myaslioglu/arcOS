@@ -15,14 +15,15 @@ export class AmountError extends Error {
   }
 }
 
-const SHAPE = /^\d+(\.\d+)?$/;
+const SHAPE = /^(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$/;
 
-/** Parses a human decimal string into an integer of `decimals` places. */
+/** Parses a human decimal string into an integer of `decimals` places. Commas are accepted only as thousands separators, never as decimal points. */
 export function parseTokenAmount(text: string, decimals: number): bigint {
-  const raw = text.trim().replace(/,/g, "");
-  if (raw === "") throw new AmountError("empty", "Enter an amount");
-  if (raw.startsWith("-")) throw new AmountError("negative", "Amount can't be negative");
-  if (!SHAPE.test(raw)) throw new AmountError("format", `"${text}" isn't a number`);
+  const trimmed = text.trim();
+  if (trimmed === "") throw new AmountError("empty", "Enter an amount");
+  if (trimmed.startsWith("-")) throw new AmountError("negative", "Amount can't be negative");
+  if (!SHAPE.test(trimmed)) throw new AmountError("format", `"${text}" isn't a number`);
+  const raw = trimmed.replace(/,/g, "");
   const [whole = "0", frac = ""] = raw.split(".");
   if (frac.length > decimals) {
     throw new AmountError("precision", `At most ${decimals} decimal places`);
