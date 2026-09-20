@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { privilegesFromAbi, privilegesFromSelectors } from "../privileges";
+import { combinePrivileges, privilegesFromAbi, privilegesFromSelectors } from "../privileges";
 
 describe("privilegesFromSelectors", () => {
   it("recognises well-known selectors", () => {
@@ -51,5 +51,21 @@ describe("real-world coverage", () => {
 
   it("ignores view functions whatever they are called", () => {
     expect(privilegesFromAbi([fn("isBlacklisted", "view"), fn("tradingEnabled", "view"), fn("maxTxAmount", "pure")])).toEqual([]);
+  });
+});
+
+describe("combinePrivileges", () => {
+  it("never lets an empty (but present) ABI array suppress the bytecode scan", () => {
+    const found = combinePrivileges([], new Set(["0x40c10f19"])); // mint(address,uint256)
+    expect(found).toEqual([{ category: "mint", signature: "mint(address,uint256)" }]);
+  });
+
+  it("unions ABI- and bytecode-derived findings, sorted by category", () => {
+    const abi = [{ type: "function", name: "setSellTax", stateMutability: "nonpayable", inputs: [] }];
+    const found = combinePrivileges(abi, new Set(["0x8456cb59"])); // pause()
+    expect(found).toEqual([
+      { category: "fees", signature: "setSellTax" },
+      { category: "pause", signature: "pause()" },
+    ]);
   });
 });

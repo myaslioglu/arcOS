@@ -105,6 +105,26 @@ export function privilegesFromSelectors(selectors: Set<string>): Privilege[] {
   return out.sort(byCategory);
 }
 
+/**
+ * Union of what a verified ABI says and what the bytecode's dispatcher actually contains,
+ * de-duplicated. Evidence from one source never suppresses the other — in particular, an empty
+ * (but present) ABI array must never skip the bytecode scan: a contract can be "verified" with an
+ * incomplete or stale ABI while its deployed code still dispatches a privileged selector.
+ */
+export function combinePrivileges(abi: readonly unknown[] | null, selectors: Set<string>): Privilege[] {
+  const fromAbi = abi && abi.length > 0 ? privilegesFromAbi(abi) : [];
+  const fromSelectors = privilegesFromSelectors(selectors);
+  const seen = new Set<string>();
+  const out: Privilege[] = [];
+  for (const p of [...fromAbi, ...fromSelectors]) {
+    const key = `${p.category}:${p.signature}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out.sort(byCategory);
+}
+
 const NAME_RULES: [PrivilegeCategory, RegExp][] = [
   ["mint", /^(mint|issue)$|^(safe|owner|admin|batch)mint|^mint(to|tokens|batch)$/i],
   ["blacklist", /(black|block)list|antibot|^(set|add|del|remove)bots?$|^(un)?freeze|^blockaccount$|^destroyblackfunds$/i],

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DexConfig } from "@arcos/chain";
 import { ExplorerUnavailable, type ExplorerSource } from "../explorer";
 import { NotAContract, inspect } from "../inspect";
@@ -13,10 +13,12 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 const DEAD = "0x000000000000000000000000000000000000dead";
 const V2 = "0x5555555555555555555555555555555555555555";
 const V3 = "0x6666666666666666666666666666666666666666";
+const GRAND = "0x9999999999999999999999999999999999999999";
 
 const PLAIN = "0x63a9059cbb00"; // PUSH4 transfer · STOP
 const MINTABLE = "0x6340c10f1900"; // PUSH4 mint(address,uint256) · STOP
 const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] };
+const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 
 type Fake = {
   code?: Record<string, string>;
@@ -24,6 +26,7 @@ type Fake = {
   reads?: Record<string, unknown>;
   blockNumberError?: Error;
   codeErrors?: Record<string, Error>;
+  storageError?: Error;
 };
 
 function reader(f: Fake): ChainReader {
@@ -33,7 +36,10 @@ function reader(f: Fake): ChainReader {
       if (err) throw err;
       return (f.code?.[a.toLowerCase()] as `0x${string}` | undefined) ?? null;
     },
-    getStorageAt: async (a, slot) => (f.storage?.[`${a.toLowerCase()}:${slot}`] as `0x${string}` | undefined) ?? null,
+    getStorageAt: async (a, slot) => {
+      if (f.storageError) throw f.storageError;
+      return (f.storage?.[`${a.toLowerCase()}:${slot}`] as `0x${string}` | undefined) ?? null;
+    },
     read: async (a, _abi, fn, args = []) => {
       const key = `${a.toLowerCase()}.${fn}(${args.map((x) => String(x).toLowerCase()).join(",")})`;
       if (!f.reads || !(key in f.reads)) throw new CallReverted();
@@ -265,5 +271,138 @@ describe("inspect", () => {
   it("strips spoofing characters from a symbol read on-chain", async () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.symbol()`]: "US‮DC" } });
     expect(r.token.symbol).toBe("USDC");
+  });
+
+  // --- Part 1: counts ---
+
+  it("computes counts by status alongside passed/total", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.owner()`]: ZERO, [`${TOKEN}.totalSupply()`]: 1000n } });
+    const byStatus = (s: Finding["status"]) => r.findings.filter((f) => f.status === s).length;
+    expect(r.counts).toEqual({ pass: byStatus("pass"), warn: byStatus("warn"), fail: byStatus("fail"), unknown: byStatus("unknown") });
+    expect(r.counts.pass).toBe(r.passed);
+    expect(r.counts.pass + r.counts.warn + r.counts.fail + r.counts.unknown).toBe(r.total);
+  });
+
+  // --- Part 2 item 2: an empty holder list is never "0%" ---
+
+  it("says unknown, not 0%, when the holder list is empty but holders are known to exist", async () => {
+    const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 50 }) });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
+    expect(find(r, "holders")).toMatchObject({ status: "unknown", title: "Couldn't check holder concentration" });
+  });
+
+  it("says unknown when the holder list is empty and holdersCount is itself unknown", async () => {
+    const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: null }) });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
+    expect(find(r, "holders").status).toBe("unknown");
+  });
+
+  it("passes with an empty holder list only when the explorer confirms there are zero holders", async () => {
+    const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 0 }) });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
+    expect(find(r, "holders")).toMatchObject({ status: "pass", title: "Top 10 wallets hold 0%" });
+  });
+
+  // --- Part 2 item 3: code the engine never read must not earn passes ---
+
+  it("treats a non-canonical delegatecall trampoline as unidentified, not as a clean pass", async () => {
+    const trampoline = `0x73${IMPL.slice(2)}f400`; // PUSH20 impl · DELEGATECALL · STOP — not a canonical EIP-1167 clone
+    const r = await run({ code: { [TOKEN]: trampoline, [IMPL]: MINTABLE } });
+    const expected = { status: "unknown", title: "This contract forwards calls to code that couldn't be identified" };
+    expect(find(r, "proxy")).toMatchObject(expected);
+    expect(find(r, "privileges")).toMatchObject(expected);
+    expect(find(r, "prevrandao")).toMatchObject(expected);
+  });
+
+  it("fails a canonical clone whose target is itself an upgradeable proxy, instead of trusting the clone's own pass", async () => {
+    const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+    const r = await run({
+      code: { [TOKEN]: clone, [IMPL]: PLAIN },
+      storage: { [`${IMPL}:${IMPL_SLOT}`]: `0x000000000000000000000000${OWNER.slice(2)}` }, // IMPL is itself an upgradeable proxy
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
+    expect(find(r, "privileges")).toMatchObject({ status: "unknown", title: "Couldn't read the contract's logic" });
+    expect(find(r, "prevrandao").status).toBe("unknown");
+  });
+
+  it("resolves one level past a clone's upgradeable-proxy target when that target's own implementation is readable", async () => {
+    const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+    const r = await run({
+      code: { [TOKEN]: clone, [IMPL]: PLAIN, [GRAND]: MINTABLE },
+      storage: { [`${IMPL}:${IMPL_SLOT}`]: `0x000000000000000000000000${GRAND.slice(2)}` },
+      reads: { [`${TOKEN}.owner()`]: OWNER },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  // --- Part 2 item 4: a privileged function with no readable owner is not "can't be called" ---
+
+  it("marks ownership and privileges unknown, not pass, when there's no owner function but privileged functions exist", async () => {
+    const r = await run({ code: { [TOKEN]: MINTABLE } }); // owner()/getOwner() both revert -> Owner{kind:"none"}
+    expect(find(r, "ownership")).toMatchObject({ status: "unknown", title: "No owner function, but the contract has privileged functions" });
+    expect(find(r, "privileges")).toMatchObject({ status: "unknown", title: "Privileged functions found, but who can call them can't be read" });
+  });
+
+  it("still passes ownership and privileges when there's no owner function and nothing privileged", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN } });
+    expect(find(r, "ownership")).toMatchObject({ status: "pass", title: "No owner function" });
+    expect(find(r, "privileges")).toMatchObject({ status: "pass", title: "No privileged functions found" });
+  });
+
+  // --- Part 2 item 5: evidence from ABI and bytecode is combined ---
+
+  it("scans bytecode for privileges even when the verified ABI is empty", async () => {
+    const ex = explorer({ contract: async () => ({ verified: true, name: "T", abi: [], proxyType: null, implementations: [] }) });
+    const r = await run({ code: { [TOKEN]: MINTABLE }, reads: { [`${TOKEN}.owner()`]: OWNER } }, ex);
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  // --- Part 2 item 6: guard() never publishes raw error text ---
+
+  it("never leaks a raw error message — even one containing a URL — into the report", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = new Error("fetch failed: https://rpc.internal.example.com/secret?key=abc123");
+    const r = await run({ code: { [TOKEN]: PLAIN }, storageError: boom });
+    expect(JSON.stringify(r)).not.toContain("rpc.internal.example.com");
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", detail: "This check couldn't run — the network didn't answer." });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proxy"), boom);
+    spy.mockRestore();
+  });
+
+  // --- Part 2 item 8: third-party numbers can't sink a report ---
+
+  it("doesn't crash when the explorer's total_supply is malformed", async () => {
+    const ex = explorer({ token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1.5e21", holdersCount: 3 }) });
+    const r = await run({ code: { [TOKEN]: PLAIN } }, ex);
+    expect(r.token.totalSupply).toBeNull();
+    expect(find(r, "holders").status).toBe("unknown");
+  });
+
+  // --- Part 3: an LP pair with totalSupply() == 0 is unknown, not fail ---
+
+  it("marks lp-lock unknown, not fail, when the v2 pair's LP totalSupply is zero", async () => {
+    const reads = {
+      [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
+      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      [`${PAIR}.totalSupply()`]: 0n,
+    };
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
+    expect(find(r, "lp-lock").status).toBe("unknown");
+  });
+
+  // --- Part 3: the inspected address is always checksummed ---
+
+  it("checksums the inspected address regardless of the casing passed in", async () => {
+    const r = await inspect({
+      address: DEAD as `0x${string}`, // all-lowercase input
+      network: "testnet",
+      reader: reader({ code: { [DEAD]: PLAIN } }),
+      explorer: null,
+      dex: null,
+      knownLockers: [],
+      explorerBase: "https://explorer.test",
+    });
+    expect(r.address).toBe("0x000000000000000000000000000000000000dEaD");
   });
 });
