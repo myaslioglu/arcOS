@@ -1,0 +1,22 @@
+{
+  "name": "@arcos/shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./core": "./src/core/index.ts",
+    "./styles/*": "./src/styles/*"
+  },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "peerDependencies": { "react": "19.2.4", "react-dom": "19.2.4" },
+  "dependencies": { "framer-motion": "^12.42.0", "lucide-react": "^1.21.0" },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  }
+}
