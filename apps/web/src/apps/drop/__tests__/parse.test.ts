@@ -160,6 +160,13 @@ describe("formatDropList", () => {
     expect(formatDropList(rows, "0x3600000000000000000000000000000000000000", 18)).toBe(`${A},2.5`);
   });
 
+  it("round-trips a whole number for a 0-decimal token (5 <-> 5n, no decimal point introduced)", () => {
+    const { rows, issues } = parseDropList(`${A},5`, 0);
+    expect(issues).toEqual([]);
+    expect(rows).toEqual([{ line: 1, address: A, amount: 5n }]);
+    expect(formatDropList(rows, "0x3600000000000000000000000000000000000000", 0)).toBe(`${A},5`);
+  });
+
   it("joins multiple rows with newlines, in the given order", () => {
     const { rows } = parseDropList(`${A},1\n${B},0.25`, 6);
     expect(formatDropList(rows, null, 6)).toBe(`${A},1\n${B},0.25`);
