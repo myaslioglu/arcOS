@@ -1,0 +1,13 @@
+{
+  "name": "arc-os",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "npm run dev -w @arcos/web",
+    "build": "npm run build -w @arcos/web",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint -w @arcos/web",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+dist
+.env*
+!.env.example
+packages/contracts/out
+packages/contracts/cache
+packages/contracts/broadcast
+.DS_Store
+*.tsbuildinfo
+.vercel
+playwright-report
+test-results
