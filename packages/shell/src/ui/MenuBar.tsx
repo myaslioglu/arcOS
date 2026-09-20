@@ -112,11 +112,11 @@ export function MenuBar(props: Props) {
       label: "Window",
       entries: [
         item("Minimize", props.onMinimizeActive, { disabled: !active }),
-        item("Zoom", props.onZoomActive, { disabled: !active }),
+        item(active?.maximized ? "Restore" : "Zoom", props.onZoomActive, { disabled: !active }),
         item("Snap left", () => props.onSnapActive("left"), { disabled: !active }),
         item("Snap right", () => props.onSnapActive("right"), { disabled: !active }),
         SEP,
-        item("Tile all", props.onTile, { disabled: visible.length === 0 }),
+        item("Tile windows", props.onTile, { disabled: visible.length === 0 }),
         item("Minimize all", props.onMinimizeAll, { disabled: visible.length === 0 }),
         item("Close all", props.onCloseAll, { disabled: windows.length === 0 }),
         ...(windows.length > 0
