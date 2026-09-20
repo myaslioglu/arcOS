@@ -34,6 +34,7 @@ contract FeeController is IFeeController, Ownable2Step {
     error NothingPending(bytes32 key);
     error TooEarly(uint64 effectiveAt);
     error ZeroRecipient();
+    error RenounceDisabled();
 
     constructor(address owner_, address payable recipient_) Ownable(owner_) {
         if (recipient_ == address(0)) revert ZeroRecipient();
@@ -77,6 +78,13 @@ contract FeeController is IFeeController, Ownable2Step {
         f.pendingValue = 0;
         f.pendingAt = 0;
         emit FeeChanged(key, f.value);
+    }
+
+    /// @notice Disabled. This system is non-upgradeable, and `setRecipient` is the only way to recover if
+    /// the fee recipient ever can't receive value (e.g. blocklisted on Arc) — losing the owner would lose
+    /// that recovery lever forever. Ownership can still be moved with `transferOwnership`/`acceptOwnership`.
+    function renounceOwnership() public view override onlyOwner {
+        revert RenounceDisabled();
     }
 
     function setRecipient(address payable recipient_) external onlyOwner {

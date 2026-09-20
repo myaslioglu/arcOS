@@ -134,4 +134,20 @@ contract FeeControllerTest is Test {
         fees.acceptOwnership();
         assertEq(fees.owner(), next);
     }
+
+    // ---------------------------------------------------------------------
+    // Ownership can be transferred but never thrown away: setRecipient is the only recovery lever if the
+    // fee recipient can no longer receive value, and this system is non-upgradeable.
+    // ---------------------------------------------------------------------
+
+    function test_renounceOwnership_alwaysReverts_ownerUnchanged_setRecipientStillWorks() public {
+        vm.prank(owner);
+        vm.expectRevert(FeeController.RenounceDisabled.selector);
+        fees.renounceOwnership();
+        assertEq(fees.owner(), owner);
+
+        vm.prank(owner);
+        fees.setRecipient(payable(address(7)));
+        assertEq(fees.recipient(), address(7));
+    }
 }
