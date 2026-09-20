@@ -88,6 +88,43 @@ contract FeeControllerTest is Test {
         assertEq(fees.recipient(), address(7));
     }
 
+    function test_setFee_revertsForNonOwner() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        fees.setFee(KEY, 10 ether);
+    }
+
+    function test_setRecipient_revertsForNonOwner() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        fees.setRecipient(payable(address(7)));
+    }
+
+    function test_reschedulingWhilePending_replacesValueAndRestartsClock() public {
+        vm.startPrank(owner);
+        fees.setFee(KEY, 30 ether); // schedules for now + 48h
+        (uint256 firstValue, uint64 firstAt) = fees.pendingOf(KEY);
+        assertEq(firstValue, 30 ether);
+        assertEq(firstAt, uint64(block.timestamp + 48 hours));
+
+        vm.warp(block.timestamp + 24 hours); // still pending, halfway through the delay
+        fees.setFee(KEY, 45 ether); // a second increase replaces the pending value and restarts the clock
+        vm.stopPrank();
+
+        (uint256 secondValue, uint64 secondAt) = fees.pendingOf(KEY);
+        assertEq(secondValue, 45 ether);
+        assertEq(secondAt, uint64(block.timestamp + 48 hours));
+        assertTrue(secondAt > firstAt); // clock was restarted, not kept from the first schedule
+
+        // the first increase can no longer be applied at its old effective time
+        vm.warp(firstAt);
+        vm.expectRevert(abi.encodeWithSelector(FeeController.TooEarly.selector, secondAt));
+        fees.applyPending(KEY);
+
+        // once the restarted delay elapses, the replaced (second) value is what applies
+        vm.warp(secondAt);
+        fees.applyPending(KEY);
+        assertEq(fees.feeOf(KEY), 45 ether);
+    }
+
     function test_ownership_isTwoStep() public {
         address next = makeAddr("next");
         vm.prank(owner);

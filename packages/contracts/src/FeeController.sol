@@ -58,6 +58,9 @@ contract FeeController is IFeeController, Ownable2Step {
             emit FeeChanged(key, value);
         } else {
             f.pendingValue = value;
+            // casting to 'uint64' is safe because block.timestamp + DELAY cannot reach type(uint64).max
+            // (~5.8 * 10^11 AD) for roughly 10^11 years from now
+            // forge-lint: disable-next-line(unsafe-typecast)
             f.pendingAt = uint64(block.timestamp + DELAY);
             emit FeeScheduled(key, value, f.pendingAt);
         }
@@ -67,6 +70,8 @@ contract FeeController is IFeeController, Ownable2Step {
     function applyPending(bytes32 key) external {
         Fee storage f = _get(key);
         if (f.pendingAt == 0) revert NothingPending(key);
+        // validator clock drift is a matter of seconds and is immaterial against this 48-hour delay
+        // forge-lint: disable-next-line(block-timestamp)
         if (block.timestamp < f.pendingAt) revert TooEarly(f.pendingAt);
         f.value = f.pendingValue;
         f.pendingValue = 0;
