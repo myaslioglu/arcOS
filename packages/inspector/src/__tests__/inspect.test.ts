@@ -261,4 +261,9 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
     expect(find(r, "holders")).toMatchObject({ status: "pass", title: "Top 10 wallets hold 7.5%" });
   });
+
+  it("strips spoofing characters from a symbol read on-chain", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.symbol()`]: "US‮DC" } });
+    expect(r.token.symbol).toBe("USDC");
+  });
 });

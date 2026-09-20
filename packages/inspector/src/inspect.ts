@@ -4,6 +4,7 @@ import {
   checkVerified, erc20Abi, findPools, resolveOwner,
 } from "./checks";
 import type { ContractInfo, Holder, TokenInfo } from "./explorer";
+import { cleanLabel } from "./label";
 import type { CheckId, Finding, InspectInput, Report } from "./types";
 
 export class NotAContract extends Error {
@@ -78,7 +79,12 @@ export async function inspect(input: InspectInput): Promise<Report> {
   return {
     address,
     network: input.network,
-    token: { name, symbol, decimals: decimals === null ? null : Number(decimals), totalSupply: supply === null ? null : supply.toString() },
+    token: {
+      name: cleanLabel(name, 64),
+      symbol: cleanLabel(symbol, 32),
+      decimals: decimals === null ? null : Number(decimals),
+      totalSupply: supply === null ? null : supply.toString(),
+    },
     findings,
     passed: findings.filter((f) => f.status === "pass").length,
     total: findings.length,
