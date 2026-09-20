@@ -51,8 +51,9 @@ export function validateMint(form: MintForm, holder: Address): { ok: true; args:
 
   if (form.mintable && form.cap.trim() !== "") {
     const c = amount(form.cap, places);
+    // A parsed cap of 0 means "no cap typed", matching TokenFactory's cap == 0 => uncapped semantics.
     if (typeof c === "string") errors.cap = c;
-    else if (!errors.supply && c < supply) errors.cap = "Cap can't be below the initial supply";
+    else if (c !== 0n && !errors.supply && c < supply) errors.cap = "Cap can't be below the initial supply";
     else cap = c;
   }
 

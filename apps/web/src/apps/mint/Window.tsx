@@ -42,24 +42,34 @@ function Form() {
     if (!result.ok) return setErrors(result.errors);
     setErrors({});
     if (fee.data === undefined || !client) return notify("Couldn't read the fee. Try again.", "warn");
+    const shownFee = fee.data;
     setBusy(true);
     try {
+      // Re-read the fee right before sending: it can change between opening the window and signing, and we
+      // must not let the user pay a stale amount.
+      const fresh = await fee.refetch();
+      if (fresh.data === undefined) return notify("Couldn't read the fee. Try again.", "warn");
+      if (fresh.data !== shownFee) return notify(`The fee changed to ${formatUsdc(fresh.data)} USDC. Check it and submit again.`, "warn");
       const hash = await writeContractAsync({
         address: contracts.tokenFactory,
         abi: tokenFactoryAbi,
         functionName: "createToken",
         args: [result.args],
-        value: fee.data,
+        value: fresh.data,
         chainId: chain.id,
       });
       const receipt = await client.waitForTransactionReceipt({ hash });
-      const [log] = parseEventLogs({ abi: tokenFactoryAbi, logs: receipt.logs, eventName: "TokenCreated" });
+      // Only trust a TokenCreated log the factory itself emitted — a malicious token contract created in the
+      // same transaction could otherwise forge the event.
+      const factoryLogs = receipt.logs.filter((l) => l.address.toLowerCase() === contracts.tokenFactory.toLowerCase());
+      const [log] = parseEventLogs({ abi: tokenFactoryAbi, logs: factoryLogs, eventName: "TokenCreated" });
       if (!log) throw new Error("The transaction succeeded but no token was reported.");
       setCreated({ token: log.args.token, symbol: result.args.symbol });
       trackEvent("mint_success", { mintable: Number(result.args.mintable), burnable: Number(result.args.burnable) });
       notify(`${result.args.symbol} created`, "ok");
     } catch (err) {
-      notify((err as { shortMessage?: string }).shortMessage ?? "The transaction didn't go through.", "warn", 6000);
+      const message = (err as { shortMessage?: string }).shortMessage ?? (err instanceof Error ? err.message : undefined);
+      notify(message ?? "The transaction didn't go through.", "warn", 6000);
     } finally {
       setBusy(false);
     }
