@@ -1,0 +1,168 @@
+# ARC.os R0 — manual QA script
+
+For the project owner to run by hand: first on testnet, then again on mainnet once
+`ARCOS.mainnet` is filled in (see `packages/contracts/DEPLOY.md`). Items marked **(no wallet
+needed)** were already exercised against `npm run dev` while writing this script and behave as
+described below. Everything else needs a browser wallet (any EIP-6963 extension — MetaMask,
+Rabby, etc. — WalletConnect is not supported) holding testnet USDC from
+https://faucet.circle.com, and the contracts deployed per `packages/contracts/DEPLOY.md`, so it
+is left for the owner to run once those two things exist.
+
+Swap and Bridge are **not** part of this script: they are coming-soon manifests, not working
+apps, because Circle's App Kit SDK currently pulls in dependencies with high-severity `npm audit`
+findings and that hasn't been resolved (see the "Coming soon" section below).
+
+## Desktop **(no wallet needed)**
+
+1. Fresh browser tab, no wallet extension (or wallet disconnected): the desktop loads with four
+   category trays — System, Trust, Create, Trade — each holding its real and coming-soon icons,
+   and the dock pins Finder, Inspector, Mint, Drop, Wallet. Nothing overlaps the dock or the menu
+   bar; a tray that runs past the bottom of the screen scrolls, it doesn't clip. Checked at
+   1280×800 and 1440×900.
+2. Open Inspector, paste the testnet EURC address
+   (`0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a`), click Inspect. Expect: window title becomes
+   "Inspector — EURC", 8 findings render, the badge reads "N of 8 checks pass" (never a numeric
+   score), every finding with an evidence link resolves to `explorer.testnet.arc.io`. No wallet
+   prompt at any point.
+3. Open Mint (no wallet): shows "Connect a wallet to use this app." and an "Open Wallet" button,
+   not a form.
+4. Open Drop (no wallet): the same gate.
+5. Load `http://localhost:3000/#app:inspector?token=0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a`
+   directly: Inspector opens on page load, pre-filled, and runs automatically — no click needed.
+
+## Wallet
+
+6. Connect: the Wallet window lists every EIP-6963 wallet the browser actually announces (not
+   just a generic "Injected" entry) when more than one extension is installed. Approve in the
+   extension; the window switches to the connected view (address link, network, balance,
+   Disconnect).
+7. Once connected on Arc Testnet, the menu bar's right side shows the short address and, within
+   about 15 seconds, `· N USDC`.
+8. Connect while the wallet is on a different chain: the menu bar reads "Switch to Arc Testnet"
+   (underlined); clicking it, or the same button inside a gated app's "Your wallet is on another
+   network." panel, prompts the wallet to add/switch networks and flips back to normal once it
+   succeeds.
+9. Disconnect from the Wallet window returns the menu bar to "Connect wallet".
+
+## Inspector
+
+10. Inspect a non-contract address (e.g. `0x0000000000000000000000000000000000000001`): renders
+    "No contract at that address.", window title stays "Inspector".
+11. Force the explorer unreachable for one inspection (or just run this from a server context on
+    mainnet, which is documented as 403-ing non-browser clients): the affected findings read
+    "unknown" — never guessed as pass or fail — and a banner reads "The explorer didn't answer, so
+    some checks are marked unknown."
+12. Click "Share proof page": the clipboard gets `http://<host>/t/<address>`. Open that link in a
+    tab with JavaScript disabled — the page still renders (it's server-rendered), with the same
+    findings, an "Open in ARC.os" link back to the app, and the disclaimer line.
+13. Load `/badge/<address>` directly: the response is an `image/svg+xml` badge, not an app page.
+14. Check the social card: fetching `/t/<address>` with a link-preview tool (or `curl -s
+    .../t/<address> | grep -i og:image`) shows an `opengraph-image` that reflects the same token.
+15. A mintable token you haven't renounced ownership of shows "Owner can mint new supply" under
+    ownership/privileges. Call `renounceOwnership()` on that token (an EOA-owned `MintableToken`
+    supports it, unlike `FeeController`), reinspect, and confirm the finding now reads ownership
+    renounced / no privileged functions reachable.
+16. Rate limit **(no wallet needed — already verified against `npm run dev`)**: 30 rapid requests
+    to `/api/inspect/<address>` from one IP succeed (or 404/whatever the address resolves to);
+    the 31st within the same minute returns `429` with a `retry-after` header. Confirmed locally:
+    a loop of 35 requests returned `404` for the first 30 and `429` for the last 5, with
+    `retry-after: 53` on the 429s.
+
+## Mint
+
+17. Create a fixed-supply token (e.g. name "Duke", symbol "DUKE", supply "1,000,000", decimals
+    18, both checkboxes off): exactly one wallet prompt for 15 USDC (as native value) plus gas —
+    confirm the requested value matches the fee shown on the submit button. After signing, the
+    window shows "DUKE is live" with a working explorer link.
+18. Create a token with 6 decimals (matching the ERC-20 USDC convention): the same flow works,
+    and both Finder's balance and Inspector's report display it at the right scale — not off by
+    factors of 10^12 against the 18-decimal fixed-supply case above.
+19. Create a mintable token, no cap: Inspector shows "Owner can mint new supply"; the effective
+    cap resolves to uncapped. With an explicit cap above supply, minting above it should revert
+    (once a mint-more UI exists to try it).
+20. Create a burnable token: the deployed contract is the burnable template — the holder can burn
+    their own balance, there's no mint/owner function to find.
+21. Click "Inspect it" on a freshly minted fixed-supply token: 8 findings, "No privileged
+    functions found", "No owner function".
+
+## Drop
+
+22. Drag a real `.csv` file from the computer onto the Recipients textarea (not pasted text): its
+    contents load into the list, a plain `address,amount` header row is recognized and skipped
+    automatically, the row/total counts update.
+23. Include a contract address with no `receive()` among the recipients of a native (USDC) drop:
+    that row's value transfer fails and refunds to the sender; the result panel lists it under
+    "N delivered" as a failed row reading "Line `<n>`: `<short address>`", where `<n>` is that
+    row's actual line number in the pasted/CSV list — not its position within whichever batch it
+    fell into.
+24. Paste a list of more than 200 recipients: it splits into multiple `sendNative`/`sendToken`
+    calls (200 per batch; the contract itself refuses more than 400 in one call, sized to Arc's
+    30,000,000 block gas limit). The Send button's label steps through "Sending batch 1 of N…",
+    "Sending batch 2 of N…", etc.
+25. On a list that splits into 3 batches, reject the wallet prompt on batch 2: afterwards the
+    textarea holds only the rows that never landed — batch 1's delivered rows are gone from the
+    list, batch 2 and batch 3's rows remain — so pressing Send again resends only what's left, not
+    the whole original list.
+26. After a drop with failures, click "Copy failed rows", then paste the clipboard back into the
+    textarea: the addresses and amounts match what was originally typed for those rows.
+27. Check the fee line above Send: "Fee `<amount>` USDC · charged per recipient, including
+    transfers that fail · `<n>` transaction(s)" — confirms the fee is charged per row submitted,
+    not per row that actually lands.
+28. Gas measurement on real hardware: send a real 200-recipient native drop on testnet, then read
+    the transaction's `gasUsed` (`cast receipt <hash> --rpc-url arc_testnet` or the explorer) and
+    compare it against the block gas limit (`cast block latest --rpc-url arc_testnet` →
+    `gasLimit`, expected 30,000,000). This confirms the Foundry-measured "~14.1M gas for 400 fresh
+    native recipients" the app's `BATCH = 200` sizing is based on (see
+    `apps/web/src/apps/drop/parse.ts`) actually holds on the live network, not just in a local
+    Anvil fork.
+29. Known open question (from `packages/contracts/DEPLOY.md`): if a *recipient* (not the fee
+    recipient) in a native drop is a blocklisted address on Arc, confirm whether only that row
+    fails — the same skip-and-refund behavior as any other failing transfer — or whether the
+    whole transaction reverts. This can only be checked on testnet against a real
+    Circle-documented blocklisted test address, if one is published; it cannot be reproduced
+    locally because the blocklist is an Arc network policy, not something Anvil enforces.
+
+## Finder
+
+30. With the wallet holding EURC (and ideally a self-created token), open Finder: EURC and any
+    other ERC-20 holdings appear as files with their symbol; tokens created here appear first,
+    newest first, each tagged "created by you"; the rest are sorted by symbol.
+31. Drag a token file from Finder onto the Inspector tray icon, its dock tile, and an already-open
+    Inspector window: each opens or updates a window titled "Inspector — `<symbol>`".
+32. Select a token file and click "Send with Drop": opens Drop pre-filled with that token
+    (skipping the USDC/Another-token picker).
+
+## Proof page and badge, for a token minted here
+
+33. Mint a token in this session, open its proof page (`/t/<address>`) and badge
+    (`/badge/<address>`) using the flows above (Inspector's "Share proof page", or the URL
+    directly): the proof page shows the token's own name/symbol and findings, and the badge SVG
+    reflects the same check counts as the Inspector window.
+
+## Coming soon
+
+34. Swap and Bridge appear as greyed tray/dock icons. Clicking one shows a toast — "Swap isn't
+    available yet." / "Bridge isn't available yet." — and nothing opens. They stay unshipped
+    because Circle's App Kit SDK currently pulls in dependencies with high-severity `npm audit`
+    findings and the project owner hasn't decided how to proceed; do not test them as working
+    features.
+
+## Phone width
+
+35. At about 390px wide with touch emulation: the desktop becomes a single searchable list of
+    every app grouped by the same four categories; tapping an app opens it full screen; the
+    minimize (–) control returns to the list; Inspector's, Mint's and Drop's forms fit the width
+    with no horizontal scrolling. (Verified for Inspector as shipped, and for Mint and Drop with
+    their wallet/deployment gates temporarily bypassed locally and reverted — see
+    `.superpowers/sdd/task-21-report.md`.)
+
+## Before mainnet — gate list
+
+- [ ] Every testnet item above passes.
+- [ ] `ARCOS_FEE_RECIPIENT` is a plain payable address — an EOA, or a multisig whose
+      `receive()`/fallback can't revert.
+- [ ] `FeeController`'s owner is a wallet you can't lose. Renouncing is disabled by design (it's
+      the only recovery lever if the fee recipient ever stops accepting value), so there is no
+      way to recover a lost owner key.
+- [ ] `NEXT_PUBLIC_ARC_NETWORK=mainnet` is set only after `ARCOS.mainnet` in
+      `packages/chain/src/addresses.ts` is filled in with the real deployed addresses.
