@@ -8,4 +8,4 @@ import { wallet } from "./wallet/manifest";
 import { SOON } from "./soon";
 
 /** Desktop order. Every app in the product is listed here and nowhere else. */
-export const APPS: AppManifest[] = [finder, wallet, about, inspector, mint, drop, ...SOON];
+export const APPS: AppManifest[] = [finder, inspector, mint, drop, wallet, about, ...SOON];
