@@ -3,6 +3,14 @@ import type { Address, DexConfig, NetworkId } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import type { ExplorerSource } from "./explorer";
 
+/** The call reached the chain and reverted (or returned no data): the function isn't there, or it said no. */
+export class CallReverted extends Error {
+  constructor(message = "execution reverted") {
+    super(message);
+    this.name = "CallReverted";
+  }
+}
+
 export type Status = "pass" | "warn" | "fail" | "unknown";
 export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao";
 
@@ -31,7 +39,10 @@ export type Report = {
 export interface ChainReader {
   getCode(address: Address): Promise<Hex | null>;
   getStorageAt(address: Address, slot: Hex): Promise<Hex | null>;
-  /** Rejects when the call reverts. */
+  /**
+   * Rejects with `CallReverted` when the call reverts or returns no data. Any other rejection is
+   * a transport failure and means nothing about the contract.
+   */
   read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[]): Promise<unknown>;
   blockNumber(): Promise<bigint>;
 }
