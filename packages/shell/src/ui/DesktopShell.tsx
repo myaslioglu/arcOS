@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildRegistry, parseAppHash, snapRect, type AppManifest, type QuickAction } from "../core";
+import { buildRegistry, dropParams, parseAppHash, snapRect, type AppManifest, type QuickAction } from "../core";
 import { RegistryProvider } from "./registry";
 import { useWindowManager } from "./hooks/useWindowManager";
 import { useIsTouch } from "./hooks/useIsTouch";
@@ -173,7 +173,10 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
               onBack={() => state.activeId && actions.minimize(state.activeId)}
             />
           ) : (
-            <DesktopIcons onOpen={(id, from) => open(id, {}, from)} />
+            <DesktopIcons
+              onOpen={(id, from) => open(id, {}, from)}
+              onDropItem={(id, item, from) => open(id, dropParams(item), from)}
+            />
           )}
           <WindowManager
             windows={state.windows}
@@ -187,6 +190,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
             windows={state.windows}
             activeId={state.activeId}
             onOpenPinned={(id, from) => open(id, {}, from)}
+            onDropItem={(id, item, from) => open(id, dropParams(item), from)}
             onFocus={actions.focus}
             onClose={actions.close}
             onCloseAll={actions.closeAll}

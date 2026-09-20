@@ -772,3 +772,4 @@
 }
 .os-icon[data-soon="true"] { opacity: 0.45; }
 .os-icon[data-drop="over"] .os-icon-tile { outline: 2px solid var(--accent); outline-offset: 2px; }
+.os-dock-tile[data-drop="over"] .os-dock-face { outline: 2px solid var(--os-hue); outline-offset: 2px; }

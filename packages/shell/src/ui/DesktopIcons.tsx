@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
-import { CATEGORY_LABEL, CATEGORY_ORDER } from "../core";
+import { useMemo, useRef } from "react";
+import { CATEGORY_LABEL, CATEGORY_ORDER, type AppManifest, type DragItem } from "../core";
 import { useRegistry } from "./registry";
+import { useDropTarget } from "./dnd";
 
 type Props = {
   onOpen: (appId: string, from: HTMLElement) => void;
+  onDropItem: (appId: string, item: DragItem, from: HTMLElement) => void;
 };
 
 /**
@@ -17,7 +19,7 @@ type Props = {
  * keyboard behave the same. Windows live on a higher plane and only their
  * frames take pointer events, so the rack stays usable with windows open.
  */
-export function DesktopIcons({ onOpen }: Props) {
+export function DesktopIcons({ onOpen, onDropItem }: Props) {
   const { list } = useRegistry();
   const trays = useMemo(
     () =>
@@ -42,24 +44,45 @@ export function DesktopIcons({ onOpen }: Props) {
           </header>
           <div className="os-tray-screen">
             {t.apps.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={(e) => onOpen(m.id, e.currentTarget)}
-                data-soon={m.comingSoon ? "true" : undefined}
-                aria-label={m.name}
-                className="os-icon"
-                style={m.hue ? ({ "--os-hue": m.hue } as React.CSSProperties) : undefined}
-              >
-                <span className="os-icon-tile">
-                  <m.icon size={26} strokeWidth={1.6} aria-hidden />
-                </span>
-                <span className="os-icon-name">{m.name}</span>
-              </button>
+              <AppIcon key={m.id} m={m} onOpen={onOpen} onDropItem={onDropItem} />
             ))}
           </div>
         </section>
       ))}
     </div>
+  );
+}
+
+function AppIcon({
+  m,
+  onOpen,
+  onDropItem,
+}: {
+  m: AppManifest;
+  onOpen: (appId: string, from: HTMLElement) => void;
+  onDropItem: (appId: string, item: DragItem, from: HTMLElement) => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const { over, props } = useDropTarget(m.comingSoon ? undefined : m.acceptsDrop, (item) => {
+    if (ref.current) onDropItem(m.id, item, ref.current);
+  });
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={(e) => onOpen(m.id, e.currentTarget)}
+      data-soon={m.comingSoon ? "true" : undefined}
+      data-drop={over ? "over" : undefined}
+      aria-label={m.name}
+      className="os-icon"
+      style={m.hue ? ({ "--os-hue": m.hue } as React.CSSProperties) : undefined}
+      {...props}
+    >
+      <span className="os-icon-tile">
+        <m.icon size={26} strokeWidth={1.6} aria-hidden />
+      </span>
+      <span className="os-icon-name">{m.name}</span>
+    </button>
   );
 }

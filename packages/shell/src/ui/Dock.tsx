@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LayoutGrid, X } from "lucide-react";
-import type { DesktopWindow } from "../core";
+import type { AppManifest, DesktopWindow, DragItem } from "../core";
 import { useRegistry } from "./registry";
+import { useDropTarget } from "./dnd";
 
 /** Magnification: the pointed-at tile grows by up to this much… */
 const MAG = 0.38;
@@ -12,11 +13,21 @@ const REACH = 112;
 /** How long a tile bounces after it launches its app. */
 const BOUNCE_MS = 720;
 
+/** Props a tile spreads on to show its name in the label above the dock. */
+type Labelled = {
+  "aria-label": string;
+  onPointerEnter: (e: React.PointerEvent<HTMLElement>) => void;
+  onPointerLeave: () => void;
+  onFocus: (e: React.FocusEvent<HTMLElement>) => void;
+  onBlur: () => void;
+};
+
 type Props = {
   windows: DesktopWindow[];
   activeId: string | null;
   /** Hands over the tile, so the window can grow out of it. */
   onOpenPinned: (appId: string, from: HTMLElement) => void;
+  onDropItem: (appId: string, item: DragItem, from: HTMLElement) => void;
   onFocus: (winId: string) => void;
   onClose: (winId: string) => void;
   onCloseAll: () => void;
@@ -41,7 +52,7 @@ type Props = {
  * Buttons name themselves in a label above the dock on hover or focus, the
  * way a real dock does.
  */
-export function Dock({ windows, activeId, onOpenPinned, onFocus, onClose, onCloseAll, onLauncher }: Props) {
+export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onClose, onCloseAll, onLauncher }: Props) {
   const registry = useRegistry();
   const pinned = useMemo(() => registry.list.filter((m) => m.pinned), [registry]);
   const [tip, setTip] = useState<{ text: string; x: number } | null>(null);
@@ -114,7 +125,7 @@ export function Dock({ windows, activeId, onOpenPinned, onFocus, onClose, onClos
     const r = el.getBoundingClientRect();
     setTip({ text, x: r.left + r.width / 2 });
   };
-  const labelled = (text: string) => ({
+  const labelled = (text: string): Labelled => ({
     "aria-label": text,
     onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
       if (e.pointerType === "mouse") show(text, e.currentTarget);
@@ -152,24 +163,18 @@ export function Dock({ windows, activeId, onOpenPinned, onFocus, onClose, onClos
         {pinned.map((m) => {
           const open = windows.some((w) => w.appId === m.id);
           return (
-            <button
+            <DockTile
               key={m.id}
-              type="button"
-              onClick={(e) => {
+              m={m}
+              open={open}
+              bouncing={bouncing === m.id}
+              onOpenPinned={(e) => {
                 if (!open && !still.current) setBouncing(m.id);
                 onOpenPinned(m.id, e.currentTarget);
               }}
-              data-cursor="hover"
-              data-mag
-              className={`os-dock-btn os-dock-tile ${open ? "os-dock-btn--open" : ""}`}
-              style={{ "--os-hue": m.hue ?? "var(--accent)" } as React.CSSProperties}
-              {...labelled(m.name)}
-            >
-              <span className={`os-dock-face ${bouncing === m.id ? "os-dock-face--bounce" : ""}`}>
-                <m.icon className="os-dock-glyph" />
-              </span>
-              {open && <span className="os-dock-dot" aria-hidden />}
-            </button>
+              onDropItem={onDropItem}
+              labelled={labelled}
+            />
           );
         })}
         {windows.length > 0 && <span className="os-dock-sep" aria-hidden />}
@@ -232,5 +237,46 @@ export function Dock({ windows, activeId, onOpenPinned, onFocus, onClose, onClos
         </span>
       )}
     </>
+  );
+}
+
+function DockTile({
+  m,
+  open,
+  bouncing,
+  onOpenPinned,
+  onDropItem,
+  labelled,
+}: {
+  m: AppManifest;
+  open: boolean;
+  bouncing: boolean;
+  onOpenPinned: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onDropItem: (appId: string, item: DragItem, from: HTMLElement) => void;
+  labelled: (text: string) => Labelled;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const { over, props } = useDropTarget(m.comingSoon ? undefined : m.acceptsDrop, (item) => {
+    if (ref.current) onDropItem(m.id, item, ref.current);
+  });
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onOpenPinned}
+      data-cursor="hover"
+      data-mag
+      data-drop={over ? "over" : undefined}
+      className={`os-dock-btn os-dock-tile ${open ? "os-dock-btn--open" : ""}`}
+      style={{ "--os-hue": m.hue ?? "var(--accent)" } as React.CSSProperties}
+      {...labelled(m.name)}
+      {...props}
+    >
+      <span className={`os-dock-face ${bouncing ? "os-dock-face--bounce" : ""}`}>
+        <m.icon className="os-dock-glyph" />
+      </span>
+      {open && <span className="os-dock-dot" aria-hidden />}
+    </button>
   );
 }
