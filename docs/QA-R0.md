@@ -19,9 +19,9 @@ Bridge" section below for what to check, including the fee split).
 
 1. Fresh browser tab, no wallet extension (or wallet disconnected): the desktop loads with four
    category trays — System, Trust, Create, Trade — each holding its real and coming-soon icons,
-   and the dock pins Finder, Inspector, Mint, Drop, Wallet. Nothing overlaps the dock or the menu
-   bar; a tray that runs past the bottom of the screen scrolls, it doesn't clip. Checked at
-   1280×800 and 1440×900.
+   and the dock pins Finder, Inspector, Mint, Drop, Swap, Wallet (Bridge and About are not
+   pinned). Nothing overlaps the dock or the menu bar; a tray that runs past the bottom of the
+   screen scrolls, it doesn't clip. Checked at 1280×800 and 1440×900.
 2. Open Inspector, paste the testnet EURC address
    (`0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a`), click Inspect. Expect: window title becomes
    "Inspector — EURC", 8 findings render, the badge reads "N of 8 checks pass" (never a numeric
@@ -170,59 +170,95 @@ Bridge" section below for what to check, including the fee split).
 
 ## Swap and Bridge
 
+Swap and Bridge call Circle's App Kit SDK without an API key (keyless mode), so both share one
+public rate limit with the rest of the internet rather than a limit scoped to this app. A "busy"
+response from the service is a real possibility, not a bug: Swap shows "The swap service is busy.
+Try again in a minute." (as the amount-box estimate error, or as the result after clicking Swap),
+and Bridge shows the equivalent "The bridge service is busy. Try again in a minute." This can't be
+reliably provoked on demand — it depends on the service's own load — so just confirm the message
+text matches this if it happens to come up while running the rest of this section.
+
 36. Open Swap with the wallet disconnected: the same "Connect a wallet to use this app." gate as
     every other trading app.
 37. Connect, open Swap: pick USDC → EURC, type "1". Within about 400ms of the last keystroke an
-    estimate appears — "You receive (estimated)" fills in, plus a "Minimum received" line and any
-    fee lines App Kit's estimate itself reports. Picking EURC as the "You send" token (matching
-    what's already selected as "You receive") swaps the two instead of letting both read EURC;
-    the "Flip" button does the same swap directly. If `NEXT_PUBLIC_FEE_RECIPIENT` is set, a
-    "Platform fee 0.20%" line is present; if it's unset (or malformed), that line is absent and no
-    fee is charged — confirm both states by toggling the env var and restarting `npm run dev`.
+    estimate appears — "You receive (estimated)" fills in, plus a "Minimum received" line, a "Max
+    slippage 0.5%" line (1% instead once cirBTC is on either side of the pair), and any fee lines
+    App Kit's estimate itself reports. Picking EURC as the "You send" token (matching what's
+    already selected as "You receive") swaps the two instead of letting both read EURC; the "Flip"
+    button does the same swap directly. If `NEXT_PUBLIC_FEE_RECIPIENT` is set, a single "Platform
+    fee (0.20%)" line shows the estimate's own developer-fee amount (never a second, separate
+    "0.20%" line duplicating it); if it's unset (or malformed), that line is absent entirely and no
+    fee is charged — confirm both states by toggling the env var and restarting `npm run dev`. A
+    fee entry whose amount comes back `null` reads "unknown", never silently disappears.
 38. Type "1,5" into the amount box: `"1,5" isn't a number` appears (a comma is never read as a
     decimal point) and Swap is disabled. Clear it and type a valid amount to confirm the message
-    clears and Swap re-enables.
-39. Click Swap: one or two wallet prompts (App Kit handles any allowance itself — permit signature
-    or an approve transaction — before the swap transaction). While it's in flight the button
-    reads "Waiting for your wallet…" and the form is locked; a second click, or opening a second
-    Swap window, does nothing until this one finishes. Once it lands: "Swap complete", the
-    transaction hash (linking to `explorer.testnet.arc.io`), and the received amount if App Kit's
-    result reports one. If `NEXT_PUBLIC_FEE_RECIPIENT` was set, check that address's USDC balance
-    increased by about 0.0018 USDC on a 1 USDC swap (0.20% minus Arc's 10% share — i.e. the
-    recipient keeps 90% of the 0.20% fee).
-40. Close the Swap window mid-swap (right after clicking Swap, before it resolves) and reopen it:
-    the in-flight state — or the result, once it lands — is still there, not a blank form. This is
-    the session store surviving the window unmounting, the same pattern Drop uses.
-41. Open Bridge with the wallet disconnected: the same connect gate.
-42. Connect, open Bridge: "To Arc" is selected by default, "From" defaults to the first EVM chain
+    clears and Swap re-enables. Switch "You send" to cirBTC and type "0.12345678" (8 decimal
+    places): no error, Swap enables once the debounced estimate settles — cirBTC is validated at
+    its own 8 decimal places, not USDC/EURC's 6. Switch back to USDC and try the same 8-decimal
+    text: refused, since USDC only allows 6.
+39. Type an amount, then edit it again inside the 400ms debounce window (before the estimate
+    updates): the button immediately reads "Updating the quote…" and is disabled — it does not stay
+    enabled against the stale estimate from before the edit. Confirm the amount that actually
+    swaps, when you do click Swap, is always what the box shows at the moment of the click, never a
+    debounced value that lagged behind it.
+40. Click Swap: one or two wallet prompts (App Kit handles any allowance itself — permit signature
+    or an approve transaction — before the swap transaction). While it's in flight the button reads
+    "Waiting for your wallet…" and the form is locked; a second click, or opening a second Swap
+    window, does nothing until this one finishes, and shows "Swapping `<amount>` `<tokenIn>` →
+    `<tokenOut>`…". Once it lands: only a `DONE` status shows "Swap complete" (success styling, the
+    transaction link, and the received amount if App Kit's result reports one); a `FAILED` or
+    `NOT_FOUND` status shows a warning-styled reason (the SDK's own explanation) and never claims
+    success; anything else (still in-flight) shows a neutral "Swap submitted — check the
+    transaction" with the link. If `NEXT_PUBLIC_FEE_RECIPIENT` was set, check that address's
+    **EURC** balance (the output token of this USDC → EURC swap — the custom fee on a same-chain
+    swap is taken from what the recipient receives, not from USDC) increased by about 0.0016 EURC
+    on a 1 USDC swap (0.20% of the EURC received, minus Circle's 10% share of that custom fee —
+    i.e. `NEXT_PUBLIC_FEE_RECIPIENT` keeps 90% of it).
+41. Close the Swap window mid-swap (right after clicking Swap, before it resolves) and reopen it:
+    "Swapping `<amount>` `<tokenIn>` → `<tokenOut>`…" is there — or the result, once it lands — not
+    a blank form. This is the session store surviving the window unmounting, the same pattern Drop
+    uses.
+42. Open Bridge with the wallet disconnected: the same connect gate.
+43. Connect, open Bridge: "To Arc" is selected by default, "From" defaults to the first EVM chain
     in the list (Ethereum Sepolia on testnet). Check the chain select lists exactly six EVM chains
     (no Solana) matching the active network (mainnet or testnet, never a mix). Type "1" in Amount:
     "Fee 0.002 USDC (0.20%) · added on top" appears when `NEXT_PUBLIC_FEE_RECIPIENT` is set, absent
     when it isn't.
-43. Click Bridge with the wallet on Arc Testnet and "To Arc" / Ethereum Sepolia selected: the
+44. Click Bridge with the wallet on Arc Testnet and "To Arc" / Ethereum Sepolia selected: the
     wallet is prompted to switch to Ethereum Sepolia (App Kit's adapter drives this itself), then
     to approve/burn there; depending on whether Circle's Forwarder relays the mint, either no
     further prompt is needed or the wallet is asked to switch back to Arc Testnet for one more
     signature. This can take a few minutes — the window says so and stays usable. Once it
-    settles: each step App Kit's result reports (its name, state, and — where present — a
-    transaction hash linking to that chain's own explorer) is listed, and the headline reads
-    "Bridge complete", "Still finishing on the destination chain", or "Bridge didn't complete"
-    depending on the result's `state` — never a guessed "complete" the SDK didn't actually report.
-    If `NEXT_PUBLIC_FEE_RECIPIENT` was set, confirm that address's USDC balance on Ethereum Sepolia
+    settles: any `warnings` App Kit's result reports (e.g. a FAST→SLOW speed downgrade) are listed
+    as plain lines, then each step (its name, state, and — where present — a transaction hash
+    linking to that chain's own explorer) below them, and the headline reads "Bridge complete",
+    "Still finishing on the destination chain", or "The bridge stopped before finishing" depending
+    on the result's `state` — never a guessed "complete" the SDK didn't actually report. If
+    `NEXT_PUBLIC_FEE_RECIPIENT` was set, confirm that address's USDC balance on Ethereum Sepolia
     (the source chain — bridge fees are charged there, added on top of the transfer) increased by
     about 0.0018 USDC.
-44. Close the Bridge window mid-transfer and reopen it (or open a fresh Bridge window): the
+45. A failed bridge (`state: 'error'`) where the burn already landed on the source chain shows
+    "Your USDC left `<source>`. It isn't lost: it can still be delivered on `<dest>`." above the
+    step list; a failure before the burn ever succeeded doesn't show that sentence, since nothing
+    left the wallet. When the failed step's error is one App Kit's `isRetryableError` considers
+    retryable, a "Retry" button appears and calls App Kit's `retryBridge` through the same
+    one-at-a-time session guard as the original submit; the failed result (and the Retry option)
+    survive closing and reopening the Bridge window, same as item 46 below. This is hard to provoke
+    on demand against a real network — the fake-kit browser check in the implementer's report is
+    the practical way to see this rendered; treat this item as confirmed once that's been done and
+    spot-check it again if a real bridge happens to fail during testnet QA.
+46. Close the Bridge window mid-transfer and reopen it (or open a fresh Bridge window): the
     in-flight state, or the settled result, is still there — closing the window never orphans a
     transfer that already burned funds on the source chain. Closing or reloading the tab itself
     prompts the browser's native "leave site?" warning while a bridge is in flight.
-45. Known simplification, not a bug: Bridge shows live progress only as "Bridging — this can take
+47. Known simplification, not a bug: Bridge shows live progress only as "Bridging — this can take
     a few minutes" while the SDK's single `kit.bridge()` call is in flight, then the full step list
     once it settles — it does not subscribe to App Kit's per-step event stream for a live
     approve/burn/attest/mint ticker.
 
 ## Phone width
 
-46. At about 390px wide with touch emulation: the desktop becomes a single searchable list of
+48. At about 390px wide with touch emulation: the desktop becomes a single searchable list of
     every app grouped by the same four categories; tapping an app opens it full screen; the
     minimize (–) control returns to the list; Inspector's, Mint's, Drop's, Swap's and Bridge's
     forms fit the width with no horizontal scrolling. (Verified for Inspector as shipped, and for

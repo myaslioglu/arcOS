@@ -27,7 +27,7 @@ Automated analysis, not investment advice.
 Mint and Drop call `TokenFactory` and `Multisend`, which are not deployed yet — both windows show
 "isn't deployed on this network yet" until they are (see `packages/contracts/DEPLOY.md`). Swap and
 Bridge run on Circle's App Kit SDK in keyless mode (no Circle API key ships to the browser) and
-charge a 0.20% platform fee, split 90/10 between `NEXT_PUBLIC_FEE_RECIPIENT` and Arc, when that
+charge a 0.20% platform fee, split 90/10 between `NEXT_PUBLIC_FEE_RECIPIENT` and Circle, when that
 address is set — with it unset, both apps still work and simply charge no fee. Installing App Kit
 requires one dependency exception (a transitive `toml` advisory forced to a patched major via an
 npm `overrides` entry); see [SECURITY.md](./SECURITY.md#dependency-exceptions) for exactly what,
@@ -101,6 +101,11 @@ pass or fail.
   have. Bridge shows the source/burn/mint steps App Kit's settled result reports; it doesn't yet
   show live per-step progress while a transfer is still in flight, since App Kit's `kit.bridge()`
   call only resolves once the transfer settles rather than streaming per-step events.
+- Swap and Bridge call Circle's App Kit SDK without an API key (keyless mode — see above), which
+  means every user of this deployment shares one public rate limit with the rest of the internet,
+  not a limit scoped to this app. A "busy" error from the service (shown as "The swap/bridge
+  service is busy. Try again in a minute.") is possible, especially around a shared limit getting
+  hit by unrelated traffic, and isn't a sign anything here is broken.
 - The contracts are unaudited.
 
 ## Security

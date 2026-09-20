@@ -57,13 +57,14 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   Resolves to `toml@4.3.0` as of 2026-09-20. `@coral-xyz/anchor@0.31.1` (the version `app-kit`
   pulls) was written against `toml@^3.0.0`; this override installs a newer major than it declares
   support for. `npm run build`, the full test suite, and a standalone `new AppKit()` smoke script
-  all ran clean against the forced version (see `.superpowers/sdd/task-20-report.md`) — `toml`'s
-  own public API (`parse(string) -> object`) is small and unchanged across this jump, and Anchor's
-  usage of it is a single, simple parse call.
+  all ran clean against the forced version — `toml`'s own public API (`parse(string) -> object`)
+  is small and unchanged across this jump, and Anchor's usage of it is a single, simple parse call.
 - **Decided by:** the project owner, in chat, 2026-09-20 — a deliberate, documented exception, not
-  a default resolution path. Accepted per the "same major" override rule in
-  `.superpowers/sdd/implementer-instructions.md`'s spirit: track it explicitly here rather than
-  silently widening the rule.
+  a default resolution path. This project's normal default is to keep a forced `overrides` bump
+  within the same major version, to avoid exactly this kind of unreviewed breaking change; this
+  entry is a narrow, explicitly-tracked exception to that default (rather than a silent one),
+  justified by there being no in-range `3.x` patch and by `toml`'s tiny, stable public API making
+  the major jump low-risk in practice (see the verification above).
 - **Exit condition:** remove the override once `@circle-fin/app-kit` (directly or via
   `@coral-xyz/anchor`) depends on `toml >= 4.2.0` on its own, or drops the CCTP-Solana / Anchor
   dependency entirely for the providers this app doesn't use. Re-run `npm audit --omit=dev` after
