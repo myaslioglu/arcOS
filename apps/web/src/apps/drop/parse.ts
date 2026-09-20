@@ -17,20 +17,50 @@ export const BATCH = 200;
 /** Mirrors Multisend.MAX_RECIPIENTS — the hard cap the contract enforces per call. */
 export const MAX_BATCH = 400;
 
+/** Hard cap on non-empty rows a single parse will accept. Beyond this a paste is treated as unsafe to
+ * even parse (let alone send), rather than silently truncated or slowly chewed through row by row. */
+export const MAX_ROWS = 10_000;
+
 const ZERO = "0x0000000000000000000000000000000000000000";
 
+/** A header's first cell is text only: letters, spaces or underscores (`address`, `wallet_address`,
+ * `Recipient`). Anything else — including a malformed address that merely lacks "0x" — is data, so a typo
+ * on line 1 always surfaces as an issue instead of silently vanishing as a "header". */
+const HEADER_CELL = /^[A-Za-z_ ]+$/;
+
+/**
+ * Splits a trimmed, non-empty line into its address token — everything up to the first run of whitespace,
+ * comma or semicolon — and the amount text that follows that run, trimmed. The amount text is otherwise
+ * untouched (its own internal commas survive) so `parseTokenAmount` sees exactly what the user typed and
+ * can apply its own thousands-separator rules. `amountText` is `undefined` when nothing follows the
+ * address (or only more separators do), meaning the line has no amount at all.
+ */
+function splitRow(trimmed: string): { address: string; amountText: string | undefined } {
+  const sepIndex = trimmed.search(/[\s,;]/);
+  if (sepIndex === -1) return { address: trimmed, amountText: undefined };
+  const address = trimmed.slice(0, sepIndex);
+  const rest = trimmed.slice(sepIndex).replace(/^[\s,;]+/, "").trim();
+  return { address, amountText: rest === "" ? undefined : rest };
+}
+
 export function parseDropList(text: string, decimals: number): { rows: DropRow[]; issues: DropIssue[]; total: bigint } {
+  const lines = text.split(/\r?\n/);
+  const nonEmptyLines = lines.filter((l) => l.trim() !== "").length;
+  if (nonEmptyLines > MAX_ROWS) {
+    return { rows: [], issues: [{ line: 0, message: "A list can have at most 10,000 rows" }], total: 0n };
+  }
+
   const rows: DropRow[] = [];
   const issues: DropIssue[] = [];
   const seen = new Map<string, number>();
   let total = 0n;
 
-  text.split(/\r?\n/).forEach((raw, i) => {
+  lines.forEach((raw, i) => {
     const line = i + 1;
-    const cells = raw.trim().split(/[\s,;]+/).filter(Boolean);
-    if (cells.length === 0) return;
-    const [addr = "", amt] = cells;
-    if (line === 1 && !addr.startsWith("0x")) return; // header
+    const trimmed = raw.trim();
+    if (trimmed === "") return;
+    const { address: addr, amountText: amt } = splitRow(trimmed);
+    if (line === 1 && HEADER_CELL.test(addr)) return; // header
     if (amt === undefined) return void issues.push({ line, message: "Expected an address and an amount" });
     if (!isAddress(addr, { strict: false })) return void issues.push({ line, message: "Not an address" });
     if (addr.toLowerCase() === ZERO) return void issues.push({ line, message: "The zero address can't receive funds on Arc" });

@@ -35,6 +35,88 @@ describe("parseDropList", () => {
   it("refuses the zero address", () => {
     expect(parseDropList("0x0000000000000000000000000000000000000000,1", 6).issues[0]?.message).toBe("The zero address can't receive funds on Arc");
   });
+
+  it("flags a duplicate address regardless of checksum casing", () => {
+    const upper = "0xABCDEF1234567890ABCDEF1234567890ABCDEF12";
+    const lower = upper.toLowerCase();
+    const { rows, issues } = parseDropList(`${upper},1\n${lower},2`, 6);
+    expect(rows.map((r) => r.line)).toEqual([1]);
+    expect(issues).toEqual([{ line: 2, message: "Duplicate of line 1" }]);
+  });
+});
+
+describe("thousands separators", () => {
+  it("keeps a comma-grouped amount intact after a comma-separated address", () => {
+    const { rows, issues } = parseDropList(`${A},1,000.50`, 6);
+    expect(issues).toEqual([]);
+    expect(rows).toEqual([{ line: 1, address: A, amount: 1_000_500_000n }]);
+  });
+
+  it("keeps a comma-grouped amount intact after a semicolon separator", () => {
+    const { rows, issues } = parseDropList(`${A};2,500`, 0);
+    expect(issues).toEqual([]);
+    expect(rows[0]?.amount).toBe(2500n);
+  });
+
+  it("keeps a comma-grouped amount intact after a tab separator", () => {
+    const { rows, issues } = parseDropList(`${A}\t1,000,000`, 0);
+    expect(issues).toEqual([]);
+    expect(rows[0]?.amount).toBe(1_000_000n);
+  });
+
+  it("rejects a malformed grouping with the amount parser's own message", () => {
+    const { rows, issues } = parseDropList(`${A},1,5`, 6);
+    expect(rows).toEqual([]);
+    expect(issues).toEqual([{ line: 1, message: '"1,5" isn\'t a number' }]);
+  });
+
+  it("trims whitespace around the amount left after the separator run", () => {
+    const { rows, issues } = parseDropList(`${A}, 12.5 `, 6);
+    expect(issues).toEqual([]);
+    expect(rows[0]?.amount).toBe(12_500_000n);
+  });
+
+  it("rejects a space inside the amount itself", () => {
+    const { rows, issues } = parseDropList(`${A},1 000`, 6);
+    expect(rows).toEqual([]);
+    expect(issues).toEqual([{ line: 1, message: '"1 000" isn\'t a number' }]);
+  });
+});
+
+describe("header detection", () => {
+  it("treats line 1 as a header only when its first cell is letters, spaces or underscores", () => {
+    expect(parseDropList(`address,amount\n${A},1`, 6).rows).toHaveLength(1);
+    expect(parseDropList(`wallet_address,amount\n${A},1`, 6).rows).toHaveLength(1);
+    expect(parseDropList(`Recipient Amount\n${A},1`, 6).rows).toHaveLength(1);
+  });
+
+  it("never drops a genuine typo on line 1 as if it were a header", () => {
+    const { rows, issues } = parseDropList("0x123,5", 6);
+    expect(rows).toEqual([]);
+    expect(issues).toEqual([{ line: 1, message: "Not an address" }]);
+  });
+
+  it("never treats a non-0x typo on line 1 as a header just because it lacks the prefix", () => {
+    const { rows, issues } = parseDropList("123abc,5", 6);
+    expect(rows).toEqual([]);
+    expect(issues).toEqual([{ line: 1, message: "Not an address" }]);
+  });
+});
+
+describe("size guard", () => {
+  it("refuses more than 10,000 rows outright, without parsing any of them", () => {
+    const text = Array.from({ length: 10_001 }, () => `${A},1`).join("\n");
+    const { rows, issues } = parseDropList(text, 6);
+    expect(rows).toEqual([]);
+    expect(issues).toEqual([{ line: 0, message: "A list can have at most 10,000 rows" }]);
+  });
+
+  it("still parses exactly 10,000 rows", () => {
+    const text = Array.from({ length: 10_000 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, "0")},1`).join("\n");
+    const { rows, issues } = parseDropList(text, 6);
+    expect(issues).toEqual([]);
+    expect(rows).toHaveLength(10_000);
+  });
 });
 
 describe("chunk", () => {
