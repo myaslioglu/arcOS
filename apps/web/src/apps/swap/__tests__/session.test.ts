@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SwapResult } from "@circle-fin/app-kit";
-import { initialSwapSessionState, session, swapSessionReducer, type SwapSessionState } from "../session";
+import { createSwapSession, initialSwapSessionState, session, swapSessionReducer, type BeforeUnloadTarget, type SwapSessionState } from "../session";
 
 const result = { txHash: "0xabc" } as unknown as SwapResult;
 
@@ -118,5 +118,96 @@ describe("session store", () => {
     session.finish(result);
     session.dismiss();
     expect(session.getSnapshot()).toEqual(initialSwapSessionState);
+  });
+});
+
+// No jsdom in this workspace (vitest.config.mts runs environment: "node") — a real `window` doesn't
+// exist, so these inject a minimal fake target instead, exactly the shape session.ts actually calls.
+describe("session store's beforeunload guard", () => {
+  const fakeTarget = (): BeforeUnloadTarget => ({ addEventListener: vi.fn(), removeEventListener: vi.fn() });
+
+  it("start() registers a beforeunload listener on the injected target", () => {
+    const target = fakeTarget();
+    const s = createSwapSession(target);
+    s.start("USDC", "EURC", "10");
+    expect(target.addEventListener).toHaveBeenCalledTimes(1);
+    expect(target.addEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
+    expect(target.removeEventListener).not.toHaveBeenCalled();
+  });
+
+  it("finish() removes the listener start() registered", () => {
+    const target = fakeTarget();
+    const s = createSwapSession(target);
+    s.start("USDC", "EURC", "10");
+    s.finish(result);
+    expect(target.removeEventListener).toHaveBeenCalledTimes(1);
+    expect(target.removeEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
+  });
+
+  it("fail() removes the listener start() registered", () => {
+    const target = fakeTarget();
+    const s = createSwapSession(target);
+    s.start("USDC", "EURC", "10");
+    s.fail("oops");
+    expect(target.removeEventListener).toHaveBeenCalledTimes(1);
+    expect(target.removeEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
+  });
+
+  it("finish()/fail() before a session ever started touch neither method", () => {
+    const target = fakeTarget();
+    const s = createSwapSession(target);
+    s.finish(result);
+    s.fail("oops");
+    expect(target.addEventListener).not.toHaveBeenCalled();
+    expect(target.removeEventListener).not.toHaveBeenCalled();
+  });
+
+  it("a second start() while already swapping is refused and doesn't re-register", () => {
+    const target = fakeTarget();
+    const s = createSwapSession(target);
+    s.start("USDC", "EURC", "10");
+    s.start("EURC", "cirBTC", "1");
+    expect(target.addEventListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("works with no target at all (SSR / a test that passes undefined) — no-ops instead of throwing", () => {
+    const s = createSwapSession(undefined);
+    expect(() => s.start("USDC", "EURC", "10")).not.toThrow();
+    expect(() => s.finish(result)).not.toThrow();
+  });
+});
+
+describe("session store notifies subscribers", () => {
+  it("calls every subscribed listener on start, finish, fail and dismiss, and stops after unsubscribing", () => {
+    const s = createSwapSession(undefined);
+    const listener = vi.fn();
+    const unsubscribe = s.subscribe(listener);
+
+    s.start("USDC", "EURC", "10");
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    s.finish(result);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    s.dismiss();
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    s.start("EURC", "USDC", "5");
+    s.fail("nope");
+    expect(listener).toHaveBeenCalledTimes(5);
+
+    unsubscribe();
+    s.dismiss();
+    expect(listener).toHaveBeenCalledTimes(5);
+  });
+
+  it("a no-op action (e.g. start() while already swapping) does not notify", () => {
+    const s = createSwapSession(undefined);
+    const listener = vi.fn();
+    s.subscribe(listener);
+    s.start("USDC", "EURC", "10");
+    expect(listener).toHaveBeenCalledTimes(1);
+    s.start("EURC", "cirBTC", "1"); // refused — already swapping
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

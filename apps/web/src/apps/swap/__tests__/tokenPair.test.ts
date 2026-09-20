@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickToken } from "../tokenPair";
+import { flipTokens, pickToken } from "../tokenPair";
 
 describe("pickToken", () => {
   it("sets the picked token on the given side, unchanged on the other, when they differ", () => {
@@ -18,8 +18,7 @@ describe("pickToken", () => {
 });
 
 describe("flipTokens", () => {
-  it("swaps tokenIn and tokenOut", async () => {
-    const { flipTokens } = await import("../tokenPair");
+  it("swaps tokenIn and tokenOut", () => {
     expect(flipTokens({ tokenIn: "USDC", tokenOut: "EURC" })).toEqual({ tokenIn: "EURC", tokenOut: "USDC" });
   });
 });

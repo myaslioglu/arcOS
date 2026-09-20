@@ -58,63 +58,84 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
   }
 }
 
+/** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake
+ * instead of depending on jsdom (this workspace's vitest runs `environment: "node"`, so there's no
+ * real `window` to exercise this against otherwise). */
+export type BeforeUnloadTarget = {
+  addEventListener(type: "beforeunload", listener: (e: BeforeUnloadEvent) => void): void;
+  removeEventListener(type: "beforeunload", listener: (e: BeforeUnloadEvent) => void): void;
+};
+
 function beforeUnloadGuard(e: BeforeUnloadEvent): void {
   e.preventDefault();
   e.returnValue = "";
 }
 
 /**
- * Module-level store: at most one Swap session per page, independent of any single window's
- * lifetime — see apps/drop/session.ts for the full rationale (closing the window unmounts the
- * form, which must not orphan a signed transaction the chain is still confirming).
+ * Factory behind the module-level `session` singleton below, pulled out so tests can construct an
+ * isolated instance against a fake `BeforeUnloadTarget` instead of the real (jsdom-only) `window`.
+ * The production singleton is the one export that matters at runtime: at most one Swap session per
+ * page, independent of any single window's lifetime — see apps/drop/session.ts for the full
+ * rationale (closing the window unmounts the form, which must not orphan a signed transaction the
+ * chain is still confirming).
+ *
+ * `target` defaults to the real `window` when one exists and `undefined` otherwise (SSR / this
+ * workspace's node test environment) — re-resolved on every call, exactly matching the previous
+ * inline `typeof window !== "undefined"` guard.
  */
-let state: SwapSessionState = initialSwapSessionState;
-const listeners = new Set<() => void>();
+export function createSwapSession(target?: BeforeUnloadTarget) {
+  const resolveTarget = (): BeforeUnloadTarget | undefined => target ?? (typeof window === "undefined" ? undefined : window);
 
-function emit(): void {
-  for (const listener of listeners) listener();
+  let state: SwapSessionState = initialSwapSessionState;
+  const listeners = new Set<() => void>();
+
+  function emit(): void {
+    for (const listener of listeners) listener();
+  }
+
+  function getSnapshot(): SwapSessionState {
+    return state;
+  }
+
+  function subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  /** Starts a session; refuses — returns `false`, changes nothing — if one is already swapping. */
+  function start(tokenIn: SwapToken, tokenOut: SwapToken, amountIn: string): boolean {
+    if (state.status === "swapping") return false;
+    state = swapSessionReducer(state, { type: "start", tokenIn, tokenOut, amountIn, startedAt: Date.now() });
+    resolveTarget()?.addEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+    return true;
+  }
+
+  /** Records a successful result; only takes effect while swapping. */
+  function finish(result: SwapResult): void {
+    if (state.status !== "swapping") return;
+    state = swapSessionReducer(state, { type: "finish", result });
+    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+  }
+
+  /** Records a failure; only takes effect while swapping. */
+  function fail(message: string): void {
+    if (state.status !== "swapping") return;
+    state = swapSessionReducer(state, { type: "fail", message });
+    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+  }
+
+  /** Dismisses a finished session, returning to a blank form; only takes effect while done. */
+  function dismiss(): void {
+    const next = swapSessionReducer(state, { type: "dismiss" });
+    if (next === state) return;
+    state = next;
+    emit();
+  }
+
+  return { getSnapshot, subscribe, start, finish, fail, dismiss };
 }
 
-function getSnapshot(): SwapSessionState {
-  return state;
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-/** Starts a session; refuses — returns `false`, changes nothing — if one is already swapping. */
-function start(tokenIn: SwapToken, tokenOut: SwapToken, amountIn: string): boolean {
-  if (state.status === "swapping") return false;
-  state = swapSessionReducer(state, { type: "start", tokenIn, tokenOut, amountIn, startedAt: Date.now() });
-  if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeUnloadGuard);
-  emit();
-  return true;
-}
-
-/** Records a successful result; only takes effect while swapping. */
-function finish(result: SwapResult): void {
-  if (state.status !== "swapping") return;
-  state = swapSessionReducer(state, { type: "finish", result });
-  if (typeof window !== "undefined") window.removeEventListener("beforeunload", beforeUnloadGuard);
-  emit();
-}
-
-/** Records a failure; only takes effect while swapping. */
-function fail(message: string): void {
-  if (state.status !== "swapping") return;
-  state = swapSessionReducer(state, { type: "fail", message });
-  if (typeof window !== "undefined") window.removeEventListener("beforeunload", beforeUnloadGuard);
-  emit();
-}
-
-/** Dismisses a finished session, returning to a blank form; only takes effect while done. */
-function dismiss(): void {
-  const next = swapSessionReducer(state, { type: "dismiss" });
-  if (next === state) return;
-  state = next;
-  emit();
-}
-
-export const session = { getSnapshot, subscribe, start, finish, fail, dismiss };
+export const session = createSwapSession();
