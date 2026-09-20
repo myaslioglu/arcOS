@@ -16,6 +16,10 @@ if that transfer fails (`FeeTransferFailed`). A recipient that can't receive val
 revert until the owner calls `FeeController.setRecipient` with a working address. There is no other way to
 recover; `FeeController`, `TokenFactory` and `Multisend` are all non-upgradeable.
 
+`Multisend`'s fee prices the ATTEMPT, not the outcome: `quote(recipients)` is charged per row submitted in
+the batch, including rows that go on to fail (and get refunded, for native; left with the sender, for
+ERC-20) — it is not reduced or refunded for failed rows.
+
 **Known open question:** if a native-value *recipient* inside a `Multisend.sendNative` drop (not the fee
 recipient) is blocklisted on Arc, does only that row fail (skip and refund, the same as any other failed
 transfer) or does the whole transaction revert? This can't be verified locally — a blocklist is an Arc

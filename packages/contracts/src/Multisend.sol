@@ -72,6 +72,11 @@ contract Multisend is ReentrancyGuard {
         if (fee < min) fee = min;
     }
 
+    /// @notice Sends native value to every address in `to`, in one transaction. A recipient whose transfer
+    /// fails (out of gas within `CALL_GAS`, a reverting receive(), a blocklisted address, ...) just fails that
+    /// row — its amount is refunded to the sender at the end of the call — rather than reverting the batch.
+    /// @dev The fee (`quote(to.length)`) prices the ATTEMPT, not the outcome: it is charged for every row
+    /// submitted, including rows that go on to fail and get refunded.
     function sendNative(address payable[] calldata to, uint256[] calldata amounts) external payable nonReentrant {
         uint256 n = _checkLists(to.length, amounts.length);
         uint256 fee = quote(n);
@@ -104,6 +109,11 @@ contract Multisend is ReentrancyGuard {
         }
     }
 
+    /// @notice Sends `token` directly from the sender to every address in `to`, in one transaction. This
+    /// contract never holds the tokens. A recipient whose transfer fails is just skipped (its tokens stay
+    /// with the sender, never pulled) rather than reverting the batch.
+    /// @dev The fee (`quote(to.length)`) prices the ATTEMPT, not the outcome: it is charged for every row
+    /// submitted, including rows that go on to fail.
     function sendToken(IERC20 token, address[] calldata to, uint256[] calldata amounts) external payable nonReentrant {
         uint256 n = _checkLists(to.length, amounts.length);
         uint256 fee = quote(n);

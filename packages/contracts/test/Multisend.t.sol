@@ -2,6 +2,7 @@
 pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IFeeController} from "../src/interfaces/IFeeController.sol";
@@ -115,6 +116,31 @@ contract RevertingReceiver {
     }
 }
 
+/// A recipient whose receive() does realistic smart-account work: one storage write, one event. This is the
+/// shape of work the 40,000-gas stipend (`CALL_GAS`) is sized for, not a plain EOA (which does no work at all).
+contract SmartAccountReceiver {
+    uint256 public lastReceived;
+
+    event Received(uint256 amount);
+
+    receive() external payable {
+        lastReceived = msg.value;
+        emit Received(msg.value);
+    }
+}
+
+/// A recipient whose receive() burns far more than the 40,000-gas stipend, like a malicious or broken
+/// contract trying to eat the whole batch's gas. Each loop iteration writes a fresh storage slot.
+contract GasGuzzler {
+    uint256[] private _sink;
+
+    receive() external payable {
+        for (uint256 i; i < 1_000; ++i) {
+            _sink.push(i);
+        }
+    }
+}
+
 contract Reenterer {
     Multisend internal immutable target;
 
@@ -138,6 +164,7 @@ contract MultisendTest is Test {
     address internal sender = makeAddr("sender");
     uint256 internal constant PER = 0.05 ether;
     uint256 internal constant MIN = 2 ether;
+    bytes32 internal constant TRANSFER_FAILED_TOPIC = keccak256("TransferFailed(uint256,address,uint256)");
 
     function setUp() public {
         fees = new FeeController(address(this), recipient);
@@ -160,6 +187,19 @@ contract MultisendTest is Test {
         out = new address payable[](a.length);
         for (uint256 i; i < a.length; ++i) {
             out[i] = payable(a[i]);
+        }
+    }
+
+    /// Fails the test if any log recorded since the last `vm.recordLogs()` is a `TransferFailed` event —
+    /// used by tests where the mock token moves funds itself, so a balance check alone can't tell the
+    /// difference between "the contract correctly reported this delivered" and "it reported FAILED but the
+    /// token moved the funds anyway."
+    function _assertNoTransferFailedEmitted() internal view {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics.length > 0) {
+                assertTrue(logs[i].topics[0] != TRANSFER_FAILED_TOPIC, "unexpected TransferFailed emitted");
+            }
         }
     }
 
@@ -242,6 +282,39 @@ contract MultisendTest is Test {
         assertEq(address(drop).balance, 0);
     }
 
+    // ---------------------------------------------------------------------
+    // The 40,000-gas stipend (CALL_GAS): enough for realistic smart-account work, too little for a
+    // gas-burning recipient to eat the batch.
+    // ---------------------------------------------------------------------
+
+    function test_sendNative_smartAccountReceiver_realisticReceiveWork_isDelivered() public {
+        SmartAccountReceiver acct = new SmartAccountReceiver();
+        (address[] memory to, uint256[] memory amounts) = _lists(2, 1 ether);
+        to[0] = address(acct);
+        vm.expectEmit(true, true, false, true);
+        emit Multisend.Drop(sender, address(0), 2, 2 ether, 0, 0);
+        vm.prank(sender);
+        drop.sendNative{value: 2 ether + MIN}(_payable(to), amounts);
+        assertEq(acct.lastReceived(), 1 ether);
+        assertEq(address(acct).balance, 1 ether);
+    }
+
+    function test_sendNative_gasGuzzlingReceiver_failsRefundsAndRestOfBatchLands() public {
+        GasGuzzler bad = new GasGuzzler();
+        (address[] memory to, uint256[] memory amounts) = _lists(2, 1 ether);
+        to[0] = address(bad);
+        uint256 before = sender.balance;
+        vm.expectEmit(true, true, false, true);
+        emit Multisend.TransferFailed(0, to[0], 1 ether);
+        vm.expectEmit(true, true, false, true);
+        emit Multisend.Drop(sender, address(0), 2, 1 ether, 1 ether, 1);
+        vm.prank(sender);
+        drop.sendNative{value: 2 ether + MIN}(_payable(to), amounts);
+        assertEq(address(bad).balance, 0);
+        assertEq(to[1].balance, 1 ether); // rest of the batch still lands
+        assertEq(sender.balance, before - 1 ether - MIN); // failed row refunded; fee still paid
+    }
+
     function test_wrongValue_lengthMismatch_empty_tooMany() public {
         (address[] memory to, uint256[] memory amounts) = _lists(2, 1 ether);
         vm.startPrank(sender);
@@ -274,6 +347,11 @@ contract MultisendTest is Test {
 
     // ---------------------------------------------------------------------
     // MAX_RECIPIENTS sized to Arc's block gas limit
+    //
+    // The `gasUsed` figures below measure only the internal EVM frame (gasleft() before/after the call, from
+    // inside this same transaction) — they exclude the transaction's calldata cost and the 21,000 intrinsic
+    // gas floor. For 400 rows of calldata that adds roughly another 0.3-0.4M gas on top; do not read the
+    // numbers asserted here as the total on-chain gas a submitted transaction would cost.
     // ---------------------------------------------------------------------
 
     function test_sendNative_400FreshRecipients_succeedsUnderGasBudget() public {
@@ -350,10 +428,14 @@ contract MultisendTest is Test {
         vm.startPrank(sender);
         NoReturnToken token = new NoReturnToken();
         (address[] memory to, uint256[] memory amounts) = _lists(2, 3 ether);
+        vm.recordLogs();
+        vm.expectEmit(true, true, false, true);
+        emit Multisend.Drop(sender, address(token), 2, 6 ether, 0, 0);
         drop.sendToken{value: MIN}(IERC20(address(token)), to, amounts);
         vm.stopPrank();
         assertEq(token.balanceOf(to[0]), 3 ether);
         assertEq(token.balanceOf(to[1]), 3 ether);
+        _assertNoTransferFailedEmitted();
     }
 
     function test_sendToken_falseReturn_withoutMovingFunds_isFailed() public {
@@ -382,9 +464,13 @@ contract MultisendTest is Test {
         vm.startPrank(sender);
         LargeReturnToken token = new LargeReturnToken();
         (address[] memory to, uint256[] memory amounts) = _lists(1, 3 ether);
+        vm.recordLogs();
+        vm.expectEmit(true, true, false, true);
+        emit Multisend.Drop(sender, address(token), 1, 3 ether, 0, 0);
         drop.sendToken{value: MIN}(IERC20(address(token)), to, amounts);
         vm.stopPrank();
         assertEq(token.balanceOf(to[0]), 3 ether); // actually delivered, correctly reported
+        _assertNoTransferFailedEmitted();
     }
 
     function test_sendToken_hugeReturnData_gasStaysBounded() public {
