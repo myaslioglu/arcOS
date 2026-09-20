@@ -1,0 +1,123 @@
+import { describe, expect, it, vi } from "vitest";
+import type { Address } from "@arcos/chain";
+import type { DropRow } from "../parse";
+import { runDrop, type BatchOutcome, type DropDeps } from "../runDrop";
+
+const addr = (n: number): Address => `0x${n.toString(16).padStart(40, "0")}` as Address;
+
+function makeRows(n: number): DropRow[] {
+  return Array.from({ length: n }, (_, i) => ({ line: i + 1, address: addr(i + 1), amount: BigInt((i + 1) * 100) }));
+}
+
+const success = (hash: string, failures: BatchOutcome["failures"] = []): BatchOutcome => ({ hash, status: "success", failures });
+const reverted = (hash: string): BatchOutcome => ({ hash, status: "reverted", failures: [] });
+
+describe("runDrop", () => {
+  it("delivers nothing from a reverted batch, stops, and puts every one of its rows in remaining", async () => {
+    const rows = makeRows(3);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async (_batch, n) => {
+      if (n === 1) return reverted("0xhash1");
+      throw new Error("must not be called after a revert");
+    });
+    const result = await runDrop(rows, 2, { sendBatch });
+
+    expect(result.delivered).toEqual([]);
+    expect(result.remaining).toEqual(rows);
+    expect(result.failed).toEqual([]);
+    expect(result.stoppedBecause).toBe("reverted");
+    expect(result.message).toMatch(/reverted/i);
+    expect(sendBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throw when sendBatch rejects on batch 2 of 3; batch 1 stays delivered with its hash", async () => {
+    const rows = makeRows(3);
+    const err = Object.assign(new Error("User rejected the request"), {
+      shortMessage: "User rejected the request",
+      name: "UserRejectedRequestError",
+    });
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async (_batch, n) => {
+      if (n === 1) return success("0xhash1");
+      if (n === 2) throw err;
+      throw new Error("must not reach batch 3");
+    });
+
+    const result = await runDrop(rows, 1, { sendBatch });
+
+    expect(result.delivered).toEqual([rows[0]]);
+    expect(result.hashes).toEqual(["0xhash1"]);
+    expect(result.remaining).toEqual([rows[1], rows[2]]);
+    expect(result.stoppedBecause).toBe("rejected");
+    expect(result.message).toBe("User rejected the request");
+    expect(sendBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a non-rejection sendBatch failure as 'error', with the error's short message", async () => {
+    const rows = makeRows(2);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => {
+      throw new Error("RPC timeout");
+    });
+
+    const result = await runDrop(rows, 1, { sendBatch });
+
+    expect(result.stoppedBecause).toBe("error");
+    expect(result.message).toBe("RPC timeout");
+    expect(result.remaining).toEqual(rows);
+    expect(result.delivered).toEqual([]);
+  });
+
+  it("recognizes a UserRejectedRequestError nested anywhere in the cause chain", async () => {
+    const inner = Object.assign(new Error("denied"), { name: "UserRejectedRequestError" });
+    const outer = new Error("wrapped");
+    (outer as Error & { cause?: unknown }).cause = inner;
+    const rows = makeRows(1);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => {
+      throw outer;
+    });
+
+    const result = await runDrop(rows, 1, { sendBatch });
+    expect(result.stoppedBecause).toBe("rejected");
+  });
+
+  it("recognizes EIP-1193 error code 4001 as a user rejection", async () => {
+    const err = Object.assign(new Error("rejected"), { code: 4001 });
+    const rows = makeRows(1);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => {
+      throw err;
+    });
+
+    const result = await runDrop(rows, 1, { sendBatch });
+    expect(result.stoppedBecause).toBe("rejected");
+  });
+
+  it("maps per-row failures back to their CSV line numbers; everything else in the batch is delivered", async () => {
+    const rows = makeRows(3);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => success("0xhash", [{ index: 1, amount: rows[1].amount }]));
+
+    const result = await runDrop(rows, 3, { sendBatch });
+
+    expect(result.failed).toEqual([{ line: rows[1].line, address: rows[1].address, amount: rows[1].amount }]);
+    expect(result.delivered).toEqual([rows[0], rows[2]]);
+    expect(result.remaining).toEqual([]);
+    expect(result.stoppedBecause).toBeNull();
+    expect(result.message).toBeNull();
+    expect(result.hashes).toEqual(["0xhash"]);
+  });
+
+  it("ignores an out-of-range failure index instead of crashing", async () => {
+    const rows = makeRows(2);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => success("0xhash", [{ index: 99, amount: 1n }]));
+
+    const result = await runDrop(rows, 2, { sendBatch });
+
+    expect(result.failed).toEqual([]);
+    expect(result.delivered).toEqual(rows);
+  });
+
+  it("returns an all-empty result for an empty list without calling sendBatch", async () => {
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => success("0xhash"));
+    const result = await runDrop([], 200, { sendBatch });
+
+    expect(result).toEqual({ delivered: [], failed: [], remaining: [], hashes: [], stoppedBecause: null, message: null });
+    expect(sendBatch).not.toHaveBeenCalled();
+  });
+});

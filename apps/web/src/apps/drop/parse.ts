@@ -88,3 +88,19 @@ export function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+/**
+ * The size of each batch `count` items would split into at `size` per batch — the same numbers
+ * `chunk(...).map(b => b.length)` would produce, computed arithmetically instead of by building a
+ * `count`-length array just to measure it (useful when `count` is a quote, not a real row list).
+ */
+export function batchSizes(count: number, size: number): number[] {
+  const sizes: number[] = [];
+  let remaining = count;
+  while (remaining > 0) {
+    const n = Math.min(remaining, size);
+    sizes.push(n);
+    remaining -= n;
+  }
+  return sizes;
+}

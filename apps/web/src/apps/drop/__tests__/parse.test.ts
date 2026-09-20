@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BATCH, MAX_BATCH, chunk, parseDropList } from "../parse";
+import { BATCH, MAX_BATCH, batchSizes, chunk, parseDropList } from "../parse";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -129,5 +129,19 @@ describe("chunk", () => {
 describe("BATCH", () => {
   it("never exceeds the contract's MAX_RECIPIENTS (mirrored here as MAX_BATCH)", () => {
     expect(BATCH).toBeLessThanOrEqual(MAX_BATCH);
+  });
+});
+
+describe("batchSizes", () => {
+  it("computes the size of each batch arithmetically, matching chunk(...).map(b => b.length)", () => {
+    expect(batchSizes(0, 200)).toEqual([]);
+    expect(batchSizes(200, 200)).toEqual([200]);
+    expect(batchSizes(201, 200)).toEqual([200, 1]);
+    expect(batchSizes(450, 200)).toEqual([200, 200, 50]);
+  });
+
+  it("agrees with chunk for an arbitrary count", () => {
+    const items = Array.from({ length: 733 }, (_, i) => i);
+    expect(batchSizes(items.length, 200)).toEqual(chunk(items, 200).map((b) => b.length));
   });
 });
