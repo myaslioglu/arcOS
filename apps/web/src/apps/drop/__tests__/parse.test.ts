@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BATCH, MAX_BATCH, batchSizes, chunk, parseDropList } from "../parse";
+import { BATCH, MAX_BATCH, batchSizes, chunk, formatDropList, parseDropList } from "../parse";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -143,5 +143,29 @@ describe("batchSizes", () => {
   it("agrees with chunk for an arbitrary count", () => {
     const items = Array.from({ length: 733 }, (_, i) => i);
     expect(batchSizes(items.length, 200)).toEqual(chunk(items, 200).map((b) => b.length));
+  });
+});
+
+describe("formatDropList", () => {
+  it("round-trips a native-USDC amount exactly, with no thousands separators", () => {
+    for (const amount of ["12.5", "0.000001", "1000"]) {
+      const { rows, issues } = parseDropList(`${A},${amount}`, 6);
+      expect(issues).toEqual([]);
+      expect(formatDropList(rows, null, 6)).toBe(`${A},${amount}`);
+    }
+  });
+
+  it("formats a token-mode amount with the token's own decimals", () => {
+    const { rows } = parseDropList(`${A},2.5`, 18);
+    expect(formatDropList(rows, "0x3600000000000000000000000000000000000000", 18)).toBe(`${A},2.5`);
+  });
+
+  it("joins multiple rows with newlines, in the given order", () => {
+    const { rows } = parseDropList(`${A},1\n${B},0.25`, 6);
+    expect(formatDropList(rows, null, 6)).toBe(`${A},1\n${B},0.25`);
+  });
+
+  it("returns an empty string for no rows", () => {
+    expect(formatDropList([], null, 6)).toBe("");
   });
 });

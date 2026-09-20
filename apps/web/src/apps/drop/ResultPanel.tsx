@@ -5,7 +5,8 @@ import type { DropResult } from "./useDrop";
 export function ResultPanel({ result, onCopyFailed }: { result: DropResult; onCopyFailed: () => void }) {
   return (
     <div className="mt-4 rounded-md border border-border-2 p-3 text-xs">
-      <p className="text-sm font-medium">{result.delivered} delivered</p>
+      <p className="text-sm font-medium">{result.delivered.length} delivered</p>
+      {result.message && <p className="mt-1 text-accent-3-text">{result.message}</p>}
       {result.failed.length > 0 && (
         <>
           <ul className="mt-2 max-h-32 overflow-auto">

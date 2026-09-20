@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
 import { useReadContracts } from "wagmi";
 import { erc20Abi, formatUnits, isAddress } from "viem";
 import { ARCOS, USDC, activeChain, activeNetwork, formatUsdc, unitsToNative, type Address } from "@arcos/chain";
@@ -9,7 +9,7 @@ import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { failedRowsText } from "./clipboard";
 import { IssuesList } from "./IssuesList";
-import { BATCH, parseDropList } from "./parse";
+import { BATCH, formatDropList, parseDropList } from "./parse";
 import { ResultPanel } from "./ResultPanel";
 import { useDrop, type DropResult } from "./useDrop";
 
@@ -31,7 +31,7 @@ function Form({ params }: Pick<AppProps, "params">) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<Sent | null>(null);
-  const [fee, setFee] = useState<bigint | null>(null);
+  const [fee, setFee] = useState<bigint | "error" | null>(null);
 
   const { over, props: dropProps } = useDropTarget(["token"], (item) => open("drop", dropParams(item)));
 
@@ -64,21 +64,27 @@ function Form({ params }: Pick<AppProps, "params">) {
     query: { enabled: !!token },
   });
   const symbol = token ? ((meta.data?.[0]?.result as string | undefined) ?? "…") : "USDC";
-  const decimals = token ? ((meta.data?.[1]?.result as number | undefined) ?? 18) : 6;
+  // `null` while a real token's decimals are still loading (or haven't resolved) — never default to 18,
+  // which would parse and quote every amount at the wrong scale until the read comes back.
+  const decimals = token ? ((meta.data?.[1]?.result as number | undefined) ?? null) : 6;
 
-  const { rows, issues, total } = useMemo(() => parseDropList(text, decimals), [text, decimals]);
-  const totalDisplay = token ? formatUnits(total, decimals) : formatUsdc(unitsToNative(total));
+  // Deferred so typing into a long list doesn't block on re-parsing it every keystroke.
+  const deferredText = useDeferredValue(text);
+  const { rows, issues, total } = useMemo(
+    () => (decimals === null ? { rows: [], issues: [], total: 0n } : parseDropList(deferredText, decimals)),
+    [deferredText, decimals],
+  );
+  const totalDisplay = decimals === null ? "" : token ? formatUnits(total, decimals) : formatUsdc(unitsToNative(total));
   const batches = Math.ceil(rows.length / BATCH) || 0;
 
   // Debounced: re-quoting on every keystroke would spam the RPC while the user is still typing rows. An
-  // empty list needs no fetch — `feeDisplay` below already reads as "no fee" once `rows.length` is 0,
-  // without this effect having to reset `fee` itself.
+  // empty list needs no fetch — the fee text below already reads as "no fee" once `rows.length` is 0.
   useEffect(() => {
     if (rows.length === 0) return;
     let cancelled = false;
     const id = setTimeout(() => {
       void quoteTotal(rows.length).then((f) => {
-        if (!cancelled) setFee(f);
+        if (!cancelled) setFee(f === null ? "error" : f);
       });
     }, 300);
     return () => {
@@ -86,7 +92,6 @@ function Form({ params }: Pick<AppProps, "params">) {
       clearTimeout(id);
     };
   }, [rows.length, quoteTotal]);
-  const feeDisplay = rows.length === 0 ? null : fee;
 
   if (!contracts) return <p className="p-5 text-sm text-muted">{"Drop isn't deployed on this network yet."}</p>;
 
@@ -111,12 +116,17 @@ function Form({ params }: Pick<AppProps, "params">) {
   };
 
   const submit = async () => {
+    if (decimals === null) return;
     setBusy(true);
     setSent(null);
     try {
       const result = await send(token, rows);
       setSent({ result, token, decimals });
-      trackEvent("drop_success", { recipients: result.delivered, batches: result.hashes.length });
+      // Rows that landed must never still be in the list — otherwise pressing Send again would send them a
+      // second time. Only what's left in `remaining` (never attempted, or whose batch reverted/was refused)
+      // goes back into the list; if nothing remains, the list is cleared and Send disables itself.
+      setText(result.remaining.length > 0 ? formatDropList(result.remaining, token, decimals) : "");
+      trackEvent("drop_success", { recipients: result.delivered.length, batches: result.hashes.length });
     } catch (err) {
       const message = (err as { shortMessage?: string }).shortMessage ?? (err instanceof Error ? err.message : undefined);
       notify(message ?? "The transaction didn't go through.", "warn", 6000);
@@ -143,6 +153,15 @@ function Form({ params }: Pick<AppProps, "params">) {
         ? `Sending batch ${progress.batch} of ${progress.batches}…`
         : "Sending…"
     : `Send to ${rows.length} wallets`;
+
+  const feeText =
+    fee === "error"
+      ? "Couldn't read the fee. Try again."
+      : fee !== null && rows.length > 0
+        ? `Fee ${formatUsdc(fee)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`
+        : rows.length > 0
+          ? "Reading the fee…"
+          : "";
 
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
@@ -177,6 +196,11 @@ function Form({ params }: Pick<AppProps, "params">) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
+        {sent && sent.result.remaining.length > 0 && (
+          <p className="mb-2 text-accent-3-text">
+            {`${sent.result.remaining.length} rows weren't sent. They're in the list below — check and send again.`}
+          </p>
+        )}
         <textarea
           className="h-32 w-full rounded-md border border-border-2 bg-surface px-2 py-1.5 font-mono text-xs"
           placeholder={"0x… , 12.5"}
@@ -191,18 +215,17 @@ function Form({ params }: Pick<AppProps, "params">) {
           <input type="file" accept=".csv,text/csv,text/plain" className="text-xs" onChange={onFileInput} />
         </label>
 
-        <p className="mt-3">
-          {rows.length} recipients · total {totalDisplay} {symbol}
-        </p>
-        <IssuesList issues={issues} />
-
-        <p className="mt-3 text-xs text-muted">
-          {feeDisplay !== null
-            ? `Fee ${formatUsdc(feeDisplay)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`
-            : rows.length > 0
-              ? "Reading the fee…"
-              : ""}
-        </p>
+        {decimals === null ? (
+          <p className="mt-3 text-muted">Reading the token…</p>
+        ) : (
+          <>
+            <p className="mt-3">
+              {rows.length} recipients · total {totalDisplay} {symbol}
+            </p>
+            <IssuesList issues={issues} />
+            <p className="mt-3 text-xs text-muted">{feeText}</p>
+          </>
+        )}
 
         {sent && <ResultPanel result={sent.result} onCopyFailed={copyFailed} />}
       </div>
@@ -210,7 +233,7 @@ function Form({ params }: Pick<AppProps, "params">) {
       <div className="border-t border-border p-3">
         <button
           type="button"
-          disabled={rows.length === 0 || !ready || busy}
+          disabled={rows.length === 0 || !ready || busy || decimals === null}
           className="w-full rounded-md border border-border-2 px-3 py-2"
           onClick={submit}
         >

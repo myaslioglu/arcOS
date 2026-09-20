@@ -1,5 +1,5 @@
-import { getAddress, isAddress } from "viem";
-import { AmountError, parseTokenAmount, type Address } from "@arcos/chain";
+import { formatUnits, getAddress, isAddress } from "viem";
+import { AmountError, formatUsdc, parseTokenAmount, unitsToNative, type Address } from "@arcos/chain";
 
 export type DropRow = { line: number; address: Address; amount: bigint };
 export type DropIssue = { line: number; message: string };
@@ -103,4 +103,15 @@ export function batchSizes(count: number, size: number): number[] {
     remaining -= n;
   }
   return sizes;
+}
+
+/**
+ * The exact inverse of `parseDropList`: turns rows back into `address,amount` list text, one row per line,
+ * with no thousands separators, so the result re-parses to the same amounts. `row.amount` is in the same
+ * units `parseDropList` produced it in — 6-decimal USDC units for native mode (`token === null`), so it
+ * needs `unitsToNative` before `formatUsdc` (which expects native wei); a real token's units already match
+ * its own `decimals`, so `formatUnits` applies directly.
+ */
+export function formatDropList(rows: DropRow[], token: Address | null, decimals: number): string {
+  return rows.map((r) => `${r.address},${token ? formatUnits(r.amount, decimals) : formatUsdc(unitsToNative(r.amount))}`).join("\n");
 }
