@@ -1,13 +1,32 @@
 import { NextResponse } from "next/server";
 import { isAddress } from "viem";
 import { NotAContract } from "@arcos/inspector";
-import { cachedInspection } from "@/lib/inspect-server";
+import { InspectorBusy, cachedInspection } from "@/lib/inspect-server";
+import { rateLimiter } from "@/lib/rate-limit";
 
-export async function GET(_req: Request, ctx: { params: Promise<{ address: string }> }) {
+const limiter = rateLimiter(30, 60_000);
+
+/** The caller's IP, best-effort: the first hop of x-forwarded-for, else x-real-ip, else "unknown". */
+function clientKey(req: Request): string {
+  const forwardedFor = req.headers.get("x-forwarded-for");
+  const first = forwardedFor?.split(",")[0]?.trim();
+  return first || req.headers.get("x-real-ip") || "unknown";
+}
+
+export async function GET(req: Request, ctx: { params: Promise<{ address: string }> }) {
   const { address } = await ctx.params;
   if (!isAddress(address, { strict: false })) {
     return NextResponse.json({ error: "That isn't an address." }, { status: 400 });
   }
+
+  const decision = limiter.take(clientKey(req));
+  if (!decision.ok) {
+    return NextResponse.json(
+      { error: "Too many requests. Try again shortly." },
+      { status: 429, headers: { "retry-after": String(decision.retryAfterSec), "cache-control": "no-store" } },
+    );
+  }
+
   try {
     const report = await cachedInspection(address);
     return NextResponse.json(report, {
@@ -15,6 +34,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ address: strin
     });
   } catch (e) {
     if (e instanceof NotAContract) return NextResponse.json({ error: "No contract at that address." }, { status: 404 });
-    return NextResponse.json({ error: "Couldn't reach the network. Try again." }, { status: 502 });
+    if (e instanceof InspectorBusy) {
+      return NextResponse.json(
+        { error: "Inspector is busy. Try again in a few seconds." },
+        { status: 503, headers: { "retry-after": "5", "cache-control": "no-store" } },
+      );
+    }
+    console.error("inspect failed", address, e);
+    return NextResponse.json(
+      { error: "Couldn't reach the network. Try again." },
+      { status: 502, headers: { "cache-control": "no-store" } },
+    );
   }
 }

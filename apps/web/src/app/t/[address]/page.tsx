@@ -4,23 +4,25 @@ import { isAddress } from "viem";
 import { explorerUrl, type Address } from "@arcos/chain";
 import { NotAContract, type Report } from "@arcos/inspector";
 import { formatAppHash } from "@arcos/shell/core";
-import { cachedInspection } from "@/lib/inspect-server";
+import { InspectorBusy, cachedInspection } from "@/lib/inspect-server";
 import { summaryLine, tokenLabel } from "@/lib/proof";
 
 type Props = { params: Promise<{ address: string }> };
 
-async function load(address: string): Promise<Report | null> {
+async function load(address: string): Promise<Report | null | "busy"> {
   if (!isAddress(address, { strict: false })) return null;
   try {
     return await cachedInspection(address as Address);
   } catch (e) {
     if (e instanceof NotAContract) return null;
+    if (e instanceof InspectorBusy) return "busy";
     throw e;
   }
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const report = await load((await params).address);
+  if (report === "busy") return { title: "ARC.os is busy — try again shortly" };
   if (!report) return { title: "Token not found — ARC.os" };
   return { title: summaryLine(report), description: "An automated reading of this token's contract on Arc. Not investment advice." };
 }
@@ -29,6 +31,15 @@ const MARK = { pass: "✓", warn: "!", fail: "✗", unknown: "?" } as const;
 
 export default async function ProofPage({ params }: Props) {
   const report = await load((await params).address);
+  if (report === "busy") {
+    return (
+      <main className="mx-auto max-w-2xl p-6 text-sm">
+        <p className="text-xs text-muted">ARC.os · proof page</p>
+        <p className="mt-4">ARC.os is busy reading other tokens. Reload in a few seconds.</p>
+        <p className="mt-6 text-xs text-faint">Automated analysis, not investment advice.</p>
+      </main>
+    );
+  }
   if (!report) notFound();
   const readAt = report.blockNumber === "unknown" ? "Read at an unknown block" : `Read at block ${report.blockNumber}`;
   return (
