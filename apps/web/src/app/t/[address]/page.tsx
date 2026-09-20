@@ -5,7 +5,7 @@ import { explorerUrl, type Address } from "@arcos/chain";
 import { NotAContract, type Report } from "@arcos/inspector";
 import { formatAppHash } from "@arcos/shell/core";
 import { InspectorBusy, cachedInspection } from "@/lib/inspect-server";
-import { summaryLine, tokenLabel } from "@/lib/proof";
+import { readAtLine, summaryLine, tokenLabel } from "@/lib/proof";
 
 type Props = { params: Promise<{ address: string }> };
 
@@ -41,12 +41,11 @@ export default async function ProofPage({ params }: Props) {
     );
   }
   if (!report) notFound();
-  const readAt = report.blockNumber === "unknown" ? "Read at an unknown block" : `Read at block ${report.blockNumber}`;
   return (
     <main className="mx-auto max-w-2xl p-6 text-sm">
       <p className="text-xs text-muted">ARC.os · proof page</p>
-      <h1 className="mt-1 text-xl font-medium">{report.token.name ?? tokenLabel(report)}</h1>
-      <a className="font-mono text-xs text-accent-text" href={explorerUrl("token", report.address)}>{report.address}</a>
+      <h1 className="mt-1 text-xl font-medium break-words">{report.token.name ?? tokenLabel(report)}</h1>
+      <a className="break-all font-mono text-xs text-accent-text" href={explorerUrl("token", report.address)}>{report.address}</a>
       <p className="mt-4 inline-block rounded-md bg-surface-2 px-2 py-1">{report.passed} of {report.total} checks pass</p>
       {!report.explorerReachable && (
         <p className="mt-2 text-xs text-muted">{"The explorer didn't answer this server, so some checks are unknown here. Open the token in ARC.os for the full reading."}</p>
@@ -66,9 +65,7 @@ export default async function ProofPage({ params }: Props) {
       <a className="mt-6 inline-block rounded-md border border-border-2 px-3 py-1.5" href={`/${formatAppHash("inspector", { token: report.address })}`}>
         Open in ARC.os
       </a>
-      <p className="mt-6 text-xs text-faint">
-        Automated analysis, not investment advice. {readAt} · {report.generatedAt.slice(0, 16).replace("T", " ")} UTC.
-      </p>
+      <p className="mt-6 text-xs text-faint">Automated analysis, not investment advice. {readAtLine(report)}.</p>
     </main>
   );
 }
