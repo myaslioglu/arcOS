@@ -51,57 +51,80 @@ export function bridgeSessionReducer(state: BridgeSessionState, action: BridgeSe
   }
 }
 
+/** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake
+ * instead of depending on jsdom (this workspace's vitest runs `environment: "node"`, so there's no
+ * real `window` to exercise this against otherwise). */
+export type BeforeUnloadTarget = {
+  addEventListener(type: "beforeunload", listener: (e: BeforeUnloadEvent) => void): void;
+  removeEventListener(type: "beforeunload", listener: (e: BeforeUnloadEvent) => void): void;
+};
+
 function beforeUnloadGuard(e: BeforeUnloadEvent): void {
   e.preventDefault();
   e.returnValue = "";
 }
 
-/** Module-level store: at most one Bridge session per page, independent of any single window's
- * lifetime — see apps/drop/session.ts for the full rationale. */
-let state: BridgeSessionState = initialBridgeSessionState;
-const listeners = new Set<() => void>();
+/**
+ * Factory behind the module-level `session` singleton below, pulled out so tests can construct an
+ * isolated instance against a fake `BeforeUnloadTarget` instead of the real (jsdom-only) `window`.
+ * The production singleton is the one export that matters at runtime: at most one Bridge session
+ * per page, independent of any single window's lifetime — see apps/drop/session.ts for the full
+ * rationale.
+ *
+ * `target` defaults to the real `window` when one exists and `undefined` otherwise (SSR / this
+ * workspace's node test environment) — re-resolved on every call, exactly matching the previous
+ * inline `typeof window !== "undefined"` guard.
+ */
+export function createBridgeSession(target?: BeforeUnloadTarget) {
+  const resolveTarget = (): BeforeUnloadTarget | undefined => target ?? (typeof window === "undefined" ? undefined : window);
 
-function emit(): void {
-  for (const listener of listeners) listener();
+  let state: BridgeSessionState = initialBridgeSessionState;
+  const listeners = new Set<() => void>();
+
+  function emit(): void {
+    for (const listener of listeners) listener();
+  }
+
+  function getSnapshot(): BridgeSessionState {
+    return state;
+  }
+
+  function subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  /** Starts a session; refuses — returns `false`, changes nothing — if one is already bridging. */
+  function start(source: ChainId, dest: ChainId, amount: string): boolean {
+    if (state.status === "bridging") return false;
+    state = bridgeSessionReducer(state, { type: "start", source, dest, amount, startedAt: Date.now() });
+    resolveTarget()?.addEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+    return true;
+  }
+
+  function finish(result: BridgeResult): void {
+    if (state.status !== "bridging") return;
+    state = bridgeSessionReducer(state, { type: "finish", result });
+    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+  }
+
+  function fail(message: string): void {
+    if (state.status !== "bridging") return;
+    state = bridgeSessionReducer(state, { type: "fail", message });
+    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+  }
+
+  function dismiss(): void {
+    const next = bridgeSessionReducer(state, { type: "dismiss" });
+    if (next === state) return;
+    state = next;
+    emit();
+  }
+
+  return { getSnapshot, subscribe, start, finish, fail, dismiss };
 }
 
-function getSnapshot(): BridgeSessionState {
-  return state;
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-/** Starts a session; refuses — returns `false`, changes nothing — if one is already bridging. */
-function start(source: ChainId, dest: ChainId, amount: string): boolean {
-  if (state.status === "bridging") return false;
-  state = bridgeSessionReducer(state, { type: "start", source, dest, amount, startedAt: Date.now() });
-  if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeUnloadGuard);
-  emit();
-  return true;
-}
-
-function finish(result: BridgeResult): void {
-  if (state.status !== "bridging") return;
-  state = bridgeSessionReducer(state, { type: "finish", result });
-  if (typeof window !== "undefined") window.removeEventListener("beforeunload", beforeUnloadGuard);
-  emit();
-}
-
-function fail(message: string): void {
-  if (state.status !== "bridging") return;
-  state = bridgeSessionReducer(state, { type: "fail", message });
-  if (typeof window !== "undefined") window.removeEventListener("beforeunload", beforeUnloadGuard);
-  emit();
-}
-
-function dismiss(): void {
-  const next = bridgeSessionReducer(state, { type: "dismiss" });
-  if (next === state) return;
-  state = next;
-  emit();
-}
-
-export const session = { getSnapshot, subscribe, start, finish, fail, dismiss };
+export const session = createBridgeSession();

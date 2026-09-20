@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bridgeChainOptions } from "../chains";
+import { bridgeChainOptions, chainLabel } from "../chains";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -26,5 +26,18 @@ describe("bridgeChainOptions", () => {
       expect(chains.some((c) => c.startsWith("Arc"))).toBe(false);
       expect(chains.some((c) => c.startsWith("Solana"))).toBe(false);
     }
+  });
+});
+
+describe("chainLabel", () => {
+  it("labels a picker chain the same as bridgeChainOptions does", () => {
+    expect(chainLabel("Ethereum_Sepolia")).toBe("Ethereum Sepolia");
+    expect(chainLabel("Ethereum")).toBe("Ethereum");
+    expect(chainLabel("Avalanche_Fuji")).toBe("Avalanche Fuji");
+  });
+
+  it("also labels Arc itself, which the picker deliberately excludes but which is still a valid source or dest once a bridge is under way", () => {
+    expect(chainLabel("Arc")).toBe("Arc");
+    expect(chainLabel("Arc_Testnet")).toBe("Arc Testnet");
   });
 });

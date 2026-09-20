@@ -2,21 +2,23 @@
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useAccount } from "wagmi";
-import { AppKit, getErrorMessage, isRateLimitError, isUserCancellationError } from "@circle-fin/app-kit";
-import { useDesktop } from "@arcos/shell";
+import { AppKit, getErrorMessage, isRateLimitError, isRetryableError, isUserCancellationError, type BridgeResult } from "@circle-fin/app-kit";
+import { useDesktop, type Tone } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
 import { ARC_CHAIN_NAME, adapterFor, bridgeFee, feeRecipient } from "@/lib/appkit";
-import { bridgeChainOptions, type ChainId } from "./chains";
+import { bridgeChainOptions, chainLabel, type ChainId } from "./chains";
+import { explorerCheckNote, fundsLeftSource, inFlightNote } from "./inFlight";
 import { resolveRoute, type Direction } from "./route";
 import { session } from "./session";
 
 const STATE_LABEL: Record<string, string> = {
   success: "Bridge complete",
   pending: "Still finishing on the destination chain",
-  error: "Bridge didn't complete",
+  error: "The bridge stopped before finishing",
 };
+const STATE_TONE: Record<string, Tone> = { success: "ok", pending: "info", error: "warn" };
 
 function Form() {
   const { connector } = useAccount();
@@ -38,30 +40,63 @@ function Form() {
   const recipient = feeRecipient();
   const fee = normalized ? bridgeFee(normalized) : "0";
 
-  const submit = async () => {
-    if (!connector || normalized === null) return;
-    const started = session.start(source, dest, normalized);
+  /** Runs `run()` through the shared one-at-a-time session guard, from the initial submit or from a
+   * Retry — both a fresh `kit.bridge()` call and `kit.retryBridge()` land here so they share exactly
+   * the same start/finish/fail handling. On a thrown error, appends the "check your wallet's chain
+   * explorer" note: a promise rejection here can still follow a burn that already landed. */
+  const performBridge = async (bridgeSource: ChainId, bridgeDest: ChainId, bridgeAmount: string, run: () => Promise<BridgeResult>) => {
+    const started = session.start(bridgeSource, bridgeDest, bridgeAmount);
     if (!started) return; // a bridge is already in flight (another click, another window) — do nothing
     try {
+      const result = await run();
+      session.finish(result);
+      if (result.state === "success") trackEvent("bridge_success", { from: bridgeSource, to: bridgeDest });
+      notify(STATE_LABEL[result.state] ?? "Bridge submitted", STATE_TONE[result.state] ?? "info");
+    } catch (err) {
+      const note = explorerCheckNote(chainLabel(bridgeSource));
+      if (isUserCancellationError(err)) session.fail("Cancelled.");
+      else if (isRateLimitError(err)) session.fail(`The bridge service is busy. Try again in a minute. ${note}`);
+      else session.fail(`${getErrorMessage(err)} ${note}`);
+    }
+  };
+
+  const submit = async () => {
+    if (!connector || normalized === null) return;
+    await performBridge(source, dest, normalized, async () => {
       const adapter = await adapterFor(connector);
       const chargeFee = recipient !== null && fee !== "0";
-      const result = await kit.bridge({
+      return kit.bridge({
         from: { adapter, chain: source },
         to: { adapter, chain: dest },
         amount: normalized,
         config: chargeFee ? { customFee: { value: fee, recipientAddress: recipient! } } : {},
       });
-      session.finish(result);
-      if (result.state === "success") trackEvent("bridge_success", { from: source, to: dest });
-      notify(STATE_LABEL[result.state] ?? "Bridge submitted", result.state === "error" ? "warn" : "ok");
-    } catch (err) {
-      if (isUserCancellationError(err)) session.fail("Cancelled.");
-      else if (isRateLimitError(err)) session.fail("The bridge service is busy. Try again in a minute.");
-      else session.fail(getErrorMessage(err));
-    }
+    });
+  };
+
+  const retry = async () => {
+    const failed = bridgeSession.result;
+    if (!connector || !failed || !bridgeSession.source || !bridgeSession.dest) return;
+    const retrySource = bridgeSession.source;
+    const retryDest = bridgeSession.dest;
+    await performBridge(retrySource, retryDest, bridgeSession.amount, async () => {
+      const adapter = await adapterFor(connector);
+      return kit.retryBridge(failed, { from: adapter, to: adapter });
+    });
   };
 
   const canSubmit = !sessionActive && !!connector && normalized !== null && issue === null;
+
+  // Whether the failed step's own error is one the SDK considers worth retrying — per the SDK's
+  // documented pattern (node_modules/@circle-fin/app-kit/index.d.ts ~line 32714): find the step that
+  // recorded an error and ask isRetryableError about that error, not about the result as a whole.
+  const failedStep = bridgeSession.result?.steps.find((s) => s.state === "error" && s.error);
+  const canRetry = bridgeSession.result?.state === "error" && !!failedStep?.error && isRetryableError(failedStep.error);
+
+  const stoppedNote =
+    bridgeSession.result && bridgeSession.result.state === "error"
+      ? inFlightNote(bridgeSession.result.source.chain.name, bridgeSession.result.destination.chain.name, fundsLeftSource(bridgeSession.result.steps))
+      : null;
 
   return (
     <div className="flex h-full flex-col text-sm">
@@ -135,7 +170,15 @@ function Form() {
           <div className="mt-4 rounded-md border border-border-2 p-3 text-xs">
             {bridgeSession.result ? (
               <>
-                <p className="font-medium text-accent-text">{STATE_LABEL[bridgeSession.result.state] ?? bridgeSession.result.state}</p>
+                <p className={`font-medium ${STATE_TONE[bridgeSession.result.state] === "warn" ? "text-accent-3-text" : "text-accent-text"}`}>
+                  {STATE_LABEL[bridgeSession.result.state] ?? bridgeSession.result.state}
+                </p>
+                {stoppedNote && <p className="mt-1">{stoppedNote}</p>}
+                {bridgeSession.result.warnings?.map((w, i) => (
+                  <p key={i} className="mt-1 text-accent-3-text">
+                    {w.message ?? w.code}
+                  </p>
+                ))}
                 <ul className="mt-1 grid gap-1">
                   {bridgeSession.result.steps.map((step, i) => (
                     <li key={i}>
@@ -152,6 +195,11 @@ function Form() {
                     </li>
                   ))}
                 </ul>
+                {canRetry && (
+                  <button type="button" className="mt-2 rounded-md border border-border-2 px-2 py-1" onClick={retry}>
+                    Retry
+                  </button>
+                )}
               </>
             ) : (
               <p className="text-accent-3-text">{bridgeSession.error}</p>

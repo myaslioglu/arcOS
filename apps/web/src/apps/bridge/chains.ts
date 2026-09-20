@@ -36,3 +36,17 @@ const TESTNET: EvmChainOption[] = [
 export function bridgeChainOptions(): EvmChainOption[] {
   return activeNetwork() === "mainnet" ? MAINNET : TESTNET;
 }
+
+const ALL_OPTIONS: EvmChainOption[] = [...MAINNET, ...TESTNET];
+
+/**
+ * Friendly display name for any chain id this app can bridge with, including Arc itself —
+ * `bridgeChainOptions()` deliberately excludes Arc from the "other chain" picker (it's always the
+ * implicit other end), but a settled or in-flight bridge's `source`/`dest` can legitimately be Arc,
+ * and error copy needs a name for it too. Falls back to the raw id for anything unrecognized.
+ */
+export function chainLabel(chainId: ChainId): string {
+  if (chainId === "Arc") return "Arc";
+  if (chainId === "Arc_Testnet") return "Arc Testnet";
+  return ALL_OPTIONS.find((o) => o.chain === chainId)?.label ?? chainId;
+}
