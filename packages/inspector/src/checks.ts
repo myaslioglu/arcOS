@@ -85,7 +85,7 @@ const PRIVILEGE_TITLE: Record<PrivilegeCategory, string> = {
   blacklist: "Owner can block wallets from trading",
   fees: "Owner can change transfer fees",
   limits: "Owner can change transaction limits",
-  pause: "Owner can pause trading",
+  pause: "Owner can switch trading on or off",
 };
 
 export function checkPrivileges(input: InspectInput, logicCode: string, abi: readonly unknown[] | null, owner: Owner): Finding {

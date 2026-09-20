@@ -9,7 +9,17 @@ export const SEVERE: PrivilegeCategory[] = ["mint", "blacklist", "fees"];
 const ORDER: PrivilegeCategory[] = ["mint", "blacklist", "fees", "limits", "pause"];
 
 const SIGNATURES: Record<PrivilegeCategory, string[]> = {
-  mint: ["mint(address,uint256)", "mint(uint256)", "mintTo(address,uint256)", "issue(uint256)"],
+  mint: [
+    "mint(address,uint256)",
+    "mint(uint256)",
+    "mintTo(address,uint256)",
+    "issue(uint256)",
+    "safeMint(address,uint256)",
+    "mintTokens(address,uint256)",
+    "ownerMint(address,uint256)",
+    "adminMint(address,uint256)",
+    "batchMint(address[],uint256[])",
+  ],
   blacklist: [
     "blacklist(address)",
     "addToBlacklist(address)",
@@ -20,6 +30,17 @@ const SIGNATURES: Record<PrivilegeCategory, string[]> = {
     "addBot(address)",
     "setBots(address[],bool)",
     "addBots(address[])",
+    "addBlackList(address)",
+    "removeBlackList(address)",
+    "addToBlackList(address)",
+    "blacklist(address,bool)",
+    "setBlacklisted(address,bool)",
+    "setIsBlacklisted(address,bool)",
+    "freeze(address)",
+    "freezeAccount(address,bool)",
+    "destroyBlackFunds(address)",
+    "blockAccount(address)",
+    "delBot(address)",
   ],
   fees: [
     "setFee(uint256)",
@@ -31,6 +52,15 @@ const SIGNATURES: Record<PrivilegeCategory, string[]> = {
     "setSellTax(uint256)",
     "updateFees(uint256,uint256)",
     "setTaxFeePercent(uint256)",
+    "excludeFromFee(address)",
+    "includeInFee(address)",
+    "excludeFromFees(address,bool)",
+    "removeAllFee()",
+    "restoreAllFee()",
+    "setMarketingFee(uint256)",
+    "setLiquidityFeePercent(uint256)",
+    "updateBuyFees(uint256,uint256,uint256)",
+    "updateSellFees(uint256,uint256,uint256)",
   ],
   limits: [
     "setMaxTxAmount(uint256)",
@@ -38,8 +68,22 @@ const SIGNATURES: Record<PrivilegeCategory, string[]> = {
     "setMaxWallet(uint256)",
     "setMaxWalletSize(uint256)",
     "setMaxWalletAmount(uint256)",
+    "setMaxTransactionAmount(uint256)",
+    "updateMaxTxnAmount(uint256)",
+    "updateMaxWalletAmount(uint256)",
   ],
-  pause: ["pause()", "unpause()", "setTradingEnabled(bool)", "setTrading(bool)"],
+  pause: [
+    "pause()",
+    "unpause()",
+    "setTradingEnabled(bool)",
+    "setTrading(bool)",
+    "enableTrading()",
+    "openTrading()",
+    "startTrading()",
+    "disableTrading()",
+    "pauseTrading()",
+    "setTradingActive(bool)",
+  ],
 };
 
 const BY_SELECTOR = new Map<string, Privilege>();
@@ -62,11 +106,11 @@ export function privilegesFromSelectors(selectors: Set<string>): Privilege[] {
 }
 
 const NAME_RULES: [PrivilegeCategory, RegExp][] = [
-  ["mint", /^(mint|mintTo|issue)$/i],
-  ["blacklist", /(blacklist|blocklist|antibot|^setbots?$|^addbots?$)/i],
-  ["fees", /^(set|update|change).*(fee|tax)/i],
+  ["mint", /^(mint|issue)$|^(safe|owner|admin|batch)mint|^mint(to|tokens|batch)$/i],
+  ["blacklist", /(black|block)list|antibot|^(set|add|del|remove)bots?$|^(un)?freeze|^blockaccount$|^destroyblackfunds$/i],
+  ["fees", /^(set|update|change).*(fee|tax)|^(exclude|include)(from|in)fees?$|^(remove|restore)allfees?$/i],
   ["limits", /^(set|update).*max/i],
-  ["pause", /^(pause|unpause|set.*trading.*)$/i],
+  ["pause", /^(pause|unpause)$|^(enable|open|start|disable|pause|set|toggle).*trading/i],
 ];
 
 /** For verified contracts: state-changing functions whose names match a privilege pattern. */
