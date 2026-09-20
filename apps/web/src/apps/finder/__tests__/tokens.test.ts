@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mergeTokens } from "../tokens";
+import { EURC, USDC } from "@arcos/chain";
+import { duplicateSymbols, mergeTokens, officialSymbol, type TokenFile } from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
 const B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const C = "0xccccccccccccccccccccccccccccccccccccccC";
+
+function file(overrides: Partial<TokenFile> & Pick<TokenFile, "address" | "symbol">): TokenFile {
+  return { name: null, decimals: 18, balance: null, createdByYou: false, ...overrides };
+}
 
 describe("mergeTokens", () => {
   it("lists created tokens first, newest first, then holdings by symbol", () => {
@@ -25,5 +31,40 @@ describe("mergeTokens", () => {
       [{ address: A, symbol: "MINE", decimals: 18 }],
     );
     expect(files).toEqual([{ address: A, symbol: "MINE", name: "Mine", decimals: 18, balance: 9n, createdByYou: true }]);
+  });
+});
+
+describe("duplicateSymbols", () => {
+  it("returns an empty set when no symbol repeats", () => {
+    const files = [file({ address: A, symbol: "USDC" }), file({ address: B, symbol: "ZED" })];
+    expect(duplicateSymbols(files)).toEqual(new Set());
+  });
+
+  it("flags symbols shared by two different-address tokens, case-insensitively", () => {
+    const files = [file({ address: A, symbol: "USDC" }), file({ address: B, symbol: "usdc" }), file({ address: C, symbol: "ZED" })];
+    expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
+  });
+
+  it("compares symbols after trimming whitespace", () => {
+    const files = [file({ address: A, symbol: " USDC " }), file({ address: B, symbol: "USDC" })];
+    expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
+  });
+});
+
+describe("officialSymbol", () => {
+  it("returns USDC for the real USDC address, case-insensitively", () => {
+    expect(officialSymbol(USDC.toUpperCase(), "testnet")).toBe("USDC");
+  });
+
+  it("returns EURC for the real EURC address on the active network", () => {
+    expect(officialSymbol(EURC.testnet, "testnet")).toBe("EURC");
+  });
+
+  it("returns null for the other network's EURC address", () => {
+    expect(officialSymbol(EURC.mainnet, "testnet")).toBeNull();
+  });
+
+  it("returns null for an unrelated address, even one that claims to be USDC", () => {
+    expect(officialSymbol("0x1111111111111111111111111111111111111111", "testnet")).toBeNull();
   });
 });

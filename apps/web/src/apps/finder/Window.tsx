@@ -9,7 +9,8 @@ import { ARCOS, activeChain, activeNetwork, explorerUrl, tokenFactoryAbi, type A
 import { blockscoutSource } from "@arcos/inspector";
 import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
-import { mergeTokens, type TokenFile } from "./tokens";
+import { shortAddress } from "@/lib/format";
+import { duplicateSymbols, mergeTokens, officialSymbol, type TokenFile } from "./tokens";
 
 function Files() {
   const { address } = useAccount();
@@ -55,6 +56,9 @@ function Files() {
     return mergeTokens(holdings.data ?? [], mine);
   }, [createdList, meta.data, holdings.data]);
 
+  const dupes = useMemo(() => duplicateSymbols(files), [files]);
+  const stillReading = holdings.isLoading || created.isLoading;
+
   return (
     <div className="flex h-full flex-col text-sm">
       {holdings.isError && (
@@ -64,27 +68,34 @@ function Files() {
       )}
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {files.length === 0 ? (
-          <p className="p-3 text-muted">No tokens yet. Create one in Mint, or receive some.</p>
+          <p className="p-3 text-muted">{stillReading ? "Reading your tokens…" : "No tokens yet. Create one in Mint, or receive some."}</p>
         ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1">
-            {files.map((f) => (
-              <li key={f.address}>
-                <button
-                  type="button"
-                  className="os-icon w-full"
-                  aria-pressed={selected?.address === f.address}
-                  onClick={() => setSelected(f)}
-                  onDoubleClick={() => open("inspector", { token: f.address })}
-                  {...dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })}
-                >
-                  <span className="os-icon-tile os-icon-tile--sm">
-                    <Coins size={18} strokeWidth={1.6} aria-hidden />
-                  </span>
-                  <span className="os-icon-name">{f.symbol}</span>
-                  {f.createdByYou && <span className="block text-[11px] text-accent-2-text">created by you</span>}
-                </button>
-              </li>
-            ))}
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1">
+            {files.map((f) => {
+              const official = officialSymbol(f.address, network);
+              const collides = dupes.has(f.symbol.trim().toLowerCase());
+              return (
+                <li key={f.address}>
+                  <button
+                    type="button"
+                    className="os-icon w-full"
+                    aria-pressed={selected?.address === f.address}
+                    onClick={() => setSelected(f)}
+                    onDoubleClick={() => open("inspector", { token: f.address })}
+                    {...dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })}
+                  >
+                    <span className="os-icon-tile os-icon-tile--sm">
+                      <Coins size={18} strokeWidth={1.6} aria-hidden />
+                    </span>
+                    <span className="os-icon-name">{f.symbol}</span>
+                    <span className="block font-mono text-[10px] text-muted">{shortAddress(f.address)}</span>
+                    {f.createdByYou && <span className="block text-[11px] text-accent-2-text">created by you</span>}
+                    {official && <span className="block text-[11px] text-accent-2-text">Official {official}</span>}
+                    {collides && <span className="block text-[11px] text-accent-3-text">Same symbol as another token</span>}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -92,7 +103,7 @@ function Files() {
         {selected ? (
           <>
             <span className="min-w-0 flex-1 truncate">
-              {selected.symbol}
+              {selected.symbol} · <span className="font-mono text-muted">{shortAddress(selected.address)}</span>
               {selected.balance !== null && ` · ${formatUnits(selected.balance, selected.decimals)}`}
             </span>
             <button type="button" className="rounded-md border border-border-2 px-2 py-1" onClick={() => open("inspector", { token: selected.address })}>Inspect</button>
