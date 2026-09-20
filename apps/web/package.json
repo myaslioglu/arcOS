@@ -13,6 +13,7 @@
     "@arcos/chain": "*",
     "@arcos/inspector": "*",
     "@arcos/shell": "*",
+    "@circle-fin/adapter-viem-v2": "^1.18.0",
     "@tanstack/react-query": "^5.103.1",
     "@vercel/analytics": "^2.0.1",
     "lucide-react": "^1.21.0",
