@@ -10,7 +10,10 @@ import { blockscoutSource } from "@arcos/inspector";
 import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { shortAddress } from "@/lib/format";
-import { duplicateSymbols, mergeTokens, officialSymbol, type TokenFile } from "./tokens";
+import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "./tokens";
+
+/** Page size for `tokensOfSlice`: Finder only ever shows the creator's most recent tokens. */
+const CREATED_PAGE_SIZE = 100;
 
 function Files() {
   const { address } = useAccount();
@@ -29,11 +32,25 @@ function Files() {
     queryFn: () => blockscoutSource(apiUrl!).tokenBalances(address!),
   });
 
+  // "Created by you" pages through the registry (tokenCountOf + tokensOfSlice) instead of tokensOf, which
+  // copies the whole per-creator array — unbounded for a heavy creator. Only the latest CREATED_PAGE_SIZE
+  // tokens are shown here.
+  const createdCount = useReadContract({
+    address: factory,
+    abi: tokenFactoryAbi,
+    functionName: "tokenCountOf",
+    args: address ? [address] : undefined,
+    chainId: chain.id,
+    query: { enabled: !!address && !!factory, refetchInterval: 15_000 },
+  });
+  const count = (createdCount.data ?? 0n) as bigint;
+  const sliceStart = useMemo(() => latestSliceStart(count, CREATED_PAGE_SIZE), [count]);
+
   const created = useReadContract({
     address: factory,
     abi: tokenFactoryAbi,
-    functionName: "tokensOf",
-    args: address ? [address] : undefined,
+    functionName: "tokensOfSlice",
+    args: address ? [address, sliceStart, BigInt(CREATED_PAGE_SIZE)] : undefined,
     chainId: chain.id,
     query: { enabled: !!address && !!factory, refetchInterval: 15_000 },
   });
@@ -57,13 +74,18 @@ function Files() {
   }, [createdList, meta.data, holdings.data]);
 
   const dupes = useMemo(() => duplicateSymbols(files), [files]);
-  const stillReading = holdings.isLoading || created.isLoading;
+  const stillReading = holdings.isLoading || createdCount.isLoading || created.isLoading;
 
   return (
     <div className="flex h-full flex-col text-sm">
       {holdings.isError && (
         <p className="border-b border-border px-4 py-2 text-xs text-muted">
           {"The explorer didn't answer, so only tokens you created here are listed."}
+        </p>
+      )}
+      {count > BigInt(CREATED_PAGE_SIZE) && (
+        <p className="border-b border-border px-4 py-2 text-xs text-muted">
+          {`Showing your latest ${CREATED_PAGE_SIZE} of ${count} tokens.`}
         </p>
       )}
       <div className="min-h-0 flex-1 overflow-auto p-3">

@@ -42,6 +42,12 @@ export function duplicateSymbols(files: TokenFile[]): Set<string> {
   return duplicates;
 }
 
+/** Start index for `tokensOfSlice` to page in the latest `size` items out of `count` total; never negative. */
+export function latestSliceStart(count: bigint, size: number): bigint {
+  const sizeBig = BigInt(size);
+  return count > sizeBig ? count - sizeBig : 0n;
+}
+
 /** "USDC" or "EURC" when `address` is that token's real, canonical contract on `network`; else null. */
 export function officialSymbol(address: string, network: NetworkId): "USDC" | "EURC" | null {
   const a = address.toLowerCase();

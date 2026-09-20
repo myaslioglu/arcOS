@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
-import { duplicateSymbols, mergeTokens, officialSymbol, type TokenFile } from "../tokens";
+import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
 const B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -66,5 +66,23 @@ describe("officialSymbol", () => {
 
   it("returns null for an unrelated address, even one that claims to be USDC", () => {
     expect(officialSymbol("0x1111111111111111111111111111111111111111", "testnet")).toBeNull();
+  });
+});
+
+describe("latestSliceStart", () => {
+  it("returns 0 when there are no tokens", () => {
+    expect(latestSliceStart(0n, 100)).toBe(0n);
+  });
+
+  it("returns 0 when the count exactly fills one page", () => {
+    expect(latestSliceStart(100n, 100)).toBe(0n);
+  });
+
+  it("returns 1 for one token past a full page", () => {
+    expect(latestSliceStart(101n, 100)).toBe(1n);
+  });
+
+  it("returns count - size for a count well past a full page", () => {
+    expect(latestSliceStart(250n, 100)).toBe(150n);
   });
 });
