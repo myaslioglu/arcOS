@@ -34,7 +34,7 @@ describe("blockscoutSource", () => {
     const src = blockscoutSource(API, fakeFetch({}));
     expect(await src.contract(T)).toEqual({ verified: false, name: null, abi: null, proxyType: null, implementations: [] });
     expect(await src.token(T)).toBeNull();
-    expect(await src.topHolders(T)).toEqual([]);
+    expect(await src.topHolders(T)).toBeNull(); // a 404 holder list is "unknown", never "zero holders"
   });
 
   it("throws ExplorerUnavailable on a bot challenge, a 5xx or a network error", async () => {

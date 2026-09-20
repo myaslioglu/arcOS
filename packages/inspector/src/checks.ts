@@ -1,21 +1,31 @@
 /**
- * Check rules — when each answers "unknown" (a failed read is never silently a "pass"):
+ * Check rules — when each answers "unknown" (a failed or missing read is never silently a "pass"):
  * - verified: the explorer didn't answer.
- * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next name").
- * - privileges: the contract's logic code couldn't be read (clone whose implementation is unreachable),
- *   or privileged functions were found but the owner is unknown (can't tell if they're reachable).
- * - proxy: never on its own — a storage-read failure propagates and is caught by the orchestrator's guard.
- * - holders: the explorer didn't answer, total supply is unknown, or (with a DEX configured) pool
- *   discovery failed, so pools can't be excluded from the holder list.
+ * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next
+ *   name"); or there's no owner function but the contract does have privileged functions, so who
+ *   (if anyone) can call them can't be read.
+ * - privileges: the contract's logic code couldn't be read (clone whose implementation is
+ *   unreachable, or the code delegates calls to a target this check couldn't identify at all);
+ *   or privileged functions were found but the owner is unknown, or there's no owner function at
+ *   all (can't tell if they're reachable either way).
+ * - proxy: a storage-read failure on the top-level address propagates and is caught by the
+ *   orchestrator's guard; a resolved EIP-1167 clone whose target is itself an EIP-1967 proxy is a
+ *   fail ("Clone of an upgradeable proxy"), not a pass; code that delegates calls (DELEGATECALL)
+ *   but resolves to no known clone target or EIP-1967 slot is unknown, not "not a proxy".
+ * - holders: the explorer didn't answer, total supply is unknown, the holder list came back empty
+ *   while the explorer's own token info says holders exist (or doesn't know), or (with a DEX
+ *   configured) pool discovery failed, so pools can't be excluded from the holder list.
  * - liquidity: no DEX is configured for this network, or pool discovery failed at the network level.
- * - lp-lock: no DEX is configured, pool discovery failed, or only Uniswap v3 pools exist (position
- *   locks need an indexer, which arrives with Radar).
- * - prevrandao: the contract's logic code couldn't be read (clone whose implementation is unreachable).
+ * - lp-lock: no DEX is configured, pool discovery failed, only Uniswap v3 pools exist (position
+ *   locks need an indexer, which arrives with Radar), or the v2 pair's LP totalSupply is zero (no
+ *   evidence to compute a locked share from).
+ * - prevrandao: the contract's logic code couldn't be read (clone whose implementation is
+ *   unreachable, or the code delegates calls to a target this check couldn't identify at all).
  */
 import { parseAbi } from "viem";
 import { BURN_ADDRESSES, type Address } from "@arcos/chain";
-import { usesOpcode, extractSelectors } from "./bytecode";
-import { SEVERE, privilegesFromAbi, privilegesFromSelectors, type Privilege, type PrivilegeCategory } from "./privileges";
+import { usesOpcode } from "./bytecode";
+import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { Holder } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput } from "./types";
 
@@ -31,6 +41,9 @@ const v2FactoryAbi = parseAbi(["function getPair(address,address) view returns (
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
 
 const PROXY_LOGIC_UNREADABLE = "This is a minimal proxy and its implementation's code couldn't be fetched.";
+const FORWARDS_TO_UNIDENTIFIED_TITLE = "This contract forwards calls to code that couldn't be identified";
+const FORWARDS_TO_UNIDENTIFIED_DETAIL =
+  "The code contains a DELEGATECALL, but no EIP-1167 clone target or EIP-1967 proxy slot could be resolved.";
 const ZERO = "0x0000000000000000000000000000000000000000";
 const GRANT_ROLE = "0x2f2ff15d";
 const lower = (a: string) => a.toLowerCase();
@@ -84,22 +97,26 @@ export type Pool = { address: Address; version: "v2" | "v3"; quote: string; dept
 export async function findPools(input: InspectInput): Promise<Pool[]> {
   const { dex, reader, address } = input;
   if (!dex) return [];
-  const pools: Pool[] = [];
-  const add = async (pool: unknown, version: Pool["version"], quote: { address: Address; symbol: string }) => {
-    if (typeof pool !== "string" || lower(pool) === ZERO) return;
+  const add = async (pool: unknown, version: Pool["version"], quote: { address: Address; symbol: string }): Promise<Pool | null> => {
+    if (typeof pool !== "string" || lower(pool) === ZERO) return null;
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
-    pools.push({ address: pool as Address, version, quote: quote.symbol, depth });
+    return { address: pool as Address, version, quote: quote.symbol, depth };
   };
-  for (const quote of dex.quoteTokens) {
-    if (lower(quote.address) === lower(address)) continue;
-    const pair = await catchReverted(reader.read(dex.v2Factory, v2FactoryAbi, "getPair", [address, quote.address]), null);
-    await add(pair, "v2", quote);
-    for (const fee of dex.v3FeeTiers) {
-      const pool = await catchReverted(reader.read(dex.v3Factory, v3FactoryAbi, "getPool", [address, quote.address, fee]), null);
-      await add(pool, "v3", quote);
-    }
-  }
-  return pools;
+  const perQuote = dex.quoteTokens
+    .filter((quote) => lower(quote.address) !== lower(address))
+    .map(async (quote) => {
+      const [v2Pool, v3Pools] = await Promise.all([
+        catchReverted(reader.read(dex.v2Factory, v2FactoryAbi, "getPair", [address, quote.address]), null).then((pair) => add(pair, "v2", quote)),
+        Promise.all(
+          dex.v3FeeTiers.map((fee) =>
+            catchReverted(reader.read(dex.v3Factory, v3FactoryAbi, "getPool", [address, quote.address, fee]), null).then((pool) => add(pool, "v3", quote)),
+          ),
+        ),
+      ]);
+      return [v2Pool, ...v3Pools];
+    });
+  const results = await Promise.all(perQuote);
+  return results.flat().filter((p): p is Pool => p !== null);
 }
 
 const finding = (id: Finding["id"], status: Finding["status"], title: string, detail: string, extra: Partial<Finding> = {}): Finding => ({
@@ -114,11 +131,16 @@ export function checkVerified(input: InspectInput, verified: boolean | null): Fi
     : finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
 }
 
-export function checkOwnership(input: InspectInput, owner: Owner): Finding {
+/** `hasPrivileged` is whether privileged functions were found in the contract's logic code. */
+export function checkOwnership(input: InspectInput, owner: Owner, hasPrivileged: boolean): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=read_contract`;
   if (owner.kind === "unknown") return finding("ownership", "unknown", "Couldn't read the owner", "The network didn't answer the owner() call.", { evidenceUrl: url });
   if (owner.kind === "renounced") return finding("ownership", "pass", "Ownership is renounced", "owner() is a burn address.", { evidenceUrl: url });
-  if (owner.kind === "none") return finding("ownership", "pass", "No owner function", "The contract exposes no owner() or getOwner().", { evidenceUrl: url });
+  if (owner.kind === "none") {
+    return hasPrivileged
+      ? finding("ownership", "unknown", "No owner function, but the contract has privileged functions", "The contract exposes no owner() or getOwner(), but its code has privileged functions — who (if anyone) can call them can't be read.", { evidenceUrl: url })
+      : finding("ownership", "pass", "No owner function", "The contract exposes no owner() or getOwner().", { evidenceUrl: url });
+  }
   if (owner.kind === "roles") return finding("ownership", "warn", "Role-based admin", "Uses AccessControl; role holders can't be listed from bytecode.", { evidenceUrl: url });
   const ownerUrl = `${input.explorerBase}/address/${owner.address}`;
   return owner.kind === "wallet"
@@ -134,43 +156,71 @@ const PRIVILEGE_TITLE: Record<PrivilegeCategory, string> = {
   pause: "Owner can switch trading on or off",
 };
 
-export function checkPrivileges(input: InspectInput, logicCode: string | null, abi: readonly unknown[] | null, owner: Owner): Finding {
+/**
+ * `found` is the union of ABI- and bytecode-derived privileges (see `combinePrivileges`),
+ * already resolved by the caller — `null` when the logic code couldn't be read at all.
+ */
+export function checkPrivileges(input: InspectInput, found: Privilege[] | null, forwardsToUnidentifiedCode: boolean, owner: Owner): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=write_contract`;
-  if (logicCode === null) {
-    return finding("privileges", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE, { evidenceUrl: url });
+  if (found === null) {
+    return forwardsToUnidentifiedCode
+      ? finding("privileges", "unknown", FORWARDS_TO_UNIDENTIFIED_TITLE, FORWARDS_TO_UNIDENTIFIED_DETAIL, { evidenceUrl: url })
+      : finding("privileges", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE, { evidenceUrl: url });
   }
-  const found: Privilege[] = abi ? privilegesFromAbi(abi) : privilegesFromSelectors(extractSelectors(logicCode));
   const list = found.map((p) => p.signature).join(", ");
   if (found.length === 0) return finding("privileges", "pass", "No privileged functions found", "No mint, blacklist, fee, limit or pause function in the dispatcher.", { evidenceUrl: url });
   if (owner.kind === "unknown") {
     return finding("privileges", "unknown", "Privileged functions found, owner unknown", `Found: ${list}.`, { evidenceUrl: url });
   }
-  if (owner.kind === "renounced" || owner.kind === "none") {
-    return finding("privileges", "pass", "Privileged functions can't be called", `Found ${list}, but ownership is renounced or absent.`, { evidenceUrl: url });
+  if (owner.kind === "renounced") {
+    return finding("privileges", "pass", "Privileged functions can't be called", `Found ${list}, but ownership is renounced.`, { evidenceUrl: url });
+  }
+  if (owner.kind === "none") {
+    return finding("privileges", "unknown", "Privileged functions found, but who can call them can't be read", `Found: ${list}.`, { evidenceUrl: url });
   }
   const worst = found.find((p) => SEVERE.includes(p.category)) ?? found[0]!;
   const status = SEVERE.includes(worst.category) ? "fail" : "warn";
   return finding("privileges", status, PRIVILEGE_TITLE[worst.category], `Found: ${list}.`, { evidenceUrl: url });
 }
 
-const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
-const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
-const slotSet = (v: string | null) => v !== null && /[1-9a-f]/i.test(v.slice(2));
+export const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+export const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
+export const slotSet = (v: string | null) => v !== null && /[1-9a-f]/i.test(v.slice(2));
+/** The 20-byte address a 32-byte storage slot value points at, or null when the slot isn't set. */
+export const addressFromSlot = (v: string | null): Address | null => (slotSet(v) ? (`0x${v!.slice(-40)}` as Address) : null);
 
-export async function checkProxy(input: InspectInput, cloneOf: Address | null): Promise<Finding> {
+export type ProxyResolution = {
+  cloneOf: Address | null;
+  /** Only meaningful when `cloneOf` is set: the target's own EIP-1967 slots are set too. */
+  cloneTargetIsProxy: boolean;
+  /** DELEGATECALL is present but resolves to no known clone target or EIP-1967 slot. */
+  forwardsToUnidentifiedCode: boolean;
+  /** Only meaningful when `cloneOf` is null: this address's own EIP-1967 slots are set. */
+  topSlotsSet: boolean;
+};
+
+export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=contract`;
-  if (cloneOf) return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${cloneOf}; its logic can't be replaced.`, { evidenceUrl: `${input.explorerBase}/address/${cloneOf}` });
-  const [impl, beacon] = await Promise.all([
-    input.reader.getStorageAt(input.address, IMPL_SLOT),
-    input.reader.getStorageAt(input.address, BEACON_SLOT),
-  ]);
-  if (slotSet(impl) || slotSet(beacon)) return finding("proxy", "fail", "Upgradeable proxy", "Whoever controls the proxy admin can replace this contract's logic.", { evidenceUrl: url });
-  return finding("proxy", "pass", "Not a proxy", "The contract's logic can't be replaced.", { evidenceUrl: url });
+  if (r.cloneOf) {
+    const targetUrl = `${input.explorerBase}/address/${r.cloneOf}`;
+    if (r.cloneTargetIsProxy) {
+      return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — whoever controls it can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
+    }
+    return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
+  }
+  if (r.forwardsToUnidentifiedCode) {
+    return finding("proxy", "unknown", FORWARDS_TO_UNIDENTIFIED_TITLE, FORWARDS_TO_UNIDENTIFIED_DETAIL, { evidenceUrl: url });
+  }
+  if (r.topSlotsSet) return finding("proxy", "fail", "Upgradeable proxy", "Whoever controls the proxy admin can replace this contract's logic.", { evidenceUrl: url });
+  return finding("proxy", "pass", "Not a proxy", "No EIP-1967 proxy slots are set and the code doesn't delegate calls.", { evidenceUrl: url });
 }
 
-export function checkHolders(input: InspectInput, holders: Holder[] | null, totalSupply: bigint | null, pools: Pool[] | null): Finding {
+export function checkHolders(input: InspectInput, holders: Holder[] | null, totalSupply: bigint | null, pools: Pool[] | null, holdersCount: number | null): Finding {
   const url = `${input.explorerBase}/token/${input.address}?tab=holders`;
   if (holders === null || !totalSupply) return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer didn't answer, or total supply is unknown.", { evidenceUrl: url });
+  if (holders.length === 0 && (holdersCount === null || holdersCount > 0)) {
+    return finding("holders", "unknown", "Couldn't check holder concentration", "The holder list came back empty, which reads as 0% concentration but usually just means the explorer hasn't indexed it yet.", { evidenceUrl: url });
+  }
   if (pools === null && input.dex) {
     return finding("holders", "unknown", "Couldn't check holder concentration", "The pool lookup failed, so a liquidity pool could be miscounted as a whale.", { evidenceUrl: url });
   }
@@ -214,19 +264,25 @@ export async function checkLpLock(input: InspectInput, pools: Pool[] | null): Pr
   const pair = v2.reduce((a, b) => (b.depth > a.depth ? b : a));
   const read = (fn: string, args: unknown[] = []) => input.reader.read(pair.address, erc20Abi, fn, args) as Promise<bigint>;
   const supply = await read("totalSupply");
+  const url = `${input.explorerBase}/token/${pair.address}?tab=holders`;
+  if (supply === 0n) {
+    // No evidence to compute a locked share from — an LP token with 0 supply isn't a "fail".
+    return finding("lp-lock", "unknown", "Couldn't check liquidity locks", "The v2 LP token's totalSupply is 0.", { fixAppId: null });
+  }
   const safe = [...BURN_ADDRESSES, ...input.knownLockers];
   const balances = await Promise.all(safe.map((a) => catchReverted(read("balanceOf", [a]), 0n)));
   const locked = balances.reduce((s, b) => s + b, 0n);
-  const pct = supply === 0n ? 0 : Number((locked * 10000n) / supply) / 100;
-  const url = `${input.explorerBase}/token/${pair.address}?tab=holders`;
+  const pct = Number((locked * 10000n) / supply) / 100;
   return pct >= 95
     ? finding("lp-lock", "pass", "Liquidity is burned or locked", `${formatPct(pct)} of the v2 LP supply can't be withdrawn.`, { evidenceUrl: url })
     : finding("lp-lock", "fail", "Liquidity isn't locked", `${formatPct(100 - pct)} of the v2 LP supply sits in wallets that can withdraw it.`, { evidenceUrl: url, fixAppId: "vault" });
 }
 
-export function checkPrevrandao(input: InspectInput, logicCode: string | null): Finding {
+export function checkPrevrandao(input: InspectInput, logicCode: string | null, forwardsToUnidentifiedCode: boolean): Finding {
   if (logicCode === null) {
-    return finding("prevrandao", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE);
+    return forwardsToUnidentifiedCode
+      ? finding("prevrandao", "unknown", FORWARDS_TO_UNIDENTIFIED_TITLE, FORWARDS_TO_UNIDENTIFIED_DETAIL)
+      : finding("prevrandao", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE);
   }
   return usesOpcode(logicCode, 0x44)
     ? finding("prevrandao", "warn", "Uses PREVRANDAO, which is always 0 on Arc", "Any randomness derived from it is predictable.", { evidenceUrl: "https://docs.arc.io/arc/references/evm-differences" })

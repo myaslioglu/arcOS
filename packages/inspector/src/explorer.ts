@@ -28,7 +28,8 @@ export type TokenBalance = { address: string; name: string | null; symbol: strin
 export interface ExplorerSource {
   contract(address: string): Promise<ContractInfo>;
   token(address: string): Promise<TokenInfo | null>;
-  topHolders(address: string): Promise<Holder[]>;
+  /** null means the explorer has no holder list for this token (404) — never treat that as "zero holders". */
+  topHolders(address: string): Promise<Holder[] | null>;
   tokenBalances(address: string): Promise<TokenBalance[]>;
 }
 
@@ -94,7 +95,8 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
     },
     async topHolders(address) {
       const j = (await get(`/tokens/${address}/holders`)) as Json | null;
-      const items = j && Array.isArray(j.items) ? (j.items as unknown[]) : [];
+      if (!j) return null;
+      const items = Array.isArray(j.items) ? (j.items as unknown[]) : [];
       return items.flatMap((raw) => {
         const it = obj(raw);
         const a = obj(it.address);
