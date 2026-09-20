@@ -5,21 +5,21 @@ import type { AppManifest, AppProps, DesktopWindow } from "../core";
 import { useRegistry } from "./registry";
 import { WindowErrorBoundary } from "./WindowErrorBoundary";
 
-const cache = new Map<string, LazyExoticComponent<ComponentType<AppProps>>>();
+// A plain object, not a Map: reading `cache[id]` is a property access, so it
+// stays a stable reference to eslint's react-hooks static-components check,
+// unlike a `Map#get()` call, which that check treats as creating a new
+// component on every render.
+const cache: Record<string, LazyExoticComponent<ComponentType<AppProps>>> = {};
 
-function lazyFor(m: AppManifest) {
-  let c = cache.get(m.id);
-  if (!c) {
-    c = lazy(m.load);
-    cache.set(m.id, c);
-  }
-  return c;
+function ensureCached(m: AppManifest): void {
+  if (!cache[m.id]) cache[m.id] = lazy(m.load);
 }
 
 export function AppBody({ win }: { win: DesktopWindow }) {
   const m = useRegistry().byId.get(win.appId);
   if (!m) return <div className="os-empty">Unknown app: {win.appId}</div>;
-  const App = lazyFor(m);
+  ensureCached(m);
+  const App = cache[m.id];
   return (
     <WindowErrorBoundary appName={m.name}>
       <Suspense fallback={<div className="os-loading">Loading…</div>}>
