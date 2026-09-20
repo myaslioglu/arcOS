@@ -78,31 +78,12 @@
   position: relative; z-index: 10;
   flex: 1; min-height: 0; overflow-y: auto;
   display: grid; align-content: start; gap: 14px;
-  width: 100%; max-width: 78rem;
+  width: 100%; max-width: 22rem;
   padding: 16px 16px 6rem;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "projects" "lab" "instrument" "folders" "system" "play" "scan";
-}
-@media (min-width: 760px) {
-  .os-icons {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas:
-      "projects lab"
-      "projects instrument"
-      "folders system"
-      "play scan";
-  }
-}
-/* Projects run down the left column. The first window opens against the
-   right edge, so the right column holds the trays reached for least. */
-@media (min-width: 1100px) {
-  .os-icons {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-areas:
-      "projects lab system"
-      "projects instrument play"
-      "projects folders scan";
-  }
+  /* The four trays stack down the left side of the stage; the first window
+     opens against the right edge, so the icons never sit under it. */
+  grid-template-areas: "system" "trust" "create" "trade";
 }
 /* Dedicated window plane: starts under the top bar (so a fresh window can
    never open behind it), above wallpaper and rack, below top bar and dock. */
@@ -145,23 +126,16 @@
 }
 [data-theme="light"] .os-tray-screen { background: #fbfbfd; box-shadow: inset 0 0 0 1px var(--border); }
 
-.os-tray[data-group="system"]     { grid-area: system; }
-.os-tray[data-group="instrument"] { grid-area: instrument; }
-.os-tray[data-group="projects"]   { grid-area: projects; }
-.os-tray[data-group="lab"]        { grid-area: lab; }
-.os-tray[data-group="folders"]    { grid-area: folders; }
-.os-tray[data-group="play"]       { grid-area: play; }
-.os-tray[data-group="scan"]       { grid-area: scan; }
+.os-tray[data-group="system"] { grid-area: system; }
+.os-tray[data-group="trust"]  { grid-area: trust; }
+.os-tray[data-group="create"] { grid-area: create; }
+.os-tray[data-group="trade"]  { grid-area: trade; }
 
-/* One hue per tray, from the site's three signal colours. Projects override
-   it per icon with their own accent. */
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="system"]     { --os-group: var(--muted); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="folders"]    { --os-group: var(--accent-3); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="instrument"] { --os-group: var(--accent); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="lab"]        { --os-group: var(--accent-2); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="play"]       { --os-group: var(--accent-3); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="scan"]       { --os-group: var(--accent-2); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="projects"]   { --os-group: var(--accent); }
+/* One hue per tray, from the site's signal colours. */
+:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="system"] { --os-group: var(--muted); }
+:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="trust"]  { --os-group: var(--accent-2); }
+:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="create"] { --os-group: var(--accent-3); }
+:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="trade"]  { --os-group: var(--accent); }
 
 .os-icon {
   --os-hue: var(--os-group, var(--accent));

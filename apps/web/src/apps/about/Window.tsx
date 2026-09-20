@@ -1,8 +1,6 @@
 "use client";
 
-import type { AppProps } from "@arcos/shell";
-
-export default function AboutWindow(_: AppProps) {
+export default function AboutWindow() {
   return (
     <div className="p-5 text-sm leading-6">
       <p className="text-base font-medium">ARC.os</p>
