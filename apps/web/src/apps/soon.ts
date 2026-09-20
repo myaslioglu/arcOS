@@ -1,4 +1,4 @@
-import { Hourglass, Lock, Radar, ShieldCheck, SquareTerminal, Trash2, Waypoints } from "lucide-react";
+import { Hourglass, Lock, Radar, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
 import type { AppManifest } from "@arcos/shell";
 
 const soon = (m: Pick<AppManifest, "id" | "name" | "blurb" | "icon" | "category" | "release">): AppManifest => ({
@@ -16,5 +16,4 @@ export const SOON: AppManifest[] = [
   soon({ id: "radar", name: "Radar", blurb: "New tokens and locks, scored", icon: Radar, category: "trade", release: "r1" }),
   soon({ id: "revoke", name: "Revoke", blurb: "Remove token approvals", icon: Trash2, category: "system", release: "r1" }),
   soon({ id: "terminal", name: "Terminal", blurb: "Do all of this by typing", icon: SquareTerminal, category: "system", release: "phase2" }),
-  soon({ id: "bridge", name: "Bridge", blurb: "Move USDC to and from Arc", icon: Waypoints, category: "trade", release: "r0" }),
 ];
