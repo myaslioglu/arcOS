@@ -12,3 +12,4 @@ packages/contracts/broadcast
 .vercel
 playwright-report
 test-results
+.claude/
