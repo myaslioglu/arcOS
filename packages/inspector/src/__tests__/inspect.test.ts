@@ -566,6 +566,39 @@ describe("inspect", () => {
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
   });
 
+  // --- Wave F small items: a fail needs an explicit negative; a pool claim needs an answer ---
+
+  it("says unknown, not 'source code isn't verified', when the explorer has no record of the address", async () => {
+    const ex = explorer({ contract: async () => ({ verified: null, name: null, abi: null, proxyType: null, implementations: [] }) });
+    const r = await run({ code: { [TOKEN]: PLAIN } }, ex);
+    expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: "The explorer has no record of this contract yet." });
+  });
+
+  it("still fails verification when the explorer positively says the source isn't verified", async () => {
+    const ex = explorer({ contract: async () => ({ verified: false, name: null, abi: null, proxyType: null, implementations: [] }) });
+    const r = await run({ code: { [TOKEN]: PLAIN } }, ex);
+    expect(find(r, "verified")).toMatchObject({ status: "fail", title: "Source code isn't verified" });
+  });
+
+  it("says unknown, not 'no pool found', when every DEX factory call reverts", async () => {
+    // No `reads` entry for either factory: every call reverts, which is what a factory address
+    // with no contract code on this network does.
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, explorer(), dex);
+    expect(find(r, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't read liquidity pools" });
+    expect(find(r, "lp-lock").status).toBe("unknown");
+    expect(find(r, "lp-lock").detail).not.toMatch(/No pool was found/);
+  });
+
+  it("still warns 'no pool found' when the factories answer that there is no pair", async () => {
+    const reads = {
+      [`${TOKEN}.totalSupply()`]: 1000n,
+      [`${V2}.getPair(${TOKEN},${USDC})`]: ZERO,
+      [`${V3}.getPool(${TOKEN},${USDC},3000)`]: ZERO,
+    };
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
+    expect(find(r, "liquidity")).toMatchObject({ status: "warn", title: "No Uniswap v2 or v3 pool found" });
+  });
+
   // --- Part 3: the inspected address is always checksummed ---
 
   it("checksums the inspected address regardless of the casing passed in", async () => {

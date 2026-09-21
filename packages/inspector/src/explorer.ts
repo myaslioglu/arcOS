@@ -11,7 +11,9 @@ export class ExplorerUnavailable extends Error {
 }
 
 export type ContractInfo = {
-  verified: boolean;
+  /** `null` when the explorer has no record of this address (a 404), or answered without saying
+   * either way — which is not the same claim as "this contract's source isn't verified". */
+  verified: boolean | null;
   name: string | null;
   abi: readonly unknown[] | null;
   proxyType: string | null;
@@ -72,10 +74,12 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
   return {
     async contract(address) {
       const j = (await get(`/smart-contracts/${address}`)) as Json | null;
-      if (!j) return { verified: false, name: null, abi: null, proxyType: null, implementations: [] };
+      if (!j) return { verified: null, name: null, abi: null, proxyType: null, implementations: [] };
       const impls = Array.isArray(j.implementations) ? (j.implementations as unknown[]) : [];
       return {
-        verified: j.is_verified === true,
+        // Only an explicit boolean is evidence: a body without the field is the explorer declining
+        // to say, and "it didn't say" must never be rendered as "it said no".
+        verified: typeof j.is_verified === "boolean" ? j.is_verified : null,
         name: cleanLabel(str(j.name), 64),
         abi: Array.isArray(j.abi) ? (j.abi as unknown[]) : null,
         proxyType: str(j.proxy_type),

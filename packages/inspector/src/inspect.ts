@@ -163,7 +163,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, implContract, tokenInfo, holders, owner, pools, blockNumber] = await Promise.all([
+  const [contract, implContract, tokenInfo, holders, owner, poolScan, blockNumber] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
     // For a proxy, the ABI that describes what can be called is the IMPLEMENTATION's: Blockscout's
     // record for the proxy address is the proxy's own, and "the proxy's ABI has no privileged
@@ -191,16 +191,16 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const found: Privilege[] | null = logicCode === null ? null : combinePrivileges(abiForPrivileges, selectors);
 
   const findings = await Promise.all([
-    guard("verified", () => checkVerified(input, contract ? contract.verified : null)),
+    guard("verified", () => checkVerified(input, contract)),
     guard("ownership", () => checkOwnership(input, owner, found)),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
       return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, cloneTargetIsProxy, targetSlotsRead, forwardsToUnidentifiedCode, topSlotsSet });
     }),
-    guard("holders", () => checkHolders(input, holders, supply, pools, tokenInfo?.holdersCount ?? null)),
-    guard("liquidity", () => checkLiquidity(input, pools)),
-    guard("lp-lock", () => checkLpLock(input, pools)),
+    guard("holders", () => checkHolders(input, holders, supply, poolScan, tokenInfo?.holdersCount ?? null)),
+    guard("liquidity", () => checkLiquidity(input, poolScan)),
+    guard("lp-lock", () => checkLpLock(input, poolScan)),
     guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)),
   ]);
   findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));

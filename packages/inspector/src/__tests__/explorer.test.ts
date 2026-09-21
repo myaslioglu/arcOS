@@ -30,11 +30,21 @@ describe("blockscoutSource", () => {
     });
   });
 
-  it("treats 404 as 'not verified', not as an outage", async () => {
+  it("treats 404 as 'no record of this contract', neither 'not verified' nor an outage", async () => {
     const src = blockscoutSource(API, fakeFetch({}));
-    expect(await src.contract(T)).toEqual({ verified: false, name: null, abi: null, proxyType: null, implementations: [] });
+    // `verified: null` is "the explorer has nothing on this address", which is not the same claim
+    // as "the explorer has this address and says its source isn't verified".
+    expect(await src.contract(T)).toEqual({ verified: null, name: null, abi: null, proxyType: null, implementations: [] });
     expect(await src.token(T)).toBeNull();
     expect(await src.topHolders(T)).toBeNull(); // a 404 holder list is "unknown", never "zero holders"
+  });
+
+  it("only reports 'not verified' on an explicit is_verified: false", async () => {
+    const no = blockscoutSource(API, fakeFetch({ [`/smart-contracts/${T}`]: json({ is_verified: false, name: "X", abi: null, proxy_type: null, implementations: [] }) }));
+    expect((await no.contract(T)).verified).toBe(false);
+    // A 200 whose body simply doesn't carry the field says nothing either way.
+    const silent = blockscoutSource(API, fakeFetch({ [`/smart-contracts/${T}`]: json({ name: "X" }) }));
+    expect((await silent.contract(T)).verified).toBeNull();
   });
 
   it("throws ExplorerUnavailable on a bot challenge, a 5xx or a network error", async () => {

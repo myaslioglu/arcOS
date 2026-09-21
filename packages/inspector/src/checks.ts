@@ -1,6 +1,8 @@
 /**
  * Check rules — when each answers "unknown" (a failed or missing read is never silently a "pass"):
- * - verified: the explorer didn't answer.
+ * - verified: the explorer didn't answer, or it answered without a record of this address (a 404)
+ *   or without the field — only an explicit `is_verified: false` is the `fail`, since that finding
+ *   tells a reader the deployer never published the source.
  * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next
  *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
  *   whether anyone controls it can't be told either way; or there's no owner function but the
@@ -30,10 +32,12 @@
  *   excluded from the holder list; or the list is shorter than ten rows without the explorer's own
  *   holders-count confirming that those rows are every holder there is, since a share added up from
  *   an unknown fraction of the holders isn't a concentration figure.
- * - liquidity: no DEX is configured for this network, or pool discovery failed at the network level.
- * - lp-lock: no DEX is configured, pool discovery failed, only Uniswap v3 pools exist (position
- *   locks need an indexer, which arrives with Radar), or the v2 pair's LP totalSupply is zero (no
- *   evidence to compute a locked share from).
+ * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
+ *   or every factory call reverted (an address with no contract code does that), which is never
+ *   reported as "no pool found" — that would be a claim about pools made from a call that failed.
+ * - lp-lock: no DEX is configured, pool discovery failed, the factories never answered, only
+ *   Uniswap v3 pools exist (position locks need an indexer, which arrives with Radar), or the v2
+ *   pair's LP totalSupply is zero (no evidence to compute a locked share from).
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  */
@@ -41,7 +45,7 @@ import { parseAbi } from "viem";
 import { BURN_ADDRESSES, type Address } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
-import type { Holder } from "./explorer";
+import type { ContractInfo, Holder } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput } from "./types";
 
 export const erc20Abi = parseAbi([
@@ -144,10 +148,28 @@ export async function beaconImplementation(reader: ChainReader, beacon: Address 
 
 export type Pool = { address: Address; version: "v2" | "v3"; quote: string; depth: bigint };
 
+/**
+ * What the pool lookup found, and whether the DEX factories answered at all. An address with no
+ * contract code reverts every call it's given, which reaches this code as "no pair" — identical to
+ * a working factory saying there is no pool. "No Uniswap pool found" read off a factory that never
+ * answered is a claim about pools that nothing actually checked.
+ */
+export type PoolScan = { pools: Pool[]; factoriesAnswered: boolean };
+
+/** Distinguishes "the factory reverted" from "the factory answered the zero address". */
+const REVERTED = Symbol("factory call reverted");
+
 /** Rejects if any call fails at the transport level — the caller decides what "pools unknown" means. */
-export async function findPools(input: InspectInput): Promise<Pool[]> {
+export async function findPools(input: InspectInput): Promise<PoolScan> {
   const { dex, reader, address } = input;
-  if (!dex) return [];
+  if (!dex) return { pools: [], factoriesAnswered: false };
+  let factoriesAnswered = false;
+  const askFactory = async (factory: Address, abi: typeof v2FactoryAbi | typeof v3FactoryAbi, fn: string, args: unknown[]): Promise<unknown> => {
+    const answer = await catchReverted<unknown>(reader.read(factory, abi, fn, args), REVERTED);
+    if (answer === REVERTED) return null;
+    factoriesAnswered = true;
+    return answer;
+  };
   const add = async (pool: unknown, version: Pool["version"], quote: { address: Address; symbol: string }): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
@@ -157,27 +179,34 @@ export async function findPools(input: InspectInput): Promise<Pool[]> {
     .filter((quote) => lower(quote.address) !== lower(address))
     .map(async (quote) => {
       const [v2Pool, v3Pools] = await Promise.all([
-        catchReverted(reader.read(dex.v2Factory, v2FactoryAbi, "getPair", [address, quote.address]), null).then((pair) => add(pair, "v2", quote)),
+        askFactory(dex.v2Factory, v2FactoryAbi, "getPair", [address, quote.address]).then((pair) => add(pair, "v2", quote)),
         Promise.all(
           dex.v3FeeTiers.map((fee) =>
-            catchReverted(reader.read(dex.v3Factory, v3FactoryAbi, "getPool", [address, quote.address, fee]), null).then((pool) => add(pool, "v3", quote)),
+            askFactory(dex.v3Factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote)),
           ),
         ),
       ]);
       return [v2Pool, ...v3Pools];
     });
   const results = await Promise.all(perQuote);
-  return results.flat().filter((p): p is Pool => p !== null);
+  return { pools: results.flat().filter((p): p is Pool => p !== null), factoriesAnswered };
 }
 
 const finding = (id: Finding["id"], status: Finding["status"], title: string, detail: string, extra: Partial<Finding> = {}): Finding => ({
   id, status, title, detail, evidenceUrl: null, fixAppId: null, ...extra,
 });
 
-export function checkVerified(input: InspectInput, verified: boolean | null): Finding {
+/**
+ * `contract` is `null` when the explorer couldn't be reached at all, and `contract.verified` is
+ * `null` when it answered but has no record of this address (a 404) or didn't say either way.
+ * Neither is "not verified": a `fail` here tells a reader the deployer never published the source,
+ * so it has to rest on the explorer positively saying so.
+ */
+export function checkVerified(input: InspectInput, contract: ContractInfo | null): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=contract`;
-  if (verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer didn't answer.", { evidenceUrl: url });
-  return verified
+  if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer didn't answer.", { evidenceUrl: url });
+  if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });
+  return contract.verified
     ? finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url })
     : finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
 }
@@ -308,7 +337,7 @@ export function checkHolders(
   input: InspectInput,
   holders: Holder[] | null,
   totalSupply: bigint | null,
-  pools: Pool[] | null,
+  scan: PoolScan | null,
   holdersCount: number | null,
 ): Finding {
   const url = `${input.explorerBase}/token/${input.address}?tab=holders`;
@@ -320,7 +349,7 @@ export function checkHolders(
   if (holders.length === 0) {
     return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer returned no holders for a token with non-zero supply, which usually means it hasn't indexed this token yet.", { evidenceUrl: url });
   }
-  if (pools === null && input.dex) {
+  if (scan === null && input.dex) {
     return finding("holders", "unknown", "Couldn't check holder concentration", "The pool lookup failed, so a liquidity pool could be miscounted as a whale.", { evidenceUrl: url });
   }
   // Fewer than ten rows is only a complete picture when the explorer positively says that's
@@ -329,7 +358,7 @@ export function checkHolders(
   if (holders.length < 10 && (holdersCount === null || holdersCount > holders.length)) {
     return finding("holders", "unknown", "Couldn't check holder concentration", `The explorer returned ${holders.length} holder(s) but doesn't confirm that's all of them, so this would only be part of the concentration.`, { evidenceUrl: url });
   }
-  const knownPools = pools ?? [];
+  const knownPools = scan?.pools ?? [];
   const skip = new Set([lower(input.address), ...knownPools.map((p) => lower(p.address)), ...input.knownLockers.map(lower)]);
   const ranked = [...holders].sort((a, b) => (a.value < b.value ? 1 : a.value > b.value ? -1 : 0));
   const top = ranked.filter((h) => !isBurn(h.address) && !skip.has(lower(h.address))).slice(0, 10);
@@ -350,10 +379,14 @@ export function checkHolders(
 
 /** 1,000 units of a 6-decimal quote token. */
 const MIN_DEPTH = 1_000_000_000n;
+const FACTORIES_SILENT =
+  "Every call to the configured Uniswap factories reverted, so no pool was found or ruled out — the factory address may hold no contract on this network.";
 
-export function checkLiquidity(input: InspectInput, pools: Pool[] | null): Finding {
+export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Finding {
   if (!input.dex) return finding("liquidity", "unknown", "Liquidity isn't checked on this network", "No DEX registry is configured here.");
-  if (pools === null) return finding("liquidity", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
+  if (scan === null) return finding("liquidity", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
+  if (!scan.factoriesAnswered) return finding("liquidity", "unknown", "Couldn't read liquidity pools", FACTORIES_SILENT);
+  const pools = scan.pools;
   if (pools.length === 0) return finding("liquidity", "warn", "No Uniswap v2 or v3 pool found", "Pools against USDC or EURC only. Uniswap v4 and Aerodrome pools aren't scanned yet.");
   const best = pools.reduce((a, b) => (b.depth > a.depth ? b : a));
   const units = (best.depth / 1_000_000n).toLocaleString("en-US");
@@ -363,12 +396,14 @@ export function checkLiquidity(input: InspectInput, pools: Pool[] | null): Findi
     : finding("liquidity", "warn", "Thin liquidity", `Deepest pool holds ${units} ${best.quote}.`, { evidenceUrl: url });
 }
 
-export async function checkLpLock(input: InspectInput, pools: Pool[] | null): Promise<Finding> {
+export async function checkLpLock(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
   if (!input.dex) return finding("lp-lock", "unknown", "Liquidity locks aren't checked on this network", "No DEX registry is configured here.");
-  if (pools === null) return finding("lp-lock", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
-  const v2 = pools.filter((p) => p.version === "v2");
+  if (scan === null) return finding("lp-lock", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
+  const v2 = scan.pools.filter((p) => p.version === "v2");
   if (v2.length === 0) {
-    const why = pools.length === 0 ? "No pool was found." : "Only Uniswap v3 pools were found; position locks need an indexer, which arrives with Radar.";
+    const why = !scan.factoriesAnswered
+      ? FACTORIES_SILENT
+      : scan.pools.length === 0 ? "No pool was found." : "Only Uniswap v3 pools were found; position locks need an indexer, which arrives with Radar.";
     // A "fix" button doesn't belong on something we couldn't check.
     return finding("lp-lock", "unknown", "Couldn't check liquidity locks", why, { fixAppId: null });
   }
