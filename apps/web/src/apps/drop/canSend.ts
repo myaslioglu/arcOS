@@ -27,6 +27,11 @@ export type CanSendInput = {
   /** A send is in progress — in this window, another Drop window, or one this window doesn't remember
    * because it was closed and reopened mid-send. */
   sessionActive: boolean;
+  /** The finished result still holds a batch that was sent but never confirmed (see result.ts's
+   * `canDismissResult`). Starting the next send would clear that result, and those rows exist
+   * nowhere else — so the session store refuses, and this makes the button say so instead of
+   * looking clickable and doing nothing. */
+  unconfirmedPending: boolean;
   /** The row count the most recently fetched fee quote was computed for, or `null` while there's no
    * usable quote (still loading, or the read failed). Must equal `rowCount` for the quote to be
    * trusted: the quote is fetched debounced (300ms after `rowCount` last changed), so pasting more
@@ -42,8 +47,9 @@ export type CanSendResult = { ok: boolean; label: string };
  * never disagree. Checked in order; the first false condition wins and sets the label.
  */
 export function canSend(input: CanSendInput): CanSendResult {
-  const { busy, ready, asset, tokenAddressEntered, textIsCurrent, rowCount, sessionActive, quoteCount } = input;
+  const { busy, ready, asset, tokenAddressEntered, textIsCurrent, rowCount, sessionActive, unconfirmedPending, quoteCount } = input;
   if (busy || sessionActive) return { ok: false, label: "Sending…" };
+  if (unconfirmedPending) return { ok: false, label: "Resolve the unconfirmed batch first." };
   if (!textIsCurrent) return { ok: false, label: "Checking the list…" };
   if (asset.kind === "unresolved") {
     return { ok: false, label: tokenAddressEntered ? "Reading the token…" : "Enter the token's address first." };

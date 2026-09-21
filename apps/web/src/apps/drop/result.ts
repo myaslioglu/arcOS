@@ -60,6 +60,19 @@ export function unconfirmedHash(result: Pick<DropResult, "hashes" | "stoppedBeca
 }
 
 /**
+ * Whether a finished result may be cleared away — by the panel's "Done" button, and by starting the
+ * next send over it (see session.ts's reducer, which refuses both while this is false). An
+ * unconfirmed batch's rows live ONLY in `result.unconfirmed`: they are deliberately kept out of
+ * `remaining` and out of the textarea (see runDrop.ts), so clearing the result destroys them along
+ * with the hash needed to find out whether that batch landed — and if it didn't, those recipients
+ * are unrecoverable in the app. The two buttons in the unconfirmed section are the way out; either
+ * one empties `unconfirmed`.
+ */
+export function canDismissResult(result: Pick<DropResult, "unconfirmed"> | null): boolean {
+  return result === null || result.unconfirmed.length === 0;
+}
+
+/**
  * The "N rows weren't sent" banner shown above the textarea once a session's result is ready
  * (wave G, N2). `remaining` alone undercounts once the run stopped because a batch came back
  * unconfirmed: that batch's own rows are in `unconfirmed`, never `remaining` (see runDrop.ts —

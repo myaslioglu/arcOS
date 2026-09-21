@@ -17,7 +17,7 @@ import { dropFeeText } from "./dropFee";
 import { IssuesList } from "./IssuesList";
 import { drop } from "./manifest";
 import { BATCH, formatDropList, parseDropList } from "./parse";
-import { remainingBannerText } from "./result";
+import { canDismissResult, remainingBannerText } from "./result";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
 import { useDrop, type DropQuote } from "./useDrop";
@@ -280,6 +280,11 @@ function Form({ params }: Pick<AppProps, "params">) {
     setText("");
   };
 
+  // G1: while a sent-but-unconfirmed batch is unresolved, its rows exist only inside this result.
+  // Both ways of clearing it — "Done" here and starting the next send — are refused by the session
+  // store; the UI reads the same predicate so the controls match what the store will accept.
+  const canDismiss = canDismissResult(dropSession.result);
+
   const decision = canSend({
     busy,
     ready,
@@ -289,6 +294,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     rowCount: rows.length,
     issueCount: issues.length,
     sessionActive,
+    unconfirmedPending: !canDismiss,
     quoteCount: quote && quote !== "error" ? quote.count : null,
   });
 
@@ -394,9 +400,11 @@ function Form({ params }: Pick<AppProps, "params">) {
               onUnconfirmedChecked={unconfirmedChecked}
               onRecoverUnconfirmed={recoverUnconfirmed}
             />
-            <button type="button" className="mt-2 rounded-md border border-border-2 px-2 py-1" onClick={dismissDone}>
-              Done
-            </button>
+            {canDismiss && (
+              <button type="button" className="mt-2 rounded-md border border-border-2 px-2 py-1" onClick={dismissDone}>
+                Done
+              </button>
+            )}
           </>
         )}
       </div>

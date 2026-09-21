@@ -157,6 +157,49 @@ describe("dropSessionReducer", () => {
     });
   });
 
+  // G1 (wave H): an unconfirmed batch's rows live ONLY in `result.unconfirmed` — never in
+  // `remaining`, never in the textarea. Anything that clears the result therefore destroys them,
+  // and with them the hash the user needs to find out whether that batch landed. Both ways out of
+  // a result are refused until one of the two buttons has resolved it.
+  describe("a result with an unresolved unconfirmed batch", () => {
+    const rows = [{ line: 1, address: A, amount: 1_000_000n }];
+    const stuck = () => doneState({ result: unconfirmedResult(rows), remainingText: `${B},2` });
+    const startAction = {
+      type: "start" as const, tokenLabel: "USDC", token: null, decimals: 6, text: `${B},2`, excludedRows: [], startedAt: 20,
+    };
+
+    it("refuses to start the next send over it", () => {
+      const state = stuck();
+      expect(dropSessionReducer(state, startAction)).toBe(state);
+    });
+
+    it("refuses to be dismissed", () => {
+      const state = stuck();
+      expect(dropSessionReducer(state, { type: "dismiss" })).toBe(state);
+    });
+
+    it("allows both again once the batch is confirmed landed", () => {
+      const resolved = dropSessionReducer(stuck(), { type: "dismissUnconfirmed" });
+      expect(dropSessionReducer(resolved, startAction).status).toBe("sending");
+      expect(dropSessionReducer(resolved, { type: "dismiss" })).toEqual(initialDropSessionState);
+    });
+
+    it("allows both again once the rows are back in the list", () => {
+      const resolved = dropSessionReducer(stuck(), { type: "recoverUnconfirmed" });
+      expect(dropSessionReducer(resolved, startAction).status).toBe("sending");
+      expect(dropSessionReducer(resolved, { type: "dismiss" })).toEqual(initialDropSessionState);
+    });
+
+    it("counts put-back rows as remaining, so the banner above the list stops undercounting", () => {
+      const state = doneState({ result: { ...unconfirmedResult(rows), remaining: [{ line: 2, address: B, amount: 2_000_000n }] } });
+      const next = dropSessionReducer(state, { type: "recoverUnconfirmed" });
+      expect(next.result?.remaining).toEqual([{ line: 2, address: B, amount: 2_000_000n }, ...rows]);
+      expect(next.result?.unconfirmed).toEqual([]);
+      // Idempotent: the second call is a no-op, so the rows can't be counted twice.
+      expect(dropSessionReducer(next, { type: "recoverUnconfirmed" })).toBe(next);
+    });
+  });
+
   // N1: an unconfirmed batch's rows must be visible AND recoverable — "It landed — I checked" just
   // clears the section; "It didn't land — put these rows back" is the only way they re-enter the
   // send list, and it must be a deliberate click that never duplicates rows if triggered twice.

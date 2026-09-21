@@ -1,6 +1,6 @@
 import type { Address } from "@arcos/chain";
 import { formatDropList } from "./parse";
-import type { ExcludedRow } from "./result";
+import { canDismissResult, type ExcludedRow } from "./result";
 import type { DropResult } from "./runDrop";
 
 /**
@@ -65,6 +65,12 @@ export type DropSessionAction =
  * clicks on the same one — the store below turns it into the `false` return value callers check.
  * `finish` only applies from "sending"; `dismiss` only from "done". Every other combination is a no-op.
  *
+ * `start` and `dismiss` are ALSO no-ops while the current result holds an unresolved unconfirmed
+ * batch (`canDismissResult`, wave H/G1): both replace `result`, and that batch's rows are in
+ * `result.unconfirmed` and nowhere else — sending the remainder would silently erase them and the
+ * hash that says whether they landed. One of the two buttons in the unconfirmed section has to
+ * resolve it first.
+ *
  * `dismissUnconfirmed`/`recoverUnconfirmed` (wave G, N1) only apply from "done" with a non-empty
  * `result.unconfirmed` — a batch `runDrop` reported as sent but not confirmed. Both clear
  * `result.unconfirmed` (so the section stops showing, including after the window is closed and
@@ -78,7 +84,7 @@ export type DropSessionAction =
 export function dropSessionReducer(state: DropSessionState, action: DropSessionAction): DropSessionState {
   switch (action.type) {
     case "start":
-      if (state.status === "sending") return state;
+      if (state.status === "sending" || !canDismissResult(state.result)) return state;
       return {
         status: "sending",
         tokenLabel: action.tokenLabel,
@@ -97,7 +103,7 @@ export function dropSessionReducer(state: DropSessionState, action: DropSessionA
         ? { ...state, status: "done", progress: null, result: action.result, remainingText: action.remainingText }
         : state;
     case "dismiss":
-      return state.status === "done" ? { ...initialDropSessionState } : state;
+      return state.status === "done" && canDismissResult(state.result) ? { ...initialDropSessionState } : state;
     case "dismissUnconfirmed":
       if (state.status !== "done" || !state.result || state.result.unconfirmed.length === 0) return state;
       return { ...state, result: { ...state.result, unconfirmed: [] } };
@@ -108,7 +114,12 @@ export function dropSessionReducer(state: DropSessionState, action: DropSessionA
       // type is `number | null`, to cover the pre-send "idle" state).
       const appended = formatDropList(state.result.unconfirmed, state.token, state.decimals ?? 6);
       const remainingText = state.remainingText === "" ? appended : `${state.remainingText}\n${appended}`;
-      return { ...state, remainingText, result: { ...state.result, unconfirmed: [] } };
+      // The rows are back in the list, so they belong in `remaining` too — the "N rows weren't
+      // sent" banner counts that, and a banner that still named only the never-attempted rows
+      // would undercount the list the user is now looking at. Clearing `unconfirmed` in the same
+      // step is what keeps this from happening twice.
+      const remaining = [...state.result.remaining, ...state.result.unconfirmed];
+      return { ...state, remainingText, result: { ...state.result, remaining, unconfirmed: [] } };
     }
   }
 }

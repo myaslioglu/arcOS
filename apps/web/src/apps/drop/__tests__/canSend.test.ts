@@ -15,6 +15,7 @@ const BASE: CanSendInput = {
   rowCount: 3,
   issueCount: 0,
   sessionActive: false,
+  unconfirmedPending: false,
   quoteCount: 3,
 };
 
@@ -105,6 +106,22 @@ describe("canSend", () => {
 
     it("stale text still wins over an unresolved asset — the button reflects the parse still catching up first", () => {
       expect(canSend({ ...BASE, asset: UNRESOLVED, textIsCurrent: false })).toEqual({ ok: false, label: "Checking the list…" });
+    });
+  });
+
+  // G1 (wave H): the unconfirmed batch's rows exist only inside the previous result, and starting
+  // the next send clears it. The reducer refuses that; the button has to say why rather than
+  // looking clickable and doing nothing.
+  describe("an unresolved unconfirmed batch", () => {
+    it("refuses to send, and says what has to happen first", () => {
+      expect(canSend({ ...BASE, unconfirmedPending: true })).toEqual({
+        ok: false,
+        label: "Resolve the unconfirmed batch first.",
+      });
+    });
+
+    it("still reports an in-flight send first — that one is about to resolve on its own", () => {
+      expect(canSend({ ...BASE, unconfirmedPending: true, sessionActive: true })).toEqual({ ok: false, label: "Sending…" });
     });
   });
 });

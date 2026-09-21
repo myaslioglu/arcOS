@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DropRow } from "../parse";
-import { excludedRowsText, failedRowsFor, remainingBannerText, unconfirmedHash, type ExcludedRow } from "../result";
+import { canDismissResult, excludedRowsText, failedRowsFor, remainingBannerText, unconfirmedHash, type ExcludedRow } from "../result";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -134,5 +134,18 @@ describe("remainingBannerText (N2 — the banner must not undercount after an un
     expect(remainingBannerText({ remaining: rows, unconfirmed: [], stoppedBecause: "unconfirmed" })).toBe(
       "1 rows weren't sent. They're in the list below — check and send again.",
     );
+  });
+
+  // G1 (wave H): the one predicate behind both ways a result can disappear — the panel's "Done"
+  // button and starting the next send over it.
+  describe("canDismissResult", () => {
+    it("holds a result back while a batch is still unconfirmed", () => {
+      expect(canDismissResult({ unconfirmed: [{ line: 1, address: A, amount: 1n }] })).toBe(false);
+    });
+
+    it("lets a result go once nothing is unconfirmed, and when there is no result at all", () => {
+      expect(canDismissResult({ unconfirmed: [] })).toBe(true);
+      expect(canDismissResult(null)).toBe(true);
+    });
   });
 });
