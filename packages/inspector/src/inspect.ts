@@ -100,11 +100,19 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     if (slots) topSlotsSet = slotSet(slots[0]) || slotSet(slots[1]);
     if (topSlotsSet) {
       // An EIP-1967 proxy's own bytecode is a trampoline with no function dispatcher: scoring it
-      // would report "no privileged functions" about a token whose implementation can mint. The
-      // implementation slot wins over the beacon slot when both are set, exactly as the EVM's own
-      // ERC-1967 lookup does.
-      proxyImpl = addressFromSlot(slots![0]) ?? (await beaconImplementation(reader, addressFromSlot(slots![1])));
-      [logicCode, logicGap] = await readLogic(proxyImpl);
+      // would report "no privileged functions" about a token whose implementation can mint.
+      const implSlot = addressFromSlot(slots![0]);
+      const beaconSlot = addressFromSlot(slots![1]);
+      if (implSlot && beaconSlot) {
+        // Nothing in the EVM resolves this: the proxy's OWN BYTECODE decides which slot it reads,
+        // and a BeaconProxy with a stale or decoy implementation slot would be scored on code that
+        // never runs. Two candidates is no candidate.
+        logicCode = null;
+        logicGap = "logic-ambiguous";
+      } else {
+        proxyImpl = implSlot ?? (await beaconImplementation(reader, beaconSlot));
+        [logicCode, logicGap] = await readLogic(proxyImpl);
+      }
     } else {
       logicCode = code;
     }

@@ -528,6 +528,25 @@ describe("inspect", () => {
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
   });
 
+  // --- Wave H: with both EIP-1967 slots set, which one runs isn't storage's to say ---
+
+  it("scores nothing when both the implementation and the beacon slot are set", async () => {
+    // A BeaconProxy with a stale or decoy implementation slot runs the BEACON's implementation;
+    // a transparent proxy with a leftover beacon slot runs the implementation slot. Only the
+    // proxy's own bytecode decides, so picking one and scoring it is a guess.
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: PLAIN, [BEACON]: PLAIN, [GRAND]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${BEACON_SLOT}`]: slotWith(BEACON) },
+      reads: { [`${BEACON}.implementation()`]: GRAND },
+    });
+    expect(find(r, "proxy").status).toBe("fail"); // still upgradeable, whichever one runs
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+    }
+    expect(find(r, "privileges")).toMatchObject({ title: "Couldn't read the contract's logic" });
+    expect(find(r, "privileges").detail).toMatch(/both/i);
+  });
+
   // --- Wave H, R1: mutable logic can't earn a pass about logic ---
   //
   // "No privileged functions", "ownership is renounced", "no owner function" and "doesn't use

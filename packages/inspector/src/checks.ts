@@ -77,13 +77,14 @@ const FORWARDS_TO_UNIDENTIFIED_DETAIL =
  * off the code that actually runs — every one of these is `unknown`, never a pass. `null` means the
  * logic code WAS read.
  */
-export type LogicGap = "delegates-to-unidentified" | "logic-unreadable" | "logic-empty" | "logic-unidentified";
+export type LogicGap = "delegates-to-unidentified" | "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous";
 
 const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
   "delegates-to-unidentified": { title: FORWARDS_TO_UNIDENTIFIED_TITLE, detail: FORWARDS_TO_UNIDENTIFIED_DETAIL },
   "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
   "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
   "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
+  "logic-ambiguous": { title: "Couldn't read the contract's logic", detail: "Both the EIP-1967 implementation and beacon slots are set, and only this proxy's own bytecode decides which of the two it runs — so which code to read can't be told." },
 };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
