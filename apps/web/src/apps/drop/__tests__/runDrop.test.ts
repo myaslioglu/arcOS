@@ -94,7 +94,7 @@ describe("runDrop", () => {
     const result = await runDrop(rows, 1, { sendBatch });
 
     expect(result.stoppedBecause).toBe("error");
-    expect(result.message).toBe("Row 1 has a zero amount.");
+    expect(result.message).toBe("An amount in this batch is zero.");
   });
 
   it("recognizes a UserRejectedRequestError nested anywhere in the cause chain", async () => {

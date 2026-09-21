@@ -17,6 +17,13 @@ export const GENERIC_TRANSACTION_ERROR = "The transaction didn't go through. Try
  * stop condition with an already-safe, already-specific sentence. `describeContractError` returns
  * `.message` verbatim for this one error type, and only this one, so a message this app deliberately
  * authored isn't swallowed by the generic fallback the way any other unrecognized error would be.
+ *
+ * That guarantee only holds if every construction site follows one rule: the argument must always be
+ * an app-authored LITERAL sentence, never built from `err.message`, `String(err)`, or any other text
+ * this app doesn't control — doing so would let raw wallet/RPC/transport text reach the user through
+ * the one path `describeContractError` treats as already safe. Enforced by a source-text scan in
+ * __tests__/contract-error.test.ts, which fails if any `new UserFacingError(...)` call reads from
+ * `.message` or `String(err`.
  */
 export class UserFacingError extends Error {
   constructor(message: string) {
@@ -32,8 +39,14 @@ const MAX_RECIPIENTS = 400;
 
 type DecodedRevert = { errorName: string; args: readonly unknown[] };
 
-const asBigInt = (v: unknown): bigint => (typeof v === "bigint" ? v : 0n);
-const asRowNumber = (v: unknown): number => Number(asBigInt(v)) + 1; // contract indices are 0-based; rows read 1-based
+/** Throws — rather than silently returning `0n` — when `v` isn't actually a bigint: a decoded
+ * revert's args are only as trustworthy as viem's ABI decoding of them, and a malformed/unexpected
+ * shape must fall through to the generic message below (via the try/catch in describeContractError)
+ * instead of rendering a confident-looking but wrong sentence like "It is now 0 USDC". */
+const asBigInt = (v: unknown): bigint => {
+  if (typeof v !== "bigint") throw new Error("expected a bigint revert argument");
+  return v;
+};
 
 /** True when `err` — or anything in its `cause` chain — is a wallet-level user rejection: viem's
  * `UserRejectedRequestError` (matched by name, so this file doesn't need to import viem) or the raw
@@ -121,7 +134,9 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
   WrongValue: (a) => `The amount sent doesn't match what's required. It should be ${formatUsdc(asBigInt(a[0]))} USDC — check it and submit again.`,
   NotAToken: () => "That address isn't a token contract.",
   RefundFailed: () => "Some transfers failed and the refund back to your wallet failed too. Nothing was sent — try again.",
-  ZeroAmount: (a) => `Row ${asRowNumber(a[0])} has a zero amount.`,
+  // Not "Row N": the contract's index is a position WITHIN the batch that was sent, not a line
+  // number in the list the user typed — those diverge for batch 2 and beyond of a multi-batch send.
+  ZeroAmount: () => "An amount in this batch is zero.",
   ReentrancyGuardReentrantCall: () => "That action is already in progress.",
 
   // --- Shared between TokenFactory and Multisend (declared identically in both ABIs) ---

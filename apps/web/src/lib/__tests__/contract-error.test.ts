@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { feeControllerAbi, multisendAbi, tokenFactoryAbi } from "@arcos/chain";
 import { describeContractError, GENERIC_TRANSACTION_ERROR, UserFacingError } from "../contract-error";
@@ -24,12 +26,16 @@ describe("describeContractError — ABI completeness", () => {
   it("covers every custom error declared across the three generated ABIs", () => {
     // A sanity check on the check itself: fails loudly if the ABIs ever stopped exporting errors,
     // rather than silently passing an empty loop below.
-    expect(allErrorNames.size).toBeGreaterThan (10);
+    expect(allErrorNames.size).toBeGreaterThan(10);
   });
 
   it("has a mapping for every custom error — fails if an ABI error has no mapping", () => {
+    // Two dummy bigint args, not an empty array: a few mappings (AboveCap, WrongFee, WrongValue) read
+    // a[0]/a[1] as bigints and now THROW — falling through to the generic message — when an expected
+    // arg is missing/not a bigint (the asBigInt fix below). This test only checks "does a mapping
+    // exist", so it needs args that won't trip that guard, not a realistic decode.
     for (const name of allErrorNames) {
-      const message = describeContractError(revertError(name, []));
+      const message = describeContractError(revertError(name, [0n, 0n]));
       expect(message, `${name} must have a specific mapping, not the generic fallback`).not.toBe(GENERIC_TRANSACTION_ERROR);
     }
   });
@@ -46,9 +52,12 @@ describe("describeContractError", () => {
     expect(describeContractError(err)).toBe("The amount sent doesn't match what's required. It should be 12345 USDC — check it and submit again.");
   });
 
-  it("maps ZeroAmount(index) to a 1-based row number", () => {
-    expect(describeContractError(revertError("ZeroAmount", [0n]))).toBe("Row 1 has a zero amount.");
-    expect(describeContractError(revertError("ZeroAmount", [3n]))).toBe("Row 4 has a zero amount.");
+  it("maps ZeroAmount(index) without claiming a CSV line number — index is a position WITHIN a batch, not a line in the list the user typed", () => {
+    // Wording fix from the wave E review: "Row N" implied a CSV line number, but the contract's
+    // `index` is local to the batch that was sent, which can — and for batch 2+ of a multi-batch send,
+    // always does — diverge from the row's actual line in the original list.
+    expect(describeContractError(revertError("ZeroAmount", [0n]))).toBe("An amount in this batch is zero.");
+    expect(describeContractError(revertError("ZeroAmount", [3n]))).toBe("An amount in this batch is zero.");
   });
 
   it("maps BadName/BadSymbol to the actual on-chain rule, not a made-up one", () => {
@@ -66,7 +75,7 @@ describe("describeContractError", () => {
     const inner = revertError("ZeroAmount", [0n]);
     const middle = new Error("mid", { cause: inner });
     const outer = new Error("outer", { cause: middle });
-    expect(describeContractError(outer)).toBe("Row 1 has a zero amount.");
+    expect(describeContractError(outer)).toBe("An amount in this batch is zero.");
   });
 
   it("treats a user rejection as a cancellation, by name, before trying to decode a revert", () => {
@@ -103,5 +112,90 @@ describe("describeContractError", () => {
   it("checks UserFacingError before a user rejection or a decoded revert, since it's never ambiguous with either", () => {
     const err = new UserFacingError("Stop condition this app wrote itself.");
     expect(describeContractError(err)).toBe("Stop condition this app wrote itself.");
+  });
+
+  // asBigInt used to silently coerce a non-bigint arg to 0n, so a malformed/unexpected args shape
+  // rendered a confident-looking but wrong "It is now 0 USDC" instead of the generic fallback.
+  it("falls back to the generic message when a decoded revert's expected-bigint arg isn't actually a bigint", () => {
+    const malformed = { name: "ContractFunctionRevertedError", data: { errorName: "WrongFee", args: ["not-a-bigint", 10n] } };
+    const message = describeContractError(malformed);
+    expect(message).toBe(GENERIC_TRANSACTION_ERROR);
+    expect(message).not.toMatch(/0 USDC/);
+  });
+
+  it("still formats normally when the args ARE bigints", () => {
+    expect(describeContractError(revertError("WrongFee", [15n * 10n ** 18n, 10n * 10n ** 18n]))).toBe(
+      "The fee changed while you were signing. It is now 15 USDC — check it and submit again.",
+    );
+  });
+});
+
+/**
+ * A source-text scan (this workspace has no jsdom harness — see AGENTS.md), not a runtime test: it
+ * fails if any file under apps/web/src constructs a `UserFacingError` from external text (an error's
+ * own `.message`, or a `String(err...)` coercion of one) rather than an app-authored literal sentence.
+ * That's the one invariant `describeContractError` depends on to safely show a `UserFacingError`'s
+ * message verbatim (see the class's own doc comment) — a single violation anywhere would let raw
+ * wallet/RPC/transport text reach the user unfiltered.
+ */
+describe("UserFacingError is only ever constructed from an app-authored literal — never external text", () => {
+  // This file's own source is exempt: it contains the literal text `new UserFacingError(` as scanner
+  // configuration (the `marker` constant below), not a real call, and test fixtures elsewhere in this
+  // suite legitimately construct `UserFacingError` instances from literal strings for other tests.
+  const SELF = path.resolve(import.meta.dirname, "contract-error.test.ts");
+
+  function listSourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...listSourceFiles(full));
+      else if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name) && full !== SELF) out.push(full);
+    }
+    return out;
+  }
+
+  /** Extracts exactly the argument list of a call whose `(` is at `openParenIdx` — balancing nested
+   * parens and skipping over string/template literal contents (so a paren inside a message string
+   * can't desynchronize the count) — rather than a fixed-length lookahead, which would leak into
+   * whatever code happens to follow a short call and produce false positives. */
+  function extractBalancedArgs(source: string, openParenIdx: number): string {
+    let depth = 1;
+    let i = openParenIdx + 1;
+    let inString: string | null = null;
+    while (i < source.length && depth > 0) {
+      const ch = source[i];
+      if (inString) {
+        if (ch === "\\") i++;
+        else if (ch === inString) inString = null;
+      } else if (ch === '"' || ch === "'" || ch === "`") {
+        inString = ch;
+      } else if (ch === "(") {
+        depth++;
+      } else if (ch === ")") {
+        depth--;
+      }
+      i++;
+    }
+    return source.slice(openParenIdx + 1, i - 1);
+  }
+
+  it("finds no `new UserFacingError(...)` call whose argument reads from `.message` or `String(err`", () => {
+    const root = path.resolve(import.meta.dirname, "..", "..");
+    const offenders: string[] = [];
+    for (const file of listSourceFiles(root)) {
+      const source = readFileSync(file, "utf8");
+      const marker = "new UserFacingError(";
+      let idx = source.indexOf(marker);
+      while (idx !== -1) {
+        const openParenIdx = idx + marker.length - 1;
+        const args = extractBalancedArgs(source, openParenIdx);
+        if (args.includes(".message") || args.includes("String(err")) {
+          offenders.push(`${path.relative(root, file)}: new UserFacingError(${args})`);
+        }
+        idx = source.indexOf(marker, idx + marker.length);
+      }
+    }
+    expect(offenders, `found UserFacingError built from external text:\n${offenders.join("\n")}`).toEqual([]);
   });
 });
