@@ -31,10 +31,13 @@ export function validateMint(form: MintForm, holder: Address): { ok: true; args:
   const name = form.name.trim();
   const symbol = form.symbol.trim();
   if (name === "") errors.name = "Enter a name";
-  else if (byteLength(name) > 64) errors.name = "At most 64 characters";
+  // "bytes", not "characters": the contract's _validateName counts UTF-8 bytes, and byteLength()
+  // above mirrors that — an accented letter or emoji is 1 JS "character" but 2-4 bytes, so a string
+  // that reads as short can still hit this limit well before its character count would suggest.
+  else if (byteLength(name) > 64) errors.name = "At most 64 bytes (accented letters and emoji count as more than one)";
   else if (hasControlByte(name)) errors.name = "A name can't contain control characters";
   if (symbol === "") errors.symbol = "Enter a symbol";
-  else if (byteLength(symbol) > 16) errors.symbol = "At most 16 characters";
+  else if (byteLength(symbol) > 16) errors.symbol = "At most 16 bytes (accented letters and emoji count as more than one)";
   else if (!isPrintableAsciiSymbol(symbol)) errors.symbol = "Use letters, digits and punctuation only — no spaces or accents";
 
   const decimals = /^\d+$/.test(form.decimals.trim()) ? Number(form.decimals) : NaN;

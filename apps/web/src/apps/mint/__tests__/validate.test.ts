@@ -24,7 +24,42 @@ describe("validateMint", () => {
     const r = validateMint(form({ name: "", symbol: "WAY-TOO-LONG-SYMBOL", decimals: "19", supply: "0" }), HOLDER);
     expect(r).toEqual({
       ok: false,
-      errors: { name: "Enter a name", symbol: "At most 16 characters", decimals: "A whole number from 0 to 18", supply: "Supply must be more than zero" },
+      errors: {
+        name: "Enter a name",
+        symbol: "At most 16 bytes (accented letters and emoji count as more than one)",
+        decimals: "A whole number from 0 to 18",
+        supply: "Supply must be more than zero",
+      },
+    });
+  });
+
+  // Wave E "should fix": the rule TokenFactory enforces (and byteLength() checks) counts UTF-8 BYTES,
+  // not JS string "characters" — the old wording said "characters", which understates how few
+  // accented letters or emoji actually fit.
+  it("says 'bytes', not 'characters', for a too-long name — and explains why that's not the same as string length", () => {
+    const tooLong = "x".repeat(65); // 65 plain ASCII bytes — over the 64-byte limit, one char per byte
+    expect(validateMint(form({ name: tooLong }), HOLDER)).toEqual({
+      ok: false,
+      errors: { name: "At most 64 bytes (accented letters and emoji count as more than one)" },
+    });
+  });
+
+  it("says 'bytes' for a too-long symbol", () => {
+    const tooLong = "X".repeat(17); // 17 bytes, over the 16-byte limit
+    expect(validateMint(form({ symbol: tooLong }), HOLDER)).toEqual({
+      ok: false,
+      errors: { symbol: "At most 16 bytes (accented letters and emoji count as more than one)" },
+    });
+  });
+
+  it("the byte limit bites well before the JS string-length limit for multi-byte text — proving 'characters' would have been misleading", () => {
+    // "é" is 1 JS character but 2 UTF-8 bytes — 33 of them is 33 "characters" yet 66 bytes, over the
+    // 64-byte name limit despite reading as a short string.
+    const accented = "é".repeat(33);
+    expect(accented.length).toBe(33);
+    expect(validateMint(form({ name: accented }), HOLDER)).toEqual({
+      ok: false,
+      errors: { name: "At most 64 bytes (accented letters and emoji count as more than one)" },
     });
   });
 
