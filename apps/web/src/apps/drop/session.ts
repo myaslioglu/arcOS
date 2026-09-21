@@ -1,4 +1,5 @@
 import type { Address } from "@arcos/chain";
+import { formatDropList } from "./parse";
 import type { ExcludedRow } from "./result";
 import type { DropResult } from "./runDrop";
 
@@ -52,7 +53,9 @@ export type DropSessionAction =
   | { type: "start"; tokenLabel: string; token: Address | null; decimals: number; text: string; excludedRows: ExcludedRow[]; startedAt: number }
   | { type: "progress"; progress: DropProgress | null }
   | { type: "finish"; result: DropResult; remainingText: string }
-  | { type: "dismiss" };
+  | { type: "dismiss" }
+  | { type: "dismissUnconfirmed" }
+  | { type: "recoverUnconfirmed" };
 
 /**
  * Pure state machine for one Drop send session — no module state, no DOM, trivially unit-testable.
@@ -61,6 +64,16 @@ export type DropSessionAction =
  * That no-op IS the hard guard against two concurrent sends, from any number of Drop windows or rapid
  * clicks on the same one — the store below turns it into the `false` return value callers check.
  * `finish` only applies from "sending"; `dismiss` only from "done". Every other combination is a no-op.
+ *
+ * `dismissUnconfirmed`/`recoverUnconfirmed` (wave G, N1) only apply from "done" with a non-empty
+ * `result.unconfirmed` — a batch `runDrop` reported as sent but not confirmed. Both clear
+ * `result.unconfirmed` (so the section stops showing, including after the window is closed and
+ * reopened), which is also what makes each one a no-op the second time it's applied: there's
+ * nothing left to dismiss or recover, so `recoverUnconfirmed` can never move — or duplicate — the
+ * same rows twice. `recoverUnconfirmed` additionally appends those rows, formatted exactly like the
+ * rest of the list (`formatDropList`, at the session's own `token`/`decimals`), to `remainingText` —
+ * the ONLY path back into the send list; `dismissUnconfirmed` ("it landed — I checked") discards
+ * them instead, leaving `remainingText` untouched.
  */
 export function dropSessionReducer(state: DropSessionState, action: DropSessionAction): DropSessionState {
   switch (action.type) {
@@ -85,6 +98,18 @@ export function dropSessionReducer(state: DropSessionState, action: DropSessionA
         : state;
     case "dismiss":
       return state.status === "done" ? { ...initialDropSessionState } : state;
+    case "dismissUnconfirmed":
+      if (state.status !== "done" || !state.result || state.result.unconfirmed.length === 0) return state;
+      return { ...state, result: { ...state.result, unconfirmed: [] } };
+    case "recoverUnconfirmed": {
+      if (state.status !== "done" || !state.result || state.result.unconfirmed.length === 0) return state;
+      // `decimals` is always a real number by "done" (it's required, non-null, on "start" — see
+      // DropSessionAction above); the `?? 6` is only for TypeScript's benefit (the field's static
+      // type is `number | null`, to cover the pre-send "idle" state).
+      const appended = formatDropList(state.result.unconfirmed, state.token, state.decimals ?? 6);
+      const remainingText = state.remainingText === "" ? appended : `${state.remainingText}\n${appended}`;
+      return { ...state, remainingText, result: { ...state.result, unconfirmed: [] } };
+    }
   }
 }
 
@@ -155,4 +180,25 @@ function dismiss(): void {
   emit();
 }
 
-export const session = { getSnapshot, subscribe, start, setProgress, finish, dismiss };
+/** "It landed — I checked": clears an unconfirmed batch's rows from the result without touching
+ * `remainingText` — the user has independently confirmed the send went through. A no-op once
+ * there's nothing unconfirmed left (already dismissed, or recovered). */
+function dismissUnconfirmed(): void {
+  const next = dropSessionReducer(state, { type: "dismissUnconfirmed" });
+  if (next === state) return;
+  state = next;
+  emit();
+}
+
+/** "It didn't land — put these rows back in the list": the ONLY way an unconfirmed batch's rows
+ * re-enter the send list (see runDrop.ts's doc comment on why they're kept out of `remaining` in
+ * the first place). Moves them into `remainingText` exactly once — calling this again, or after
+ * `dismissUnconfirmed`, is a no-op, since `result.unconfirmed` is already empty by then. */
+function recoverUnconfirmed(): void {
+  const next = dropSessionReducer(state, { type: "recoverUnconfirmed" });
+  if (next === state) return;
+  state = next;
+  emit();
+}
+
+export const session = { getSnapshot, subscribe, start, setProgress, finish, dismiss, dismissUnconfirmed, recoverUnconfirmed };

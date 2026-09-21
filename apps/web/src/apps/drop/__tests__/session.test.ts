@@ -5,6 +5,19 @@ import { dropSessionReducer, initialDropSessionState, session, type DropSessionS
 
 const emptyResult: DropResult = { delivered: [], failed: [], remaining: [], unconfirmed: [], hashes: [], stoppedBecause: null, message: null };
 
+const A = "0x1111111111111111111111111111111111111111" as const;
+const B = "0x2222222222222222222222222222222222222222" as const;
+
+/** A result as `runDrop` leaves it after a batch came back unconfirmed — `unconfirmed` carries the
+ * rows, `hashes`' last entry is that batch's hash (see result.ts's `unconfirmedHash`). */
+const unconfirmedResult = (rows: DropResult["unconfirmed"], hashes: string[] = ["0xhash"]): DropResult => ({
+  ...emptyResult,
+  unconfirmed: rows,
+  hashes,
+  stoppedBecause: "unconfirmed",
+  message: "Batch 1 of 2 was sent but is unconfirmed — check the explorer before sending the rest.",
+});
+
 const excludedRow = (line: number, text: string, reason: string): ExcludedRow => ({ line, text, reason });
 
 const sendingState = (over: Partial<DropSessionState> = {}): DropSessionState => ({
@@ -143,6 +156,87 @@ describe("dropSessionReducer", () => {
       expect(dropSessionReducer(state, { type: "dismiss" })).toBe(state);
     });
   });
+
+  // N1: an unconfirmed batch's rows must be visible AND recoverable — "It landed — I checked" just
+  // clears the section; "It didn't land — put these rows back" is the only way they re-enter the
+  // send list, and it must be a deliberate click that never duplicates rows if triggered twice.
+  describe("dismissUnconfirmed ('It landed — I checked')", () => {
+    it("clears result.unconfirmed, from done, without touching remainingText", () => {
+      const rows = [{ line: 3, address: A, amount: 1n }];
+      const state = doneState({ result: unconfirmedResult(rows), remainingText: "leftover" });
+      const next = dropSessionReducer(state, { type: "dismissUnconfirmed" });
+      expect(next.result?.unconfirmed).toEqual([]);
+      expect(next.remainingText).toBe("leftover");
+      // The rest of the result is untouched — this only clears the unconfirmed section.
+      expect(next.result?.stoppedBecause).toBe("unconfirmed");
+      expect(next.result?.hashes).toEqual(["0xhash"]);
+    });
+
+    it("is a no-op once there's nothing unconfirmed left to dismiss", () => {
+      const state = doneState({ result: emptyResult });
+      expect(dropSessionReducer(state, { type: "dismissUnconfirmed" })).toBe(state);
+    });
+
+    it("is idempotent — dismissing twice doesn't error or change anything the second time", () => {
+      const rows = [{ line: 3, address: A, amount: 1n }];
+      const once = dropSessionReducer(doneState({ result: unconfirmedResult(rows) }), { type: "dismissUnconfirmed" });
+      const twice = dropSessionReducer(once, { type: "dismissUnconfirmed" });
+      expect(twice).toBe(once);
+    });
+
+    it("is a no-op outside done", () => {
+      expect(dropSessionReducer(initialDropSessionState, { type: "dismissUnconfirmed" })).toBe(initialDropSessionState);
+      const state = sendingState();
+      expect(dropSessionReducer(state, { type: "dismissUnconfirmed" })).toBe(state);
+    });
+  });
+
+  describe("recoverUnconfirmed (\"It didn't land — put these rows back\")", () => {
+    it("moves unconfirmed rows into remainingText, formatted the same way the rest of the list is, and clears unconfirmed", () => {
+      // 1_000_000n at 6 decimals (native units) formats back to "1" — see parse.ts's formatDropList.
+      const rows = [{ line: 5, address: A, amount: 1_000_000n }];
+      const state = doneState({ result: unconfirmedResult(rows), remainingText: `${B},2`, token: null, decimals: 6 });
+      const next = dropSessionReducer(state, { type: "recoverUnconfirmed" });
+      expect(next.result?.unconfirmed).toEqual([]);
+      expect(next.remainingText).toBe(`${B},2\n${A},1`);
+    });
+
+    it("starts remainingText fresh — no leading blank line — when nothing else was remaining", () => {
+      const rows = [{ line: 1, address: A, amount: 1_000_000n }];
+      const state = doneState({ result: unconfirmedResult(rows), remainingText: "", token: null, decimals: 6 });
+      const next = dropSessionReducer(state, { type: "recoverUnconfirmed" });
+      expect(next.remainingText).toBe(`${A},1`);
+    });
+
+    it("formats a real token's rows at the token's own decimals, not native's", () => {
+      const rows = [{ line: 1, address: A, amount: 5n * 10n ** 9n }]; // 5 at 9 decimals
+      const state = doneState({ result: unconfirmedResult(rows), remainingText: "", token: B, decimals: 9 });
+      const next = dropSessionReducer(state, { type: "recoverUnconfirmed" });
+      expect(next.remainingText).toBe(`${A},5`);
+    });
+
+    it("moves rows exactly once — calling it again (rows already moved) doesn't duplicate them", () => {
+      const rows = [{ line: 5, address: A, amount: 1_000_000n }];
+      const state = doneState({ result: unconfirmedResult(rows), remainingText: "", token: null, decimals: 6 });
+      const once = dropSessionReducer(state, { type: "recoverUnconfirmed" });
+      const twice = dropSessionReducer(once, { type: "recoverUnconfirmed" });
+      expect(twice).toBe(once); // no-op reference equality — nothing changed, nothing duplicated
+      expect(twice.remainingText).toBe(`${A},1`);
+    });
+
+    it("is a no-op once there's nothing unconfirmed left to recover (e.g. after dismissUnconfirmed)", () => {
+      const rows = [{ line: 5, address: A, amount: 1_000_000n }];
+      const dismissed = dropSessionReducer(doneState({ result: unconfirmedResult(rows) }), { type: "dismissUnconfirmed" });
+      const next = dropSessionReducer(dismissed, { type: "recoverUnconfirmed" });
+      expect(next).toBe(dismissed);
+    });
+
+    it("is a no-op outside done", () => {
+      expect(dropSessionReducer(initialDropSessionState, { type: "recoverUnconfirmed" })).toBe(initialDropSessionState);
+      const state = sendingState();
+      expect(dropSessionReducer(state, { type: "recoverUnconfirmed" })).toBe(state);
+    });
+  });
 });
 
 describe("session store", () => {
@@ -217,5 +311,25 @@ describe("session store", () => {
     session.start("USDC", null, 6, "y"); // refused, no change
     expect(calls).toBe(callsAfterStart);
     unsubscribe();
+  });
+
+  it("dismissUnconfirmed() only takes effect once a session is done with an unconfirmed batch to clear", () => {
+    session.dismissUnconfirmed(); // idle — no-op
+    expect(session.getSnapshot().status).toBe("idle");
+
+    session.start("USDC", null, 6, "x");
+    session.finish(unconfirmedResult([{ line: 1, address: A, amount: 1n }]), "");
+    session.dismissUnconfirmed();
+    expect(session.getSnapshot().result?.unconfirmed).toEqual([]);
+  });
+
+  it("recoverUnconfirmed() moves the unconfirmed rows into remainingText and survives a reopened window's initial read", () => {
+    session.start("USDC", null, 6, "x");
+    session.finish(unconfirmedResult([{ line: 1, address: A, amount: 1_000_000n }]), "");
+    session.recoverUnconfirmed();
+    expect(session.getSnapshot().result?.unconfirmed).toEqual([]);
+    expect(session.getSnapshot().remainingText).toBe(`${A},1`);
+    // A freshly "reopened window" just reads getSnapshot() again — the recovered row is there.
+    expect(session.getSnapshot().remainingText).toContain(A);
   });
 });

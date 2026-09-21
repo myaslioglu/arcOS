@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DropRow } from "../parse";
-import { excludedRowsText, failedRowsFor, type ExcludedRow } from "../result";
+import { excludedRowsText, failedRowsFor, unconfirmedHash, type ExcludedRow } from "../result";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -70,5 +70,30 @@ describe("excludedRowsText keeps each row's original text and reason available (
     const rows = [excludedRow(4, "  0xnotaddr , 12.5  ", "Not an address")];
     expect(rows[0].text).toBe("  0xnotaddr , 12.5  ");
     expect(rows[0].reason).toBe("Not an address");
+  });
+});
+
+describe("unconfirmedHash (N1 — which hash belongs to the unconfirmed batch)", () => {
+  // runDrop.ts pushes an unconfirmed batch's hash right before returning (see its own doc comment
+  // on BatchOutcome/"unconfirmed"), so it is always the LAST entry in `hashes` whenever the run
+  // stopped that way. This makes that otherwise-implicit ordering an explicit, tested fact instead
+  // of something ResultPanel.tsx has to assume on its own.
+  it("is null when the run didn't stop unconfirmed", () => {
+    expect(unconfirmedHash({ hashes: ["0x1", "0x2"], stoppedBecause: null })).toBeNull();
+    expect(unconfirmedHash({ hashes: ["0x1"], stoppedBecause: "reverted" })).toBeNull();
+    expect(unconfirmedHash({ hashes: [], stoppedBecause: "rejected" })).toBeNull();
+    expect(unconfirmedHash({ hashes: ["0x1"], stoppedBecause: "error" })).toBeNull();
+  });
+
+  it("is the LAST hash recorded when the run stopped unconfirmed — the earlier, already-delivered batches' hashes are not it", () => {
+    expect(unconfirmedHash({ hashes: ["0x1", "0x2", "0x3"], stoppedBecause: "unconfirmed" })).toBe("0x3");
+  });
+
+  it("is the only hash when the very first batch was the one that came back unconfirmed", () => {
+    expect(unconfirmedHash({ hashes: ["0xonly"], stoppedBecause: "unconfirmed" })).toBe("0xonly");
+  });
+
+  it("is null (never crashes) if somehow stopped unconfirmed with no hash recorded at all", () => {
+    expect(unconfirmedHash({ hashes: [], stoppedBecause: "unconfirmed" })).toBeNull();
   });
 });

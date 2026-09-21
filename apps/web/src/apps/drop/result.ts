@@ -1,4 +1,5 @@
 import type { DropRow } from "./parse";
+import type { DropResult } from "./runDrop";
 
 export type FailedRow = { line: number; address: string; amount: bigint };
 
@@ -44,4 +45,16 @@ export function excludedRowsText(rows: readonly ExcludedRow[]): string | null {
   if (rows.length === 0) return null;
   if (rows.length === 1) return `1 row wasn't sent because it had a problem: line ${rows[0].line}`;
   return `${rows.length} rows weren't sent because they had problems: lines ${rows.map((r) => r.line).join(", ")}`;
+}
+
+/**
+ * Which of `hashes` belongs to the batch `runDrop` reported as `unconfirmed` — `null` unless the
+ * run actually stopped that way (wave G, N1). `runDrop.ts` always pushes an unconfirmed batch's
+ * hash right before returning (see `BatchOutcome`'s doc comment there), so it is the LAST hash
+ * recorded; this makes that otherwise-implicit ordering an explicit, tested fact `ResultPanel.tsx`
+ * can rely on instead of assuming it on its own.
+ */
+export function unconfirmedHash(result: Pick<DropResult, "hashes" | "stoppedBecause">): string | null {
+  if (result.stoppedBecause !== "unconfirmed") return null;
+  return result.hashes.at(-1) ?? null;
 }

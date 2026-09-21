@@ -15,7 +15,7 @@ import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
 import { IssuesList } from "./IssuesList";
 import { drop } from "./manifest";
-import { BATCH, parseDropList } from "./parse";
+import { BATCH, formatDropList, parseDropList } from "./parse";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
 import { useDrop, type DropQuote } from "./useDrop";
@@ -246,6 +246,33 @@ function Form({ params }: Pick<AppProps, "params">) {
     }
   };
 
+  // N1: the unconfirmed section's three controls. Copying/recovering both need the session's own
+  // `token`/`decimals` (captured once at `start`) — not this render's `asset`, which describes
+  // whatever the form currently holds, not what the unconfirmed batch was actually sent as.
+  const copyUnconfirmed = async () => {
+    if (!dropSession.result || dropSession.decimals === null) return;
+    const clip = formatDropList(dropSession.result.unconfirmed, dropSession.token, dropSession.decimals);
+    try {
+      await navigator.clipboard.writeText(clip);
+      notify("Unconfirmed rows copied");
+    } catch {
+      notify("Couldn't copy to the clipboard.", "warn");
+    }
+  };
+
+  const unconfirmedChecked = () => session.dismissUnconfirmed();
+
+  const recoverUnconfirmed = () => {
+    if (!dropSession.result || dropSession.decimals === null) return;
+    // Appended to THIS window's own local `text` — not re-synced from the session store, which
+    // would clobber any edits the user already made to the textarea since the send finished (see
+    // the `syncedDoneAt` block above). `session.recoverUnconfirmed()` separately updates the store's
+    // own `remainingText`, which is what a freshly reopened window reads on mount.
+    const rowsText = formatDropList(dropSession.result.unconfirmed, dropSession.token, dropSession.decimals);
+    setText((current) => (current === "" ? rowsText : `${current}\n${rowsText}`));
+    session.recoverUnconfirmed();
+  };
+
   const dismissDone = () => {
     session.dismiss();
     setText("");
@@ -362,7 +389,14 @@ function Form({ params }: Pick<AppProps, "params">) {
 
         {dropSession.status === "done" && dropSession.result && (
           <>
-            <ResultPanel result={dropSession.result} excludedRows={dropSession.excludedRows} onCopyFailed={copyFailed} />
+            <ResultPanel
+              result={dropSession.result}
+              excludedRows={dropSession.excludedRows}
+              onCopyFailed={copyFailed}
+              onCopyUnconfirmed={copyUnconfirmed}
+              onUnconfirmedChecked={unconfirmedChecked}
+              onRecoverUnconfirmed={recoverUnconfirmed}
+            />
             <button type="button" className="mt-2 rounded-md border border-border-2 px-2 py-1" onClick={dismissDone}>
               Done
             </button>
