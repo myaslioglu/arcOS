@@ -74,19 +74,42 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
   return {
     async contract(address) {
       const j = (await get(`/smart-contracts/${address}`)) as Json | null;
-      if (!j) return { verified: null, name: null, abi: null, proxyType: null, implementations: [] };
-      const impls = Array.isArray(j.implementations) ? (j.implementations as unknown[]) : [];
-      return {
-        // Only an explicit boolean is evidence: a body without the field is the explorer declining
-        // to say, and "it didn't say" must never be rendered as "it said no".
-        verified: typeof j.is_verified === "boolean" ? j.is_verified : null,
-        name: cleanLabel(str(j.name), 64),
-        abi: Array.isArray(j.abi) ? (j.abi as unknown[]) : null,
-        proxyType: str(j.proxy_type),
-        implementations: impls
-          .map((i) => str(obj(i).address_hash) ?? str(obj(i).address))
-          .filter((a): a is string => a !== null),
-      };
+      const impls = j && Array.isArray(j.implementations) ? (j.implementations as unknown[]) : [];
+      const info: ContractInfo = j
+        ? {
+            // Only an explicit boolean is evidence: a body without the field is the explorer
+            // declining to say, and "it didn't say" must never be rendered as "it said no".
+            verified: typeof j.is_verified === "boolean" ? j.is_verified : null,
+            name: cleanLabel(str(j.name), 64),
+            abi: Array.isArray(j.abi) ? (j.abi as unknown[]) : null,
+            proxyType: str(j.proxy_type),
+            implementations: impls
+              .map((i) => str(obj(i).address_hash) ?? str(obj(i).address))
+              .filter((a): a is string => a !== null),
+          }
+        : { verified: null, name: null, abi: null, proxyType: null, implementations: [] };
+      if (info.verified !== null) return info;
+
+      // Measured on the real testnet explorer (2026-09-20): an unverified contract's
+      // /smart-contracts/<addr> answers 200 with NO `is_verified` field at all — not a 404, and not
+      // `is_verified: false`. That is NOT the explorer declining to say; /addresses/<addr> has its
+      // own explicit `is_verified` for the same address, so ask it before giving up and calling
+      // this "unknown". Only trusted when it's unambiguously about a contract at this address
+      // (`is_contract: true`) and itself carries a boolean — a 404, "not a contract", or another
+      // body with no boolean all still mean "the explorer never said either way".
+      let a: Json | null;
+      try {
+        a = (await get(`/addresses/${address}`)) as Json | null;
+      } catch (e) {
+        // An outage on this second call must not sink whatever the first call already produced
+        // (abi, implementations, ...) — it only means `verified` stays unknown, same as a 404.
+        if (e instanceof ExplorerUnavailable) return info;
+        throw e;
+      }
+      if (a && a.is_contract === true && typeof a.is_verified === "boolean") {
+        return { ...info, verified: a.is_verified };
+      }
+      return info;
     },
     async token(address) {
       const j = (await get(`/tokens/${address}`)) as Json | null;

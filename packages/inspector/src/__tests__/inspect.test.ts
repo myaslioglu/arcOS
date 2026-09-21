@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DexConfig } from "@arcos/chain";
-import { ExplorerUnavailable, type ExplorerSource } from "../explorer";
+import { ExplorerUnavailable, blockscoutSource, type ExplorerSource } from "../explorer";
 import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
 
@@ -577,6 +577,35 @@ describe("inspect", () => {
   it("still fails verification when the explorer positively says the source isn't verified", async () => {
     const ex = explorer({ contract: async () => ({ verified: false, name: null, abi: null, proxyType: null, implementations: [] }) });
     const r = await run({ code: { [TOKEN]: PLAIN } }, ex);
+    expect(find(r, "verified")).toMatchObject({ status: "fail", title: "Source code isn't verified" });
+  });
+
+  // N9 (wave G): wave F's fix above was correct in principle but wrong about the explorer — a real
+  // unverified contract's /smart-contracts/<addr> answers 200 with no `is_verified` field at all
+  // (measured on the Arc testnet explorer, 2026-09-20), which silently turned this into "unknown"
+  // instead of "fail". This drives `inspect()` through the REAL blockscoutSource end to end (not a
+  // stubbed ExplorerSource) with that exact response shape, so the fix in explorer.ts's fallback to
+  // /addresses/<addr> is proven all the way through to the finding a user actually sees.
+  it("reports fail — not unknown — for the real testnet shape of an unverified ERC-20: no is_verified field on /smart-contracts, resolved via /addresses", async () => {
+    const apiUrl = "https://explorer.test/api/v2";
+    const fakeFetch = (async (input: RequestInfo | URL) => {
+      const path = String(input).replace(apiUrl, "");
+      const bodies: Record<string, unknown> = {
+        [`/smart-contracts/${TOKEN}`]: {
+          conflicting_implementations: [],
+          creation_bytecode: "0x6080604052",
+          creation_status: "success",
+          deployed_bytecode: "0x6080604052",
+          implementations: [],
+          proxy_type: null,
+        },
+        [`/addresses/${TOKEN}`]: { is_contract: true, is_verified: false },
+      };
+      if (!(path in bodies)) return new Response(JSON.stringify({ message: "Not found" }), { status: 404 });
+      return new Response(JSON.stringify(bodies[path]), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const r = await run({ code: { [TOKEN]: PLAIN } }, blockscoutSource(apiUrl, fakeFetch));
     expect(find(r, "verified")).toMatchObject({ status: "fail", title: "Source code isn't verified" });
   });
 

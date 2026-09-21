@@ -110,4 +110,90 @@ describe("blockscoutSource", () => {
     ]);
     expect(await src.tokenBalances(T)).toEqual([{ address: "0xDDD", name: "D", symbol: "D", decimals: 18, value: 0n }]);
   });
+
+  // N9: measured on the Arc TESTNET explorer on 2026-09-20 for two real unverified ERC-20s —
+  // /smart-contracts/<addr> answers 200 with NO `is_verified` field at all (not a 404, not
+  // `is_verified: false`); wave F's premise that a missing field always meant "unknown" was wrong
+  // for this real shape. The explorer's actual explicit statement lives at /addresses/<addr>
+  // instead (`is_contract: true, is_verified: false`), so `contract()` must fall back to it before
+  // giving up and calling this "unknown".
+  describe("N9 — falls back to /addresses/<addr> when /smart-contracts/<addr> has no is_verified field", () => {
+    // The real, complete body shape of the unverified /smart-contracts response (fields present on
+    // Blockscout for an unverified contract, minus the is_verified boolean it simply never sends).
+    const unverifiedSmartContractsBody = {
+      conflicting_implementations: [],
+      creation_bytecode: "0x6080604052",
+      creation_status: "success",
+      deployed_bytecode: "0x6080604052",
+      implementations: [],
+      proxy_type: null,
+    };
+
+    it("resolves verified: false from /addresses/<addr> when /smart-contracts/<addr> has no is_verified field (the real unverified-token shape)", async () => {
+      const src = blockscoutSource(API, fakeFetch({
+        [`/smart-contracts/${T}`]: json(unverifiedSmartContractsBody),
+        [`/addresses/${T}`]: json({ is_contract: true, is_verified: false }),
+      }));
+      expect(await src.contract(T)).toEqual({ verified: false, name: null, abi: null, proxyType: null, implementations: [] });
+    });
+
+    it("does not need /addresses/<addr> at all when /smart-contracts/<addr> already answers explicitly (the real verified-USDC shape)", async () => {
+      let addressesCalled = false;
+      const fetchFn: typeof fetch = (async (input: RequestInfo | URL) => {
+        if (String(input).includes("/addresses/")) addressesCalled = true;
+        return fakeFetch({
+          [`/smart-contracts/${T}`]: json({ is_verified: true, name: "FiatTokenProxy", abi: [{ type: "function", name: "transfer" }], proxy_type: "eip1967_oz", implementations: [] }),
+          [`/addresses/${T}`]: json({ is_contract: true, is_verified: true, name: "FiatTokenProxy", proxy_type: "eip1967_oz" }),
+        })(input);
+      }) as typeof fetch;
+      const src = blockscoutSource(API, fetchFn);
+      expect(await src.contract(T)).toEqual({
+        verified: true, name: "FiatTokenProxy", abi: [{ type: "function", name: "transfer" }], proxyType: "eip1967_oz", implementations: [],
+      });
+      expect(addressesCalled).toBe(false);
+    });
+
+    it("stays unknown (null) when both endpoints have no record at all (both 404)", async () => {
+      const src = blockscoutSource(API, fakeFetch({}));
+      expect(await src.contract(T)).toEqual({ verified: null, name: null, abi: null, proxyType: null, implementations: [] });
+    });
+
+    it("stays unknown when /addresses/<addr> says this isn't even a contract", async () => {
+      const src = blockscoutSource(API, fakeFetch({
+        [`/smart-contracts/${T}`]: json(unverifiedSmartContractsBody),
+        [`/addresses/${T}`]: json({ is_contract: false }),
+      }));
+      expect((await src.contract(T)).verified).toBeNull();
+    });
+
+    it("stays unknown when /addresses/<addr> is a contract but its body has no is_verified field either", async () => {
+      const src = blockscoutSource(API, fakeFetch({
+        [`/smart-contracts/${T}`]: json(unverifiedSmartContractsBody),
+        [`/addresses/${T}`]: json({ is_contract: true }),
+      }));
+      expect((await src.contract(T)).verified).toBeNull();
+    });
+
+    it("an ExplorerUnavailable from the /addresses/<addr> fallback doesn't sink the fields the first call already got — verified stays null, abi/implementations are kept", async () => {
+      const src = blockscoutSource(API, fakeFetch({
+        [`/smart-contracts/${T}`]: json({
+          conflicting_implementations: [], creation_bytecode: "0x", creation_status: "success", deployed_bytecode: "0x",
+          implementations: [{ address_hash: "0x2222222222222222222222222222222222222222" }], proxy_type: "eip1967",
+        }),
+        [`/addresses/${T}`]: json({}, 503), // outage on the fallback call — not a 404, not a clean answer
+      }));
+      const info = await src.contract(T);
+      expect(info.verified).toBeNull();
+      expect(info.proxyType).toBe("eip1967");
+      expect(info.implementations).toEqual(["0x2222222222222222222222222222222222222222"]);
+    });
+
+    it("also swallows a network-error ExplorerUnavailable from the fallback the same way", async () => {
+      const src = blockscoutSource(API, fakeFetch({
+        [`/smart-contracts/${T}`]: json(unverifiedSmartContractsBody),
+        [`/addresses/${T}`]: new Error("ECONNRESET"),
+      }));
+      await expect(src.contract(T)).resolves.toMatchObject({ verified: null });
+    });
+  });
 });
