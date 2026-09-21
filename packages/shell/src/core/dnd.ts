@@ -35,6 +35,9 @@ export function acceptedKind(types: readonly string[], accepts: readonly DropKin
   return null;
 }
 
+// Only `token` is emitted: consumers (Inspector, Drop) re-read symbol/decimals on-chain rather
+// than trusting whatever the dragged item claimed, so there's nothing else for a window param to
+// carry.
 export function dropParams(item: DragItem): Record<string, string> {
-  return { token: item.address, symbol: item.symbol, decimals: String(item.decimals) };
+  return { token: item.address };
 }

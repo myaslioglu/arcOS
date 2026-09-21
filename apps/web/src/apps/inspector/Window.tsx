@@ -12,6 +12,7 @@ import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
 import { passLine } from "@/lib/proof";
 import { FindingRow } from "./FindingRow";
+import { inspector } from "./manifest";
 
 const ATTACKER_NAME_LINE = "The name and symbol are chosen by whoever deployed this contract and can imitate another token. Check the address.";
 
@@ -41,7 +42,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
     if (report) setTitle(winId, `Inspector — ${report.token.symbol ?? shortAddress(report.address)}`);
   }, [report, setTitle, winId]);
 
-  const { over, props: dropProps } = useDropTarget(["token"], (item) => open("inspector", dropParams(item)));
+  const { over, props: dropProps } = useDropTarget(inspector.acceptsDrop, (item) => open("inspector", dropParams(item)));
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

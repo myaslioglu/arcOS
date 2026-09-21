@@ -2,7 +2,11 @@ import type { ComponentType } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { WindowAction, WindowSize } from "./types";
 
-export type DropKind = "token" | "lp-position" | "lock" | "approval" | "csv";
+// Only "token" can be decoded today (see dnd.ts's decodeDragItem). Widen this together with
+// DragItem and its decoder when a manifest actually needs to declare one of the other kinds —
+// otherwise a future manifest could declare a kind that highlights a drop target and then silently
+// swallows every drop on it.
+export type DropKind = "token";
 export type AppCategory = "system" | "trust" | "create" | "trade";
 
 export const CATEGORY_ORDER: AppCategory[] = ["system", "trust", "create", "trade"];
@@ -30,7 +34,9 @@ export type AppManifest = {
   acceptsDrop?: DropKind[];
   /** Several windows of this app, keyed by params. Omit for a singleton. */
   instanceKey?: (params: Record<string, string>) => string;
+  /** Descriptive metadata only — not read by the shell today. */
   requiresWallet: boolean;
+  /** Descriptive metadata only — not read by the shell today. */
   release: "r0" | "r1" | "r2" | "phase2";
   /** Shown in the dock even when closed. */
   pinned?: boolean;

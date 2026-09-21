@@ -10,6 +10,7 @@ import { trackEvent } from "@/lib/analytics";
 import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
 import { IssuesList } from "./IssuesList";
+import { drop } from "./manifest";
 import { BATCH, parseDropList } from "./parse";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
@@ -42,7 +43,7 @@ function Form({ params }: Pick<AppProps, "params">) {
   const [busy, setBusy] = useState(false);
   const [fee, setFee] = useState<bigint | "error" | null>(null);
 
-  const { over, props: dropProps } = useDropTarget(["token"], (item) => open("drop", dropParams(item)));
+  const { over, props: dropProps } = useDropTarget(drop.acceptsDrop, (item) => open("drop", dropParams(item)));
 
   // A prefilled or dropped token drives the picker: USDC selects native mode (cheaper, no approval), any
   // other address selects "Another token" with that address. This is the React-endorsed "adjust state
