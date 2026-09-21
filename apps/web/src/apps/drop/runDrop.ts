@@ -1,3 +1,4 @@
+import { describeContractError } from "@/lib/contract-error";
 import { chunk, type DropRow } from "./parse";
 import { failedRowsFor, type FailedRow } from "./result";
 
@@ -45,15 +46,6 @@ export function isUserRejection(err: unknown): boolean {
   return false;
 }
 
-/** Exported so the hook can build the same human-readable message for the approval step's own failures. */
-export function shortMessage(err: unknown): string {
-  if (err !== null && typeof err === "object") {
-    const short = (err as { shortMessage?: unknown }).shortMessage;
-    if (typeof short === "string") return short;
-  }
-  return err instanceof Error ? err.message : "The transaction didn't go through.";
-}
-
 /**
  * Sends `rows` in batches of `batchSize` through `deps.sendBatch`, never reporting a row as delivered
  * unless it actually landed and never sending the same row twice.
@@ -78,7 +70,10 @@ export async function runDrop(rows: DropRow[], batchSize: number, deps: DropDeps
     } catch (err) {
       result.remaining.push(...batches.slice(i).flat());
       result.stoppedBecause = isUserRejection(err) ? "rejected" : "error";
-      result.message = shortMessage(err);
+      // describeContractError, not the wallet/RPC's own message: a batch failure here can be a
+      // decoded contract revert (WrongValue, ZeroAmount, BadLists, ...) or raw transport detail —
+      // either way the user gets one plain sentence, never raw RPC text (see lib/contract-error.ts).
+      result.message = describeContractError(err);
       return result;
     }
 

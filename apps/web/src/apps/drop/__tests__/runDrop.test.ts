@@ -47,22 +47,39 @@ describe("runDrop", () => {
     expect(result.hashes).toEqual(["0xhash1"]);
     expect(result.remaining).toEqual([rows[1], rows[2]]);
     expect(result.stoppedBecause).toBe("rejected");
-    expect(result.message).toBe("User rejected the request");
+    expect(result.message).toBe("You cancelled the request in your wallet.");
     expect(sendBatch).toHaveBeenCalledTimes(2);
   });
 
-  it("treats a non-rejection sendBatch failure as 'error', with the error's short message", async () => {
+  it("treats a non-rejection sendBatch failure as 'error', with a safe generic message — never the raw error text, which can carry RPC/transport detail", async () => {
     const rows = makeRows(2);
     const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => {
-      throw new Error("RPC timeout");
+      throw new Error("execution reverted (unknown custom error) at https://rpc.internal.example");
     });
 
     const result = await runDrop(rows, 1, { sendBatch });
 
     expect(result.stoppedBecause).toBe("error");
-    expect(result.message).toBe("RPC timeout");
+    expect(result.message).toBe("The transaction didn't go through. Try again.");
+    expect(result.message).not.toMatch(/https?:\/\//);
     expect(result.remaining).toEqual(rows);
     expect(result.delivered).toEqual([]);
+  });
+
+  it("maps a decoded contract revert to its plain-language sentence via describeContractError", async () => {
+    const rows = makeRows(1);
+    const revertErr = {
+      name: "ContractFunctionRevertedError",
+      data: { errorName: "ZeroAmount", args: [0n] },
+    };
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => {
+      throw revertErr;
+    });
+
+    const result = await runDrop(rows, 1, { sendBatch });
+
+    expect(result.stoppedBecause).toBe("error");
+    expect(result.message).toBe("Row 1 has a zero amount.");
   });
 
   it("recognizes a UserRejectedRequestError nested anywhere in the cause chain", async () => {

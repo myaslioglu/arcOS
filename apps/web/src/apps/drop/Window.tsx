@@ -6,6 +6,7 @@ import { erc20Abi, formatUnits, isAddress } from "viem";
 import { ARCOS, USDC, activeChain, activeNetwork, formatUsdc, unitsToNative, type Address } from "@arcos/chain";
 import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
+import { describeContractError } from "@/lib/contract-error";
 import { trackEvent } from "@/lib/analytics";
 import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
@@ -14,7 +15,7 @@ import { drop } from "./manifest";
 import { BATCH, parseDropList } from "./parse";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
-import { useDrop } from "./useDrop";
+import { useDrop, type DropQuote } from "./useDrop";
 
 const MAX_FILE_BYTES = 2_000_000;
 const isUsdc = (addr: string) => addr.toLowerCase() === USDC.toLowerCase();
@@ -41,7 +42,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     return snap.status === "done" ? snap.remainingText : "";
   });
   const [busy, setBusy] = useState(false);
-  const [fee, setFee] = useState<bigint | "error" | null>(null);
+  const [fetchedQuote, setFetchedQuote] = useState<DropQuote | "error" | null>(null);
 
   const { over, props: dropProps } = useDropTarget(drop.acceptsDrop, (item) => open("drop", dropParams(item)));
 
@@ -111,6 +112,10 @@ function Form({ params }: Pick<AppProps, "params">) {
   );
   const totalDisplay = decimals === null ? "" : token ? formatUnits(total, decimals) : formatUsdc(unitsToNative(total));
   const batches = Math.ceil(rows.length / BATCH) || 0;
+  // Derived, not reset from inside the effect below (which would mean calling setState synchronously
+  // during an effect, on every row-count change): a stale quote from a previous, longer list must
+  // never be shown — or offered a Retry — once the list is empty.
+  const quote = rows.length === 0 ? null : fetchedQuote;
 
   // Debounced: re-quoting on every keystroke would spam the RPC while the user is still typing rows. An
   // empty list needs no fetch — the fee text below already reads as "no fee" once `rows.length` is 0.
@@ -118,8 +123,8 @@ function Form({ params }: Pick<AppProps, "params">) {
     if (rows.length === 0) return;
     let cancelled = false;
     const id = setTimeout(() => {
-      void quoteTotal(rows.length).then((f) => {
-        if (!cancelled) setFee(f === null ? "error" : f);
+      void quoteTotal(rows.length).then((q) => {
+        if (!cancelled) setFetchedQuote(q === null ? "error" : q);
       });
     }, 300);
     return () => {
@@ -127,6 +132,14 @@ function Form({ params }: Pick<AppProps, "params">) {
       clearTimeout(id);
     };
   }, [rows.length, quoteTotal]);
+
+  /** Re-fetches the fee on demand — the Retry control below, for when the debounced read above failed
+   * (a dead "Couldn't read the fee." state would otherwise only clear itself if the user happened to
+   * edit the list again). */
+  const retryFee = () => {
+    if (rows.length === 0) return;
+    void quoteTotal(rows.length).then((q) => setFetchedQuote(q === null ? "error" : q));
+  };
 
   if (!contracts) return <p className="p-5 text-sm text-muted">{"Drop isn't deployed on this network yet."}</p>;
 
@@ -157,15 +170,17 @@ function Form({ params }: Pick<AppProps, "params">) {
     // moment ago (see canSend.ts / the "stale text" guard on the button itself).
     const fresh = parseDropList(text, decimals);
     if (fresh.rows.length === 0) return;
+    // Mirrors Mint's own fresh-fee guard: refuse to start a paid send without a known fee to compare
+    // against, rather than silently skipping the per-batch staleness check below.
+    if (quote === null || quote === "error") return notify("Couldn't read the fee. Try again.", "warn");
     const started = session.start(token ? symbol : "USDC", token, decimals, text);
     if (!started) return; // a send is already in flight (another click, another window) — do nothing
     setBusy(true);
     try {
-      const result = await send(token, fresh.rows, decimals);
+      const result = await send(token, fresh.rows, decimals, quote.basis);
       trackEvent("drop_success", { recipients: result.delivered.length, batches: result.hashes.length });
     } catch (err) {
-      const message = (err as { shortMessage?: string }).shortMessage ?? (err instanceof Error ? err.message : undefined);
-      notify(message ?? "The transaction didn't go through.", "warn", 6000);
+      notify(describeContractError(err), "warn", 6000);
     } finally {
       setBusy(false);
     }
@@ -204,13 +219,11 @@ function Form({ params }: Pick<AppProps, "params">) {
       : `Sending ${dropSession.tokenLabel} — batch ${dropSession.progress.batch} of ${dropSession.progress.batches}…`;
 
   const feeText =
-    fee === "error"
-      ? "Couldn't read the fee. Try again."
-      : fee !== null && rows.length > 0
-        ? `Fee ${formatUsdc(fee)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`
-        : rows.length > 0
-          ? "Reading the fee…"
-          : "";
+    quote && quote !== "error" && rows.length > 0
+      ? `Fee ${formatUsdc(quote.total)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`
+      : rows.length > 0
+        ? "Reading the fee…"
+        : "";
 
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
@@ -283,7 +296,16 @@ function Form({ params }: Pick<AppProps, "params">) {
               {rows.length} recipients{issues.length > 0 ? ` · ${issues.length} excluded` : ""} · total {totalDisplay} {symbol}
             </p>
             <IssuesList issues={issues} />
-            <p className="mt-3 text-xs text-muted">{feeText}</p>
+            {quote === "error" ? (
+              <p className="mt-3 text-xs text-accent-3-text">
+                {"Couldn't read the fee. "}
+                <button type="button" className="underline" onClick={retryFee}>
+                  Retry
+                </button>
+              </p>
+            ) : (
+              feeText && <p className="mt-3 text-xs text-muted">{feeText}</p>
+            )}
           </>
         )}
 
