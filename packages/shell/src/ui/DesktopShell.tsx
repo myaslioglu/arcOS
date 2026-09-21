@@ -98,7 +98,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
 
   const shortcuts = () =>
     notify(
-      "⌘K search · Esc closes a window · double-click a title to zoom · drag to an edge to snap · right-click for the desktop menu",
+      "⌘K / Ctrl+K search · Esc closes a window · double-click a title to zoom · drag to an edge to snap · right-click for the desktop menu",
       "info",
       8000,
     );

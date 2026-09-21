@@ -49,8 +49,8 @@ describe("windowReducer — app instances", () => {
 describe("windowReducer", () => {
   it("opens windows with rising z and cascade steps", () => {
     let s = initialWindowState();
-    s = windowReducer(s, open("mcmc"));
-    s = windowReducer(s, open("tr-ets"));
+    s = windowReducer(s, open("app-a"));
+    s = windowReducer(s, open("app-b"));
     expect(s.windows).toHaveLength(2);
     expect(s.windows[0]!.winId).toBe("w-1");
     expect(s.windows[1]!.winId).toBe("w-2");
@@ -59,13 +59,13 @@ describe("windowReducer", () => {
     expect(s.activeId).toBe("w-2");
   });
 
-  it("de-dupes open on kind+refId: focuses, restores and lifts", () => {
+  it("de-dupes open on appId+instanceKey: focuses, restores and lifts", () => {
     let s = initialWindowState();
-    s = windowReducer(s, open("mcmc"));
-    s = windowReducer(s, open("tr-ets"));
+    s = windowReducer(s, open("app-a"));
+    s = windowReducer(s, open("app-b"));
     s = windowReducer(s, { type: "minimize", winId: "w-1" });
     const before = s.windows.length;
-    s = windowReducer(s, open("mcmc"));
+    s = windowReducer(s, open("app-a"));
     expect(s.windows).toHaveLength(before);
     expect(s.activeId).toBe("w-1");
     expect(s.windows.find((w) => w.winId === "w-1")?.minimized).toBe(false);
@@ -73,7 +73,7 @@ describe("windowReducer", () => {
   });
 
   it("focus restores a minimized window", () => {
-    let s = windowReducer(initialWindowState(), open("mcmc"));
+    let s = windowReducer(initialWindowState(), open("app-a"));
     s = windowReducer(s, { type: "minimize", winId: "w-1" });
     s = windowReducer(s, { type: "focus", winId: "w-1" });
     expect(s.windows[0]!.minimized).toBe(false);
@@ -82,8 +82,8 @@ describe("windowReducer", () => {
 
   it("minimizing the active window falls back to the topmost visible one", () => {
     let s = initialWindowState();
-    s = windowReducer(s, open("mcmc"));
-    s = windowReducer(s, open("tr-ets"));
+    s = windowReducer(s, open("app-a"));
+    s = windowReducer(s, open("app-b"));
     s = windowReducer(s, { type: "minimize", winId: "w-2" });
     expect(s.activeId).toBe("w-1");
     s = windowReducer(s, { type: "minimize", winId: "w-1" });
@@ -92,8 +92,8 @@ describe("windowReducer", () => {
 
   it("toggle-max flips and lifts; close falls back to the previous top", () => {
     let s = initialWindowState();
-    s = windowReducer(s, open("mcmc"));
-    s = windowReducer(s, open("tr-ets"));
+    s = windowReducer(s, open("app-a"));
+    s = windowReducer(s, open("app-b"));
     s = windowReducer(s, { type: "toggle-max", winId: "w-1" });
     expect(s.windows.find((w) => w.winId === "w-1")?.maximized).toBe(true);
     expect(s.activeId).toBe("w-1");
@@ -108,15 +108,15 @@ describe("windowReducer", () => {
   });
 
   it("ignores unknown winIds without changing state", () => {
-    const s = windowReducer(initialWindowState(), open("mcmc"));
+    const s = windowReducer(initialWindowState(), open("app-a"));
     expect(windowReducer(s, { type: "focus", winId: "w-99" })).toBe(s);
     expect(windowReducer(s, { type: "close", winId: "w-99" })).toBe(s);
   });
 });
 
-describe("window geometry the visitor sets", () => {
+describe("window geometry", () => {
   it("remembers a rect, and a remembered rect leaves maximized", () => {
-    let s = windowReducer(initialWindowState(), open("mcmc"));
+    let s = windowReducer(initialWindowState(), open("app-a"));
     expect(s.windows[0]!.rect).toBeNull();
     s = windowReducer(s, { type: "toggle-max", winId: "w-1" });
     const rect = { left: 40, top: 30, width: 500, height: 400 };
@@ -128,7 +128,7 @@ describe("window geometry the visitor sets", () => {
 
   it("tiles the visible windows side by side and leaves minimized ones alone", () => {
     let s = initialWindowState();
-    for (const id of ["mcmc", "sdt", "scope"]) s = windowReducer(s, open(id));
+    for (const id of ["app-a", "app-c", "app-d"]) s = windowReducer(s, open(id));
     s = windowReducer(s, { type: "minimize", winId: "w-2" });
     s = windowReducer(s, { type: "tile", stageW: 1440, stageH: 860 });
     const placed = s.windows.filter((w) => w.rect);
@@ -139,7 +139,7 @@ describe("window geometry the visitor sets", () => {
   });
 
   it("minimizes everything at once", () => {
-    let s = windowReducer(windowReducer(initialWindowState(), open("mcmc")), open("sdt"));
+    let s = windowReducer(windowReducer(initialWindowState(), open("app-a")), open("app-c"));
     s = windowReducer(s, { type: "minimize-all" });
     expect(s.windows.every((w) => w.minimized)).toBe(true);
     expect(s.activeId).toBeNull();

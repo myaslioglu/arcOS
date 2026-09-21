@@ -17,8 +17,9 @@ function topVisible(windows: DesktopWindow[]): DesktopWindow | undefined {
 
 /**
  * Pure window manager. Language-free on purpose: callers resolve `title`
- * via `desktopItemTitle` before dispatching `open`, so this reducer is
- * trivially unit-testable and safe to run anywhere.
+ * themselves (from the app's manifest — see `openActionFor`) before
+ * dispatching `open`, so this reducer is trivially unit-testable and safe
+ * to run anywhere.
  *
  * - `open` de-dupes on appId+instanceKey: an existing window is focused, restored
  *   and lifted instead of opening a second copy.

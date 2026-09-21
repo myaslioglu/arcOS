@@ -153,7 +153,7 @@ export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onC
           data-mag
           className="os-dock-btn os-dock-tile"
           style={{ "--os-hue": "var(--muted)" } as React.CSSProperties}
-          {...labelled("Search  ⌘K")}
+          {...labelled("Search  ⌘K / Ctrl+K")}
         >
           <span className="os-dock-face">
             <LayoutGrid className="os-dock-glyph" />

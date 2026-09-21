@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest";
 import { clampRect, MIN_WINDOW, snapRect, snapZone, tileRects, windowRect } from "../geometry";
 import type { WindowSize } from "../types";
 
-// The old kind → size table this window sizing used to look up before the
-// manifest took over; kept here only to drive the ported windowRect tests.
+// Arbitrary window sizes spanning the range windowRect has to handle across
+// stage sizes and cascade slots; not tied to any particular app.
 const SIZES: Record<string, WindowSize> = {
-  publication: { w: 620, h: 660 },
-  note: { w: 600, h: 640 },
-  folder: { w: 600, h: 620 },
-  project: { w: 640, h: 580 },
-  app: { w: 880, h: 700 },
-  system: { w: 520, h: 470 },
+  a: { w: 620, h: 660 },
+  b: { w: 600, h: 640 },
+  c: { w: 600, h: 620 },
+  d: { w: 640, h: 580 },
+  wide: { w: 880, h: 700 },
+  narrow: { w: 520, h: 470 },
 };
 
 describe("windowRect", () => {
@@ -18,28 +18,28 @@ describe("windowRect", () => {
   const H = 860;
 
   it("opens the first window against the right edge, clear of the dock", () => {
-    const r = windowRect(0, SIZES.publication!, W, H);
+    const r = windowRect(0, SIZES.a!, W, H);
     expect(r.left + r.width).toBe(W - 16);
     expect(r.top).toBe(16);
     expect(r.top + r.height).toBeLessThanOrEqual(H - 60);
   });
 
   it("tiles the second window beside the first when both fit", () => {
-    const a = windowRect(0, SIZES.publication!, W, H);
-    const b = windowRect(1, SIZES.publication!, W, H);
+    const a = windowRect(0, SIZES.a!, W, H);
+    const b = windowRect(1, SIZES.a!, W, H);
     expect(b.left).toBe(16);
     expect(b.left + b.width).toBeLessThanOrEqual(a.left);
   });
 
   it("cascades on a stage too narrow for two", () => {
-    const a = windowRect(0, SIZES.publication!, 1000, H);
-    const b = windowRect(1, SIZES.publication!, 1000, H);
+    const a = windowRect(0, SIZES.a!, 1000, H);
+    const b = windowRect(1, SIZES.a!, 1000, H);
     expect(b.left).toBeLessThan(a.left);
     expect(b.top).toBeGreaterThan(a.top);
   });
 
-  it("sizes by kind and never leaves the stage", () => {
-    expect(windowRect(0, SIZES.app!, W, H).width).toBeGreaterThan(windowRect(0, SIZES.system!, W, H).width);
+  it("handles differently sized windows and never leaves the stage", () => {
+    expect(windowRect(0, SIZES.wide!, W, H).width).toBeGreaterThan(windowRect(0, SIZES.narrow!, W, H).width);
     const stages = [
       [1440, 860],
       [1024, 700],

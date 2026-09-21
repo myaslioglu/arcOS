@@ -50,7 +50,7 @@ export function TouchHome({ activeId, onOpen, onBack }: Props) {
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="search..."
+          placeholder="Search apps"
           aria-label="search"
           className="os-touch-search"
         />

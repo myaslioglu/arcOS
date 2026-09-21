@@ -16,6 +16,10 @@ type Props = {
   onPickAction: (action: QuickAction) => void;
 };
 
+const LISTBOX_ID = "os-launcher-listbox";
+const hitKey = (hit: LauncherHit): string => (hit.kind === "app" ? hit.app.id : hit.action.id);
+const optionId = (hit: LauncherHit): string => `os-launcher-option-${hitKey(hit)}`;
+
 /**
  * Full-screen search over the app registry, plus whatever quick actions the
  * caller derives from the query. An app row opens as a desktop window; an
@@ -81,6 +85,10 @@ export function Launcher({ open, onClose, quickActions, onPickApp, onPickAction 
                 <Search className="h-4 w-4 shrink-0 text-faint" />
                 <input
                   autoFocus
+                  role="combobox"
+                  aria-expanded="true"
+                  aria-controls={LISTBOX_ID}
+                  aria-activedescendant={results[selected] ? optionId(results[selected]) : undefined}
                   value={query}
                   onChange={(e) => {
                     setQuery(e.target.value);
@@ -107,15 +115,16 @@ export function Launcher({ open, onClose, quickActions, onPickApp, onPickAction 
                   esc
                 </kbd>
               </div>
-              <ul role="listbox" aria-label="Results" className="os-launcher-list">
+              <ul id={LISTBOX_ID} role="listbox" aria-label="Results" className="os-launcher-list">
                 {results.length === 0 && (
                   <li className="px-3 py-6 text-center font-mono text-xs text-faint">No matches</li>
                 )}
                 {results.map((hit, i) => {
-                  const key = hit.kind === "app" ? hit.app.id : hit.action.id;
+                  const key = hitKey(hit);
                   return (
                     <li
                       key={key}
+                      id={optionId(hit)}
                       role="option"
                       aria-selected={i === selected}
                       onMouseEnter={() => setCursor(i)}
@@ -139,7 +148,7 @@ export function Launcher({ open, onClose, quickActions, onPickApp, onPickAction 
                 })}
               </ul>
               <div className="os-launcher-foot">
-                <span>content opens as a window</span>
+                <span>Opens as a window</span>
                 <span className="flex items-center gap-1">
                   <CornerDownLeft className="h-3 w-3" />
                   open

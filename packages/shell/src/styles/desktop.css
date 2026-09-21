@@ -8,8 +8,8 @@
  */
 
 /* ---------------------------------------------------------------
-   yaslioglu.os — desktop
-   The site's device language, continued: same tokens, own layout.
+   ARC.os — desktop
+   The shell's device language: same tokens, own layout.
    --------------------------------------------------------------- */
 .os-root {
   position: relative;
@@ -20,15 +20,6 @@
   background: var(--bg);
   /* Top bar height — the window plane starts here so nothing opens behind it. */
   --os-topbar-h: 2.5rem;
-  /* Graph-paper wallpaper. */
-  --paper-bg: #0d1316;
-  --paper-line: rgba(94, 200, 180, 0.08);
-  --paper-line-strong: rgba(94, 200, 180, 0.17);
-}
-[data-theme="light"] .os-root {
-  --paper-bg: #f3f6f1;
-  --paper-line: rgba(30, 120, 100, 0.09);
-  --paper-line-strong: rgba(30, 120, 100, 0.2);
 }
 
 /* A plain background container: no Wallpaper component sits inside it, so
@@ -61,18 +52,7 @@
   box-shadow: 0 0 6px color-mix(in oklab, var(--accent-2) 45%, transparent);
 }
 .os-clock { color: var(--faint); white-space: nowrap; }
-@media (max-width: 639px) { .os-cites { display: none; } }
 @media (max-width: 419px) { .os-clock { display: none; } }
-.os-cites {
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--surface-2); padding: 2px 8px; color: var(--faint);
-}
-.os-search-btn {
-  display: inline-flex; align-items: center; gap: 0.35rem;
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--surface-2); padding: 4px 10px; color: var(--muted);
-}
-.os-search-btn:hover { color: var(--fg); border-color: var(--border-2); }
 
 .os-icons {
   position: relative; z-index: 10;
@@ -116,8 +96,8 @@
 .os-tray-count { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .os-tray-screen {
   /* Icon cells share the tray's width evenly instead of leaving a ragged gap
-     on the right. 6rem is the narrowest cell that keeps a 13-letter word
-     (Psychometrics) on one line at 11px mono. */
+     on the right. 6rem is the narrowest cell that keeps a 13-letter app name
+     on one line at 11px mono. */
   flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr));
   align-content: start; gap: 2px;
   border-radius: 9px; padding: 8px;
@@ -131,11 +111,11 @@
 .os-tray[data-group="create"] { grid-area: create; }
 .os-tray[data-group="trade"]  { grid-area: trade; }
 
-/* One hue per tray, from the site's signal colours. */
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="system"] { --os-group: var(--muted); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="trust"]  { --os-group: var(--accent-2); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="create"] { --os-group: var(--accent-3); }
-:is(.os-tray, .os-touch-group, .os-folder, .os-desk-cell, .os-group, .os-group-rows)[data-group="trade"]  { --os-group: var(--accent); }
+/* One hue per tray, from the shell's signal colours. */
+:is(.os-tray, .os-touch-group)[data-group="system"] { --os-group: var(--muted); }
+:is(.os-tray, .os-touch-group)[data-group="trust"]  { --os-group: var(--accent-2); }
+:is(.os-tray, .os-touch-group)[data-group="create"] { --os-group: var(--accent-3); }
+:is(.os-tray, .os-touch-group)[data-group="trade"]  { --os-group: var(--accent); }
 
 .os-icon {
   --os-hue: var(--os-group, var(--accent));
@@ -166,137 +146,6 @@
 }
 .os-icon:hover .os-icon-name { color: var(--fg); }
 
-/* ---------------------------------------------------------------
-   The folder view: the desktop as a computer shows it. Folders run
-   down the left edge, four to a column so they stay clear of the
-   dock, and the wallpaper is left open.
-   --------------------------------------------------------------- */
-.os-desk {
-  position: relative; z-index: 10;
-  flex: 1; min-height: 0; overflow: auto;
-  display: grid; grid-auto-flow: column; grid-template-rows: repeat(4, max-content);
-  align-content: start; justify-content: start;
-  gap: 4px 8px; padding: 18px 14px 7rem;
-}
-@media (max-height: 640px) { .os-desk { grid-template-rows: repeat(3, max-content); } }
-.os-desk-cell {
-  --os-hue: var(--os-group, var(--accent));
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  width: 7.5rem; padding: 12px 6px 9px; border-radius: 14px;
-  border: 1px solid transparent; text-align: center;
-  transition: background-color 0.18s ease, border-color 0.18s ease;
-}
-.os-desk-cell:hover {
-  background: color-mix(in oklab, var(--os-hue) 10%, transparent);
-  border-color: color-mix(in oklab, var(--os-hue) 26%, transparent);
-}
-.os-desk-cell:focus-visible { outline: 2px solid var(--os-hue); outline-offset: 1px; }
-/* Labels sit on the wallpaper, not on a tray, so they carry their own shadow. */
-.os-desk-name {
-  max-width: 100%; padding: 1px 7px; border-radius: 6px;
-  font-family: var(--font-mono); font-size: 12px; line-height: 1.4; color: var(--fg);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-[data-theme="light"] .os-desk-name { text-shadow: 0 1px 2px rgba(255, 255, 255, 0.95); }
-.os-icon-tile--lg { width: 64px; height: 64px; border-radius: 17px; margin: 4px 0; }
-
-/* A folder drawn from its contents: the back panel and its tab, a card for
-   each of the first three things inside carrying that thing's glyph, and a
-   front flap with the tray's LED and the count. Hover tips the flap toward
-   the reader and lifts the cards. Only transforms move. */
-.os-folder {
-  --os-group: var(--accent);
-  --fw: 88px; --fh: 72px; --card-w: 30px; --card-h: 36px; --card-gap: 19px; --glyph: 15px;
-  position: relative; display: block; flex: none;
-  width: var(--fw); height: var(--fh);
-  perspective: 360px;
-}
-.os-folder--sm { --fw: 60px; --fh: 50px; --card-w: 21px; --card-h: 25px; --card-gap: 13px; --glyph: 11px; }
-.os-folder-back {
-  position: absolute; inset: 9% 0 0 0;
-  border-radius: 5px 10px 10px 10px;
-  background: color-mix(in oklab, var(--os-group) 26%, var(--surface-2));
-  border: 1px solid color-mix(in oklab, var(--os-group) 42%, var(--border));
-}
-.os-folder-back::before {
-  content: ""; position: absolute; left: -1px; bottom: 100%;
-  width: 44%; height: calc(var(--fh) * 0.12);
-  border-radius: 6px 9px 0 0;
-  background: inherit; border: inherit; border-bottom: 0;
-}
-.os-folder-cards { position: absolute; inset: 0; }
-.os-folder-card {
-  --os-hue: var(--os-group);
-  position: absolute; top: 15%;
-  left: calc(50% - var(--card-w) / 2 + (var(--i) - (var(--n) - 1) / 2) * var(--card-gap));
-  width: var(--card-w); height: var(--card-h);
-  display: grid; justify-items: center; align-items: start;
-  padding-top: calc(var(--card-h) * 0.1);
-  border-radius: 5px;
-  background: var(--surface);
-  border: 1px solid color-mix(in oklab, var(--os-hue) 40%, var(--border));
-  box-shadow: 0 2px 6px -2px rgba(0, 0, 0, 0.55);
-  color: var(--os-hue);
-  transform: rotate(calc((var(--i) - (var(--n) - 1) / 2) * 5deg));
-  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.os-folder-glyph { width: var(--glyph); height: var(--glyph); }
-.os-folder-front {
-  position: absolute; left: 0; right: 0; bottom: 0; top: 42%;
-  display: flex; align-items: flex-end; justify-content: space-between;
-  padding: 0 7px 6px;
-  border-radius: 7px 7px 10px 10px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--os-group) 40%, var(--surface-2)),
-    color-mix(in oklab, var(--os-group) 22%, var(--surface))
-  );
-  border: 1px solid color-mix(in oklab, var(--os-group) 52%, var(--border));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 18px -10px rgba(0, 0, 0, 0.7);
-  transform-origin: 50% 100%;
-  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.os-folder-led {
-  align-self: flex-start; margin-top: 6px; width: 5px; height: 5px; border-radius: 999px;
-  background: var(--os-group);
-  box-shadow: 0 0 6px color-mix(in oklab, var(--os-group) 60%, transparent);
-  transition: box-shadow 0.2s ease;
-}
-.os-folder-count {
-  font-family: var(--font-mono); font-size: 10px; line-height: 1; font-variant-numeric: tabular-nums;
-  color: color-mix(in oklab, var(--os-group) 60%, var(--fg));
-}
-.os-folder--sm .os-folder-front { padding: 0 5px 4px; border-radius: 5px 5px 8px 8px; }
-.os-folder--sm .os-folder-led { margin-top: 4px; width: 4px; height: 4px; }
-.os-folder--sm .os-folder-count { font-size: 9px; }
-:is(.os-desk-cell, .os-icon):is(:hover, :focus-visible) .os-folder-led {
-  box-shadow: 0 0 10px color-mix(in oklab, var(--os-group) 85%, transparent);
-}
-@media (prefers-reduced-motion: no-preference) {
-  :is(.os-desk-cell, .os-icon):is(:hover, :focus-visible) .os-folder-front { transform: rotateX(-38deg); }
-  :is(.os-desk-cell, .os-icon):is(:hover, :focus-visible) .os-folder-card {
-    transform: translateY(calc(var(--fh) * -0.11)) rotate(calc((var(--i) - (var(--n) - 1) / 2) * 11deg));
-  }
-}
-
-/* A tray opened as a folder window: its icons over a status line that reads
-   out what the pointed-at icon does. */
-.os-group { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.os-group-grid {
-  flex: 1; min-height: 0; overflow-y: auto;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
-  align-content: start; gap: 4px; padding: 14px;
-}
-.os-group-status {
-  flex: none; margin: 0; padding: 7px 14px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in oklab, var(--surface) 70%, transparent);
-  font-family: var(--font-mono); font-size: 11px; color: var(--faint);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.os-group-rows { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 12px; }
-
 /* Windows share the rack's hardware: a bezel frame, a plate for the title bar
    with an LED that lights on the focused window, and an inset screen for the
    body. Background windows keep their frame but dim their screen. */
@@ -318,13 +167,6 @@
 .os-window--pinned { inset: 0; width: auto; height: auto; border-radius: 0; border-width: 0; }
 .os-window--active { border-color: color-mix(in oklab, var(--os-win) 42%, var(--border-2)); }
 
-.os-window[data-kind="app"]         { --os-win: var(--accent); }
-.os-window[data-kind="publication"] { --os-win: var(--accent); }
-.os-window[data-kind="project"]     { --os-win: var(--accent-2); }
-.os-window[data-kind="note"]        { --os-win: var(--accent-3); }
-.os-window[data-kind="folder"]      { --os-win: var(--accent-3); }
-.os-window[data-kind="system"]      { --os-win: var(--muted); }
-
 .os-titlebar {
   display: flex; align-items: center; gap: 8px; min-height: 30px;
   padding: 1px 2px 7px 8px;
@@ -341,10 +183,6 @@
 .os-window--active .os-led {
   background: var(--os-win);
   box-shadow: 0 0 7px color-mix(in oklab, var(--os-win) 60%, transparent);
-}
-.os-kind {
-  flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em;
-  border: 1px solid; border-radius: 6px; padding: 1px 6px;
 }
 .os-title {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -369,41 +207,11 @@
 .os-window--free:not(.os-window--active) .os-body { opacity: 0.6; }
 /* Touch and maximized windows run under the dock; keep the last lines clear. */
 .os-window--pinned .os-body { padding-bottom: 5.5rem; }
-/* Apps that paint their own surface (the terminal's glass, the radar's grid,
-   the CV's desk, the portfolio's browser) fill the screen edge to edge and
-   scroll inside themselves. Pinned, they stop above the dock instead of
-   padding their content under it. */
+/* Apps that paint their own surface fill the screen edge to edge and scroll
+   inside themselves. Pinned, they stop above the dock instead of padding
+   their content under it. */
 .os-body--flush { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .os-window--pinned .os-body--flush { padding-bottom: 0; margin-bottom: 4.75rem; }
-
-
-/* Folder window: filter + tray rows. */
-.os-folder-filter {
-  width: 100%; margin-top: 0.5rem;
-  border: 1px solid var(--border); border-radius: 9px; background: var(--bg-2);
-  padding: 0.45rem 0.7rem; font-family: var(--font-mono); font-size: 12px;
-  color: var(--fg); outline: none;
-}
-.os-folder-filter:focus-visible { border-color: color-mix(in oklab, var(--accent) 50%, var(--border)); }
-.os-folder-list {
-  margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.3rem;
-  list-style: none; padding: 0;
-}
-.os-folder-row {
-  display: flex; align-items: flex-start; gap: 0.6rem; width: 100%; text-align: left;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
-  padding: 0.5rem 0.65rem;
-}
-.os-folder-row:hover { border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
-.os-folder-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.os-folder-title {
-  font-family: var(--font-serif); font-size: 0.9rem; line-height: 1.4; color: var(--fg);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.os-folder-blurb {
-  font-family: var(--font-mono); font-size: 10px; line-height: 1.45; color: var(--faint);
-  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
-}
 
 /* The dock: search and the dock apps as tiles in their own colours, then a
    chip per open window. Under a mouse the tiles swell toward the pointer:
@@ -566,21 +374,6 @@
 .os-touch-search:focus-visible { border-color: color-mix(in oklab, var(--accent) 50%, var(--border)); }
 .os-touch-top { display: flex; align-items: stretch; gap: 0.5rem; }
 .os-touch-top .os-touch-search { flex: 1; min-width: 0; }
-.os-touch-views {
-  display: flex; flex: none; overflow: hidden;
-  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
-}
-.os-touch-view { display: grid; place-items: center; width: 44px; color: var(--faint); }
-.os-touch-view + .os-touch-view { border-left: 1px solid var(--border); }
-.os-touch-view[aria-pressed="true"] {
-  color: var(--accent-text);
-  background: color-mix(in oklab, var(--accent) 12%, transparent);
-}
-.os-touch-folders {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem 0.25rem; margin-top: 1rem; justify-items: center;
-}
-.os-touch-folders .os-desk-cell { width: 100%; }
 .os-touch-group { margin-top: 1.1rem; }
 .os-touch-plate {
   display: flex; align-items: center; gap: 8px; padding: 0 4px 2px;
@@ -618,13 +411,7 @@
 .os-menu-title:hover, .os-menu-title[aria-expanded="true"] { color: var(--fg); background: var(--surface-2); }
 .os-menu-title:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .os-menu-title--brand { color: var(--fg); font-weight: 600; }
-.os-app-name {
-  max-width: 12rem; padding: 0 0.55rem 0 0.3rem;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--fg);
-}
 @media (max-width: 767px) { .os-menu--text { display: none; } }
-@media (max-width: 479px) { .os-app-name { display: none; } }
 .os-menu-panel, .os-ctx {
   padding: 5px;
   border: 1px solid var(--border-2); border-radius: 11px;
@@ -649,42 +436,9 @@
 .os-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-menu-hint { font-size: 11px; color: var(--faint); }
 .os-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
-.os-menu-heading {
-  padding: 6px 0.6rem 3px 1.55rem;
-  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.16em; color: var(--faint);
-}
 
-/* Right-click menu on the desktop, with the wallpapers as swatches. */
+/* Right-click menu on the desktop. */
 .os-ctx { position: fixed; z-index: 90; width: 236px; }
-.os-swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 2px 4px 4px; }
-.os-swatch {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 5px 2px; border: 1px solid transparent; border-radius: 8px;
-  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
-}
-.os-swatch:hover, .os-swatch:focus-visible { outline: none; color: var(--fg); background: var(--surface-2); }
-.os-swatch[aria-checked="true"] { color: var(--fg); border-color: color-mix(in oklab, var(--accent) 55%, transparent); }
-.os-swatch-chip { width: 100%; height: 28px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--border); }
-.os-swatch[data-swatch="trace"] .os-swatch-chip {
-  background:
-    radial-gradient(70% 90% at 25% 30%, var(--grad-a), transparent),
-    radial-gradient(70% 90% at 80% 40%, var(--grad-b), transparent),
-    var(--bg);
-}
-.os-swatch[data-swatch="night"] .os-swatch-chip {
-  background:
-    radial-gradient(2px 2px at 30% 76%, #ffd27a, transparent),
-    radial-gradient(2px 2px at 70% 76%, #ffd27a, transparent),
-    radial-gradient(60% 30% at 50% 60%, rgba(255, 170, 90, 0.35), transparent),
-    linear-gradient(#04060b, #1a1a33 60%, #07080d);
-}
-.os-swatch[data-swatch="paper"] .os-swatch-chip {
-  background:
-    linear-gradient(to right, var(--paper-line-strong) 1px, transparent 1px) 0 0 / 7px 7px,
-    linear-gradient(to bottom, var(--paper-line-strong) 1px, transparent 1px) 0 0 / 7px 7px,
-    var(--paper-bg);
-}
 
 /* Notifications, under the menu bar on the right. */
 .os-toasts {
@@ -739,13 +493,6 @@
   animation: os-snap-in 0.14s ease-out;
 }
 @keyframes os-snap-in { from { opacity: 0; transform: scale(0.985); } }
-
-/* Graph paper: millimetre lines under centimetre lines, the trace inked on. */
-.os-root[data-wallpaper="paper"] { background: var(--paper-bg); }
-
-/* Night flight: a runway on final approach under a dark sky. */
-.os-root[data-wallpaper="night"] { background: #04060b; }
-
 
 .os-loading,
 .os-empty {

@@ -99,7 +99,7 @@ export function MenuBar(props: Props) {
       name: "File",
       label: "File",
       entries: [
-        item("Search…", props.onSearch, { hint: "⌘K" }),
+        item("Search…", props.onSearch, { hint: "⌘K / Ctrl+K" }),
         SEP,
         ...list.filter((m) => !m.comingSoon).map((m) => item(`Open ${m.name}`, () => props.onOpenApp(m.id))),
         SEP,
