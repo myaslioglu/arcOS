@@ -11,6 +11,15 @@ export type BridgeSessionState = {
   result: BridgeResult | null;
   /** Set instead of `result` when the bridge failed — never both at once. */
   error: string | null;
+  /**
+   * The most recent non-null `BridgeResult` — including one whose own `state` is `"error"` — kept
+   * across a `start()` (which resets `result` to `null` the instant a retry begins) and across a
+   * `fail()` (a thrown error has no `BridgeResult` of its own to report). Without this, `result`
+   * alone loses the first attempt's burn tx hash and step list the moment a retry starts, and loses
+   * it for good if that retry itself throws — this is what lets the window keep showing the original
+   * evidence, and the "funds are in flight" explanation, throughout a retry. Cleared only on dismiss.
+   */
+  lastResult: BridgeResult | null;
   startedAt: number | null;
 };
 
@@ -21,6 +30,7 @@ export const initialBridgeSessionState: BridgeSessionState = {
   amount: "",
   result: null,
   error: null,
+  lastResult: null,
   startedAt: null,
 };
 
@@ -41,9 +51,18 @@ export function bridgeSessionReducer(state: BridgeSessionState, action: BridgeSe
   switch (action.type) {
     case "start":
       if (state.status === "bridging") return state;
-      return { status: "bridging", source: action.source, dest: action.dest, amount: action.amount, result: null, error: null, startedAt: action.startedAt };
+      return {
+        status: "bridging",
+        source: action.source,
+        dest: action.dest,
+        amount: action.amount,
+        result: null,
+        error: null,
+        lastResult: state.lastResult,
+        startedAt: action.startedAt,
+      };
     case "finish":
-      return state.status === "bridging" ? { ...state, status: "done", result: action.result, error: null } : state;
+      return state.status === "bridging" ? { ...state, status: "done", result: action.result, error: null, lastResult: action.result } : state;
     case "fail":
       return state.status === "bridging" ? { ...state, status: "done", result: null, error: action.message } : state;
     case "dismiss":

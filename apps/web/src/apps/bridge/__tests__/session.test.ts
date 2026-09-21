@@ -18,6 +18,7 @@ const bridgingState = (over: Partial<BridgeSessionState> = {}): BridgeSessionSta
   amount: "1",
   result: null,
   error: null,
+  lastResult: null,
   startedAt: 1,
   ...over,
 });
@@ -39,7 +40,16 @@ describe("bridgeSessionReducer", () => {
         amount: "1",
         startedAt: 10,
       });
-      expect(next).toEqual({ status: "bridging", source: "Ethereum_Sepolia", dest: "Arc_Testnet", amount: "1", result: null, error: null, startedAt: 10 });
+      expect(next).toEqual({
+        status: "bridging",
+        source: "Ethereum_Sepolia",
+        dest: "Arc_Testnet",
+        amount: "1",
+        result: null,
+        error: null,
+        lastResult: null,
+        startedAt: 10,
+      });
     });
 
     it("refuses to start while already bridging — the guard against a second concurrent bridge", () => {
@@ -47,14 +57,29 @@ describe("bridgeSessionReducer", () => {
       const next = bridgeSessionReducer(state, { type: "start", source: "Base", dest: "Arc", amount: "2", startedAt: 99 });
       expect(next).toBe(state);
     });
+
+    it("carries lastResult forward across a retry's start — a retry must not erase the evidence of the first attempt", () => {
+      const failed = { state: "error", steps: [] } as unknown as BridgeResult;
+      const next = bridgeSessionReducer(doneState({ result: null, error: "boom", lastResult: failed }), {
+        type: "start",
+        source: "Ethereum_Sepolia",
+        dest: "Arc_Testnet",
+        amount: "1",
+        startedAt: 50,
+      });
+      expect(next.status).toBe("bridging");
+      expect(next.result).toBeNull(); // "sending" state resets the CURRENT attempt's result...
+      expect(next.lastResult).toBe(failed); // ...but lastResult, the prior attempt's evidence, survives
+    });
   });
 
   describe("finish", () => {
-    it("only applies from bridging, moving to done with the result", () => {
+    it("only applies from bridging, moving to done with the result, and records it as lastResult too", () => {
       const next = bridgeSessionReducer(bridgingState(), { type: "finish", result });
       expect(next.status).toBe("done");
       expect(next.result).toBe(result);
       expect(next.error).toBeNull();
+      expect(next.lastResult).toBe(result);
     });
 
     it("is a no-op outside bridging", () => {
@@ -63,11 +88,16 @@ describe("bridgeSessionReducer", () => {
   });
 
   describe("fail", () => {
-    it("only applies from bridging, moving to done with the message", () => {
-      const next = bridgeSessionReducer(bridgingState(), { type: "fail", message: "Cancelled." });
+    it("only applies from bridging, moving to done with the message, and never touches lastResult", () => {
+      const failed = { state: "error", steps: [] } as unknown as BridgeResult;
+      const next = bridgeSessionReducer(bridgingState({ lastResult: failed }), { type: "fail", message: "Cancelled." });
       expect(next.status).toBe("done");
       expect(next.result).toBeNull();
       expect(next.error).toBe("Cancelled.");
+      // A retry that itself throws (kit.bridge()/kit.retryBridge() rejecting, with no BridgeResult of
+      // its own) must not erase the ORIGINAL attempt's steps/tx links — that's the whole point of
+      // lastResult (item 8 of the brief): a failed retry used to leave zero evidence behind.
+      expect(next.lastResult).toBe(failed);
     });
 
     it("is a no-op outside bridging", () => {
@@ -76,8 +106,8 @@ describe("bridgeSessionReducer", () => {
   });
 
   describe("dismiss", () => {
-    it("only applies from done, resetting to the initial state", () => {
-      expect(bridgeSessionReducer(doneState(), { type: "dismiss" })).toEqual(initialBridgeSessionState);
+    it("only applies from done, resetting to the initial state — including lastResult", () => {
+      expect(bridgeSessionReducer(doneState({ lastResult: result }), { type: "dismiss" })).toEqual(initialBridgeSessionState);
     });
 
     it("is a no-op outside done", () => {
