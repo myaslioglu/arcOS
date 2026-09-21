@@ -58,3 +58,21 @@ export function unconfirmedHash(result: Pick<DropResult, "hashes" | "stoppedBeca
   if (result.stoppedBecause !== "unconfirmed") return null;
   return result.hashes.at(-1) ?? null;
 }
+
+/**
+ * The "N rows weren't sent" banner shown above the textarea once a session's result is ready
+ * (wave G, N2). `remaining` alone undercounts once the run stopped because a batch came back
+ * unconfirmed: that batch's own rows are in `unconfirmed`, never `remaining` (see runDrop.ts —
+ * putting them in `remaining` would invite sending them a second time), so a banner naming only
+ * `remaining.length` silently reads as if it covers the whole story. Names both counts in that
+ * case; otherwise unchanged from the original wording. `null` when nothing is unsent at all.
+ */
+export function remainingBannerText(result: Pick<DropResult, "remaining" | "unconfirmed" | "stoppedBecause">): string | null {
+  if (result.stoppedBecause === "unconfirmed" && result.unconfirmed.length > 0) {
+    const unconfirmedPart = `${result.unconfirmed.length} rows are unconfirmed — see below.`;
+    if (result.remaining.length === 0) return unconfirmedPart;
+    return `${unconfirmedPart} ${result.remaining.length} rows weren't sent and are in the list.`;
+  }
+  if (result.remaining.length === 0) return null;
+  return `${result.remaining.length} rows weren't sent. They're in the list below — check and send again.`;
+}

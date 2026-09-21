@@ -16,6 +16,7 @@ import { failedRowsText } from "./clipboard";
 import { IssuesList } from "./IssuesList";
 import { drop } from "./manifest";
 import { BATCH, formatDropList, parseDropList } from "./parse";
+import { remainingBannerText } from "./result";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
 import { useDrop, type DropQuote } from "./useDrop";
@@ -303,6 +304,10 @@ function Form({ params }: Pick<AppProps, "params">) {
         ? "Reading the fee…"
         : "";
 
+  // N2: after an unconfirmed batch, `remaining` alone undercounts — see remainingBannerText's doc
+  // comment — so this names both counts rather than reading as if it covers the whole story.
+  const banner = dropSession.status === "done" && dropSession.result ? remainingBannerText(dropSession.result) : null;
+
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
       <div className="flex items-center gap-2 border-b border-border p-3">
@@ -339,11 +344,7 @@ function Form({ params }: Pick<AppProps, "params">) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {dropSession.status === "done" && dropSession.result && dropSession.result.remaining.length > 0 && (
-          <p className="mb-2 text-accent-3-text">
-            {`${dropSession.result.remaining.length} rows weren't sent. They're in the list below — check and send again.`}
-          </p>
-        )}
+        {banner && <p className="mb-2 text-accent-3-text">{banner}</p>}
         <textarea
           className="h-32 w-full rounded-md border border-border-2 bg-surface px-2 py-1.5 font-mono text-xs"
           placeholder={"0x… , 12.5"}

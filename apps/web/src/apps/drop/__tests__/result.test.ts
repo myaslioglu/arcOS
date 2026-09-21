@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DropRow } from "../parse";
-import { excludedRowsText, failedRowsFor, unconfirmedHash, type ExcludedRow } from "../result";
+import { excludedRowsText, failedRowsFor, remainingBannerText, unconfirmedHash, type ExcludedRow } from "../result";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -95,5 +95,44 @@ describe("unconfirmedHash (N1 — which hash belongs to the unconfirmed batch)",
 
   it("is null (never crashes) if somehow stopped unconfirmed with no hash recorded at all", () => {
     expect(unconfirmedHash({ hashes: [], stoppedBecause: "unconfirmed" })).toBeNull();
+  });
+});
+
+describe("remainingBannerText (N2 — the banner must not undercount after an unconfirmed batch)", () => {
+  it("is null when nothing is unsent at all", () => {
+    expect(remainingBannerText({ remaining: [], unconfirmed: [], stoppedBecause: null })).toBeNull();
+  });
+
+  it("names only `remaining` for an ordinary partial send (reverted/rejected/error) — unchanged wording", () => {
+    const rows: DropRow[] = [{ line: 1, address: A, amount: 1n }, { line: 2, address: B, amount: 1n }];
+    expect(remainingBannerText({ remaining: rows, unconfirmed: [], stoppedBecause: "reverted" })).toBe(
+      "2 rows weren't sent. They're in the list below — check and send again.",
+    );
+  });
+
+  // The exact hazard N2 fixes: after an unconfirmed batch, `remaining` only counts rows from
+  // batches never even attempted — it does NOT include the unconfirmed batch's own rows (see
+  // runDrop.ts) — so a banner naming only `remaining.length` silently undercounts and reads as if
+  // it covers the whole story.
+  it("names BOTH counts once the run stopped because a batch came back unconfirmed", () => {
+    const unconfirmedRows: DropRow[] = Array.from({ length: 400 }, (_, i) => ({ line: i + 1, address: A, amount: 1n }));
+    const remainingRows: DropRow[] = Array.from({ length: 400 }, (_, i) => ({ line: i + 401, address: B, amount: 1n }));
+    expect(remainingBannerText({ remaining: remainingRows, unconfirmed: unconfirmedRows, stoppedBecause: "unconfirmed" })).toBe(
+      "400 rows are unconfirmed — see below. 400 rows weren't sent and are in the list.",
+    );
+  });
+
+  it("names only the unconfirmed count when every OTHER batch had already been attempted (nothing left in remaining)", () => {
+    const unconfirmedRows: DropRow[] = [{ line: 1, address: A, amount: 1n }];
+    expect(remainingBannerText({ remaining: [], unconfirmed: unconfirmedRows, stoppedBecause: "unconfirmed" })).toBe(
+      "1 rows are unconfirmed — see below.",
+    );
+  });
+
+  it("falls back to the ordinary wording if stoppedBecause says unconfirmed but there are somehow no unconfirmed rows", () => {
+    const rows: DropRow[] = [{ line: 1, address: A, amount: 1n }];
+    expect(remainingBannerText({ remaining: rows, unconfirmed: [], stoppedBecause: "unconfirmed" })).toBe(
+      "1 rows weren't sent. They're in the list below — check and send again.",
+    );
   });
 });
