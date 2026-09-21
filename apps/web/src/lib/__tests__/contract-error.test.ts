@@ -180,22 +180,58 @@ describe("UserFacingError is only ever constructed from an app-authored literal 
     return source.slice(openParenIdx + 1, i - 1);
   }
 
-  it("finds no `new UserFacingError(...)` call whose argument reads from `.message` or `String(err`", () => {
+  /** Strips block and line comments before scanning, so a doc comment that merely MENTIONS
+   * `new UserFacingError(...)` as documentation (e.g. this very rule's own explanation, a few lines
+   * above in this file, and in contract-error.ts's class doc comment) is never counted as a real
+   * call site or checked for an offense that only makes sense against real code. */
+  function stripComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  }
+
+  // wave G, N7: names an error-like variable a template literal might interpolate — e.g.
+  // `` `Failed: ${err}` `` or `` `${error.shortMessage}` `` — which leaks whatever that value's own
+  // message/toString happens to produce, exactly the hazard `.message`/`String(err` already guard
+  // against, just spelled differently.
+  const ERROR_LIKE_NAMES = ["e", "err", "error", "cause"];
+
+  /** Every reason `args` (one call's extracted argument list) fails to look like an app-authored
+   * literal — empty when it's fine. More than one reason can apply at once; all are reported. */
+  function offenseReasons(args: string): string[] {
+    const reasons: string[] = [];
+    if (args.includes(".message")) reasons.push("reads .message");
+    if (args.includes("String(err")) reasons.push("coerces String(err...)");
+    // A bare identifier argument — e.g. `new UserFacingError(err)` — passes an external value
+    // straight through with no literal wrapper at all, the most direct version of this hazard.
+    if (/^[A-Za-z_$][\w$]*$/.test(args.trim())) reasons.push("is a bare identifier, not an app-authored literal");
+    for (const name of ERROR_LIKE_NAMES) {
+      if (new RegExp(`\\$\\{\\s*${name}\\b`).test(args)) reasons.push(`interpolates \${${name}...} in a template literal`);
+    }
+    return reasons;
+  }
+
+  it("finds no `new UserFacingError(...)` call built from external text — `.message`, `String(err`, a bare identifier, or a template interpolating an error-like variable", () => {
     const root = path.resolve(import.meta.dirname, "..", "..");
     const offenders: string[] = [];
+    let totalSites = 0;
     for (const file of listSourceFiles(root)) {
-      const source = readFileSync(file, "utf8");
+      const source = stripComments(readFileSync(file, "utf8"));
       const marker = "new UserFacingError(";
       let idx = source.indexOf(marker);
       while (idx !== -1) {
+        totalSites++;
         const openParenIdx = idx + marker.length - 1;
         const args = extractBalancedArgs(source, openParenIdx);
-        if (args.includes(".message") || args.includes("String(err")) {
-          offenders.push(`${path.relative(root, file)}: new UserFacingError(${args})`);
+        const reasons = offenseReasons(args);
+        if (reasons.length > 0) {
+          offenders.push(`${path.relative(root, file)}: new UserFacingError(${args}) — ${reasons.join(", ")}`);
         }
         idx = source.indexOf(marker, idx + marker.length);
       }
     }
     expect(offenders, `found UserFacingError built from external text:\n${offenders.join("\n")}`).toEqual([]);
+    // A vacuous scan (zero construction sites found anywhere — production code or this suite's own
+    // fixtures) would make the loop above pass trivially, which must fail loudly instead: it would
+    // mean the pattern this test guards moved, was renamed, or was refactored out from under it.
+    expect(totalSites).toBeGreaterThanOrEqual(4);
   });
 });
