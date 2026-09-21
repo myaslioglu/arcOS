@@ -68,12 +68,23 @@ build`.
 
 `FeeController`, `TokenFactory` and `Multisend` are not upgradeable and hold no funds between
 transactions — every paid call forwards its fee to the fee recipient in the same transaction.
-Fees are capped on-chain at deployment (Mint 15 USDC flat; Drop 0.05 USDC per recipient, 2 USDC
-minimum, charged per recipient submitted including any that fail) and a fee increase only takes
-effect 48 hours after it's scheduled, so it's never a surprise. `Multisend` accepts at most 400
-recipients per transaction, sized to Arc's 30,000,000 block gas limit; the app itself batches at
-200 per transaction to leave headroom. `FeeController`'s ownership can be transferred but never
-renounced — it's the only recovery lever if the fee recipient ever stops accepting value.
+
+Current fees: Mint 15 USDC flat; Drop 0.05 USDC per recipient, 2 USDC minimum, charged per
+recipient submitted including any that fail. Each fee is hard-capped on chain at deployment and can
+never be raised past that cap: Mint's cap is 50 USDC; Drop's per-recipient cap is 0.5 USDC, and its
+minimum's cap is 10 USDC. A fee decrease takes effect immediately; an increase only takes effect 48
+hours after it's scheduled, so a fee can never change on you without warning. `Multisend` accepts
+at most 400 recipients per transaction, sized to Arc's 30,000,000 block gas limit; the app itself
+batches at 200 per transaction to leave headroom.
+
+`FeeController`'s ownership can be transferred but never renounced — it's the only recovery lever
+if the fee recipient ever stops accepting value. That's a real, single point of failure worth
+naming plainly: every paid action (Mint, Drop) forwards its fee to one fee-recipient address in the
+same transaction and reverts the whole action if that transfer fails, so if that address ever
+becomes unable to receive value — a contract with no `receive()`, or one blocklisted on Arc — every
+paid action starts reverting until the owner points `FeeController` at a working address with
+`setRecipient`. This is a risk to the ACTION (it stops working until fixed), not to your funds:
+these contracts hold no funds between transactions, so nothing here is ever at risk of being lost.
 
 None of the contracts are deployed yet, and none have been audited. See
 `packages/contracts/DEPLOY.md` for how deployment works and what it needs from whoever runs it.

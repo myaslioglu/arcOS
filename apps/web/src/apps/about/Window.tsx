@@ -44,6 +44,20 @@ export default function AboutWindow() {
       </dl>
 
       <p className="mt-4 text-muted">Contracts are not upgradeable and hold no funds between transactions.</p>
+
+      <div className="mt-2 grid gap-1 text-muted">
+        <p>
+          Current fees: Mint 15 USDC flat (capped at 50 USDC). Drop 0.05 USDC per recipient, 2 USDC
+          minimum (capped at 0.5 USDC per recipient, 10 USDC minimum).
+        </p>
+        <p>A fee decrease applies immediately. An increase only applies 48 hours after it&apos;s scheduled.</p>
+        <p>
+          Every paid action forwards its fee to one fee-recipient address in the same transaction. If
+          that address can&apos;t receive value, paid actions revert until the owner points it
+          elsewhere — no user funds are ever held by these contracts.
+        </p>
+      </div>
+
       <p className="mt-2 text-muted">These contracts haven&apos;t been audited by a third party.</p>
 
       <ul className="mt-4 grid gap-1 text-xs text-faint">
