@@ -24,11 +24,15 @@ function Files() {
   const apiUrl = chain.blockExplorers?.default.apiUrl;
   const [selected, setSelected] = useState<TokenFile | null>(null);
 
+  // The shell doesn't expose window-active state to apps (DesktopApi is notify/open/close/
+  // setTitle only), so polling can't be paused while this window sits in the background; the
+  // intervals below are lengthened instead — holdings 60s, registry 30s — rather than the 30s/15s
+  // this used before.
   const holdings = useQuery({
     queryKey: ["holdings", network, address],
     enabled: !!address && !!apiUrl,
     retry: false,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     queryFn: () => blockscoutSource(apiUrl!).tokenBalances(address!),
   });
 
@@ -41,7 +45,7 @@ function Files() {
     functionName: "tokenCountOf",
     args: address ? [address] : undefined,
     chainId: chain.id,
-    query: { enabled: !!address && !!factory, refetchInterval: 15_000 },
+    query: { enabled: !!address && !!factory, refetchInterval: 30_000 },
   });
   const count = (createdCount.data ?? 0n) as bigint;
   const sliceStart = useMemo(() => latestSliceStart(count, CREATED_PAGE_SIZE), [count]);
@@ -52,7 +56,7 @@ function Files() {
     functionName: "tokensOfSlice",
     args: address ? [address, sliceStart, BigInt(CREATED_PAGE_SIZE)] : undefined,
     chainId: chain.id,
-    query: { enabled: !!address && !!factory, refetchInterval: 15_000 },
+    query: { enabled: !!address && !!factory, refetchInterval: 30_000 },
   });
   const createdList = useMemo(() => (created.data ?? []) as readonly Address[], [created.data]);
 
@@ -68,7 +72,9 @@ function Files() {
     const mine = createdList.map((token, i) => ({
       address: token,
       symbol: (meta.data?.[i * 2]?.result as string | undefined) ?? "…",
-      decimals: (meta.data?.[i * 2 + 1]?.result as number | undefined) ?? 18,
+      // null while the read is pending or failed — never assumed to be 18 (Drop deliberately
+      // refuses to do this too), so a wrong balance is never shown at the wrong scale.
+      decimals: (meta.data?.[i * 2 + 1]?.result as number | undefined) ?? null,
     }));
     return mergeTokens(holdings.data ?? [], mine);
   }, [createdList, meta.data, holdings.data]);
@@ -104,7 +110,9 @@ function Files() {
                     aria-pressed={selected?.address === f.address}
                     onClick={() => setSelected(f)}
                     onDoubleClick={() => open("inspector", { token: f.address })}
-                    {...dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })}
+                    {...(f.decimals !== null
+                      ? dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })
+                      : {})}
                   >
                     <span className="os-icon-tile os-icon-tile--sm">
                       <Coins size={18} strokeWidth={1.6} aria-hidden />
@@ -126,10 +134,10 @@ function Files() {
           <>
             <span className="min-w-0 flex-1 truncate">
               {selected.symbol} · <span className="font-mono text-muted">{shortAddress(selected.address)}</span>
-              {selected.balance !== null && ` · ${formatUnits(selected.balance, selected.decimals)}`}
+              {selected.balance !== null && selected.decimals !== null && ` · ${formatUnits(selected.balance, selected.decimals)}`}
             </span>
             <button type="button" className="rounded-md border border-border-2 px-2 py-1" onClick={() => open("inspector", { token: selected.address })}>Inspect</button>
-            <button type="button" className="rounded-md border border-border-2 px-2 py-1" onClick={() => open("drop", { token: selected.address, symbol: selected.symbol, decimals: String(selected.decimals) })}>Send with Drop</button>
+            <button type="button" className="rounded-md border border-border-2 px-2 py-1" onClick={() => open("drop", { token: selected.address })}>Send with Drop</button>
             <a className="text-accent-text" href={explorerUrl("token", selected.address)} target="_blank" rel="noreferrer">Explorer</a>
           </>
         ) : (

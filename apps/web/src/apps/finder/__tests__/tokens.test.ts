@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
+import { cleanLabel } from "@arcos/inspector";
 import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
@@ -32,6 +33,16 @@ describe("mergeTokens", () => {
     );
     expect(files).toEqual([{ address: A, symbol: "MINE", name: "Mine", decimals: 18, balance: 9n, createdByYou: true }]);
   });
+
+  // A created token's decimals come from a live on-chain read that can still be pending or can
+  // fail; mergeTokens must pass that "unknown" straight through as null rather than inventing a
+  // value, so the window never displays a balance under the wrong scale (see Window.tsx, which
+  // shows a balance only once decimals is known — Drop already refuses to assume 18 for the same
+  // reason).
+  it("keeps a created token's decimals null when the on-chain read hasn't resolved", () => {
+    const files = mergeTokens([], [{ address: A, symbol: "NEW", decimals: null }]);
+    expect(files).toEqual([{ address: A, symbol: "NEW", name: null, decimals: null, balance: null, createdByYou: true }]);
+  });
 });
 
 describe("duplicateSymbols", () => {
@@ -47,6 +58,20 @@ describe("duplicateSymbols", () => {
 
   it("compares symbols after trimming whitespace", () => {
     const files = [file({ address: A, symbol: " USDC " }), file({ address: B, symbol: "USDC" })];
+    expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
+  });
+
+  // Regression guard: a zero-width space isn't Unicode whitespace, so String#trim() (what
+  // duplicateSymbols itself uses) leaves it in place — duplicateSymbols alone would NOT catch this
+  // pair. It passes only because blockscoutSource now runs every name/symbol through cleanLabel
+  // before it ever reaches Finder (see explorer.test.ts), so the zero-width space is already gone
+  // by the time a TokenFile's symbol gets here — the explorer layer is what makes this pass, not
+  // duplicateSymbols's own comparison.
+  it("flags a symbol that only looked different because of a zero-width space, once cleaned at the source", () => {
+    const zeroWidthSpace = String.fromCharCode(0x200b);
+    const dirty = cleanLabel(`USDC${zeroWidthSpace}`, 32);
+    expect(dirty).toBe("USDC"); // the source already stripped it
+    const files = [file({ address: A, symbol: dirty! }), file({ address: B, symbol: "USDC" })];
     expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
   });
 });

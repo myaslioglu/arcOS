@@ -5,14 +5,16 @@ export type TokenFile = {
   address: string;
   symbol: string;
   name: string | null;
-  decimals: number;
+  /** null while the on-chain decimals() read is pending or has failed — never guessed at, since
+   * that would show a balance at the wrong scale. */
+  decimals: number | null;
   balance: bigint | null;
   createdByYou: boolean;
 };
 
 export function mergeTokens(
   holdings: TokenBalance[],
-  created: { address: string; symbol: string; decimals: number }[],
+  created: { address: string; symbol: string; decimals: number | null }[],
 ): TokenFile[] {
   const held = new Map(holdings.map((h) => [h.address.toLowerCase(), h]));
   const mine: TokenFile[] = [...created].reverse().map((c) => {
