@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [r0, main]
+  pull_request:
+
+# Read-only, no deploy step, no secrets used anywhere in this workflow: it only checks out the repo,
+# installs dependencies from the committed lockfile, and runs the same typecheck/lint/test/build
+# commands documented in the root README/package.json. Deploying the contracts needs a private key
+# and is run by hand — see packages/contracts/DEPLOY.md — never from CI.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node version comes from .nvmrc (currently 22), matching the root package.json's
+      # "engines": { "node": ">=22" } and what contributors run locally.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # npm workspaces monorepo — one install at the root links every package. This also fetches
+      # Foundry (npm-installed: @foundry-rs/forge, @foundry-rs/cast, @foundry-rs/anvil) and
+      # forge-std (an npm devDependency fetched from GitHub by tag, "forge-std":
+      # "github:foundry-rs/forge-std#v1.16.2" in packages/contracts/package.json) exactly the way a
+      # local `npm install` does — no separate curl-install-foundry step.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck --workspaces --if-present
+
+      - name: Lint
+        run: npm run lint
+
+      # The JS/TS workspaces' own vitest suites. @arcos/contracts' "test" script is `forge test`,
+      # run as its own step below instead, so a Solidity failure and a TS failure are never
+      # conflated in the same step's output.
+      - name: Test (JS workspaces)
+        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector
+
+      - name: Test (contracts — forge)
+        run: npm run test -w @arcos/contracts
+
+      - name: Build (web)
+        run: npm run build -w @arcos/web
+
+      # Fails if the committed ABIs (packages/chain/src/abis) don't match what the current Solidity
+      # sources actually export — catching a contract change whose regenerated ABI never got
+      # committed alongside it.
+      - name: ABI drift check
+        run: |
+          npm run abis -w @arcos/contracts
+          git diff --exit-code packages/chain/src/abis
+
+      - name: npm audit (high/critical)
+        run: npm audit --audit-level=high
