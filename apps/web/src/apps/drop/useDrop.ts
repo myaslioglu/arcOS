@@ -5,6 +5,7 @@ import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, formatUsdc, multisendAbi, unitsToNative, type Address } from "@arcos/chain";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
+import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import { dropBatchFee, dropTotalFee } from "./dropFee";
 import { BATCH, batchSizes, chunk, formatDropList, type DropRow } from "./parse";
 import { isUserRejection, runDrop, type BatchOutcome, type DropResult } from "./runDrop";
@@ -25,7 +26,7 @@ export function useDrop() {
   const contracts = ARCOS[activeNetwork()];
   const multisend = contracts?.multisend;
   const feeController = contracts?.feeController;
-  const { address } = useAccount();
+  const { address, chainId: walletChainId } = useAccount();
   const client = usePublicClient({ chainId: chain.id });
   const { writeContractAsync } = useWriteContract();
 
@@ -80,13 +81,23 @@ export function useDrop() {
       const batches = chunk(rows, BATCH);
 
       try {
+        // Defence in depth — the real guard is the `chainId` withChain sets on every write below,
+        // which viem enforces at signing time regardless (see lib/paid-write.ts). This just gives a
+        // wallet that's already on the wrong network one plain sentence before it even opens.
+        assertWalletOnChain(walletChainId, chain.id);
+
         if (token) {
           const total = rows.reduce((s, r) => s + r.amount, 0n);
           try {
             const allowance = await client.readContract({ address: token, abi: erc20Abi, functionName: "allowance", args: [address, multisend] });
             if (allowance < total) {
               session.setProgress({ batch: 0, batches: batches.length, step: "approve" });
-              const hash = await writeContractAsync({ address: token, abi: erc20Abi, functionName: "approve", args: [multisend, total], chainId: chain.id });
+              // `as const` keeps `functionName`/`args` narrowed to erc20Abi's "approve" overload —
+              // without it, passing a fresh object literal through withChain's generic `T` widens
+              // `functionName` to plain `string`, which wagmi's overload resolution then rejects.
+              const hash = await writeContractAsync(
+                withChain({ address: token, abi: erc20Abi, functionName: "approve", args: [multisend, total] } as const, chain.id),
+              );
               await client.waitForTransactionReceipt({ hash });
             }
           } catch (err) {
@@ -112,6 +123,10 @@ export function useDrop() {
           const to = batch.map((r) => r.address);
           const amounts = batch.map((r) => (token ? r.amount : unitsToNative(r.amount)));
 
+          // Defence in depth again, per batch: a multi-batch send can run long enough for the wallet's
+          // chain to change mid-run, not just before the first batch.
+          assertWalletOnChain(walletChainId, chain.id);
+
           // Re-read DROP_PER_RECIPIENT and DROP_MIN fresh, right before this batch signs — not the
           // basis the form last showed — and recompute the fee: a multi-batch send can straddle a fee
           // change mid-run, so every batch gets its own check, not just the first. A mismatch stops
@@ -132,10 +147,10 @@ export function useDrop() {
           let hash: `0x${string}`;
           if (token) {
             const { request } = await client.simulateContract({ account: address, address: multisend, abi: multisendAbi, functionName: "sendToken", args: [token, to, amounts], value: fee });
-            hash = await writeContractAsync(request);
+            hash = await writeContractAsync(withChain(request, chain.id));
           } else {
             const { request } = await client.simulateContract({ account: address, address: multisend, abi: multisendAbi, functionName: "sendNative", args: [to, amounts], value: amounts.reduce((s, a) => s + a, 0n) + fee });
-            hash = await writeContractAsync(request);
+            hash = await writeContractAsync(withChain(request, chain.id));
           }
           const receipt = await client.waitForTransactionReceipt({ hash });
           // Filtered to the Multisend contract's own logs: without it, any other log in the same transaction
@@ -157,7 +172,8 @@ export function useDrop() {
       } catch (err) {
         // `runDrop` itself never throws (every sendBatch failure is caught and turned into a DropResult) —
         // this is a defensive net for anything truly unexpected, so the session store still reaches "done"
-        // instead of being stuck reporting "sending" forever.
+        // instead of being stuck reporting "sending" forever. The wallet-chain guard above also lands
+        // here, since it runs before runDrop is ever called.
         const result: DropResult = {
           delivered: [],
           failed: [],
@@ -170,7 +186,7 @@ export function useDrop() {
         throw err;
       }
     },
-    [client, multisend, address, chain.id, writeContractAsync, readFeeBasis],
+    [client, multisend, address, walletChainId, chain.id, writeContractAsync, readFeeBasis],
   );
 
   return { ready: !!multisend && !!client && !!address, quoteTotal, send };

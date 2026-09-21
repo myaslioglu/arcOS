@@ -7,6 +7,7 @@ import { ARCOS, FEE_KEYS, activeChain, activeNetwork, explorerUrl, feeController
 import { useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { UserFacingError, describeContractError } from "@/lib/contract-error";
+import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import { trackEvent } from "@/lib/analytics";
 import { session } from "./session";
 import { validateMint, type MintForm } from "./validate";
@@ -16,7 +17,7 @@ const EMPTY: MintForm = { name: "", symbol: "", decimals: "18", supply: "", mint
 function Form() {
   const chain = activeChain();
   const contracts = ARCOS[activeNetwork()];
-  const { address } = useAccount();
+  const { address, chainId: walletChainId } = useAccount();
   const client = usePublicClient({ chainId: chain.id });
   const { writeContractAsync } = useWriteContract();
   const { open, notify } = useDesktop();
@@ -52,6 +53,11 @@ function Form() {
     const started = session.start(result.args.symbol);
     if (!started) return; // a mint is already in flight (another click, another window) — do nothing
     try {
+      // Defence in depth — the real guard is the `chainId` withChain sets on the write below, which
+      // viem enforces at signing time regardless. This just gives a wallet that's already on the
+      // wrong network one plain sentence before it even opens, instead of a simulate call succeeding
+      // against Arc's own public client (unrelated to the wallet) followed by a cryptic error.
+      assertWalletOnChain(walletChainId, chain.id);
       // Re-read the fee right before sending: it can change between opening the window and signing, and we
       // must not let the user pay a stale amount.
       const fresh = await fee.refetch();
@@ -67,7 +73,7 @@ function Form() {
         args: [result.args],
         value: fresh.data,
       });
-      const hash = await writeContractAsync(request);
+      const hash = await writeContractAsync(withChain(request, chain.id));
       const receipt = await client.waitForTransactionReceipt({ hash });
       // Only trust a TokenCreated log the factory itself emitted — a malicious token contract created in the
       // same transaction could otherwise forge the event.
