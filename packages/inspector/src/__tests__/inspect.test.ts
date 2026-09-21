@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DexConfig } from "@arcos/chain";
+import { extractSelectors } from "../bytecode";
 import { ExplorerUnavailable, blockscoutSource, type ExplorerSource } from "../explorer";
 import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
+import { MINTABLE_TOKEN_DEPLOYED, STANDARD_TOKEN_DEPLOYED } from "./fixtures/tokens";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const IMPL = "0x2222222222222222222222222222222222222222";
@@ -642,6 +644,49 @@ describe("inspect", () => {
     });
     expect(find(r, "ownership")).toMatchObject({ status: "unknown" });
     expect(find(r, "ownership").detail).toMatch(/burn address/);
+  });
+
+  // --- Wave H safety rail: this repo's own deployed token templates, as ground truth ---
+  //
+  // Every other fixture in this file is a hand-written toy (`PLAIN` is a single PUSH4). These two
+  // are the REAL compiled bytecode of the templates the Mint app deploys, so "a token minted here
+  // reads as clean in Inspector" is asserted against the thing that actually gets deployed — and
+  // they are the ground truth for the dispatcher-visibility rule: a scan that can't see the
+  // dispatcher of THESE can't claim to have seen anyone's.
+
+  describe("the repo's own token templates", () => {
+    it("sees the ERC-20 dispatcher in both templates' real bytecode", () => {
+      const standard = extractSelectors(STANDARD_TOKEN_DEPLOYED);
+      const mintable = extractSelectors(MINTABLE_TOKEN_DEPLOYED);
+      const TRANSFER = "0xa9059cbb"; // transfer(address,uint256)
+      const MINT = "0x40c10f19"; // mint(address,uint256)
+      expect([standard.has(TRANSFER), mintable.has(TRANSFER)]).toEqual([true, true]);
+      expect([standard.has(MINT), mintable.has(MINT)]).toEqual([false, true]);
+    });
+
+    it("reads a real StandardToken as clean on ownership, privileges, proxy and prevrandao", async () => {
+      const r = await run({ code: { [TOKEN]: STANDARD_TOKEN_DEPLOYED }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } });
+      for (const id of ["ownership", "privileges", "proxy", "prevrandao"] as const) {
+        expect([id, find(r, id).status]).toEqual([id, "pass"]);
+      }
+      expect(find(r, "ownership").title).toBe("No owner function");
+      expect(find(r, "privileges").title).toBe("No privileged functions found");
+    });
+
+    it("reads a real MintableToken as owned, with the mint function found", async () => {
+      const r = await run({ code: { [TOKEN]: MINTABLE_TOKEN_DEPLOYED }, reads: { [`${TOKEN}.owner()`]: OWNER } });
+      expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
+      expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+      expect(find(r, "proxy").status).toBe("pass");
+    });
+
+    it("reads an EIP-1167 clone of a real StandardToken as a non-upgradeable minimal proxy with clean logic", async () => {
+      const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: STANDARD_TOKEN_DEPLOYED } });
+      expect(find(r, "proxy")).toMatchObject({ status: "pass", title: "Minimal proxy — not upgradeable" });
+      for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+        expect([id, find(r, id).status]).toEqual([id, "pass"]);
+      }
+    });
   });
 
   // --- Part 3: the inspected address is always checksummed ---
