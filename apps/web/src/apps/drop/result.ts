@@ -22,14 +22,26 @@ export function failedRowsFor(batch: DropRow[], failures: readonly { args: Trans
 }
 
 /**
- * Describes the rows `parseDropList` rejected before a send ever began (a bad address, a bad
- * amount, a duplicate, ...) — distinct from `failed` (rows the CONTRACT reported as failed
- * transfers, mapped by `failedRowsFor` above). Without this, a result panel that only shows
- * "N delivered" reads as if it covers the whole list, silently dropping any row the parser had
- * already excluded. Returns null (render nothing) when nothing was excluded.
+ * A row `parseDropList` rejected before a send ever began (a bad address, a bad amount, a
+ * duplicate, ...), with everything needed to show it without the user's original list around: the
+ * CSV line number, the row's exact original text, and the reason it was excluded. Kept as its own
+ * structure (not just the line number) so a send's result can still show what the user actually typed
+ * even after the textarea has been replaced with just the unsent remainder — see Window.tsx/
+ * ResultPanel.tsx, and the wave E review note this fixes: "lines 4, 9, 17" used to point at text the
+ * user could no longer see anywhere on screen.
  */
-export function excludedRowsText(lines: readonly number[]): string | null {
-  if (lines.length === 0) return null;
-  if (lines.length === 1) return `1 row wasn't sent because it had a problem: line ${lines[0]}`;
-  return `${lines.length} rows weren't sent because they had problems: lines ${lines.join(", ")}`;
+export type ExcludedRow = { line: number; text: string; reason: string };
+
+/**
+ * Describes the rows `parseDropList` rejected before a send ever began — distinct from `failed`
+ * (rows the CONTRACT reported as failed transfers, mapped by `failedRowsFor` above). Without this, a
+ * result panel that only shows "N delivered" reads as if it covers the whole list, silently dropping
+ * any row the parser had already excluded. Returns null (render nothing) when nothing was excluded.
+ * Only a summary sentence — the caller renders each row's own `text`/`reason` (see `ExcludedRow`)
+ * alongside it, not just this count.
+ */
+export function excludedRowsText(rows: readonly ExcludedRow[]): string | null {
+  if (rows.length === 0) return null;
+  if (rows.length === 1) return `1 row wasn't sent because it had a problem: line ${rows[0].line}`;
+  return `${rows.length} rows weren't sent because they had problems: lines ${rows.map((r) => r.line).join(", ")}`;
 }

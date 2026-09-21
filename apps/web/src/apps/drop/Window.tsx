@@ -188,9 +188,13 @@ function Form({ params }: Pick<AppProps, "params">) {
       return notify("The fee shown doesn't match the current list — wait for it to update and try again.", "warn");
     }
     // Rows the parser rejected (bad address, bad amount, a duplicate, ...) never reach `fresh.rows`,
-    // so their line numbers are captured here — the only place that still has them — for the result
-    // panel to say a send didn't cover them (see session.ts's excludedLines and ResultPanel.tsx).
-    const started = session.start(token ? symbol : "USDC", token, decimals, text, fresh.issues.map((i) => i.line));
+    // so their ORIGINAL TEXT is captured here — the only place that still has it, since a partial
+    // send later replaces this textarea with just the unsent remainder — for the result panel to say
+    // a send didn't cover them, and show exactly what was excluded and why (session.ts's
+    // excludedRows, result.ts's ExcludedRow, ResultPanel.tsx).
+    const textLines = text.split(/\r?\n/);
+    const excludedRows = fresh.issues.map((i) => ({ line: i.line, text: textLines[i.line - 1] ?? "", reason: i.message }));
+    const started = session.start(token ? symbol : "USDC", token, decimals, text, excludedRows);
     if (!started) return; // a send is already in flight (another click, another window) — do nothing
     setBusy(true);
     try {
@@ -329,7 +333,7 @@ function Form({ params }: Pick<AppProps, "params">) {
 
         {dropSession.status === "done" && dropSession.result && (
           <>
-            <ResultPanel result={dropSession.result} excludedLines={dropSession.excludedLines} onCopyFailed={copyFailed} />
+            <ResultPanel result={dropSession.result} excludedRows={dropSession.excludedRows} onCopyFailed={copyFailed} />
             <button type="button" className="mt-2 rounded-md border border-border-2 px-2 py-1" onClick={dismissDone}>
               Done
             </button>

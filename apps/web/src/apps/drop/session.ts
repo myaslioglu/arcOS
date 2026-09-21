@@ -1,4 +1,5 @@
 import type { Address } from "@arcos/chain";
+import type { ExcludedRow } from "./result";
 import type { DropResult } from "./runDrop";
 
 /**
@@ -24,11 +25,14 @@ export type DropSessionState = {
    * still unsent, ready to prefill the form for a follow-up send.
    */
   remainingText: string;
-  /** CSV line numbers `parseDropList` rejected before this send began (bad address, bad amount, a
-   * duplicate, ...) — captured once at `start` from the same parse that produced the rows actually
-   * sent, so the result panel can say a send didn't cover them instead of reading as "All delivered"
+  /** Rows `parseDropList` rejected before this send began (bad address, bad amount, a duplicate,
+   * ...) — captured once at `start` from the same parse that produced the rows actually sent, with
+   * each row's ORIGINAL TEXT and reason, not just its line number: after a partial send replaces the
+   * textarea with the unsent remainder, a line number alone would point at text the user can no
+   * longer see anywhere (see ExcludedRow's doc comment). Lets the result panel say a send didn't
+   * cover them, and show exactly what was excluded and why, instead of reading as "All delivered"
    * covering the whole list. */
-  excludedLines: number[];
+  excludedRows: ExcludedRow[];
   startedAt: number | null;
 };
 
@@ -40,12 +44,12 @@ export const initialDropSessionState: DropSessionState = {
   progress: null,
   result: null,
   remainingText: "",
-  excludedLines: [],
+  excludedRows: [],
   startedAt: null,
 };
 
 export type DropSessionAction =
-  | { type: "start"; tokenLabel: string; token: Address | null; decimals: number; text: string; excludedLines: number[]; startedAt: number }
+  | { type: "start"; tokenLabel: string; token: Address | null; decimals: number; text: string; excludedRows: ExcludedRow[]; startedAt: number }
   | { type: "progress"; progress: DropProgress | null }
   | { type: "finish"; result: DropResult; remainingText: string }
   | { type: "dismiss" };
@@ -70,7 +74,7 @@ export function dropSessionReducer(state: DropSessionState, action: DropSessionA
         progress: null,
         result: null,
         remainingText: action.text,
-        excludedLines: action.excludedLines,
+        excludedRows: action.excludedRows,
         startedAt: action.startedAt,
       };
     case "progress":
@@ -117,10 +121,10 @@ function subscribe(listener: () => void): () => void {
 }
 
 /** Starts a session; refuses — returns `false`, changes nothing — if one is already sending.
- * `excludedLines` defaults to empty for callers (and the many existing tests) that don't pass one. */
-function start(tokenLabel: string, token: Address | null, decimals: number, text: string, excludedLines: number[] = []): boolean {
+ * `excludedRows` defaults to empty for callers (and the many existing tests) that don't pass one. */
+function start(tokenLabel: string, token: Address | null, decimals: number, text: string, excludedRows: ExcludedRow[] = []): boolean {
   if (state.status === "sending") return false;
-  state = dropSessionReducer(state, { type: "start", tokenLabel, token, decimals, text, excludedLines, startedAt: Date.now() });
+  state = dropSessionReducer(state, { type: "start", tokenLabel, token, decimals, text, excludedRows, startedAt: Date.now() });
   if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeUnloadGuard);
   emit();
   return true;

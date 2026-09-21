@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { DropResult } from "../runDrop";
+import type { ExcludedRow } from "../result";
 import { dropSessionReducer, initialDropSessionState, session, type DropSessionState } from "../session";
 
 const emptyResult: DropResult = { delivered: [], failed: [], remaining: [], unconfirmed: [], hashes: [], stoppedBecause: null, message: null };
+
+const excludedRow = (line: number, text: string, reason: string): ExcludedRow => ({ line, text, reason });
 
 const sendingState = (over: Partial<DropSessionState> = {}): DropSessionState => ({
   status: "sending",
@@ -12,7 +15,7 @@ const sendingState = (over: Partial<DropSessionState> = {}): DropSessionState =>
   progress: null,
   result: null,
   remainingText: "0x1111111111111111111111111111111111111111,1",
-  excludedLines: [],
+  excludedRows: [],
   startedAt: 1,
   ...over,
 });
@@ -35,7 +38,7 @@ describe("dropSessionReducer", () => {
         token: null,
         decimals: 6,
         text: "0x1111111111111111111111111111111111111111,1",
-        excludedLines: [],
+        excludedRows: [],
         startedAt: 10,
       });
       expect(next).toEqual({
@@ -46,24 +49,25 @@ describe("dropSessionReducer", () => {
         progress: null,
         result: null,
         remainingText: "0x1111111111111111111111111111111111111111,1",
-        excludedLines: [],
+        excludedRows: [],
         startedAt: 10,
       });
     });
 
-    it("carries the parser-excluded line numbers into the session, unchanged through to done", () => {
+    it("carries the parser-excluded rows — original text and reason, not just the line number — into the session, unchanged through to done", () => {
+      const rows = [excludedRow(4, "not-an-address, 1", "Not an address"), excludedRow(9, "0x1,0", "Amount is zero"), excludedRow(17, "", "Expected an address and an amount")];
       const started = dropSessionReducer(initialDropSessionState, {
         type: "start",
         tokenLabel: "USDC",
         token: null,
         decimals: 6,
         text: "x",
-        excludedLines: [4, 9, 17],
+        excludedRows: rows,
         startedAt: 10,
       });
-      expect(started.excludedLines).toEqual([4, 9, 17]);
+      expect(started.excludedRows).toEqual(rows);
       const finished = dropSessionReducer(started, { type: "finish", result: emptyResult, remainingText: "" });
-      expect(finished.excludedLines).toEqual([4, 9, 17]);
+      expect(finished.excludedRows).toEqual(rows);
     });
 
     it("starts a session from done (reviewing one result, then sending the remainder)", () => {
@@ -73,7 +77,7 @@ describe("dropSessionReducer", () => {
         token: null,
         decimals: 6,
         text: "x",
-        excludedLines: [],
+        excludedRows: [],
         startedAt: 20,
       });
       expect(next.status).toBe("sending");
@@ -88,7 +92,7 @@ describe("dropSessionReducer", () => {
         token: null,
         decimals: 6,
         text: "a second list",
-        excludedLines: [],
+        excludedRows: [],
         startedAt: 99,
       });
       expect(next).toBe(state); // unchanged reference: the no-op IS the refusal
@@ -163,14 +167,15 @@ describe("session store", () => {
     expect(session.getSnapshot().remainingText).toBe("list one");
   });
 
-  it("start() defaults excludedLines to an empty array when the caller omits it", () => {
+  it("start() defaults excludedRows to an empty array when the caller omits it", () => {
     session.start("USDC", null, 6, "x");
-    expect(session.getSnapshot().excludedLines).toEqual([]);
+    expect(session.getSnapshot().excludedRows).toEqual([]);
   });
 
-  it("start() records the excluded line numbers the caller passes", () => {
-    session.start("USDC", null, 6, "x", [2, 5]);
-    expect(session.getSnapshot().excludedLines).toEqual([2, 5]);
+  it("start() records the excluded rows — original text and reason — the caller passes", () => {
+    const rows = [excludedRow(2, "bad,row", "Not an address"), excludedRow(5, "0x1,0", "Amount is zero")];
+    session.start("USDC", null, 6, "x", rows);
+    expect(session.getSnapshot().excludedRows).toEqual(rows);
   });
 
   it("setProgress() only takes effect once a session is sending", () => {
