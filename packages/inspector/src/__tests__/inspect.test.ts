@@ -548,6 +548,24 @@ describe("inspect", () => {
     expect(find(r, "holders")).toMatchObject({ status: "pass", title: "All 3 wallets hold 24%" });
   });
 
+  // --- Wave F item 4: a renounced owner proves nothing about role holders ---
+
+  // PUSH4 mint(address,uint256) · PUSH4 grantRole(bytes32,address) · STOP
+  const MINT_AND_ROLES = "0x6340c10f19632f2ff15d00";
+
+  it("never calls privileged functions uncallable when a renounced owner sits next to AccessControl", async () => {
+    const r = await run({ code: { [TOKEN]: MINT_AND_ROLES }, reads: { [`${TOKEN}.owner()`]: ZERO } });
+    expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Role-based admin" });
+    expect(find(r, "ownership").detail).toMatch(/renounced/);
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  it("still reports plain role-based admin, with no owner function, the way it always did", async () => {
+    const r = await run({ code: { [TOKEN]: MINT_AND_ROLES } });
+    expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Role-based admin", detail: "Uses AccessControl; role holders can't be listed from bytecode." });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
   // --- Part 3: the inspected address is always checksummed ---
 
   it("checksums the inspected address regardless of the casing passed in", async () => {

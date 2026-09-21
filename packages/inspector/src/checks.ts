@@ -5,7 +5,9 @@
  *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
  *   whether anyone controls it can't be told either way; or there's no owner function but the
  *   contract does have privileged functions (in logic code that WAS read), so who (if anyone) can
- *   call them can't be read.
+ *   call them can't be read. "Ownership is renounced" is reserved for a burn-address owner() on
+ *   logic with no `grantRole`: with AccessControl in the code, a renounced Ownable leaves the roles
+ *   untouched, so it's reported as role-based admin (a warn) instead.
  * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone or an
  *   EIP-1967 proxy whose implementation is unreachable, points at empty code or is itself a proxy,
  *   or code that delegates calls to a target this check couldn't identify at all); or privileged
@@ -97,7 +99,9 @@ async function catchReverted<T>(p: Promise<T>, fallback: T): Promise<T> {
 export type Owner =
   | { kind: "none" }
   | { kind: "renounced" }
-  | { kind: "roles" }
+  /** The logic exposes `grantRole`. `renounced` records that `owner()` is a burn address as well —
+   * which says nothing about role holders, so it never reaches the "renounced" kind. */
+  | { kind: "roles"; renounced: boolean }
   | { kind: "unknown" }
   | { kind: "wallet" | "contract"; address: Address };
 
@@ -110,14 +114,16 @@ export async function resolveOwner(reader: ChainReader, token: Address, selector
       if (e instanceof CallReverted) continue; // no such function — try the next name
       return { kind: "unknown" }; // a transport failure means nothing about ownership
     }
-    if (isBurn(owner)) return { kind: "renounced" };
+    // Renouncing Ownable retires owner-only functions; it does nothing to AccessControl, so a
+    // contract with `grantRole` still has role holders who can call whatever the roles gate.
+    if (isBurn(owner)) return selectors.has(GRANT_ROLE) ? { kind: "roles", renounced: true } : { kind: "renounced" };
     try {
       return { kind: (await reader.getCode(owner)) ? "contract" : "wallet", address: owner };
     } catch {
       return { kind: "unknown" };
     }
   }
-  return selectors.has(GRANT_ROLE) ? { kind: "roles" } : { kind: "none" };
+  return selectors.has(GRANT_ROLE) ? { kind: "roles", renounced: false } : { kind: "none" };
 }
 
 /**
@@ -195,7 +201,12 @@ export function checkOwnership(input: InspectInput, owner: Owner, found: Privile
       ? finding("ownership", "unknown", "No owner function, but the contract has privileged functions", "The contract exposes no owner() or getOwner(), but its code has privileged functions — who (if anyone) can call them can't be read.", { evidenceUrl: url })
       : finding("ownership", "pass", "No owner function", "The contract exposes no owner() or getOwner().", { evidenceUrl: url });
   }
-  if (owner.kind === "roles") return finding("ownership", "warn", "Role-based admin", "Uses AccessControl; role holders can't be listed from bytecode.", { evidenceUrl: url });
+  if (owner.kind === "roles") {
+    const detail = owner.renounced
+      ? "owner() is a burn address, so ownership is renounced — but the contract also uses AccessControl, and giving up Ownable revokes no roles. Role holders can't be listed from bytecode."
+      : "Uses AccessControl; role holders can't be listed from bytecode.";
+    return finding("ownership", "warn", "Role-based admin", detail, { evidenceUrl: url });
+  }
   const ownerUrl = `${input.explorerBase}/address/${owner.address}`;
   return owner.kind === "wallet"
     ? finding("ownership", "warn", "Owned by a wallet", `${owner.address} controls owner-only functions.`, { evidenceUrl: ownerUrl })
