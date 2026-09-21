@@ -85,9 +85,13 @@ function Form() {
   /** Runs `run()` through the shared one-at-a-time session guard, from the initial submit or from a
    * Retry — both a fresh `kit.bridge()` call and `kit.retryBridge()` land here so they share exactly
    * the same start/finish/fail handling. On a thrown error, appends the "check your wallet's chain
-   * explorer" note: a promise rejection here can still follow a burn that already landed. */
-  const performBridge = async (bridgeSource: ChainId, bridgeDest: ChainId, bridgeAmount: string, run: () => Promise<BridgeResult>) => {
-    const started = session.start(bridgeSource, bridgeDest, bridgeAmount);
+   * explorer" note: a promise rejection here can still follow a burn that already landed.
+   *
+   * `retry` is forwarded to `session.start` unchanged (I4, wave E): it must be `true` only when `run`
+   * is actually retrying the attempt `lastResult` describes, so a brand-new transfer never inherits a
+   * previous, unrelated bridge's evidence — see session.ts's "start" reducer case for the full why. */
+  const performBridge = async (bridgeSource: ChainId, bridgeDest: ChainId, bridgeAmount: string, retry: boolean, run: () => Promise<BridgeResult>) => {
+    const started = session.start(bridgeSource, bridgeDest, bridgeAmount, retry);
     if (!started) return; // a bridge is already in flight (another click, another window) — do nothing
     try {
       const result = await run();
@@ -104,7 +108,10 @@ function Form() {
 
   const submit = async () => {
     if (!connector || normalized === null) return;
-    await performBridge(source, dest, normalized, async () => {
+    // Not a retry: the form stays usable after a bridge finishes (so a second, unrelated transfer can
+    // be submitted without dismissing first) — this path must always start clean, never carrying a
+    // previous attempt's evidence forward.
+    await performBridge(source, dest, normalized, false, async () => {
       const adapter = await adapterFor(connector);
       const chargeFee = recipient !== null && fee !== "0";
       return kit.bridge({
@@ -127,7 +134,7 @@ function Form() {
     if (!connector || !failed || !bridgeSession.source || !bridgeSession.dest) return;
     const retrySource = bridgeSession.source;
     const retryDest = bridgeSession.dest;
-    await performBridge(retrySource, retryDest, bridgeSession.amount, async () => {
+    await performBridge(retrySource, retryDest, bridgeSession.amount, true, async () => {
       const adapter = await adapterFor(connector);
       return kit.retryBridge(failed, { from: adapter, to: adapter });
     });

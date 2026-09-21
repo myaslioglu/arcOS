@@ -35,7 +35,7 @@ export const initialBridgeSessionState: BridgeSessionState = {
 };
 
 export type BridgeSessionAction =
-  | { type: "start"; source: ChainId; dest: ChainId; amount: string; startedAt: number }
+  | { type: "start"; source: ChainId; dest: ChainId; amount: string; retry: boolean; startedAt: number }
   | { type: "finish"; result: BridgeResult }
   | { type: "fail"; message: string }
   | { type: "dismiss" };
@@ -58,7 +58,13 @@ export function bridgeSessionReducer(state: BridgeSessionState, action: BridgeSe
         amount: action.amount,
         result: null,
         error: null,
-        lastResult: state.lastResult,
+        // wave E, I4: `lastResult` (the evidence a Retry panel shows) must only survive a `start` that
+        // is ITSELF a retry of that same evidence. A fresh, non-retry start — a brand-new transfer,
+        // typed and submitted after a previous one finished — must not inherit a stranger's burn hash:
+        // before this, `start` carried `lastResult` forward unconditionally, so a new transfer could
+        // render "Retrying. Your first attempt:" over a completely unrelated prior bridge, and a
+        // failed new attempt could show that unrelated bridge's SUCCESS underneath its own error.
+        lastResult: action.retry ? state.lastResult : null,
         startedAt: action.startedAt,
       };
     case "finish":
@@ -113,10 +119,12 @@ export function createBridgeSession(target?: BeforeUnloadTarget) {
     return () => listeners.delete(listener);
   }
 
-  /** Starts a session; refuses — returns `false`, changes nothing — if one is already bridging. */
-  function start(source: ChainId, dest: ChainId, amount: string): boolean {
+  /** Starts a session; refuses — returns `false`, changes nothing — if one is already bridging.
+   * `retry` must be true only when this start is retrying the attempt `lastResult` (if any) already
+   * describes — see bridgeSessionReducer's "start" case for why a fresh, non-retry start clears it. */
+  function start(source: ChainId, dest: ChainId, amount: string, retry: boolean): boolean {
     if (state.status === "bridging") return false;
-    state = bridgeSessionReducer(state, { type: "start", source, dest, amount, startedAt: Date.now() });
+    state = bridgeSessionReducer(state, { type: "start", source, dest, amount, retry, startedAt: Date.now() });
     resolveTarget()?.addEventListener("beforeunload", beforeUnloadGuard);
     emit();
     return true;

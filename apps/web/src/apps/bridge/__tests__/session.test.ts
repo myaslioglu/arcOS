@@ -10,6 +10,7 @@ import {
 } from "../session";
 
 const result = { state: "success", steps: [] } as unknown as BridgeResult;
+const failedResult = { state: "error", steps: [] } as unknown as BridgeResult;
 
 const bridgingState = (over: Partial<BridgeSessionState> = {}): BridgeSessionState => ({
   status: "bridging",
@@ -38,6 +39,7 @@ describe("bridgeSessionReducer", () => {
         source: "Ethereum_Sepolia",
         dest: "Arc_Testnet",
         amount: "1",
+        retry: false,
         startedAt: 10,
       });
       expect(next).toEqual({
@@ -54,22 +56,70 @@ describe("bridgeSessionReducer", () => {
 
     it("refuses to start while already bridging — the guard against a second concurrent bridge", () => {
       const state = bridgingState();
-      const next = bridgeSessionReducer(state, { type: "start", source: "Base", dest: "Arc", amount: "2", startedAt: 99 });
+      const next = bridgeSessionReducer(state, { type: "start", source: "Base", dest: "Arc", amount: "2", retry: false, startedAt: 99 });
       expect(next).toBe(state);
     });
 
-    it("carries lastResult forward across a retry's start — a retry must not erase the evidence of the first attempt", () => {
-      const failed = { state: "error", steps: [] } as unknown as BridgeResult;
-      const next = bridgeSessionReducer(doneState({ result: null, error: "boom", lastResult: failed }), {
+    // I4 (wave E): `start` used to carry `lastResult` forward UNCONDITIONALLY, so a brand-new transfer
+    // (a fresh, non-retry start) rendered "Retrying. Your first attempt:" with a PREVIOUS, unrelated
+    // transfer's burn hash — and a failed new attempt showed a successful unrelated bridge underneath
+    // an error. `retry: false` must clear it.
+    it("a fresh (non-retry) start clears lastResult, even if one is left over from an earlier, unrelated bridge", () => {
+      const next = bridgeSessionReducer(doneState({ lastResult: failedResult }), {
+        type: "start",
+        source: "Base_Sepolia",
+        dest: "Arc_Testnet",
+        amount: "5",
+        retry: false,
+        startedAt: 20,
+      });
+      expect(next.status).toBe("bridging");
+      expect(next.lastResult).toBeNull();
+    });
+
+    it("a retry start (retry: true) carries lastResult forward — a retry must not erase the evidence of the first attempt", () => {
+      const next = bridgeSessionReducer(doneState({ result: null, error: "boom", lastResult: failedResult }), {
         type: "start",
         source: "Ethereum_Sepolia",
         dest: "Arc_Testnet",
         amount: "1",
+        retry: true,
         startedAt: 50,
       });
       expect(next.status).toBe("bridging");
-      expect(next.result).toBeNull(); // "sending" state resets the CURRENT attempt's result...
-      expect(next.lastResult).toBe(failed); // ...but lastResult, the prior attempt's evidence, survives
+      expect(next.result).toBeNull(); // "bridging" state resets the CURRENT attempt's result...
+      expect(next.lastResult).toBe(failedResult); // ...but lastResult, the prior attempt's evidence, survives
+    });
+  });
+
+  // End-to-end (start + finish/fail) coverage of the four scenarios the brief calls out by name.
+  describe("a full retry cycle", () => {
+    it("a failed retry keeps the ORIGINAL lastResult as the visible evidence, not the new (thrown, resultless) failure", () => {
+      const retrying = bridgeSessionReducer(doneState({ result: null, error: "first failure", lastResult: failedResult }), {
+        type: "start",
+        source: "Ethereum_Sepolia",
+        dest: "Arc_Testnet",
+        amount: "1",
+        retry: true,
+        startedAt: 50,
+      });
+      const failedAgain = bridgeSessionReducer(retrying, { type: "fail", message: "second failure" });
+      expect(failedAgain.lastResult).toBe(failedResult);
+      expect(failedAgain.error).toBe("second failure");
+    });
+
+    it("a successful retry replaces lastResult with the NEW result", () => {
+      const retrying = bridgeSessionReducer(doneState({ result: null, error: "first failure", lastResult: failedResult }), {
+        type: "start",
+        source: "Ethereum_Sepolia",
+        dest: "Arc_Testnet",
+        amount: "1",
+        retry: true,
+        startedAt: 50,
+      });
+      const succeeded = bridgeSessionReducer(retrying, { type: "finish", result });
+      expect(succeeded.lastResult).toBe(result);
+      expect(succeeded.lastResult).not.toBe(failedResult);
     });
   });
 
@@ -125,21 +175,37 @@ describe("session store", () => {
 
   it("start() returns true and the snapshot reflects it", () => {
     expect(session.getSnapshot().status).toBe("idle");
-    expect(session.start("Ethereum_Sepolia", "Arc_Testnet", "1")).toBe(true);
+    expect(session.start("Ethereum_Sepolia", "Arc_Testnet", "1", false)).toBe(true);
     expect(session.getSnapshot().status).toBe("bridging");
   });
 
   it("start() refuses a second concurrent bridge — one operation at a time, survives a closed window", () => {
-    expect(session.start("Ethereum_Sepolia", "Arc_Testnet", "1")).toBe(true);
-    expect(session.start("Base_Sepolia", "Arc_Testnet", "2")).toBe(false);
+    expect(session.start("Ethereum_Sepolia", "Arc_Testnet", "1", false)).toBe(true);
+    expect(session.start("Base_Sepolia", "Arc_Testnet", "2", false)).toBe(false);
     expect(session.getSnapshot().source).toBe("Ethereum_Sepolia");
+  });
+
+  it("start() with retry: false clears any lastResult from a previous, unrelated bridge", () => {
+    session.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
+    session.finish(failedResult); // an unrelated bridge finishes with a result
+    session.start("Base_Sepolia", "Arc_Testnet", "9", false); // a brand-new transfer, not a retry
+    expect(session.getSnapshot().lastResult).toBeNull();
+  });
+
+  it("start() with retry: true keeps the previous lastResult", () => {
+    session.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
+    session.fail("first attempt failed");
+    session.start("Ethereum_Sepolia", "Arc_Testnet", "1", true);
+    // fail() never sets lastResult (see the reducer test above), so this only proves retry:true keeps
+    // whatever was already there rather than resetting it — asserted precisely via the reducer tests.
+    expect(session.getSnapshot().status).toBe("bridging");
   });
 
   it("finish() only takes effect once bridging", () => {
     session.finish(result);
     expect(session.getSnapshot().status).toBe("idle");
 
-    session.start("Ethereum_Sepolia", "Arc_Testnet", "1");
+    session.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
     session.finish(result);
     expect(session.getSnapshot()).toMatchObject({ status: "done", result });
   });
@@ -148,7 +214,7 @@ describe("session store", () => {
     session.dismiss(); // idle already — no-op
     expect(session.getSnapshot().status).toBe("idle");
 
-    session.start("Ethereum_Sepolia", "Arc_Testnet", "1");
+    session.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
     session.dismiss(); // still bridging — no-op
     expect(session.getSnapshot().status).toBe("bridging");
 
@@ -166,7 +232,7 @@ describe("session store's beforeunload guard", () => {
   it("start() registers a beforeunload listener on the injected target", () => {
     const target = fakeTarget();
     const s = createBridgeSession(target);
-    s.start("Ethereum_Sepolia", "Arc_Testnet", "1");
+    s.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
     expect(target.addEventListener).toHaveBeenCalledTimes(1);
     expect(target.addEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
   });
@@ -174,7 +240,7 @@ describe("session store's beforeunload guard", () => {
   it("finish() removes the listener start() registered", () => {
     const target = fakeTarget();
     const s = createBridgeSession(target);
-    s.start("Ethereum_Sepolia", "Arc_Testnet", "1");
+    s.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
     s.finish(result);
     expect(target.removeEventListener).toHaveBeenCalledTimes(1);
     expect(target.removeEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
@@ -183,7 +249,7 @@ describe("session store's beforeunload guard", () => {
   it("fail() removes the listener start() registered", () => {
     const target = fakeTarget();
     const s = createBridgeSession(target);
-    s.start("Ethereum_Sepolia", "Arc_Testnet", "1");
+    s.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
     s.fail("oops");
     expect(target.removeEventListener).toHaveBeenCalledTimes(1);
     expect(target.removeEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
@@ -200,7 +266,7 @@ describe("session store's beforeunload guard", () => {
 
   it("works with no target at all (SSR / a test that passes undefined) — no-ops instead of throwing", () => {
     const s = createBridgeSession(undefined);
-    expect(() => s.start("Ethereum_Sepolia", "Arc_Testnet", "1")).not.toThrow();
+    expect(() => s.start("Ethereum_Sepolia", "Arc_Testnet", "1", false)).not.toThrow();
     expect(() => s.finish(result)).not.toThrow();
   });
 });
@@ -211,7 +277,7 @@ describe("session store notifies subscribers", () => {
     const listener = vi.fn();
     const unsubscribe = s.subscribe(listener);
 
-    s.start("Ethereum_Sepolia", "Arc_Testnet", "1");
+    s.start("Ethereum_Sepolia", "Arc_Testnet", "1", false);
     expect(listener).toHaveBeenCalledTimes(1);
 
     s.finish(result);
@@ -220,7 +286,7 @@ describe("session store notifies subscribers", () => {
     s.dismiss();
     expect(listener).toHaveBeenCalledTimes(3);
 
-    s.start("Base_Sepolia", "Arc_Testnet", "5");
+    s.start("Base_Sepolia", "Arc_Testnet", "5", false);
     s.fail("nope");
     expect(listener).toHaveBeenCalledTimes(5);
 
