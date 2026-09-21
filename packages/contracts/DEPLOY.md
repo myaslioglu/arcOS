@@ -104,6 +104,18 @@ fails, produce the standard JSON input for that contract and upload it in the ex
 
 Replace each `<...-address>` with the address of the contract you're verifying.
 
+The explorer's "Verify & publish" form also has a field for the ABI-encoded constructor arguments —
+it does not derive them from the standard-JSON input above, so paste the matching `cast abi-encode`
+output into that field for each contract:
+
+    npx cast abi-encode "constructor(address,address)" <deployer-address> $ARCOS_FEE_RECIPIENT   # FeeController
+    npx cast abi-encode "constructor(address)" <FeeController-address>                           # TokenFactory
+    npx cast abi-encode "constructor(address)" <FeeController-address>                           # Multisend
+
+Each command prints one `0x`-prefixed hex string. Some Blockscout forms want it WITH the leading `0x`
+(paste as printed); others want it bare — if the form's field is labeled "hex-encoded" without
+mentioning `0x`, or it rejects the value as printed, strip the leading `0x` and paste the rest.
+
 Before mainnet: every test passes, the testnet deployment has been used end to end from the app, and
 `ARCOS_OWNER` is a wallet you can't lose.
 
