@@ -265,6 +265,35 @@ text matches this if it happens to come up while running the rest of this sectio
     Mint, Drop, Swap and Bridge with their wallet/deployment gates temporarily bypassed locally
     and reverted.)
 
+## Final fix wave G
+
+49. Drop, "Another token" with an unresolved address: pick "Another token", leave the address
+    field empty, and paste a few valid recipient rows. Expect: Send reads "Enter the token's
+    address first." and is disabled — the row/total preview never falls back to treating the list
+    as native USDC. Start typing a real ERC-20 address: once it's a syntactically valid address
+    the label changes to "Reading the token…" (still disabled) until its symbol/decimals resolve;
+    only then does Send enable and show the real token's symbol in the total. At no point during
+    this should the app be sendable as, or quote, native USDC.
+50. Drop, the unconfirmed-batch panel: send a list of at least one batch, and right after approving
+    the transaction in the wallet extension (before its receipt can be read) cut network access —
+    turn off Wi-Fi, or use the browser devtools' "offline" throttling — so the confirmation never
+    comes back. Expect: the result panel shows a "This batch was sent but not confirmed" section
+    with that batch's own rows (not the whole original list) and an explorer link for that batch's
+    own transaction hash, plus a "Copy these rows" button. Click "It landed — I checked": the
+    section disappears and those rows are NOT added back to the textarea. Repeat the drop and this
+    time click "It didn't land — put these rows back in the list": the rows ARE appended to the
+    textarea, ready to resend; close and reopen the Drop window before clicking either button and
+    confirm the section is still there; clicking either button again afterward does nothing further
+    (the rows never duplicate in the list).
+51. Mint and Drop refuse a network switch before the wallet opens: connect on Arc Testnet, open
+    Mint (or Drop) and fill in valid parameters, then switch the wallet extension to a different
+    network WITHOUT reloading the page or window. Click Create token (or Send): the app shows "Your
+    wallet is on a different network. Switch to Arc and try again." and no wallet prompt ever
+    appears. For Drop specifically, paste a list long enough to span at least two batches, let batch
+    1 send successfully, then switch networks before approving batch 2: batch 2 is refused the same
+    way (checked live, not just once at the start of the whole send) rather than being signed on the
+    wrong chain.
+
 ## Before mainnet — gate list
 
 - [ ] Every testnet item above passes.
