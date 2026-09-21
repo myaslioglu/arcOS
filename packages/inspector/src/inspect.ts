@@ -78,6 +78,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   let proxyImpl: Address | null = null;
   let logicCode: string | null;
   let logicGap: LogicGap | null = null;
+  /** The address the scored code was fetched FROM, when that isn't this token itself. Whatever the
+   * engine resolves as "the logic" has to answer for itself before it can be scored — see `vet`. */
+  let logicFrom: Address | null = null;
 
   /** Reads the code at a resolved logic address. A thrown read ("couldn't read it") and an empty
    * answer ("that address holds no code") both leave nothing to score, but they aren't the same
@@ -90,6 +93,29 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     } catch {
       return [null, "logic-unreadable"];
     }
+  };
+
+  type ProxySlots = { read: boolean; impl: Address | null; beacon: Address | null };
+  const readProxySlots = async (at: Address): Promise<ProxySlots> => {
+    try {
+      const [impl, beacon] = await Promise.all([reader.getStorageAt(at, IMPL_SLOT), reader.getStorageAt(at, BEACON_SLOT)]);
+      return { read: true, impl: addressFromSlot(impl), beacon: addressFromSlot(beacon) };
+    } catch {
+      return { read: false, impl: null, beacon: null };
+    }
+  };
+
+  /**
+   * One rule for every address the engine resolves as "the logic": it is only the logic if it
+   * isn't a proxy in its own right. A TransparentUpgradeableProxy, most BeaconProxy builds and any
+   * proxy with a function of its own all have a dispatcher, so "has no dispatcher" catches none of
+   * them — its EIP-1967 slots and its clone shape do. One hop is all this engine follows, so a
+   * second one is simply unidentified; and a slot that wouldn't read leaves "it isn't a proxy" as
+   * an assumption, which is not something to score a report on.
+   */
+  const vet = (codeAt: string, slots: ProxySlots): LogicGap | null => {
+    if (!slots.read) return "logic-unreadable";
+    return minimalProxyTarget(codeAt) || slots.impl || slots.beacon ? "logic-unidentified" : null;
   };
 
   if (cloneOf === null) {
@@ -112,8 +138,10 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       } else {
         proxyImpl = implSlot ?? (await beaconImplementation(reader, beaconSlot));
         [logicCode, logicGap] = await readLogic(proxyImpl);
+        logicFrom = proxyImpl;
       }
     } else {
+      // This address's own code, and its own slots were just read and are unset.
       logicCode = code;
     }
   } else if (!cloneResolved) {
@@ -126,25 +154,32 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // The clone's target was fetched — check whether the TARGET is itself an upgradeable proxy.
     // A slot read that THREW says nothing: without it, "no slot is set" is an assumption, not a
     // reading, so `checkProxy` must not turn it into "not upgradeable".
-    const readTargetSlot = (slot: typeof IMPL_SLOT | typeof BEACON_SLOT) =>
-      reader.getStorageAt(cloneOf, slot).catch(() => {
-        targetSlotsRead = false;
-        return null;
-      });
-    const [tImpl, tBeacon] = await Promise.all([readTargetSlot(IMPL_SLOT), readTargetSlot(BEACON_SLOT)]);
-    cloneTargetIsProxy = slotSet(tImpl) || slotSet(tBeacon);
+    const targetSlots = await readProxySlots(cloneOf);
+    targetSlotsRead = targetSlots.read;
+    cloneTargetIsProxy = targetSlots.impl !== null || targetSlots.beacon !== null;
     if (!cloneTargetIsProxy) {
-      logicCode = cloneImplCode;
+      // The target's slots have just been read, so `vet` only has the clone-of-a-clone shape (and
+      // the unread-slot case) left to rule out.
+      logicGap = vet(cloneImplCode!, targetSlots);
+      logicCode = logicGap === null ? cloneImplCode : null;
     } else {
       // One level of further resolution is enough — a proxy-of-a-proxy-of-a-proxy stays unknown.
       // A beacon slot holds the BEACON's address, not the logic's, so it needs its own call.
-      const grandAddr = addressFromSlot(tImpl) ?? (await beaconImplementation(reader, addressFromSlot(tBeacon)));
+      const grandAddr = targetSlots.impl ?? (await beaconImplementation(reader, targetSlots.beacon));
       [logicCode, logicGap] = await readLogic(grandAddr);
+      logicFrom = grandAddr;
     }
   }
 
-  // Code that delegates calls but resolves to no known clone target or EIP-1967 slot: the engine
-  // never read the code that actually runs, so it must not score anything downstream of it.
+  // Everything resolved from somewhere else has to answer for itself before it can be scored.
+  if (logicCode !== null && logicFrom !== null) {
+    const gap = vet(logicCode, await readProxySlots(logicFrom));
+    if (gap !== null) {
+      logicCode = null;
+      logicGap = gap;
+    }
+  }
+
   // The ONE value behind both `proxy`'s upgradeability fail and R1's block on the logic checks.
   const upgradeable = cloneOf === null ? topSlotsSet : cloneTargetIsProxy;
   // Whose slots make it upgradeable — this address's own, or the clone target's. That is also
@@ -156,18 +191,11 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     ? await reader.getStorageAt(upgradeableAt, ADMIN_SLOT).then(addressFromSlot, () => null)
     : null;
 
+  // Code that delegates calls but resolves to no known clone target or EIP-1967 slot. `checkProxy`
+  // reports this shape on its own; what it must NOT do is discard the contract's own dispatcher,
+  // whose privileged selectors are real evidence. Everything it can't vouch for is blocked by the
+  // DELEGATECALL rule below instead — the same rule on every path.
   const forwardsToUnidentifiedCode = cloneOf === null && !topSlotsSet && usesOpcode(code, DELEGATECALL);
-  if (forwardsToUnidentifiedCode) {
-    logicCode = null;
-    logicGap = "delegates-to-unidentified";
-  }
-  // Last net, for every path above: code with no function dispatcher at all that still delegates
-  // calls is another trampoline, not the logic — whatever chain of proxies led here wasn't followed
-  // to the end, so there is nothing to score.
-  if (logicCode !== null && extractSelectors(logicCode).size === 0 && usesOpcode(logicCode, DELEGATECALL)) {
-    logicCode = null;
-    logicGap = "logic-unidentified";
-  }
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -209,10 +237,15 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const abiForPrivileges = cloneOf !== null ? null : topSlotsSet ? (implContract?.abi ?? null) : (contract?.abi ?? null);
   const found: Privilege[] | null = logicCode === null ? null : combinePrivileges(abiForPrivileges, selectors);
 
-  // R1: what stops the three logic checks from reaching a `pass` — see `LogicBlock`. Applied after
-  // the checks, in one place, so no check can be given a new pass path that quietly escapes it.
+  // What stops the three logic checks from reaching a `pass` — see `LogicBlock` for each reason and
+  // why they rank this way. Applied after the checks, in one place, so no check can grow a new
+  // pass path that quietly escapes it. (`logicCode === null` needs nothing: those checks already
+  // answer `unknown` from `logicGap`.)
   const block: LogicBlock | null =
-    logicCode !== null && upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt } : null;
+    logicCode === null ? null
+    : usesOpcode(logicCode, DELEGATECALL) ? { kind: "delegatecall" }
+    : upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt }
+    : null;
   const gate = (f: Finding): Finding => gateLogicPass(input, f, block);
 
   const findings = await Promise.all([

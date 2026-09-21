@@ -326,13 +326,13 @@ describe("inspect", () => {
   it("treats a non-canonical delegatecall trampoline as unidentified, not as a clean pass", async () => {
     const trampoline = `0x73${IMPL.slice(2)}f400`; // PUSH20 impl · DELEGATECALL · STOP — not a canonical EIP-1167 clone
     const r = await run({ code: { [TOKEN]: trampoline, [IMPL]: MINTABLE } });
-    const expected = { status: "unknown", title: "This contract forwards calls to code that couldn't be identified" };
-    expect(find(r, "proxy")).toMatchObject(expected);
-    expect(find(r, "privileges")).toMatchObject(expected);
-    expect(find(r, "prevrandao")).toMatchObject(expected);
-    // No owner function was found either, but the logic that would reveal one was never read —
-    // that must not read as "confirmed no owner".
-    expect(find(r, "ownership").status).toBe("unknown");
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "This contract forwards calls to code that couldn't be identified" });
+    // No owner function and nothing privileged was found either, but all three findings would rest
+    // on a dispatcher this contract doesn't have, in front of code it runs but this scan can't see.
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+      expect([id, find(r, id).title]).toEqual([id, "Runs code this check can't see"]);
+    }
   });
 
   it("fails a canonical clone whose target is itself an upgradeable proxy, instead of trusting the clone's own pass", async () => {
@@ -526,6 +526,60 @@ describe("inspect", () => {
     });
     expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  // --- Wave H: the resolved logic has to answer for itself ---
+  //
+  // Whatever address the engine ends up calling "the logic", it is only the logic if it isn't a
+  // proxy in its own right, and the scan can only vouch for code it can actually see.
+
+  it("never scores a resolved implementation that is a proxy itself, dispatcher or no dispatcher", async () => {
+    // IMPL is a TransparentUpgradeableProxy-shaped contract: one function of its own (admin()) in
+    // front of a DELEGATECALL, so it escapes any "no dispatcher at all" net.
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: "0x63f851a440f400", [GRAND]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${IMPL}:${IMPL_SLOT}`]: slotWith(GRAND) },
+    });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+    }
+    expect(find(r, "privileges").detail).toMatch(/further proxy/);
+  });
+
+  it("says unknown when a resolved implementation's own proxy slots can't be read", async () => {
+    // An unread slot is not an unset one: without it, "this implementation isn't itself a proxy"
+    // is an assumption, and everything scored from its code rests on that assumption.
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: PLAIN },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+      storageErrors: { [`${IMPL}:${IMPL_SLOT}`]: new Error("ETIMEDOUT") },
+    });
+    expect(find(r, "privileges")).toMatchObject({ status: "unknown", title: "Couldn't read the contract's logic" });
+    expect(find(r, "prevrandao").status).toBe("unknown");
+  });
+
+  it("prefers unknown over R1's warn when the logic it would judge can run code it can't see", async () => {
+    // A UUPS implementation contains a DELEGATECALL and sits behind an upgradeable proxy, so both
+    // rules apply. "This might change later" is the weaker statement; "I can't see what it runs"
+    // is the true one.
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: "0x63a9059cbbf400" }, // PUSH4 transfer · DELEGATECALL · STOP
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${ADMIN_SLOT}`]: slotWith(OWNER) },
+    });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+      expect([id, find(r, id).title]).toEqual([id, "Runs code this check can't see"]);
+    }
+  });
+
+  it("keeps what it did see in code that delegates: the mint still fails, nothing else passes", async () => {
+    // PUSH4 transfer · PUSH4 mint(address,uint256) · DELEGATECALL · STOP. The dispatcher is this
+    // contract's own and what it holds is real evidence; only the would-be passes are blocked.
+    const r = await run({ code: { [TOKEN]: "0x63a9059cbb6340c10f19f400" }, reads: { [`${TOKEN}.owner()`]: OWNER } });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+    expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
+    expect(find(r, "prevrandao")).toMatchObject({ status: "unknown", title: "Runs code this check can't see" });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "This contract forwards calls to code that couldn't be identified" });
   });
 
   // --- Wave H: with both EIP-1967 slots set, which one runs isn't storage's to say ---

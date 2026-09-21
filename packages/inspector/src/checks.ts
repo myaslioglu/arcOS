@@ -12,11 +12,11 @@
  *   owner() on logic that WAS read and has no `grantRole`: with AccessControl in the code, a
  *   renounced Ownable leaves the roles untouched, so it's reported as role-based admin (a warn).
  * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone or an
- *   EIP-1967 proxy whose implementation is unreachable, points at empty code or is itself a proxy,
- *   or code that delegates calls to a target this check couldn't identify at all); or privileged
- *   functions were found but the owner is unknown, or there's no owner function at all (can't tell
- *   if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's bytecode and
- *   ABI, never on its own trampoline, which has no dispatcher and so would look privilege-free.
+ *   EIP-1967 proxy whose implementation is unreachable, points at empty code, is itself a proxy, or
+ *   can't be picked out because both proxy slots are set); or privileged functions were found but
+ *   the owner is unknown, or there's no owner function at all (can't tell if they're reachable
+ *   either way). A proxy is always judged on its IMPLEMENTATION's bytecode and ABI, never on its
+ *   own trampoline, which has no dispatcher and so would look privilege-free.
  * - proxy: a storage-read failure on the top-level address propagates and is caught by the
  *   orchestrator's guard, so "Not a proxy" only ever rests on slots that were actually read; an
  *   EIP-1167 clone whose implementation couldn't be fetched at all (a transport failure) is
@@ -43,10 +43,11 @@
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  *
  * On top of all of that, ownership, privileges and prevrandao are statements about code, so a
- * `pass` from any of them is conditional on that code being the code that will run — see
- * `LogicBlock` and `gateLogicPass`: when the logic can be replaced (anything upgradeable), a
- * would-be pass becomes a `warn` naming who can replace it. Their `fail`/`warn` findings are
- * about the logic running NOW and stand unchanged.
+ * `pass` from any of them is conditional on the engine having seen the code that will actually run
+ * — see `LogicBlock` and `gateLogicPass`. When the logic can be replaced (anything upgradeable), a
+ * would-be pass becomes a `warn` naming who can replace it; when the scored code can run code from
+ * elsewhere (DELEGATECALL), it becomes `unknown`. Their `fail`/`warn` findings describe the logic
+ * running NOW and stand unchanged.
  */
 import { parseAbi } from "viem";
 import { BURN_ADDRESSES, type Address } from "@arcos/chain";
@@ -77,10 +78,9 @@ const FORWARDS_TO_UNIDENTIFIED_DETAIL =
  * off the code that actually runs — every one of these is `unknown`, never a pass. `null` means the
  * logic code WAS read.
  */
-export type LogicGap = "delegates-to-unidentified" | "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous";
+export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous";
 
 const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
-  "delegates-to-unidentified": { title: FORWARDS_TO_UNIDENTIFIED_TITLE, detail: FORWARDS_TO_UNIDENTIFIED_DETAIL },
   "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
   "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
   "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
@@ -97,24 +97,34 @@ const isBurn = (a: string) => BURN_ADDRESSES.some((b) => lower(b) === lower(a));
 const shortAddress = (a: string): string => (a.length <= 12 ? a : `${a.slice(0, 6)}…${a.slice(-4)}`);
 
 /**
- * R1 — why a would-be `pass` about what this contract's logic DOES can't stand, even though the
- * check found nothing wrong with the code it read.
+ * Why a would-be `pass` about what this contract's logic DOES can't stand, even though the check
+ * found nothing wrong with the code it read.
  *
- * `mutable`: the code can be replaced — this address's own EIP-1967 slots are set, or it is a
+ * `mutable` (R1): the code can be replaced — this address's own EIP-1967 slots are set, or it is a
  * clone of a contract whose are (exactly the condition `checkProxy` fails on, read from the same
  * value so the two can never disagree). "No privileged functions", "Ownership is renounced", "No
  * owner function" and "Doesn't rely on on-chain randomness" are then statements about code that
  * can be different tomorrow. They stay true of the logic running NOW, which is why this downgrades
  * to a `warn` naming who can replace it rather than to an `unknown`.
+ *
+ * `delegatecall`: the code being scored can run code from another address, which this scan never
+ * sees, so "nothing of the sort is in here" doesn't rule it out. Nothing is known about the code
+ * that isn't visible, so this is `unknown`, and it outranks `mutable` — a UUPS implementation is
+ * both, and "I can't see what it runs" is the stronger fact.
  */
-export type LogicBlock = { kind: "mutable"; admin: Address | null; proxy: Address };
+export type LogicBlock = { kind: "delegatecall" } | { kind: "mutable"; admin: Address | null; proxy: Address };
 
 /** Short on purpose: the OG card shows titles only. The address and the reasoning go in `detail`. */
-const BLOCK_TITLE: Record<LogicBlock["kind"], Partial<Record<Finding["id"], string>>> = {
-  mutable: {
-    ownership: "Control can be added by an upgrade",
-    privileges: "Privileges can be added by an upgrade",
-    prevrandao: "Randomness can be added by an upgrade",
+const MUTABLE_TITLE: Partial<Record<Finding["id"], string>> = {
+  ownership: "Control can be added by an upgrade",
+  privileges: "Privileges can be added by an upgrade",
+  prevrandao: "Randomness can be added by an upgrade",
+};
+
+const OPAQUE_LOGIC: Record<"delegatecall", { title: string; detail: string }> = {
+  delegatecall: {
+    title: "Runs code this check can't see",
+    detail: "This contract can run code from another address (DELEGATECALL), which this check can't see — so what it found here rules nothing out.",
   },
 };
 
@@ -125,14 +135,18 @@ const BLOCK_TITLE: Record<LogicBlock["kind"], Partial<Record<Finding["id"], stri
  */
 export function gateLogicPass(input: InspectInput, finding: Finding, block: LogicBlock | null): Finding {
   if (block === null || finding.status !== "pass") return finding;
-  const who = block.admin ? `the proxy admin ${shortAddress(block.admin)}` : "whoever controls upgrades";
-  return {
-    ...finding,
-    status: "warn",
-    title: BLOCK_TITLE[block.kind][finding.id] ?? "An upgrade can change this",
-    detail: `${finding.detail} But ${who} can replace this contract's code, so it only describes the logic running now.`,
-    evidenceUrl: `${input.explorerBase}/address/${block.proxy}?tab=contract`,
-  };
+  if (block.kind === "mutable") {
+    const who = block.admin ? `the proxy admin ${shortAddress(block.admin)}` : "whoever controls upgrades";
+    return {
+      ...finding,
+      status: "warn",
+      title: MUTABLE_TITLE[finding.id] ?? "An upgrade can change this",
+      detail: `${finding.detail} But ${who} can replace this contract's code, so it only describes the logic running now.`,
+      evidenceUrl: `${input.explorerBase}/address/${block.proxy}?tab=contract`,
+    };
+  }
+  const { title, detail } = OPAQUE_LOGIC[block.kind];
+  return { ...finding, status: "unknown", title, detail };
 }
 
 /** Rounds to at most one decimal and drops a trailing ".0" — "30%", "50.4%", never "50.0%". */
