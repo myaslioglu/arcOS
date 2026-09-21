@@ -3,8 +3,8 @@ import type { Address } from "@arcos/chain";
 import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, addressFromSlot, beaconImplementation, checkHolders, checkLiquidity,
-  checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified, erc20Abi, findPools,
-  gateLogicPass, resolveOwner, slotSet, type LogicBlock, type LogicGap,
+  checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified, dispatcherVisible,
+  erc20Abi, findPools, gateLogicPass, resolveOwner, slotSet, type LogicBlock, type LogicGap,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import type { ContractInfo, Holder, TokenInfo } from "./explorer";
@@ -244,6 +244,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const block: LogicBlock | null =
     logicCode === null ? null
     : usesOpcode(logicCode, DELEGATECALL) ? { kind: "delegatecall" }
+    : !dispatcherVisible(abiForPrivileges, selectors) ? { kind: "dispatcher" }
     : upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt }
     : null;
   const gate = (f: Finding): Finding => gateLogicPass(input, f, block);

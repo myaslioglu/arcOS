@@ -89,6 +89,7 @@ const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 const GRANT_ROLE = "0x2f2ff15d";
+const ERC20_TRANSFER = "0xa9059cbb";
 const lower = (a: string) => a.toLowerCase();
 const isBurn = (a: string) => BURN_ADDRESSES.some((b) => lower(b) === lower(a));
 
@@ -111,8 +112,23 @@ const shortAddress = (a: string): string => (a.length <= 12 ? a : `${a.slice(0, 
  * sees, so "nothing of the sort is in here" doesn't rule it out. Nothing is known about the code
  * that isn't visible, so this is `unknown`, and it outranks `mutable` — a UUPS implementation is
  * both, and "I can't see what it runs" is the stronger fact.
+ *
+ * `dispatcher` (R2): the scan can't be shown to have read this contract's functions at all — see
+ * `dispatcherVisible`. Also `unknown`, and it outranks `mutable` for the same reason.
  */
-export type LogicBlock = { kind: "delegatecall" } | { kind: "mutable"; admin: Address | null; proxy: Address };
+export type LogicBlock = { kind: "delegatecall" } | { kind: "dispatcher" } | { kind: "mutable"; admin: Address | null; proxy: Address };
+
+/**
+ * R2 — a scan is evidence of ABSENCE only if it can be shown to have seen this contract's
+ * dispatcher. Either the explorer publishes the functions of the address being scored (a verified
+ * ABI with entries in it), or the bytecode scan found the ERC-20 `transfer(address,uint256)`
+ * selector: the thing being inspected is a token, so a scan that can't even see `transfer` has no
+ * standing to say whether there is a `mint`. Vyper's dense dispatcher, Huff, a fallback-only
+ * contract and via-IR jump tables all land here, as does `0x00`.
+ */
+export function dispatcherVisible(abi: readonly unknown[] | null, selectors: Set<string>): boolean {
+  return (abi !== null && abi.length > 0) || selectors.has(ERC20_TRANSFER);
+}
 
 /** Short on purpose: the OG card shows titles only. The address and the reasoning go in `detail`. */
 const MUTABLE_TITLE: Partial<Record<Finding["id"], string>> = {
@@ -121,10 +137,14 @@ const MUTABLE_TITLE: Partial<Record<Finding["id"], string>> = {
   prevrandao: "Randomness can be added by an upgrade",
 };
 
-const OPAQUE_LOGIC: Record<"delegatecall", { title: string; detail: string }> = {
+const OPAQUE_LOGIC: Record<"delegatecall" | "dispatcher", { title: string; detail: string }> = {
   delegatecall: {
     title: "Runs code this check can't see",
     detail: "This contract can run code from another address (DELEGATECALL), which this check can't see — so what it found here rules nothing out.",
+  },
+  dispatcher: {
+    title: "Couldn't read this contract's functions",
+    detail: "No ERC-20 transfer function could be found in this contract's bytecode and no verified ABI lists its functions, so this scan can't claim to have seen what it does or doesn't expose.",
   },
 };
 

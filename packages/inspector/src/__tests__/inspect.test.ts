@@ -19,7 +19,11 @@ const GRAND = "0x9999999999999999999999999999999999999999";
 const BEACON = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 const PLAIN = "0x63a9059cbb00"; // PUSH4 transfer · STOP
-const MINTABLE = "0x6340c10f1900"; // PUSH4 mint(address,uint256) · STOP
+// PUSH4 transfer · PUSH4 mint(address,uint256) · STOP. The transfer selector is what makes this a
+// readable ERC-20 dispatcher rather than four bytes of something (see R2 / `dispatcherVisible`):
+// without it no absence could be claimed from this fixture, and every case below is about what the
+// presence of `mint` means, not about whether the scan could read the contract at all.
+const MINTABLE = "0x63a9059cbb6340c10f1900";
 const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] };
 const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
@@ -526,6 +530,41 @@ describe("inspect", () => {
     });
     expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  // --- Wave H, R2: "nothing found" is only evidence once the dispatcher was demonstrably read ---
+
+  it("claims nothing about code whose dispatcher it never recognised", async () => {
+    // A single STOP: no selectors, so every "nothing of the sort in here" finding would be about a
+    // scan that read nothing. Vyper's dense dispatcher, Huff, a fallback-only contract and via-IR
+    // jump tables all reach this engine the same way.
+    const r = await run({ code: { [TOKEN]: "0x00" } });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+      expect([id, find(r, id).title]).toEqual([id, "Couldn't read this contract's functions"]);
+    }
+  });
+
+  it("still reports a privileged selector it did find, even with no transfer function in sight", async () => {
+    // PUSH4 mint(address,uint256) · STOP. Nothing here proves the dispatcher was read in full, so
+    // no absence can be claimed — but what WAS seen is evidence, and it still fails.
+    const r = await run({ code: { [TOKEN]: "0x6340c10f1900" }, reads: { [`${TOKEN}.owner()`]: OWNER } });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+    expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
+  });
+
+  it("accepts a verified ABI as proof the functions were read when the bytecode scan can't see them", async () => {
+    // The way out for a contract whose dispatcher this engine can't parse: the explorer publishes
+    // its functions, so "there is no mint here" rests on something after all.
+    const ex = explorer({
+      contract: async () => ({
+        verified: true, name: "Vyper", abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable" }],
+        proxyType: null, implementations: [],
+      }),
+    });
+    const r = await run({ code: { [TOKEN]: "0x00" } }, ex);
+    expect(find(r, "privileges")).toMatchObject({ status: "pass", title: "No privileged functions found" });
+    expect(find(r, "ownership")).toMatchObject({ status: "pass", title: "No owner function" });
   });
 
   // --- Wave H: the resolved logic has to answer for itself ---
