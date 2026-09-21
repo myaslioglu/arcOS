@@ -58,29 +58,70 @@ Paste the key at the hidden prompt, then choose a password. Check the address:
 
    Replace `<FeeController-address-from-step-2>` with the `FeeController` address printed in step 2, and `<owner-keystore-name>` with whatever name the owner used when they imported their own key with `cast wallet import`.
 
-4. Verify on the explorer (repeat per contract; FeeController takes `constructor(address,address)`):
+4. Verify on the explorer — repeat per contract. Replace every `<X-address-from-step-2>` placeholder
+   with the matching address printed in step 2, and `<deployer-address>` with the address printed by
+   `npx cast wallet address --account arcos-deployer` above.
+
+   **`FeeController`'s first constructor argument is the deployer, not `ARCOS_OWNER`.** The script
+   deploys it owned by the deployer (`new FeeController(deployer, recipient)`, see
+   `script/DeployR0.s.sol`) and only transfers ownership to `ARCOS_OWNER` afterward, in a separate
+   `transferOwnership` call — the constructor argument that has to match the deployed bytecode is
+   whichever address actually broadcast the deployment, not the final owner. Use
+   `<deployer-address>` here even when `ARCOS_OWNER` is a different address:
+
+       npx forge verify-contract <FeeController-address-from-step-2> src/FeeController.sol:FeeController \
+         --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
+         --constructor-args $(npx cast abi-encode "constructor(address,address)" <deployer-address> $ARCOS_FEE_RECIPIENT)
+
+   `TokenFactory` and `Multisend` each take one constructor argument — the `FeeController` address:
 
        npx forge verify-contract <TokenFactory-address-from-step-2> src/TokenFactory.sol:TokenFactory \
          --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
          --constructor-args $(npx cast abi-encode "constructor(address)" <FeeController-address-from-step-2>)
 
-   Again, replace `<TokenFactory-address-from-step-2>` and `<FeeController-address-from-step-2>` with the addresses printed in step 2.
+       npx forge verify-contract <Multisend-address-from-step-2> src/Multisend.sol:Multisend \
+         --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
+         --constructor-args $(npx cast abi-encode "constructor(address)" <FeeController-address-from-step-2>)
 
 5. Tell the agent the three addresses (they're public), or let it read them from
    `broadcast/DeployR0.s.sol/5042002/run-latest.json` (this path is relative to `packages/contracts`, where you're standing).
 
 ## Mainnet
 
-Same commands (still from `packages/contracts`) with `--rpc-url arc`, `--chain-id 5042` and `--verifier-url https://explorer.arc.io/api/`.
-The mainnet explorer API may refuse command-line clients (it sits behind a bot check). If verification fails,
-produce the standard JSON input and upload it in the explorer's "Verify & publish" page in your browser:
+Same commands (still from `packages/contracts`) with `--rpc-url arc`, `--chain-id 5042` and
+`--verifier-url https://explorer.arc.io/api/` — the same three `forge verify-contract` commands from
+step 4 above, once each for `FeeController` (`constructor(address,address)`: the deployer's address,
+then `ARCOS_FEE_RECIPIENT` — the deployer-not-`ARCOS_OWNER` note in step 4 applies here too),
+`TokenFactory` and `Multisend` (`constructor(address)`: the `FeeController` address).
 
-    npx forge verify-contract <deployed-contract-address> src/TokenFactory.sol:TokenFactory --show-standard-json-input > TokenFactory.input.json
+The mainnet explorer API may refuse command-line clients (it sits behind a bot check). If verification
+fails, produce the standard JSON input for that contract and upload it in the explorer's
+"Verify & publish" page in your browser instead — repeat for each of the three contracts:
 
-Replace `<deployed-contract-address>` with the address of the contract you're verifying.
+    npx forge verify-contract <FeeController-address> src/FeeController.sol:FeeController --show-standard-json-input > FeeController.input.json
+    npx forge verify-contract <TokenFactory-address> src/TokenFactory.sol:TokenFactory --show-standard-json-input > TokenFactory.input.json
+    npx forge verify-contract <Multisend-address> src/Multisend.sol:Multisend --show-standard-json-input > Multisend.input.json
+
+Replace each `<...-address>` with the address of the contract you're verifying.
 
 Before mainnet: every test passes, the testnet deployment has been used end to end from the app, and
 `ARCOS_OWNER` is a wallet you can't lose.
+
+## After wiring the addresses
+
+Once `ARCOS.<network>` in `packages/chain/src/addresses.ts` has the three real addresses, sanity-check
+that they're actually wired together — read-only, no private key needed:
+
+    npx cast call <TokenFactory-address> "feeController()(address)" --rpc-url arc_testnet
+    npx cast call <Multisend-address> "feeController()(address)" --rpc-url arc_testnet
+
+Both must print the same address, and it must equal the `feeController` address you put in
+`ARCOS.<network>`. (Swap `arc_testnet` for `arc`, and the testnet addresses for the mainnet ones,
+when checking a mainnet deployment.)
+
+This is the on-chain half of the address sanity check. The off-chain half — that the three addresses
+are each well-formed, checksummed, non-zero and pairwise distinct — is `checkArcosAddresses` in
+`packages/chain/src/addressSanity.ts` (pure, unit-tested, no RPC call, no network needed).
 
 ## What the agent still needs from you
 
