@@ -1,3 +1,5 @@
+import { cleanLabel } from "./label";
+
 export class ExplorerUnavailable extends Error {
   constructor(
     public readonly status: number | null,
@@ -74,7 +76,7 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
       const impls = Array.isArray(j.implementations) ? (j.implementations as unknown[]) : [];
       return {
         verified: j.is_verified === true,
-        name: str(j.name),
+        name: cleanLabel(str(j.name), 64),
         abi: Array.isArray(j.abi) ? (j.abi as unknown[]) : null,
         proxyType: str(j.proxy_type),
         implementations: impls
@@ -86,8 +88,8 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
       const j = (await get(`/tokens/${address}`)) as Json | null;
       if (!j) return null;
       return {
-        name: str(j.name),
-        symbol: str(j.symbol),
+        name: cleanLabel(str(j.name), 64),
+        symbol: cleanLabel(str(j.symbol), 32),
         decimals: int(j.decimals),
         totalSupply: str(j.total_supply),
         holdersCount: int(j.holders_count),
@@ -101,7 +103,7 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
         const it = obj(raw);
         const a = obj(it.address);
         const hash = str(a.hash);
-        return hash ? [{ address: hash, isContract: a.is_contract === true, name: str(a.name), value: big(it.value) }] : [];
+        return hash ? [{ address: hash, isContract: a.is_contract === true, name: cleanLabel(str(a.name), 64), value: big(it.value) }] : [];
       });
     },
     async tokenBalances(address) {
@@ -113,7 +115,7 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
         const hash = str(t.address_hash) ?? str(t.address);
         const decimals = int(t.decimals);
         if (t.type !== "ERC-20" || !hash || decimals === null) return [];
-        return [{ address: hash, name: str(t.name), symbol: str(t.symbol), decimals, value: big(it.value) }];
+        return [{ address: hash, name: cleanLabel(str(t.name), 64), symbol: cleanLabel(str(t.symbol), 32), decimals, value: big(it.value) }];
       });
     },
   };

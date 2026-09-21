@@ -64,6 +64,29 @@ describe("blockscoutSource", () => {
     expect(await src.tokenBalances(T)).toEqual([{ address: "0xCCC", name: "Duke", symbol: "DUKE", decimals: 18, value: 5n }]);
   });
 
+  it("cleans a zero-width space and a bidi override out of every name and symbol it returns", async () => {
+    const ZWSP = String.fromCharCode(0x200b); // zero-width space
+    const RLO = String.fromCharCode(0x202e); // right-to-left override
+    const src = blockscoutSource(API, fakeFetch({
+      [`/smart-contracts/${T}`]: json({
+        is_verified: true, name: `Du${ZWSP}ke`, abi: null, proxy_type: null, implementations: [],
+      }),
+      [`/tokens/${T}`]: json({
+        name: `${RLO}EKTA`, symbol: `USD${ZWSP}C`, decimals: "18", total_supply: "1", holders_count: 1,
+      }),
+      [`/tokens/${T}/holders`]: json({ items: [
+        { address: { hash: "0xAAA", is_contract: false, name: `Po${ZWSP}ol` }, value: "1" },
+      ] }),
+      [`/addresses/${T}/token-balances`]: json([
+        { token: { address_hash: "0xCCC", name: `${RLO}Duke`, symbol: `DUK${ZWSP}E`, decimals: "18", type: "ERC-20" }, value: "5" },
+      ]),
+    }));
+    expect((await src.contract(T)).name).toBe("Duke");
+    expect(await src.token(T)).toEqual({ name: "EKTA", symbol: "USDC", decimals: 18, totalSupply: "1", holdersCount: 1 });
+    expect((await src.topHolders(T))![0]!.name).toBe("Pool");
+    expect((await src.tokenBalances(T))[0]).toEqual({ address: "0xCCC", name: "Duke", symbol: "DUKE", decimals: 18, value: 5n });
+  });
+
   it("skips malformed array elements instead of throwing", async () => {
     const src = blockscoutSource(API, fakeFetch({
       [`/smart-contracts/${T}`]: json({ is_verified: true, name: "X", abi: null, proxy_type: null, implementations: [null, 7, { address_hash: "0xAAA" }] }),
