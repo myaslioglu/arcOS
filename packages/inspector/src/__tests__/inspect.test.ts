@@ -706,6 +706,16 @@ describe("inspect", () => {
 
   // --- Wave F item 2: a failed storage read is never "the target is not a proxy" ---
 
+  it("won't call a clone's logic unreplaceable when that logic runs code from somewhere it can't see", async () => {
+    // The clone itself can't be re-pointed, but "its logic can't be replaced" is a claim about the
+    // code that ends up running — and this implementation DELEGATECALLs to an address that isn't
+    // an EIP-1967 slot or a clone target, so whoever controls that address controls the behaviour.
+    // The top-level path has refused this since wave D; the clone path was still passing it.
+    const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: "0x63a9059cbbf400" } });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown" });
+    expect(find(r, "proxy").detail).toMatch(/delegate/i);
+  });
+
   it("says unknown, not 'not upgradeable', when a clone target's EIP-1967 slots can't be read", async () => {
     const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN }, storageError: new Error("ETIMEDOUT") });
     expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check whether this clone is upgradeable" });
@@ -853,6 +863,29 @@ describe("inspect", () => {
   it("passes verification when both the proxy and the implementation are verified", async () => {
     const r = await run(proxied, proxyOver(true));
     expect(find(r, "verified")).toMatchObject({ status: "pass", title: "Source code is verified" });
+  });
+
+  // Found by wave H's own pass-by-pass audit: the same defect as D7, on the paths D7 didn't reach.
+
+  it("won't call the source verified when which code the proxy runs can't even be told", async () => {
+    // Both EIP-1967 slots set: the explorer says this address's source is published, but what it
+    // publishes is the forwarding code, and which of the two implementations runs is unknown.
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: PLAIN, [BEACON]: PLAIN },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${BEACON_SLOT}`]: slotWith(BEACON) },
+    });
+    expect(find(r, "verified")).toMatchObject({ status: "unknown", title: "Couldn't check source verification" });
+  });
+
+  it("checks the implementation's record for an EIP-1167 clone too, not just the trampoline's", async () => {
+    const ex = explorer({
+      contract: async (a) =>
+        a.toLowerCase() === IMPL.toLowerCase()
+          ? { verified: false, name: null, abi: null, proxyType: null, implementations: [] }
+          : { verified: true, name: "Clone", abi: null, proxyType: null, implementations: [] },
+    });
+    const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN } }, ex);
+    expect(find(r, "verified")).toMatchObject({ status: "fail", title: "The code this proxy runs isn't verified" });
   });
 
   it("still fails verification when the explorer positively says the source isn't verified", async () => {

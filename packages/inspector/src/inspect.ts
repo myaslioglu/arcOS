@@ -75,12 +75,15 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   let topSlotsSet = false;
   let cloneTargetIsProxy = false;
   let targetSlotsRead = true;
-  let proxyImpl: Address | null = null;
   let logicCode: string | null;
   let logicGap: LogicGap | null = null;
-  /** The address the scored code was fetched FROM, when that isn't this token itself. Whatever the
-   * engine resolves as "the logic" has to answer for itself before it can be scored — see `vet`. */
-  let logicFrom: Address | null = null;
+  /** Where the code that runs lives, when that isn't this token's own code. `null` covers both
+   * "this token runs its own code" and "it demonstrably forwards, but to something that couldn't be
+   * identified" — `runsOtherCode` below tells those two apart. */
+  let logicAt: Address | null = null;
+  /** Set when `vet` has already been applied to `logicAt`: the clone path runs it inline with the
+   * slot read it has just made, and the general pass below would only repeat those two reads. */
+  let logicVetted = false;
 
   /** Reads the code at a resolved logic address. A thrown read ("couldn't read it") and an empty
    * answer ("that address holds no code") both leave nothing to score, but they aren't the same
@@ -136,9 +139,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
         logicCode = null;
         logicGap = "logic-ambiguous";
       } else {
-        proxyImpl = implSlot ?? (await beaconImplementation(reader, beaconSlot));
-        [logicCode, logicGap] = await readLogic(proxyImpl);
-        logicFrom = proxyImpl;
+        // A beacon slot holds the BEACON's address, not the logic's, so it needs its own call.
+        logicAt = implSlot ?? (await beaconImplementation(reader, beaconSlot));
+        [logicCode, logicGap] = await readLogic(logicAt);
       }
     } else {
       // This address's own code, and its own slots were just read and are unset.
@@ -162,18 +165,20 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       // the unread-slot case) left to rule out.
       logicGap = vet(cloneImplCode!, targetSlots);
       logicCode = logicGap === null ? cloneImplCode : null;
+      logicAt = cloneOf;
+      logicVetted = true;
     } else {
       // One level of further resolution is enough — a proxy-of-a-proxy-of-a-proxy stays unknown.
       // A beacon slot holds the BEACON's address, not the logic's, so it needs its own call.
       const grandAddr = targetSlots.impl ?? (await beaconImplementation(reader, targetSlots.beacon));
       [logicCode, logicGap] = await readLogic(grandAddr);
-      logicFrom = grandAddr;
+      logicAt = grandAddr;
     }
   }
 
   // Everything resolved from somewhere else has to answer for itself before it can be scored.
-  if (logicCode !== null && logicFrom !== null) {
-    const gap = vet(logicCode, await readProxySlots(logicFrom));
+  if (logicCode !== null && logicAt !== null && !logicVetted) {
+    const gap = vet(logicCode, await readProxySlots(logicAt));
     if (gap !== null) {
       logicCode = null;
       logicGap = gap;
@@ -196,6 +201,13 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   // whose privileged selectors are real evidence. Everything it can't vouch for is blocked by the
   // DELEGATECALL rule below instead — the same rule on every path.
   const forwardsToUnidentifiedCode = cloneOf === null && !topSlotsSet && usesOpcode(code, DELEGATECALL);
+  /** The scored logic runs code from an address this engine never identified. Read by the `proxy`
+   * check (a clone whose logic does this isn't "not replaceable" after all) and by the gate on the
+   * three logic checks — one fact, one place. */
+  const logicDelegates = logicCode !== null && usesOpcode(logicCode, DELEGATECALL);
+  /** This token demonstrably runs code that isn't its own: a clone, or its EIP-1967 slots are set.
+   * Whether that code was actually identified is `logicAt`. */
+  const runsOtherCode = cloneOf !== null || topSlotsSet;
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -210,12 +222,12 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, implContract, tokenInfo, holderPage, owner, poolScan, blockNumber] = await Promise.all([
+  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
-    // For a proxy, the ABI that describes what can be called is the IMPLEMENTATION's: Blockscout's
-    // record for the proxy address is the proxy's own, and "the proxy's ABI has no privileged
-    // functions" says nothing about the logic behind it.
-    proxyImpl && logicCode !== null ? ask<ContractInfo>(() => explorer!.contract(proxyImpl!)) : Promise.resolve(null),
+    // For anything that forwards, the record that matters is the one for the code that RUNS:
+    // Blockscout's record for a proxy or a clone address describes the forwarding code, and
+    // "the proxy's ABI has no privileged functions" says nothing about the logic behind it.
+    logicAt ? ask<ContractInfo>(() => explorer!.contract(logicAt!)) : Promise.resolve(null),
     ask<TokenInfo | null>(() => explorer!.token(address)),
     ask<HolderPage | null>(() => explorer!.topHolders(address)),
     resolveOwner(reader, address, selectors),
@@ -231,10 +243,10 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     readOr<bigint | null>("totalSupply", tryBig(tokenInfo?.totalSupply ?? null)),
   ]);
 
-  // The ABI is only evidence about the code that actually runs: the token's own for a plain
-  // contract, the implementation's for an EIP-1967 proxy, and none at all for a clone (whose
-  // explorer record describes the trampoline).
-  const abiForPrivileges = cloneOf !== null ? null : topSlotsSet ? (implContract?.abi ?? null) : (contract?.abi ?? null);
+  // The ABI is only evidence about the code that actually runs: this address's own record for a
+  // plain contract, and the resolved implementation's for anything that forwards (an EIP-1967
+  // proxy or an EIP-1167 clone) — never the forwarding contract's own.
+  const abiForPrivileges = runsOtherCode ? (logicContract?.abi ?? null) : (contract?.abi ?? null);
   const found: Privilege[] | null = logicCode === null ? null : combinePrivileges(abiForPrivileges, selectors);
 
   // What stops the three logic checks from reaching a `pass` — see `LogicBlock` for each reason and
@@ -243,19 +255,19 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   // answer `unknown` from `logicGap`.)
   const block: LogicBlock | null =
     logicCode === null ? null
-    : usesOpcode(logicCode, DELEGATECALL) ? { kind: "delegatecall" }
+    : logicDelegates ? { kind: "delegatecall" }
     : !dispatcherVisible(abiForPrivileges, selectors) ? { kind: "dispatcher" }
     : upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt }
     : null;
   const gate = (f: Finding): Finding => gateLogicPass(input, f, block);
 
   const findings = await Promise.all([
-    guard("verified", () => checkVerified(input, contract, proxyImpl && logicCode !== null ? proxyImpl : null, implContract)),
+    guard("verified", () => checkVerified(input, contract, runsOtherCode ? { at: logicAt, info: logicContract } : null)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
-      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, upgradeable, admin });
+      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, upgradeable, admin });
     }),
     guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),

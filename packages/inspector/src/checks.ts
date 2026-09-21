@@ -289,24 +289,31 @@ const finding = (id: Finding["id"], status: Finding["status"], title: string, de
  * Neither is "not verified": a `fail` here tells a reader the deployer never published the source,
  * so it has to rest on the explorer positively saying so.
  *
- * "Anyone can read what this contract does" is a claim about the code that RUNS, so for a proxy it
- * has to cover the implementation too — `logicAt`/`logic` carry that record when the engine
- * resolved one. A verified proxy in front of unverified logic is the shape that made this matter:
- * the reassuring line was true of 40 lines of forwarding code and false of everything behind it.
+ * "Anyone can read what this contract does" is a claim about the code that RUNS, so for a proxy or
+ * a clone it has to cover the implementation too. `logic` is `null` when this address runs its own
+ * code, and otherwise says where the code that runs lives (`at`, `null` when the engine knows this
+ * token forwards but couldn't identify where) and what the explorer has on it. A verified proxy in
+ * front of unverified logic is the shape that made this matter: the reassuring line was true of 40
+ * lines of forwarding code and false of everything behind it.
  */
-export function checkVerified(input: InspectInput, contract: ContractInfo | null, logicAt: Address | null = null, logic: ContractInfo | null = null): Finding {
+export type LogicVerification = { at: Address | null; info: ContractInfo | null };
+
+export function checkVerified(input: InspectInput, contract: ContractInfo | null, logic: LogicVerification | null = null): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=contract`;
   if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer didn't answer.", { evidenceUrl: url });
   if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });
   if (!contract.verified) return finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
-  if (logicAt === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
-  const logicUrl = `${input.explorerBase}/address/${logicAt}?tab=contract`;
-  if (logic === null || logic.verified === null) {
-    return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logicAt} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
+  if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
+  if (logic.at === null) {
+    return finding("verified", "unknown", "Couldn't check source verification", "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", { evidenceUrl: url });
   }
-  return logic.verified
-    ? finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logicAt}) are verified.`, { evidenceUrl: url })
-    : finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logicAt}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl });
+  const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
+  if (logic.info === null || logic.info.verified === null) {
+    return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
+  }
+  return logic.info.verified
+    ? finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url })
+    : finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl });
 }
 
 /**
@@ -404,6 +411,10 @@ export type ProxyResolution = {
   targetSlotsRead: boolean;
   /** DELEGATECALL is present but resolves to no known clone target or EIP-1967 slot. */
   forwardsToUnidentifiedCode: boolean;
+  /** The code finally scored as this token's logic contains a DELEGATECALL of its own. A clone is
+   * not re-pointable, but "its logic can't be replaced" is a claim about the code that ends up
+   * running, and whoever controls the address behind that DELEGATECALL controls exactly that. */
+  logicDelegates: boolean;
   /** The code this token runs can be replaced: its own EIP-1967 implementation or beacon slot is
    * set, or it is a clone of a contract whose is. THE value — `checkProxy`'s upgradeability `fail`
    * and R1's block on the logic checks (`LogicBlock`) both read this one field, so the report can
@@ -432,6 +443,9 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     }
     if (!r.targetSlotsRead) {
       return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
+    }
+    if (r.logicDelegates) {
+      return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
     }
     return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
   }
