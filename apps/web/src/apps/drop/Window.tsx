@@ -8,6 +8,7 @@ import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/she
 import { ConnectGate } from "@/components/ConnectGate";
 import { describeContractError } from "@/lib/contract-error";
 import { trackEvent } from "@/lib/analytics";
+import { shortAddress } from "@/lib/format";
 import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
 import { IssuesList } from "./IssuesList";
@@ -92,12 +93,15 @@ function Form({ params }: Pick<AppProps, "params">) {
       : [],
     query: { enabled: !!token },
   });
-  const symbol = token ? ((meta.data?.[0]?.result as string | undefined) ?? "…") : "USDC";
   // Distinguishes "still loading" from "the read failed" — either the whole multicall failed (meta.status
-  // === "error") or it succeeded but this particular call reverted (meta.data[1].status === "failure").
+  // === "error") or it succeeded but this particular call reverted (meta.data[N].status === "failure").
   // Mirrors how a failed fee read is already handled below: a dedicated message instead of an endless
   // "Reading…" state, and Send stays disabled either way.
+  const symbolFailed = token ? meta.status === "error" || meta.data?.[0]?.status === "failure" : false;
   const decimalsFailed = token ? meta.status === "error" || meta.data?.[1]?.status === "failure" : false;
+  // A token whose name/symbol can't be read still needs a label somewhere the user can trust — its
+  // own address, short-formed, rather than an endless "…" that never resolves.
+  const symbol = token ? (symbolFailed ? shortAddress(token) : ((meta.data?.[0]?.result as string | undefined) ?? "…")) : "USDC";
   // `null` while a real token's decimals are still loading, or failed — never default to 18, which would
   // parse and quote every amount at the wrong scale until the read comes back.
   const decimals = token ? ((meta.data?.[1]?.result as number | undefined) ?? null) : 6;
@@ -173,7 +177,10 @@ function Form({ params }: Pick<AppProps, "params">) {
     // Mirrors Mint's own fresh-fee guard: refuse to start a paid send without a known fee to compare
     // against, rather than silently skipping the per-batch staleness check below.
     if (quote === null || quote === "error") return notify("Couldn't read the fee. Try again.", "warn");
-    const started = session.start(token ? symbol : "USDC", token, decimals, text);
+    // Rows the parser rejected (bad address, bad amount, a duplicate, ...) never reach `fresh.rows`,
+    // so their line numbers are captured here — the only place that still has them — for the result
+    // panel to say a send didn't cover them (see session.ts's excludedLines and ResultPanel.tsx).
+    const started = session.start(token ? symbol : "USDC", token, decimals, text, fresh.issues.map((i) => i.line));
     if (!started) return; // a send is already in flight (another click, another window) — do nothing
     setBusy(true);
     try {
@@ -251,7 +258,7 @@ function Form({ params }: Pick<AppProps, "params">) {
         {mode === "token" && (
           <input
             className="min-w-0 flex-1 rounded-md border border-border-2 bg-surface px-2 py-1.5 font-mono text-xs"
-            placeholder="0x3600000000000000000000000000000000000000"
+            placeholder="Token contract address"
             value={tokenAddr}
             disabled={sessionActive}
             onChange={(e) => setTokenAddr(e.target.value)}
@@ -311,7 +318,7 @@ function Form({ params }: Pick<AppProps, "params">) {
 
         {dropSession.status === "done" && dropSession.result && (
           <>
-            <ResultPanel result={dropSession.result} onCopyFailed={copyFailed} />
+            <ResultPanel result={dropSession.result} excludedLines={dropSession.excludedLines} onCopyFailed={copyFailed} />
             <button type="button" className="mt-2 rounded-md border border-border-2 px-2 py-1" onClick={dismissDone}>
               Done
             </button>

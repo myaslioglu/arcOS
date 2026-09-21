@@ -12,6 +12,7 @@ const sendingState = (over: Partial<DropSessionState> = {}): DropSessionState =>
   progress: null,
   result: null,
   remainingText: "0x1111111111111111111111111111111111111111,1",
+  excludedLines: [],
   startedAt: 1,
   ...over,
 });
@@ -34,6 +35,7 @@ describe("dropSessionReducer", () => {
         token: null,
         decimals: 6,
         text: "0x1111111111111111111111111111111111111111,1",
+        excludedLines: [],
         startedAt: 10,
       });
       expect(next).toEqual({
@@ -44,19 +46,51 @@ describe("dropSessionReducer", () => {
         progress: null,
         result: null,
         remainingText: "0x1111111111111111111111111111111111111111,1",
+        excludedLines: [],
         startedAt: 10,
       });
     });
 
+    it("carries the parser-excluded line numbers into the session, unchanged through to done", () => {
+      const started = dropSessionReducer(initialDropSessionState, {
+        type: "start",
+        tokenLabel: "USDC",
+        token: null,
+        decimals: 6,
+        text: "x",
+        excludedLines: [4, 9, 17],
+        startedAt: 10,
+      });
+      expect(started.excludedLines).toEqual([4, 9, 17]);
+      const finished = dropSessionReducer(started, { type: "finish", result: emptyResult, remainingText: "" });
+      expect(finished.excludedLines).toEqual([4, 9, 17]);
+    });
+
     it("starts a session from done (reviewing one result, then sending the remainder)", () => {
-      const next = dropSessionReducer(doneState(), { type: "start", tokenLabel: "USDC", token: null, decimals: 6, text: "x", startedAt: 20 });
+      const next = dropSessionReducer(doneState(), {
+        type: "start",
+        tokenLabel: "USDC",
+        token: null,
+        decimals: 6,
+        text: "x",
+        excludedLines: [],
+        startedAt: 20,
+      });
       expect(next.status).toBe("sending");
       expect(next.startedAt).toBe(20);
     });
 
     it("refuses to start while already sending — the hard guard against a second concurrent send", () => {
       const state = sendingState();
-      const next = dropSessionReducer(state, { type: "start", tokenLabel: "USDC", token: null, decimals: 6, text: "a second list", startedAt: 99 });
+      const next = dropSessionReducer(state, {
+        type: "start",
+        tokenLabel: "USDC",
+        token: null,
+        decimals: 6,
+        text: "a second list",
+        excludedLines: [],
+        startedAt: 99,
+      });
       expect(next).toBe(state); // unchanged reference: the no-op IS the refusal
     });
   });
@@ -127,6 +161,16 @@ describe("session store", () => {
     expect(session.start("USDC", null, 6, "list two")).toBe(false);
     // The second, refused call changed nothing: the session still reflects the first list.
     expect(session.getSnapshot().remainingText).toBe("list one");
+  });
+
+  it("start() defaults excludedLines to an empty array when the caller omits it", () => {
+    session.start("USDC", null, 6, "x");
+    expect(session.getSnapshot().excludedLines).toEqual([]);
+  });
+
+  it("start() records the excluded line numbers the caller passes", () => {
+    session.start("USDC", null, 6, "x", [2, 5]);
+    expect(session.getSnapshot().excludedLines).toEqual([2, 5]);
   });
 
   it("setProgress() only takes effect once a session is sending", () => {

@@ -24,6 +24,11 @@ export type DropSessionState = {
    * still unsent, ready to prefill the form for a follow-up send.
    */
   remainingText: string;
+  /** CSV line numbers `parseDropList` rejected before this send began (bad address, bad amount, a
+   * duplicate, ...) — captured once at `start` from the same parse that produced the rows actually
+   * sent, so the result panel can say a send didn't cover them instead of reading as "All delivered"
+   * covering the whole list. */
+  excludedLines: number[];
   startedAt: number | null;
 };
 
@@ -35,11 +40,12 @@ export const initialDropSessionState: DropSessionState = {
   progress: null,
   result: null,
   remainingText: "",
+  excludedLines: [],
   startedAt: null,
 };
 
 export type DropSessionAction =
-  | { type: "start"; tokenLabel: string; token: Address | null; decimals: number; text: string; startedAt: number }
+  | { type: "start"; tokenLabel: string; token: Address | null; decimals: number; text: string; excludedLines: number[]; startedAt: number }
   | { type: "progress"; progress: DropProgress | null }
   | { type: "finish"; result: DropResult; remainingText: string }
   | { type: "dismiss" };
@@ -64,6 +70,7 @@ export function dropSessionReducer(state: DropSessionState, action: DropSessionA
         progress: null,
         result: null,
         remainingText: action.text,
+        excludedLines: action.excludedLines,
         startedAt: action.startedAt,
       };
     case "progress":
@@ -109,10 +116,11 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Starts a session; refuses — returns `false`, changes nothing — if one is already sending. */
-function start(tokenLabel: string, token: Address | null, decimals: number, text: string): boolean {
+/** Starts a session; refuses — returns `false`, changes nothing — if one is already sending.
+ * `excludedLines` defaults to empty for callers (and the many existing tests) that don't pass one. */
+function start(tokenLabel: string, token: Address | null, decimals: number, text: string, excludedLines: number[] = []): boolean {
   if (state.status === "sending") return false;
-  state = dropSessionReducer(state, { type: "start", tokenLabel, token, decimals, text, startedAt: Date.now() });
+  state = dropSessionReducer(state, { type: "start", tokenLabel, token, decimals, text, excludedLines, startedAt: Date.now() });
   if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeUnloadGuard);
   emit();
   return true;

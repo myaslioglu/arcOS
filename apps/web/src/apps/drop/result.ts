@@ -20,3 +20,16 @@ export function failedRowsFor(batch: DropRow[], failures: readonly { args: Trans
   }
   return out;
 }
+
+/**
+ * Describes the rows `parseDropList` rejected before a send ever began (a bad address, a bad
+ * amount, a duplicate, ...) — distinct from `failed` (rows the CONTRACT reported as failed
+ * transfers, mapped by `failedRowsFor` above). Without this, a result panel that only shows
+ * "N delivered" reads as if it covers the whole list, silently dropping any row the parser had
+ * already excluded. Returns null (render nothing) when nothing was excluded.
+ */
+export function excludedRowsText(lines: readonly number[]): string | null {
+  if (lines.length === 0) return null;
+  if (lines.length === 1) return `1 row wasn't sent because it had a problem: line ${lines[0]}`;
+  return `${lines.length} rows weren't sent because they had problems: lines ${lines.join(", ")}`;
+}

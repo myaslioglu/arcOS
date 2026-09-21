@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DropRow } from "../parse";
-import { failedRowsFor } from "../result";
+import { excludedRowsText, failedRowsFor } from "../result";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -37,5 +37,23 @@ describe("failedRowsFor", () => {
   it("returns an empty list for an empty batch or no failures", () => {
     expect(failedRowsFor([], [])).toEqual([]);
     expect(failedRowsFor(batch, [])).toEqual([]);
+  });
+});
+
+describe("excludedRowsText", () => {
+  it("returns null when nothing was excluded, so a result reads as covering everything", () => {
+    expect(excludedRowsText([])).toBeNull();
+  });
+
+  it("states the count and the exact lines for multiple excluded rows", () => {
+    expect(excludedRowsText([4, 9, 17])).toBe("3 rows weren't sent because they had problems: lines 4, 9, 17");
+  });
+
+  it("uses singular wording for exactly one excluded row", () => {
+    expect(excludedRowsText([6])).toBe("1 row wasn't sent because it had a problem: line 6");
+  });
+
+  it("preserves the given line order rather than re-sorting", () => {
+    expect(excludedRowsText([9, 4, 17])).toBe("3 rows weren't sent because they had problems: lines 9, 4, 17");
   });
 });
