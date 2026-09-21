@@ -13,6 +13,7 @@ import { shortAddress } from "@/lib/format";
 import { resolveDropAsset } from "./asset";
 import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
+import { dropFeeText } from "./dropFee";
 import { IssuesList } from "./IssuesList";
 import { drop } from "./manifest";
 import { BATCH, formatDropList, parseDropList } from "./parse";
@@ -297,12 +298,7 @@ function Form({ params }: Pick<AppProps, "params">) {
       ? `Approving ${dropSession.tokenLabel}…`
       : `Sending ${dropSession.tokenLabel} — batch ${dropSession.progress.batch} of ${dropSession.progress.batches}…`;
 
-  const feeText =
-    quote && quote !== "error" && rows.length > 0
-      ? `Fee ${formatUsdc(quote.total)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`
-      : rows.length > 0
-        ? "Reading the fee…"
-        : "";
+  const feeText = dropFeeText(quote, rows.length, batches);
 
   // N2: after an unconfirmed batch, `remaining` alone undercounts — see remainingBannerText's doc
   // comment — so this names both counts rather than reading as if it covers the whole story.

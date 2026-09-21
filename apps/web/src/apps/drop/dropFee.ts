@@ -37,3 +37,20 @@ export function feeChangeMessage(previous: DropFeeBasis, fresh: DropFeeBasis): s
   }
   return `The minimum fee changed from ${formatUsdc(previous.min)} to ${formatUsdc(fresh.min)} USDC. Check it and submit again.`;
 }
+
+/**
+ * The fee line shown above the Send button (wave G, N5). Only shows a total once `quote.count`
+ * matches `rowCount` — not merely "a quote exists" — since the quote is fetched debounced (300ms
+ * after the row count last changed; see the effect in Window.tsx). Without this check, pasting more
+ * rows over a shorter list (or removing rows from a longer one) would keep the OLD quote's total on
+ * screen, silently mislabelled as the current fee, until the debounced re-fetch catches up. Mirrors
+ * canSend.ts's own `quoteCount !== rowCount` guard on the Send button itself (wave E, I1).
+ * `quote`'s shape is kept structural (not `DropQuote` from useDrop.ts) so this stays a plain,
+ * dependency-free pure function.
+ */
+export function dropFeeText(quote: { total: bigint; count: number } | "error" | null, rowCount: number, batches: number): string {
+  if (quote && quote !== "error" && quote.count === rowCount && rowCount > 0) {
+    return `Fee ${formatUsdc(quote.total)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`;
+  }
+  return rowCount > 0 ? "Reading the fee…" : "";
+}

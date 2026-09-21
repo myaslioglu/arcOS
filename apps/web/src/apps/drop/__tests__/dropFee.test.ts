@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropBatchFee, dropTotalFee, feeChangeMessage } from "../dropFee";
+import { dropBatchFee, dropFeeText, dropTotalFee, feeChangeMessage } from "../dropFee";
 
 // Mirrors packages/contracts/src/Multisend.sol's quote(): recipients * DROP_PER_RECIPIENT, floored
 // at DROP_MIN. Values below match the deployed R0 defaults (see script/DeployR0.s.sol) but the
@@ -68,5 +68,36 @@ describe("feeChangeMessage", () => {
     const previous = { perRecipient: PER_RECIPIENT, min: MIN };
     const fresh = { perRecipient: 1n * 10n ** 16n, min: 5n * 10n ** 18n };
     expect(feeChangeMessage(previous, fresh)).toMatch(/^The fee per recipient changed/);
+  });
+});
+
+describe("dropFeeText (N5 — must not show a stale total while the quote/row-count mismatch is pending)", () => {
+  it("is empty with no rows", () => {
+    expect(dropFeeText(null, 0, 0)).toBe("");
+    expect(dropFeeText({ total: 10n * 10n ** 18n, count: 0 }, 0, 0)).toBe("");
+  });
+
+  it("reads 'Reading the fee…' with rows present but no quote yet", () => {
+    expect(dropFeeText(null, 3, 1)).toBe("Reading the fee…");
+  });
+
+  it("shows the fee once the quote's count matches the current row count", () => {
+    expect(dropFeeText({ total: 10n * 10n ** 18n, count: 200 }, 200, 1)).toBe(
+      "Fee 10 USDC · charged per recipient, including transfers that fail · 1 transaction(s)",
+    );
+  });
+
+  // The exact hazard N5 fixes: a quote is fetched debounced (300ms after the row count last
+  // changed — see the effect in Window.tsx), so pasting more rows over a shorter list (or deleting
+  // rows from a longer one) leaves a real, non-null quote on hand whose `count` no longer matches
+  // what's on screen. Showing its `total` in that window would silently label a stale number as the
+  // current fee.
+  it("reads 'Reading the fee…' — not the stale total — when the quote's count no longer matches the current row count", () => {
+    expect(dropFeeText({ total: 10n * 10n ** 18n, count: 200 }, 400, 2)).toBe("Reading the fee…");
+    expect(dropFeeText({ total: 10n * 10n ** 18n, count: 400 }, 200, 1)).toBe("Reading the fee…");
+  });
+
+  it("reads 'Reading the fee…' when the quote read failed, same as still loading", () => {
+    expect(dropFeeText("error", 5, 1)).toBe("Reading the fee…");
   });
 });
