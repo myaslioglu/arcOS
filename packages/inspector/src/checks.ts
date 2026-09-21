@@ -7,9 +7,10 @@
  *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
  *   whether anyone controls it can't be told either way; or there's no owner function but the
  *   contract does have privileged functions (in logic code that WAS read), so who (if anyone) can
- *   call them can't be read. "Ownership is renounced" is reserved for a burn-address owner() on
- *   logic with no `grantRole`: with AccessControl in the code, a renounced Ownable leaves the roles
- *   untouched, so it's reported as role-based admin (a warn) instead.
+ *   call them can't be read; or owner() IS a burn address but the logic code couldn't be read, so
+ *   role-based admins can't be ruled out. "Ownership is renounced" is reserved for a burn-address
+ *   owner() on logic that WAS read and has no `grantRole`: with AccessControl in the code, a
+ *   renounced Ownable leaves the roles untouched, so it's reported as role-based admin (a warn).
  * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone or an
  *   EIP-1967 proxy whose implementation is unreachable, points at empty code or is itself a proxy,
  *   or code that delegates calls to a target this check couldn't identify at all); or privileged
@@ -221,7 +222,14 @@ export function checkVerified(input: InspectInput, contract: ContractInfo | null
 export function checkOwnership(input: InspectInput, owner: Owner, found: Privilege[] | null): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=read_contract`;
   if (owner.kind === "unknown") return finding("ownership", "unknown", "Couldn't read the owner", "The network didn't answer the owner() call.", { evidenceUrl: url });
-  if (owner.kind === "renounced") return finding("ownership", "pass", "Ownership is renounced", "owner() is a burn address.", { evidenceUrl: url });
+  if (owner.kind === "renounced") {
+    // A burn-address owner() is only half the story: role-based admins live in the logic, and
+    // `resolveOwner` can only rule them out from selectors it actually read. With no logic to
+    // read, "nobody controls this" is a bigger claim than the evidence supports.
+    return found === null
+      ? finding("ownership", "unknown", "Couldn't read the contract's logic", "owner() is a burn address, but the contract's logic code couldn't be read, so whether anything else (a role, an admin) can still control it can't be told.", { evidenceUrl: url })
+      : finding("ownership", "pass", "Ownership is renounced", "owner() is a burn address.", { evidenceUrl: url });
+  }
   if (owner.kind === "none") {
     if (found === null) {
       return finding("ownership", "unknown", "Couldn't read the contract's logic", "The contract's logic code couldn't be read, so it can't tell whether anyone controls it.", { evidenceUrl: url });

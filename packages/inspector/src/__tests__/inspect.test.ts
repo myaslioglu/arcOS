@@ -599,6 +599,22 @@ describe("inspect", () => {
     expect(find(r, "liquidity")).toMatchObject({ status: "warn", title: "No Uniswap v2 or v3 pool found" });
   });
 
+  // --- Wave F audit: "renounced" is only half the story when the logic was never read ---
+
+  it("says unknown, not 'ownership is renounced', when the logic behind a proxy was never read", async () => {
+    // owner() answers with a burn address, but the implementation's code — the only place a
+    // grantRole selector could be seen — couldn't be fetched, so "nobody controls this" isn't
+    // something this run can tell.
+    const r = await run({
+      code: { [TOKEN]: PLAIN },
+      codeErrors: { [IMPL]: new Error("ETIMEDOUT") },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+      reads: { [`${TOKEN}.owner()`]: ZERO },
+    });
+    expect(find(r, "ownership")).toMatchObject({ status: "unknown" });
+    expect(find(r, "ownership").detail).toMatch(/burn address/);
+  });
+
   // --- Part 3: the inspected address is always checksummed ---
 
   it("checksums the inspected address regardless of the casing passed in", async () => {
