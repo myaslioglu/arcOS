@@ -2,19 +2,26 @@
  * Check rules — when each answers "unknown" (a failed or missing read is never silently a "pass"):
  * - verified: the explorer didn't answer.
  * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next
- *   name"); or there's no owner function but the contract does have privileged functions, so who
- *   (if anyone) can call them can't be read.
+ *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
+ *   whether anyone controls it can't be told either way; or there's no owner function but the
+ *   contract does have privileged functions (in logic code that WAS read), so who (if anyone) can
+ *   call them can't be read.
  * - privileges: the contract's logic code couldn't be read (clone whose implementation is
- *   unreachable, or the code delegates calls to a target this check couldn't identify at all);
- *   or privileged functions were found but the owner is unknown, or there's no owner function at
- *   all (can't tell if they're reachable either way).
+ *   unreachable or came back empty, or the code delegates calls to a target this check couldn't
+ *   identify at all); or privileged functions were found but the owner is unknown, or there's no
+ *   owner function at all (can't tell if they're reachable either way).
  * - proxy: a storage-read failure on the top-level address propagates and is caught by the
- *   orchestrator's guard; a resolved EIP-1167 clone whose target is itself an EIP-1967 proxy is a
- *   fail ("Clone of an upgradeable proxy"), not a pass; code that delegates calls (DELEGATECALL)
- *   but resolves to no known clone target or EIP-1967 slot is unknown, not "not a proxy".
- * - holders: the explorer didn't answer, total supply is unknown, the holder list came back empty
- *   while the explorer's own token info says holders exist (or doesn't know), or (with a DEX
- *   configured) pool discovery failed, so pools can't be excluded from the holder list.
+ *   orchestrator's guard; an EIP-1167 clone whose implementation couldn't be fetched at all (a
+ *   transport failure) is unknown, never "not upgradeable"; a clone whose target read succeeded but
+ *   came back with no code at all is a fail (it points at nothing); a resolved clone whose target is
+ *   itself an EIP-1967 proxy is a fail ("Clone of an upgradeable proxy"), not a pass; code that
+ *   delegates calls (DELEGATECALL) but resolves to no known clone target or EIP-1967 slot is
+ *   unknown, not "not a proxy".
+ * - holders: the explorer didn't answer, total supply is unknown, or the holder list came back
+ *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
+ *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
+ *   holders-count field claims — or (with a DEX configured) pool discovery failed, so pools can't be
+ *   excluded from the holder list.
  * - liquidity: no DEX is configured for this network, or pool discovery failed at the network level.
  * - lp-lock: no DEX is configured, pool discovery failed, only Uniswap v3 pools exist (position
  *   locks need an indexer, which arrives with Radar), or the v2 pair's LP totalSupply is zero (no
@@ -131,13 +138,22 @@ export function checkVerified(input: InspectInput, verified: boolean | null): Fi
     : finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
 }
 
-/** `hasPrivileged` is whether privileged functions were found in the contract's logic code. */
-export function checkOwnership(input: InspectInput, owner: Owner, hasPrivileged: boolean): Finding {
+/**
+ * `found` is the union of ABI- and bytecode-derived privileges (see `combinePrivileges`), already
+ * resolved by the caller — `null` when the contract's logic code couldn't be read at all (an
+ * unfetchable clone target, or a DELEGATECALL to unidentified code). `found === null` must NOT be
+ * treated the same as "logic read, nothing privileged found": when there's no owner() function and
+ * the logic is unreadable, whether anyone controls the contract can't be told either way.
+ */
+export function checkOwnership(input: InspectInput, owner: Owner, found: Privilege[] | null): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=read_contract`;
   if (owner.kind === "unknown") return finding("ownership", "unknown", "Couldn't read the owner", "The network didn't answer the owner() call.", { evidenceUrl: url });
   if (owner.kind === "renounced") return finding("ownership", "pass", "Ownership is renounced", "owner() is a burn address.", { evidenceUrl: url });
   if (owner.kind === "none") {
-    return hasPrivileged
+    if (found === null) {
+      return finding("ownership", "unknown", "Couldn't read the contract's logic", "The contract's logic code couldn't be read, so it can't tell whether anyone controls it.", { evidenceUrl: url });
+    }
+    return found.length > 0
       ? finding("ownership", "unknown", "No owner function, but the contract has privileged functions", "The contract exposes no owner() or getOwner(), but its code has privileged functions — who (if anyone) can call them can't be read.", { evidenceUrl: url })
       : finding("ownership", "pass", "No owner function", "The contract exposes no owner() or getOwner().", { evidenceUrl: url });
   }
@@ -191,7 +207,14 @@ export const addressFromSlot = (v: string | null): Address | null => (slotSet(v)
 
 export type ProxyResolution = {
   cloneOf: Address | null;
-  /** Only meaningful when `cloneOf` is set: the target's own EIP-1967 slots are set too. */
+  /** Only meaningful when `cloneOf` is set: the clone's implementation code couldn't be fetched at
+   * all — a transport failure, not evidence of anything. Never a pass. */
+  cloneReadFailed: boolean;
+  /** Only meaningful when `cloneOf` is set and `cloneReadFailed` is false: the read succeeded but
+   * the target address has no code (`0x`) — a clone pointing at nothing, which is broken. */
+  cloneTargetEmpty: boolean;
+  /** Only meaningful when `cloneOf` is set and the target's code was actually read: the target's
+   * own EIP-1967 slots are set too. */
   cloneTargetIsProxy: boolean;
   /** DELEGATECALL is present but resolves to no known clone target or EIP-1967 slot. */
   forwardsToUnidentifiedCode: boolean;
@@ -203,6 +226,12 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=contract`;
   if (r.cloneOf) {
     const targetUrl = `${input.explorerBase}/address/${r.cloneOf}`;
+    if (r.cloneReadFailed) {
+      return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone that forwards to ${r.cloneOf}, whose code couldn't be read.`, { evidenceUrl: targetUrl });
+    }
+    if (r.cloneTargetEmpty) {
+      return finding("proxy", "fail", "Clone points at an address with no code", `An EIP-1167 clone of ${r.cloneOf}, which has no contract code at all — calls to it will fail.`, { evidenceUrl: targetUrl });
+    }
     if (r.cloneTargetIsProxy) {
       return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — whoever controls it can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
     }
@@ -215,11 +244,15 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   return finding("proxy", "pass", "Not a proxy", "No EIP-1967 proxy slots are set and the code doesn't delegate calls.", { evidenceUrl: url });
 }
 
-export function checkHolders(input: InspectInput, holders: Holder[] | null, totalSupply: bigint | null, pools: Pool[] | null, holdersCount: number | null): Finding {
+export function checkHolders(input: InspectInput, holders: Holder[] | null, totalSupply: bigint | null, pools: Pool[] | null): Finding {
   const url = `${input.explorerBase}/token/${input.address}?tab=holders`;
   if (holders === null || !totalSupply) return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer didn't answer, or total supply is unknown.", { evidenceUrl: url });
-  if (holders.length === 0 && (holdersCount === null || holdersCount > 0)) {
-    return finding("holders", "unknown", "Couldn't check holder concentration", "The holder list came back empty, which reads as 0% concentration but usually just means the explorer hasn't indexed it yet.", { evidenceUrl: url });
+  // totalSupply > 0 (just checked above) guarantees at least one holder exists, so an empty list
+  // here is never "0% concentration" — it's the explorer not having indexed this token yet. This
+  // holds regardless of what the explorer's own holders-count field claims: a non-zero supply next
+  // to a claimed holder count of 0 is itself a contradiction, not confirmation of "no holders".
+  if (holders.length === 0) {
+    return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer returned no holders for a token with non-zero supply, which usually means it hasn't indexed this token yet.", { evidenceUrl: url });
   }
   if (pools === null && input.dex) {
     return finding("holders", "unknown", "Couldn't check holder concentration", "The pool lookup failed, so a liquidity pool could be miscounted as a whale.", { evidenceUrl: url });

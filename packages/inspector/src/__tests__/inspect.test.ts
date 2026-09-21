@@ -188,10 +188,10 @@ describe("inspect", () => {
     expect(find(r, "privileges").status).toBe("pass");
   });
 
-  it("never judges a clone by its own trampoline bytecode", async () => {
+  it("never judges a clone by its own trampoline bytecode — and a target with genuinely no code is a fail, not a pass", async () => {
     const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
-    const r = await run({ code: { [TOKEN]: clone }, reads: { [`${TOKEN}.owner()`]: OWNER } }); // implementation code missing
-    expect(find(r, "proxy").status).toBe("pass");
+    const r = await run({ code: { [TOKEN]: clone }, reads: { [`${TOKEN}.owner()`]: OWNER } }); // implementation code missing (the read succeeded, empty)
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone points at an address with no code" });
     expect(find(r, "privileges").status).toBe("unknown");
     expect(find(r, "prevrandao").status).toBe("unknown");
   });
@@ -250,10 +250,11 @@ describe("inspect", () => {
     expect(find(r, "privileges").status).toBe("unknown");
   });
 
-  it("still resolves when a clone's implementation fetch rejects, marking privileges and prevrandao unknown", async () => {
+  it("still resolves when a clone's implementation fetch rejects, marking proxy, ownership, privileges and prevrandao unknown", async () => {
     const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
     const r = await run({ code: { [TOKEN]: clone }, codeErrors: { [IMPL]: new Error("ETIMEDOUT") } });
-    expect(find(r, "proxy")).toMatchObject({ status: "pass", title: "Minimal proxy — not upgradeable" });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check whether this clone is upgradeable" });
+    expect(find(r, "ownership").status).toBe("unknown");
     expect(find(r, "privileges").status).toBe("unknown");
     expect(find(r, "prevrandao").status).toBe("unknown");
   });
@@ -297,10 +298,10 @@ describe("inspect", () => {
     expect(find(r, "holders").status).toBe("unknown");
   });
 
-  it("passes with an empty holder list only when the explorer confirms there are zero holders", async () => {
+  it("stays unknown, not pass, even when the explorer's own holdersCount claims zero — supply > 0 guarantees at least one holder", async () => {
     const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 0 }) });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
-    expect(find(r, "holders")).toMatchObject({ status: "pass", title: "Top 10 wallets hold 0%" });
+    expect(find(r, "holders")).toMatchObject({ status: "unknown", title: "Couldn't check holder concentration" });
   });
 
   // --- Part 2 item 3: code the engine never read must not earn passes ---
@@ -312,6 +313,9 @@ describe("inspect", () => {
     expect(find(r, "proxy")).toMatchObject(expected);
     expect(find(r, "privileges")).toMatchObject(expected);
     expect(find(r, "prevrandao")).toMatchObject(expected);
+    // No owner function was found either, but the logic that would reveal one was never read —
+    // that must not read as "confirmed no owner".
+    expect(find(r, "ownership").status).toBe("unknown");
   });
 
   it("fails a canonical clone whose target is itself an upgradeable proxy, instead of trusting the clone's own pass", async () => {
