@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { feeControllerAbi, multisendAbi, tokenFactoryAbi } from "@arcos/chain";
-import { describeContractError, GENERIC_TRANSACTION_ERROR } from "../contract-error";
+import { describeContractError, GENERIC_TRANSACTION_ERROR, UserFacingError } from "../contract-error";
 
 type AbiErrorItem = { type: string; name?: string };
 
@@ -93,5 +93,15 @@ describe("describeContractError", () => {
 
   it("falls back safely when the decoded error name isn't one of ours", () => {
     expect(describeContractError(revertError("SomeFutureError"))).toBe(GENERIC_TRANSACTION_ERROR);
+  });
+
+  it("returns a UserFacingError's own message verbatim — a message this app already wrote is not the generic-fallback situation", () => {
+    const err = new UserFacingError("The fee changed to 5 USDC. Check it and submit again.");
+    expect(describeContractError(err)).toBe("The fee changed to 5 USDC. Check it and submit again.");
+  });
+
+  it("checks UserFacingError before a user rejection or a decoded revert, since it's never ambiguous with either", () => {
+    const err = new UserFacingError("Stop condition this app wrote itself.");
+    expect(describeContractError(err)).toBe("Stop condition this app wrote itself.");
   });
 });

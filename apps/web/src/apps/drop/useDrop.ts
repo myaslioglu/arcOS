@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, formatUsdc, multisendAbi, unitsToNative, type Address } from "@arcos/chain";
-import { describeContractError } from "@/lib/contract-error";
+import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { dropBatchFee, dropTotalFee } from "./dropFee";
 import { BATCH, batchSizes, chunk, formatDropList, type DropRow } from "./parse";
 import { isUserRejection, runDrop, type BatchOutcome, type DropResult } from "./runDrop";
@@ -120,7 +120,10 @@ export function useDrop() {
           const fresh = await readFeeBasis(client);
           const fee = dropBatchFee(fresh.perRecipient, fresh.min, batch.length);
           if (shownFee && (fresh.perRecipient !== shownFee.perRecipient || fresh.min !== shownFee.min)) {
-            throw new Error(`The fee changed to ${formatUsdc(fee)} USDC. Check it and submit again.`);
+            // UserFacingError, not a plain Error: this message is already safe and specific — see
+            // its doc comment in lib/contract-error.ts for why it must not be replaced by
+            // describeContractError's generic fallback when runDrop's catch formats it below.
+            throw new UserFacingError(`The fee changed to ${formatUsdc(fee)} USDC. Check it and submit again.`);
           }
 
           // Simulate first: a revert here costs nothing and gives a readable reason. Each branch calls

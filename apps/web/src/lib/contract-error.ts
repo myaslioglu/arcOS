@@ -10,6 +10,21 @@ import { formatUsdc } from "@arcos/chain";
  */
 export const GENERIC_TRANSACTION_ERROR = "The transaction didn't go through. Try again.";
 
+/**
+ * A message this app already wrote for the user, as opposed to a wallet/RPC/contract error whose raw
+ * text must never reach them directly — e.g. Drop's "the fee changed mid-send, stop before signing"
+ * condition (apps/drop/useDrop.ts), which has nothing to decode: there's no revert, just a plain
+ * stop condition with an already-safe, already-specific sentence. `describeContractError` returns
+ * `.message` verbatim for this one error type, and only this one, so a message this app deliberately
+ * authored isn't swallowed by the generic fallback the way any other unrecognized error would be.
+ */
+export class UserFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserFacingError";
+  }
+}
+
 /** Mirrors Multisend.MAX_RECIPIENTS (packages/contracts/src/Multisend.sol) — the contract has no
  * separate "too many recipients" error; BadLists covers that along with a length mismatch or an
  * empty list, so the one sentence below has to cover all three. */
@@ -116,13 +131,15 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
 
 /**
  * Turns a thrown wallet/contract error into one plain sentence a user can act on. Checks, in order:
- * 1. A wallet-level user rejection ("You cancelled the request in your wallet.").
- * 2. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
- * 3. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
+ * 1. `UserFacingError` — a message this app already wrote, returned as-is.
+ * 2. A wallet-level user rejection ("You cancelled the request in your wallet.").
+ * 3. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
+ * 4. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
 export function describeContractError(err: unknown): string {
+  if (err instanceof UserFacingError) return err.message;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
 
   const revert = findDecodedRevert(err);

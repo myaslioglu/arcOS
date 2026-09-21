@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Address } from "@arcos/chain";
+import { UserFacingError } from "@/lib/contract-error";
 import type { DropRow } from "../parse";
 import { runDrop, type BatchOutcome, type DropDeps } from "../runDrop";
 
@@ -64,6 +65,19 @@ describe("runDrop", () => {
     expect(result.message).not.toMatch(/https?:\/\//);
     expect(result.remaining).toEqual(rows);
     expect(result.delivered).toEqual([]);
+  });
+
+  it("passes a UserFacingError's message through verbatim — e.g. useDrop.ts's per-batch stale-fee stop condition", async () => {
+    const rows = makeRows(2);
+    const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => {
+      throw new UserFacingError("The fee changed to 5 USDC. Check it and submit again.");
+    });
+
+    const result = await runDrop(rows, 1, { sendBatch });
+
+    expect(result.stoppedBecause).toBe("error");
+    expect(result.message).toBe("The fee changed to 5 USDC. Check it and submit again.");
+    expect(result.remaining).toEqual(rows);
   });
 
   it("maps a decoded contract revert to its plain-language sentence via describeContractError", async () => {

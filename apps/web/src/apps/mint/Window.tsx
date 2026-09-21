@@ -6,7 +6,7 @@ import { parseEventLogs } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, explorerUrl, feeControllerAbi, formatUsdc, tokenFactoryAbi } from "@arcos/chain";
 import { useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
-import { describeContractError } from "@/lib/contract-error";
+import { UserFacingError, describeContractError } from "@/lib/contract-error";
 import { trackEvent } from "@/lib/analytics";
 import { session } from "./session";
 import { validateMint, type MintForm } from "./validate";
@@ -73,7 +73,11 @@ function Form() {
       // same transaction could otherwise forge the event.
       const factoryLogs = receipt.logs.filter((l) => l.address.toLowerCase() === contracts.tokenFactory.toLowerCase());
       const [log] = parseEventLogs({ abi: tokenFactoryAbi, logs: factoryLogs, eventName: "TokenCreated" });
-      if (!log) throw new Error("The transaction succeeded but no token was reported.");
+      // UserFacingError, not a plain Error: the transaction DID succeed (the user paid), so this
+      // message must survive describeContractError's formatting below verbatim rather than being
+      // replaced by its generic "didn't go through" fallback, which would wrongly invite a retry
+      // (and a second charge) for a mint that actually went through.
+      if (!log) throw new UserFacingError("The transaction succeeded but no token was reported.");
       session.finish({ token: log.args.token, symbol: result.args.symbol, decimals: result.args.decimals });
       trackEvent("mint_success", { mintable: Number(result.args.mintable), burnable: Number(result.args.burnable) });
       notify(`${result.args.symbol} created`, "ok");
