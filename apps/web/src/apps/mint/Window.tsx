@@ -89,8 +89,10 @@ function Form() {
       hash = await writeContractAsync(withChain(request, chain.id));
       const receipt = await client.waitForTransactionReceipt({ hash });
       // A revert refunds `value` atomically — the fee was NOT taken. Distinct from the "no token
-      // reported" UserFacingError below: this has a real receipt confirming exactly what happened, so
-      // it's a definite failure (classifyMintFailure never marks a UserFacingError "unconfirmed").
+      // reported" case below: this has a real receipt confirming exactly what happened (a definite
+      // failure — classifyMintFailure never marks a UserFacingError "unconfirmed"), whereas "no
+      // token reported" has a real SUCCESS receipt with the fee taken but nothing to confirm what
+      // was created, so it goes through session.unconfirmed() directly instead (N6).
       if (receipt.status === "reverted") {
         throw new UserFacingError("The transaction reverted — no token was created and the fee wasn't taken. Check the fee and try again.");
       }
@@ -98,11 +100,18 @@ function Form() {
       // same transaction could otherwise forge the event.
       const factoryLogs = receipt.logs.filter((l) => l.address.toLowerCase() === contracts.tokenFactory.toLowerCase());
       const [log] = parseEventLogs({ abi: tokenFactoryAbi, logs: factoryLogs, eventName: "TokenCreated" });
-      // UserFacingError, not a plain Error: the transaction DID succeed (the user paid), so this
-      // message must survive classifyMintFailure's formatting below verbatim rather than being
-      // replaced by its generic "didn't go through" fallback, which would wrongly invite a retry
-      // (and a second charge) for a mint that actually went through.
-      if (!log) throw new UserFacingError("The transaction succeeded but no token was reported.");
+      if (!log) {
+        // N6: routed through session.unconfirmed(), not thrown as a UserFacingError — the fee WAS
+        // taken (this receipt is a real success, not a revert) and a hash exists, but without the
+        // expected event this app can't confirm a token actually came out of it. Reusing the plain
+        // "fail" path (as a UserFacingError previously did — classifyMintFailure below never marks
+        // a UserFacingError unconfirmed, by design; see its own doc comment) would drop the hash and
+        // show "Try again", which reads as "nothing happened" and invites a second, separately-
+        // charged mint for a transaction that may well have succeeded. The explorer is the only way
+        // to actually find out, so this gets the same treatment as I3's unconfirmed-receipt case.
+        session.unconfirmed("The transaction succeeded but no token was reported. Check the explorer before minting again.", hash);
+        return;
+      }
       session.finish({ token: log.args.token, symbol: result.args.symbol, decimals: result.args.decimals });
       trackEvent("mint_success", { mintable: Number(result.args.mintable), burnable: Number(result.args.burnable) });
       notify(`${result.args.symbol} created`, "ok");

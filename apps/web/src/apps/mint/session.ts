@@ -77,9 +77,12 @@ export function mintSessionReducer(state: MintSessionState, action: MintSessionA
  * `hashKnown` is true once `writeContractAsync` has returned a hash — the transaction was broadcast,
  * so the user may already have paid. Order matters:
  * 1. A `UserFacingError` is always this app's own, definite decision about what happened (a stale-fee
- *    stop before signing, or — once a receipt WAS obtained — an explicit "it reverted" / "no token
- *    was reported" call in Window.tsx). It is never "unconfirmed", regardless of `hashKnown`: by the
- *    time either of those throws, the outcome is already known.
+ *    stop before signing, or — once a receipt WAS obtained — an explicit "it reverted" throw in
+ *    Window.tsx). It is never "unconfirmed", regardless of `hashKnown`: by the time it throws, the
+ *    outcome is already known. (The receipt-succeeded-but-no-token-reported case is deliberately NOT
+ *    a `UserFacingError` — Window.tsx calls `session.unconfirmed()` directly for it instead, wave G's
+ *    N6: the fee WAS taken with a real success receipt, but there's nothing to confirm what was
+ *    created, which is exactly the "check the explorer" situation case 2 below describes.)
  * 2. Otherwise, if a hash is known, something failed AFTER broadcast with no definite answer — most
  *    likely `waitForTransactionReceipt` itself rejecting (timeout, dropped connection) — so the mint
  *    may have gone through. Saying "Try again" here would invite a second, separately-charged mint;
