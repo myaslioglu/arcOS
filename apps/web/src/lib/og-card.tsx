@@ -1,12 +1,17 @@
 import type { Report } from "@arcos/inspector";
+import { shortAddress } from "./format";
 import { NAME_DISCLOSURE, passLine, rankFindings, shortLabel, tokenLabel } from "./proof";
 
 /**
- * next/og's default font is missing glyphs for U+2713 (✓) and U+2717 (✗) — they render as
- * tofu boxes. ✔ (U+2714) and a plain ASCII "X" are both present, so this set differs from the
- * page's own MARK (which renders as HTML and has full system-font fallback).
+ * Each status's finding row used to lead with a glyph (✔/!/X/?) coloured by TINT below. next/og's
+ * default font has no glyph for U+2713 (✓) or U+2717 (✗) at all (they render as tofu boxes), so the
+ * previous fix picked ✔ (U+2714) and a plain ASCII "X" instead — but ✔ still isn't in the default
+ * font, so satori falls back to an emoji font for it, and an emoji glyph ignores the `color` CSS
+ * property entirely: ✔ rendered dark/untinted while "!"/"X"/"?" (ordinary text glyphs) took their
+ * tint normally, so the four statuses read as visually inconsistent. Small solid-colour circles —
+ * plain `background`/`borderRadius` divs, not text at all — sidestep font fallback entirely, so
+ * every status tints the same way.
  */
-const MARK = { pass: "✔", warn: "!", fail: "X", unknown: "?" } as const;
 const TINT = { pass: "#0c8a4e", warn: "#b97309", fail: "#b42318", unknown: "#6b6f79" } as const;
 
 /**
@@ -29,7 +34,13 @@ export function ogCard(report: Report | null) {
   const { shown: rows, hiddenCount } = report ? rankFindings(report.findings, 3) : { shown: [], hiddenCount: 0 };
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 48, background: "#f6f7f9", color: "#14161c", fontSize: 30 }}>
-      <div style={{ display: "flex", fontSize: 26, color: "#555a66" }}>ARC.os · token report on Arc</div>
+      <div style={{ display: "flex", fontSize: 26, color: "#555a66" }}>
+        {/* The disclosure at the bottom says "check the address" without showing one anywhere on
+            the card — this is that address, short-formed, fixed-width regardless of the token's
+            own (attacker-controlled) name/symbol length above, so it never risks the header line
+            wrapping. */}
+        {report ? `ARC.os · token report on Arc · ${shortAddress(report.address)}` : "ARC.os · token report on Arc"}
+      </div>
       <div style={{ display: "flex", fontSize: 64, marginTop: 12 }}>{report ? shortLabel(tokenLabel(report), 16) : "Token not found"}</div>
       {report && <div style={{ display: "flex", fontSize: 40, marginTop: 4 }}>{passLine(report)}</div>}
       {report && !report.explorerReachable && (
@@ -37,8 +48,10 @@ export function ogCard(report: Report | null) {
       )}
       <div style={{ display: "flex", flexDirection: "column", marginTop: 24 }}>
         {rows.map((f) => (
-          <div key={f.id} style={{ display: "flex", marginTop: 10 }}>
-            <div style={{ display: "flex", width: 44, color: TINT[f.status] }}>{MARK[f.status]}</div>
+          <div key={f.id} style={{ display: "flex", alignItems: "center", marginTop: 10 }}>
+            <div style={{ display: "flex", width: 44, alignItems: "center" }}>
+              <div style={{ display: "flex", width: 22, height: 22, borderRadius: 11, background: TINT[f.status] }} />
+            </div>
             <div style={{ display: "flex" }}>{f.title}</div>
           </div>
         ))}
