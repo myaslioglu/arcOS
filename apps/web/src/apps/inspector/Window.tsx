@@ -119,7 +119,12 @@ export default function InspectorWindow({ winId, params }: AppProps) {
           </>
         )}
       </div>
-      <p className="border-t border-border px-4 py-2 text-xs text-faint">Automated analysis, not investment advice.</p>
+      {/* The investment disclaimer is fixed wording (see the global constraints) — the second
+          sentence mirrors one line of the README's "What Inspector can and can't see", so the
+          limit is stated where the findings are read, not only in the repo. */}
+      <p className="border-t border-border px-4 py-2 text-xs text-faint">
+        {"Automated analysis, not investment advice. Upgradeable contracts, and code Inspector can't read, are never reported as clean."}
+      </p>
     </div>
   );
 }

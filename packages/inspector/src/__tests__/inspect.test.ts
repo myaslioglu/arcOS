@@ -711,6 +711,10 @@ describe("inspect", () => {
     expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check whether this clone is upgradeable" });
   });
 
+  // Not a wave F fix, despite where it sits: a top-level storage failure already propagated out of
+  // checkProxy into the orchestrator's guard before wave F, and this test passes with wave F's
+  // change reverted. It is kept as the guard for that pre-existing behaviour — the one thing that
+  // must never happen is a storage read failing and the report saying "Not a proxy" anyway.
   it("says unknown, not 'Not a proxy', when the token's own EIP-1967 slots can't be read", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await run({ code: { [TOKEN]: PLAIN }, storageError: new Error("ETIMEDOUT") });

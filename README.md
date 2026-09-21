@@ -101,6 +101,23 @@ privileged function into a "can't be called" pass: if the contract has no `owner
 but does have privileged functions, both the ownership and privileges findings read "unknown", not
 "pass" — the same rule that applies to any other failed or missing read.
 
+## What Inspector can and can't see
+
+- It follows standard proxies one hop: EIP-1967 implementation and beacon slots, and EIP-1167
+  clones. A proxy behind a proxy, or one whose two slots disagree, reads "unknown", not "clean".
+- Anything upgradeable never earns a pass about control. With the code replaceable, "no privileged
+  functions" and "ownership is renounced" describe only the logic running now, so they are shown as
+  warnings naming whoever can replace it.
+- "Nothing found" counts only when the scan can be shown to have read the contract's functions. A
+  non-standard dispatcher (Vyper, Huff, fallback-only), custom proxy storage, a diamond (EIP-2535)
+  or a `DELEGATECALL` to code it can't identify all read "unknown" rather than clean.
+- Privileged functions are recognised by selector and by verified-ABI name; one whose name and
+  signature appear in neither list isn't detected.
+- Holder figures are only as complete as the explorer's index, and exclude burn addresses, known
+  pools and lock contracts. A list the explorer won't confirm is complete gives a floor, not a
+  concentration.
+- The name and symbol are chosen by whoever deployed the contract and can imitate another token.
+
 ## Known limits
 
 - The mainnet block explorer's API answers non-browser clients with a Cloudflare challenge, so a
@@ -108,6 +125,9 @@ but does have privileged functions, both the ownership and privileges findings r
   inspection run in a browser tab.
 - Liquidity and lock checks cover Uniswap v2 and v3 pools against USDC and EURC only. Uniswap v4
   and Aerodrome aren't scanned yet.
+- Drop approves exactly the total a run needs, but a run that stops early (a refused signature, an
+  unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until it
+  is used by a later run or revoked by hand. A Revoke app arrives in R1.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
   indexer, which arrives with Radar.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
