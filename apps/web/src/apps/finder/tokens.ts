@@ -59,6 +59,16 @@ export function duplicateSymbols(files: TokenFile[]): Set<string> {
   return duplicates;
 }
 
+/**
+ * Whether `symbol` is one of the duplicated ones — the only way the Finder should ask. Keying the
+ * set and querying it are two halves of the same decision, so they live in one file and share
+ * `symbolKey`: a call site that builds its own key (as the window used to) can drift from the set
+ * and then quietly answer "no collisions" forever, which is exactly what this check is for.
+ */
+export function isDuplicateSymbol(duplicates: ReadonlySet<string>, symbol: string): boolean {
+  return duplicates.has(symbolKey(symbol));
+}
+
 /** Start index for `tokensOfSlice` to page in the latest `size` items out of `count` total; never negative. */
 export function latestSliceStart(count: bigint, size: number): bigint {
   const sizeBig = BigInt(size);

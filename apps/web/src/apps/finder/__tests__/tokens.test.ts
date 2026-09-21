@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
-import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, symbolKey, type TokenFile } from "../tokens";
+import { duplicateSymbols, isDuplicateSymbol, latestSliceStart, mergeTokens, officialSymbol, symbolKey, type TokenFile } from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
 const B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -79,6 +79,24 @@ describe("duplicateSymbols", () => {
   it("still flags real symbols in a list that also holds placeholders", () => {
     const files = [file({ address: A, symbol: "\u2026" }), file({ address: B, symbol: "USDC" }), file({ address: C, symbol: "USDC" })];
     expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
+  });
+});
+
+// The Finder asks this, once, about each token it draws. It exists as a function so the lookup is
+// covered by a test: the window used to key its query itself, and a query keyed differently from
+// the set silently answers "no duplicates" forever.
+describe("isDuplicateSymbol", () => {
+  it("answers yes for a raw, uncleaned symbol that collides with another token's", () => {
+    const dirty = " USD\u200bC ";
+    const dupes = duplicateSymbols([file({ address: A, symbol: dirty }), file({ address: B, symbol: "USDC" })]);
+    expect(isDuplicateSymbol(dupes, dirty)).toBe(true);
+    expect(isDuplicateSymbol(dupes, "usdc")).toBe(true);
+  });
+
+  it("answers no for a symbol nothing else claims, and for the pending-read placeholders", () => {
+    const dupes = duplicateSymbols([file({ address: A, symbol: "USDC" }), file({ address: B, symbol: "USDC" }), file({ address: C, symbol: "?" })]);
+    expect(isDuplicateSymbol(dupes, "ZED")).toBe(false);
+    expect(isDuplicateSymbol(dupes, "?")).toBe(false);
   });
 });
 
