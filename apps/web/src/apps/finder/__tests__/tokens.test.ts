@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
-import { cleanLabel } from "@arcos/inspector";
 import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
@@ -61,17 +60,12 @@ describe("duplicateSymbols", () => {
     expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
   });
 
-  // Regression guard: a zero-width space isn't Unicode whitespace, so String#trim() (what
-  // duplicateSymbols itself uses) leaves it in place — duplicateSymbols alone would NOT catch this
-  // pair. It passes only because blockscoutSource now runs every name/symbol through cleanLabel
-  // before it ever reaches Finder (see explorer.test.ts), so the zero-width space is already gone
-  // by the time a TokenFile's symbol gets here — the explorer layer is what makes this pass, not
-  // duplicateSymbols's own comparison.
-  it("flags a symbol that only looked different because of a zero-width space, once cleaned at the source", () => {
-    const zeroWidthSpace = String.fromCharCode(0x200b);
-    const dirty = cleanLabel(`USDC${zeroWidthSpace}`, 32);
-    expect(dirty).toBe("USDC"); // the source already stripped it
-    const files = [file({ address: A, symbol: dirty! }), file({ address: B, symbol: "USDC" })];
+  // Regression guard: a zero-width space isn't Unicode whitespace, so String#trim() alone would NOT
+  // catch this pair. duplicateSymbols must not depend on every caller having already cleaned the
+  // symbol (e.g. an on-chain symbol() read that reaches here uncleaned) — it runs cleanLabel itself
+  // before comparing, so the guarantee holds regardless of where the raw symbol came from.
+  it("flags a symbol that only looks different because of a zero-width space, even when it arrives uncleaned", () => {
+    const files = [file({ address: A, symbol: "USD\u200bC" }), file({ address: B, symbol: "USDC" })];
     expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
   });
 });

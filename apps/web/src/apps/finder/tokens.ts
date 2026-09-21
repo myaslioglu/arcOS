@@ -1,5 +1,5 @@
 import { EURC, USDC, type NetworkId } from "@arcos/chain";
-import type { TokenBalance } from "@arcos/inspector";
+import { cleanLabel, type TokenBalance } from "@arcos/inspector";
 
 export type TokenFile = {
   address: string;
@@ -28,11 +28,14 @@ export function mergeTokens(
   return [...mine, ...rest];
 }
 
-/** Lower-cased symbols that appear on more than one token in the list. */
+/** Lower-cased symbols that appear on more than one token in the list. Cleans each symbol itself
+ * (control/format/zero-width characters stripped) before comparing, so a spoofed symbol that looks
+ * identical to a real one still collides here even if the caller never ran it through `cleanLabel` —
+ * the guarantee doesn't depend on every source (on-chain read, explorer) having already cleaned it. */
 export function duplicateSymbols(files: TokenFile[]): Set<string> {
   const addressesBySymbol = new Map<string, Set<string>>();
   for (const f of files) {
-    const symbol = f.symbol.trim().toLowerCase();
+    const symbol = (cleanLabel(f.symbol, 32) ?? f.symbol).trim().toLowerCase();
     const addresses = addressesBySymbol.get(symbol) ?? new Set<string>();
     addresses.add(f.address.toLowerCase());
     addressesBySymbol.set(symbol, addresses);

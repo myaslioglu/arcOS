@@ -4,6 +4,7 @@ import { useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore, t
 import { useReadContracts } from "wagmi";
 import { erc20Abi, formatUnits, isAddress } from "viem";
 import { ARCOS, USDC, activeChain, activeNetwork, formatUsdc, unitsToNative, type Address } from "@arcos/chain";
+import { cleanLabel } from "@arcos/inspector";
 import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { describeContractError } from "@/lib/contract-error";
@@ -100,8 +101,9 @@ function Form({ params }: Pick<AppProps, "params">) {
   const symbolFailed = token ? meta.status === "error" || meta.data?.[0]?.status === "failure" : false;
   const decimalsFailed = token ? meta.status === "error" || meta.data?.[1]?.status === "failure" : false;
   // A token whose name/symbol can't be read still needs a label somewhere the user can trust — its
-  // own address, short-formed, rather than an endless "…" that never resolves.
-  const symbol = token ? (symbolFailed ? shortAddress(token) : ((meta.data?.[0]?.result as string | undefined) ?? "…")) : "USDC";
+  // own address, short-formed, rather than an endless "…" that never resolves. The raw symbol() read
+  // is a value the token's own creator fully controls, so it's never shown or stored uncleaned.
+  const symbol = token ? (symbolFailed ? shortAddress(token) : (cleanLabel(meta.data?.[0]?.result as string | undefined, 32) ?? "…")) : "USDC";
   // `null` while a real token's decimals are still loading, or failed — never default to 18, which would
   // parse and quote every amount at the wrong scale until the read comes back.
   const decimals = token ? ((meta.data?.[1]?.result as number | undefined) ?? null) : 6;

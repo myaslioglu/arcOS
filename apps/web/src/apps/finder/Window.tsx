@@ -6,7 +6,7 @@ import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { erc20Abi, formatUnits } from "viem";
 import { Coins } from "lucide-react";
 import { ARCOS, activeChain, activeNetwork, explorerUrl, tokenFactoryAbi, type Address } from "@arcos/chain";
-import { blockscoutSource } from "@arcos/inspector";
+import { blockscoutSource, cleanLabel } from "@arcos/inspector";
 import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { shortAddress } from "@/lib/format";
@@ -71,7 +71,9 @@ function Files() {
   const files = useMemo(() => {
     const mine = createdList.map((token, i) => ({
       address: token,
-      symbol: (meta.data?.[i * 2]?.result as string | undefined) ?? "…",
+      // A raw on-chain symbol() read — never rendered or compared uncleaned, since a token's
+      // creator fully controls what it returns (spoofing bidi overrides, zero-width characters, ...).
+      symbol: cleanLabel(meta.data?.[i * 2]?.result as string | undefined, 32) ?? "…",
       // null while the read is pending or failed — never assumed to be 18 (Drop deliberately
       // refuses to do this too), so a wrong balance is never shown at the wrong scale.
       decimals: (meta.data?.[i * 2 + 1]?.result as number | undefined) ?? null,
