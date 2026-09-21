@@ -17,6 +17,7 @@
     "@circle-fin/app-kit": "^1.15.2",
     "@tanstack/react-query": "^5.103.1",
     "@vercel/analytics": "^2.0.1",
+    "@wagmi/core": "^2.22.1",
     "lucide-react": "^1.21.0",
     "next": "16.3.5",
     "react": "19.2.4",

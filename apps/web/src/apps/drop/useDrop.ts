@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback } from "react";
+import { getAccount } from "@wagmi/core";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisendAbi, unitsToNative } from "@arcos/chain";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
+import { wagmiConfig } from "@/providers/wagmi";
 import type { DropAsset } from "./asset";
 import { dropBatchFee, dropTotalFee, feeChangeMessage, type DropFeeBasis } from "./dropFee";
 import { BATCH, batchSizes, chunk, formatDropList, type DropRow } from "./parse";
@@ -154,9 +156,16 @@ export function useDrop() {
           const to = batch.map((r) => r.address);
           const amounts = batch.map((r) => (token ? r.amount : unitsToNative(r.amount)));
 
-          // Defence in depth again, per batch: a multi-batch send can run long enough for the wallet's
-          // chain to change mid-run, not just before the first batch.
-          assertWalletOnChain(walletChainId, chain.id);
+          // Defence in depth again, per batch: a multi-batch send can run long enough for the
+          // wallet's chain to change mid-run, not just before the first batch. `walletChainId`
+          // above is a value closed over from the render that started this send — it never
+          // changes for the life of this call, so re-checking IT here couldn't actually detect a
+          // mid-run switch (N4). `getAccount(wagmiConfig).chainId` reads the wallet's chain live,
+          // straight from the wagmi config outside React, so a switch that happens between batches
+          // is seen here. viem's own `assertCurrentChain` (via `withChain` below) remains the real
+          // guard either way — this only decides whether the user gets a plain sentence before the
+          // wallet opens, or a cryptic wallet-level mismatch after it does.
+          assertWalletOnChain(getAccount(wagmiConfig).chainId, chain.id);
 
           // Re-read DROP_PER_RECIPIENT and DROP_MIN fresh, right before this batch signs — not the
           // basis the form last showed — and recompute the fee: a multi-batch send can straddle a fee
