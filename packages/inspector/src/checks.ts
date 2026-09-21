@@ -30,9 +30,11 @@
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
  *   holders-count field claims — or (with a DEX configured) pool discovery failed, so pools can't be
- *   excluded from the holder list; or the list is shorter than ten rows without the explorer's own
- *   holders-count confirming that those rows are every holder there is, since a share added up from
- *   an unknown fraction of the holders isn't a concentration figure.
+ *   excluded from the holder list; or the rows left after those exclusions are fewer than ten and
+ *   the explorer confirms neither (through `next_page_params` nor through its own holders-count)
+ *   that they are every holder there is, since a share added up from an unknown fraction of the
+ *   holders is a floor, not a concentration figure — a floor can still be a warn or a fail, but
+ *   never a pass.
  * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
  *   or every factory call reverted (an address with no contract code does that), which is never
  *   reported as "no pool found" — that would be a claim about pools made from a call that failed.
@@ -53,7 +55,7 @@ import { parseAbi } from "viem";
 import { BURN_ADDRESSES, type Address } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
-import type { ContractInfo, Holder } from "./explorer";
+import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput } from "./types";
 
 export const erc20Abi = parseAbi([
@@ -286,14 +288,25 @@ const finding = (id: Finding["id"], status: Finding["status"], title: string, de
  * `null` when it answered but has no record of this address (a 404) or didn't say either way.
  * Neither is "not verified": a `fail` here tells a reader the deployer never published the source,
  * so it has to rest on the explorer positively saying so.
+ *
+ * "Anyone can read what this contract does" is a claim about the code that RUNS, so for a proxy it
+ * has to cover the implementation too — `logicAt`/`logic` carry that record when the engine
+ * resolved one. A verified proxy in front of unverified logic is the shape that made this matter:
+ * the reassuring line was true of 40 lines of forwarding code and false of everything behind it.
  */
-export function checkVerified(input: InspectInput, contract: ContractInfo | null): Finding {
+export function checkVerified(input: InspectInput, contract: ContractInfo | null, logicAt: Address | null = null, logic: ContractInfo | null = null): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=contract`;
   if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer didn't answer.", { evidenceUrl: url });
   if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });
-  return contract.verified
-    ? finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url })
-    : finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
+  if (!contract.verified) return finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
+  if (logicAt === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
+  const logicUrl = `${input.explorerBase}/address/${logicAt}?tab=contract`;
+  if (logic === null || logic.verified === null) {
+    return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logicAt} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
+  }
+  return logic.verified
+    ? finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logicAt}) are verified.`, { evidenceUrl: url })
+    : finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logicAt}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl });
 }
 
 /**
@@ -437,19 +450,21 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
 }
 
 /**
- * `holdersCount` is the explorer's own count of every holder of this token (`holders_count`), the
- * only thing that can tell a complete top-holder list from a truncated one: the list itself looks
- * identical either way, and "the top 3 of 5,000 holders hold 24%" is not a concentration figure.
+ * A top-holder list looks identical whether it is every holder or the first page of thousands, so
+ * completeness has to come from the explorer: `page.complete` (it said there is no next page) or
+ * `holdersCount`, its own count of every holder of this token (`holders_count`). "The top 3 of
+ * 5,000 holders hold 24%" is not a concentration figure.
  */
 export function checkHolders(
   input: InspectInput,
-  holders: Holder[] | null,
+  page: HolderPage | null,
   totalSupply: bigint | null,
   scan: PoolScan | null,
   holdersCount: number | null,
 ): Finding {
   const url = `${input.explorerBase}/token/${input.address}?tab=holders`;
-  if (holders === null || !totalSupply) return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer didn't answer, or total supply is unknown.", { evidenceUrl: url });
+  if (page === null || !totalSupply) return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer didn't answer, or total supply is unknown.", { evidenceUrl: url });
+  const holders = page.holders;
   // totalSupply > 0 (just checked above) guarantees at least one holder exists, so an empty list
   // here is never "0% concentration" — it's the explorer not having indexed this token yet. This
   // holds regardless of what the explorer's own holders-count field claims: a non-zero supply next
@@ -460,10 +475,14 @@ export function checkHolders(
   if (scan === null && input.dex) {
     return finding("holders", "unknown", "Couldn't check holder concentration", "The pool lookup failed, so a liquidity pool could be miscounted as a whale.", { evidenceUrl: url });
   }
+  // Two ways the explorer can confirm the rows in hand are every holder there is: it sent
+  // `next_page_params: null` (this page is the last one), or its own holder count is no bigger
+  // than the number of rows it sent. Without one of them this is one page of a longer list.
+  const listComplete = page.complete || (holdersCount !== null && holdersCount <= holders.length);
   // Fewer than ten rows is only a complete picture when the explorer positively says that's
-  // everyone. Otherwise this is one page of a longer list and the share it adds up to is a floor,
-  // not a measurement — a share computed from an unknown fraction of the holders is never a pass.
-  if (holders.length < 10 && (holdersCount === null || holdersCount > holders.length)) {
+  // everyone. Otherwise the share they add up to is a floor, not a measurement — a share computed
+  // from an unknown fraction of the holders is never a pass.
+  if (holders.length < 10 && !listComplete) {
     return finding("holders", "unknown", "Couldn't check holder concentration", `The explorer returned ${holders.length} holder(s) but doesn't confirm that's all of them, so this would only be part of the concentration.`, { evidenceUrl: url });
   }
   const knownPools = scan?.pools ?? [];
@@ -472,6 +491,19 @@ export function checkHolders(
   const top = ranked.filter((h) => !isBurn(h.address) && !skip.has(lower(h.address))).slice(0, 10);
   const held = top.reduce((sum, h) => sum + h.value, 0n);
   const pct = Number((held * 10000n) / totalSupply) / 100;
+  const detail = "Excludes burn addresses, liquidity pools and known lock contracts.";
+  // Excluding pools, burn addresses and the token itself can leave a full page with fewer than ten
+  // wallets to add up. Calling those "all N wallets" is a claim about the whole holder list that
+  // this page can't support, and the figure is a floor: more holders can only push it up. A floor
+  // is still evidence for "at least this concentrated", so it can cross into warn or fail — it
+  // just can never be the evidence for a pass.
+  if (top.length < 10 && !listComplete) {
+    const who = top.length === 1 ? "The top wallet holds" : `The top ${top.length} wallets hold`;
+    const title = `${who} at least ${formatPct(pct)}`;
+    if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+    if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
+    return finding("holders", "unknown", "Couldn't check holder concentration", `Excluding pools, burn addresses and lock contracts left ${top.length} of the ${holders.length} rows the explorer sent, and it doesn't confirm those are all the holders — so ${formatPct(pct)} is a floor, not the concentration.`, { evidenceUrl: url });
+  }
   // Say how many wallets the figure actually covers: "Top 10" on a token with three holders is a
   // claim about seven wallets that don't exist.
   const title =
@@ -479,7 +511,6 @@ export function checkHolders(
     : top.length === 0 ? "No wallet holds any of the supply"
     : top.length === 1 ? `The only wallet holds ${formatPct(pct)}`
     : `All ${top.length} wallets hold ${formatPct(pct)}`;
-  const detail = "Excludes burn addresses, liquidity pools and known lock contracts.";
   if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
   if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
   return finding("holders", "pass", title, detail, { evidenceUrl: url });

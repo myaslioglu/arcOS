@@ -27,13 +27,22 @@ export type TokenInfo = {
   holdersCount: number | null;
 };
 export type Holder = { address: string; isContract: boolean; name: string | null; value: bigint };
+
+/**
+ * One page of a token's holder list, and whether the explorer said it is the WHOLE list. Blockscout
+ * pages this endpoint 50 rows at a time and sends `next_page_params: null` on the last page — the
+ * only positive statement it makes about completeness that doesn't depend on its `holders_count`
+ * field being fresh. A share added up from an unknown fraction of the holders isn't a concentration
+ * figure, so `checkHolders` needs to know which of the two it has.
+ */
+export type HolderPage = { holders: Holder[]; complete: boolean };
 export type TokenBalance = { address: string; name: string | null; symbol: string | null; decimals: number; value: bigint };
 
 export interface ExplorerSource {
   contract(address: string): Promise<ContractInfo>;
   token(address: string): Promise<TokenInfo | null>;
   /** null means the explorer has no holder list for this token (404) — never treat that as "zero holders". */
-  topHolders(address: string): Promise<Holder[] | null>;
+  topHolders(address: string): Promise<HolderPage | null>;
   tokenBalances(address: string): Promise<TokenBalance[]>;
 }
 
@@ -126,12 +135,15 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch):
       const j = (await get(`/tokens/${address}/holders`)) as Json | null;
       if (!j) return null;
       const items = Array.isArray(j.items) ? (j.items as unknown[]) : [];
-      return items.flatMap((raw) => {
+      const holders = items.flatMap((raw) => {
         const it = obj(raw);
         const a = obj(it.address);
         const hash = str(a.hash);
         return hash ? [{ address: hash, isContract: a.is_contract === true, name: cleanLabel(str(a.name), 64), value: big(it.value) }] : [];
       });
+      // Only an explicit `null` is the explorer saying "this page is the last one". A body without
+      // the field at all hasn't said so, and an absent statement is never a positive one.
+      return { holders, complete: "next_page_params" in j && j.next_page_params === null };
     },
     async tokenBalances(address) {
       const j = await get(`/addresses/${address}/token-balances`);

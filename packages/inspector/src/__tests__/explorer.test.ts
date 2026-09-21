@@ -47,6 +47,57 @@ describe("blockscoutSource", () => {
     expect((await silent.contract(T)).verified).toBeNull();
   });
 
+  // Measured on the Arc TESTNET explorer, 2026-09-21. Every number in the token record arrives as
+  // a STRING, and the holder list is paginated 50 at a time with `next_page_params` describing the
+  // next page — or `null` when this page is the last one, which is the explorer positively saying
+  // the list is complete.
+  describe("the shapes the real explorer actually sends", () => {
+    const realToken = {
+      address_hash: "0x3600000000000000000000000000000000000000",
+      decimals: "6",
+      holders_count: "4939808",
+      name: "USDC",
+      symbol: "USDC",
+      total_supply: "315059781045050047",
+      type: "ERC-20",
+    };
+    const holderItem = (hash: string, value: string) => ({
+      address: { hash, is_contract: false, is_verified: false, name: null, ens_domain_name: null },
+      token_id: null,
+      value,
+    });
+
+    it("parses a token record whose every number is a string", async () => {
+      const src = blockscoutSource(API, fakeFetch({ [`/tokens/${T}`]: json(realToken) }));
+      expect(await src.token(T)).toEqual({
+        name: "USDC", symbol: "USDC", decimals: 6, totalSupply: "315059781045050047", holdersCount: 4939808,
+      });
+    });
+
+    it("calls a holder page complete only when the explorer says there is no next page", async () => {
+      const lastPage = blockscoutSource(API, fakeFetch({
+        [`/tokens/${T}/holders`]: json({ items: [holderItem("0xAAA", "247124236425957170")], next_page_params: null }),
+      }));
+      expect(await lastPage.topHolders(T)).toEqual({
+        holders: [{ address: "0xAAA", isContract: false, name: null, value: 247124236425957170n }],
+        complete: true,
+      });
+
+      const oneOfMany = blockscoutSource(API, fakeFetch({
+        [`/tokens/${T}/holders`]: json({
+          items: [holderItem("0xAAA", "1"), holderItem("0xBBB", "2")],
+          next_page_params: { value: "247124236425957170", address_hash: "0xAAA", items_count: 50 },
+        }),
+      }));
+      expect((await oneOfMany.topHolders(T))!.complete).toBe(false);
+    });
+
+    it("doesn't call a page complete just because the field is missing", async () => {
+      const src = blockscoutSource(API, fakeFetch({ [`/tokens/${T}/holders`]: json({ items: [holderItem("0xAAA", "1")] }) }));
+      expect((await src.topHolders(T))!.complete).toBe(false);
+    });
+  });
+
   it("throws ExplorerUnavailable on a bot challenge, a 5xx or a network error", async () => {
     const challenge = new Response("<html>Just a moment…</html>", { status: 403 });
     await expect(blockscoutSource(API, fakeFetch({ [`/tokens/${T}`]: challenge })).token(T)).rejects.toMatchObject({
@@ -67,10 +118,13 @@ describe("blockscoutSource", () => {
         { token: { address_hash: "0xDDD", name: "Art", symbol: "ART", decimals: null, type: "ERC-721" }, value: "1" },
       ]),
     }));
-    expect(await src.topHolders(T)).toEqual([
-      { address: "0xAAA", isContract: true, name: "Pool", value: 900n },
-      { address: "0xBBB", isContract: false, name: null, value: 100n },
-    ]);
+    expect(await src.topHolders(T)).toEqual({
+      holders: [
+        { address: "0xAAA", isContract: true, name: "Pool", value: 900n },
+        { address: "0xBBB", isContract: false, name: null, value: 100n },
+      ],
+      complete: false,
+    });
     expect(await src.tokenBalances(T)).toEqual([{ address: "0xCCC", name: "Duke", symbol: "DUKE", decimals: 18, value: 5n }]);
   });
 
@@ -93,7 +147,7 @@ describe("blockscoutSource", () => {
     }));
     expect((await src.contract(T)).name).toBe("Duke");
     expect(await src.token(T)).toEqual({ name: "EKTA", symbol: "USDC", decimals: 18, totalSupply: "1", holdersCount: 1 });
-    expect((await src.topHolders(T))![0]!.name).toBe("Pool");
+    expect((await src.topHolders(T))!.holders[0]!.name).toBe("Pool");
     expect((await src.tokenBalances(T))[0]).toEqual({ address: "0xCCC", name: "Duke", symbol: "DUKE", decimals: 18, value: 5n });
   });
 
@@ -104,7 +158,7 @@ describe("blockscoutSource", () => {
       [`/addresses/${T}/token-balances`]: json([null, 42, { token: null, value: "1" }, { token: { address_hash: "0xDDD", name: "D", symbol: "D", decimals: "18", type: "ERC-20" }, value: "2.5" }]),
     }));
     expect((await src.contract(T)).implementations).toEqual(["0xAAA"]);
-    expect(await src.topHolders(T)).toEqual([
+    expect((await src.topHolders(T))!.holders).toEqual([
       { address: "0xBBB", isContract: false, name: null, value: 0n },
       { address: "0xCCC", isContract: false, name: null, value: 10n },
     ]);

@@ -7,7 +7,7 @@ import {
   erc20Abi, findPools, gateLogicPass, resolveOwner, slotSet, type LogicBlock, type LogicGap,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
-import type { ContractInfo, Holder, TokenInfo } from "./explorer";
+import type { ContractInfo, HolderPage, TokenInfo } from "./explorer";
 import { cleanLabel } from "./label";
 import type { CheckId, Finding, InspectInput, Report } from "./types";
 
@@ -210,14 +210,14 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, implContract, tokenInfo, holders, owner, poolScan, blockNumber] = await Promise.all([
+  const [contract, implContract, tokenInfo, holderPage, owner, poolScan, blockNumber] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
     // For a proxy, the ABI that describes what can be called is the IMPLEMENTATION's: Blockscout's
     // record for the proxy address is the proxy's own, and "the proxy's ABI has no privileged
     // functions" says nothing about the logic behind it.
     proxyImpl && logicCode !== null ? ask<ContractInfo>(() => explorer!.contract(proxyImpl!)) : Promise.resolve(null),
     ask<TokenInfo | null>(() => explorer!.token(address)),
-    ask<Holder[] | null>(() => explorer!.topHolders(address)),
+    ask<HolderPage | null>(() => explorer!.topHolders(address)),
     resolveOwner(reader, address, selectors),
     findPools(input).catch(() => null),
     reader.blockNumber().catch(() => null),
@@ -250,14 +250,14 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const gate = (f: Finding): Finding => gateLogicPass(input, f, block);
 
   const findings = await Promise.all([
-    guard("verified", () => checkVerified(input, contract)),
+    guard("verified", () => checkVerified(input, contract, proxyImpl && logicCode !== null ? proxyImpl : null, implContract)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
       return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, upgradeable, admin });
     }),
-    guard("holders", () => checkHolders(input, holders, supply, poolScan, tokenInfo?.holdersCount ?? null)),
+    guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),
     guard("lp-lock", () => checkLpLock(input, poolScan)),
     guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)).then(gate),

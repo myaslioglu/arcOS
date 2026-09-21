@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DexConfig } from "@arcos/chain";
 import { extractSelectors } from "../bytecode";
-import { ExplorerUnavailable, blockscoutSource, type ExplorerSource } from "../explorer";
+import { ExplorerUnavailable, blockscoutSource, type ExplorerSource, type Holder } from "../explorer";
 import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
 import { MINTABLE_TOKEN_DEPLOYED, STANDARD_TOKEN_DEPLOYED } from "./fixtures/tokens";
@@ -72,10 +72,15 @@ function reader(f: Fake): ChainReader {
   };
 }
 
+/** One page of holders. `complete` defaults to false — the explorer only confirms a page is the
+ * whole list by sending `next_page_params: null`, and most of the cases below are about what can
+ * be said when it hasn't confirmed that. */
+const page = (holders: Holder[], complete = false) => async () => ({ holders, complete });
+
 const explorer = (over: Partial<ExplorerSource> = {}): ExplorerSource => ({
   contract: async () => ({ verified: true, name: "T", abi: null, proxyType: null, implementations: [] }),
   token: async () => ({ name: "Token", symbol: "TKN", decimals: 18, totalSupply: "1000", holdersCount: 3 }),
-  topHolders: async () => [],
+  topHolders: page([]),
   tokenBalances: async () => [],
   ...over,
 });
@@ -154,11 +159,11 @@ describe("inspect", () => {
 
   it("measures holder concentration without pools and burn addresses", async () => {
     const holders = explorer({
-      topHolders: async () => [
+      topHolders: page([
         { address: PAIR, isContract: true, name: null, value: 500n },
         { address: DEAD, isContract: false, name: null, value: 100n },
         { address: OWNER, isContract: false, name: null, value: 300n },
-      ],
+      ]),
     });
     const reads = {
       [`${TOKEN}.totalSupply()`]: 1000n,
@@ -251,10 +256,10 @@ describe("inspect", () => {
 
   it("ranks holders itself and shows one decimal when it matters", async () => {
     const holders = explorer({
-      topHolders: async () => [
+      topHolders: page([
         { address: "0x8888888888888888888888888888888888888888", isContract: false, name: null, value: 4n },
         { address: OWNER, isContract: false, name: null, value: 500n },
-      ],
+      ]),
       token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 2 }),
     });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
@@ -283,8 +288,7 @@ describe("inspect", () => {
   it("ranks holders by value, not by the order the explorer returned them, across a full page", async () => {
     const holderAddr = (i: number) => `0x${i.toString(16).padStart(40, "0")}`;
     const holders = explorer({
-      topHolders: async () =>
-        Array.from({ length: 12 }, (_, i) => ({ address: holderAddr(i + 1), isContract: false, name: null, value: BigInt(i + 1) })),
+      topHolders: page(Array.from({ length: 12 }, (_, i) => ({ address: holderAddr(i + 1), isContract: false, name: null, value: BigInt(i + 1) }))),
     });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
     expect(find(r, "holders")).toMatchObject({ status: "pass", title: "Top 10 wallets hold 7.5%" });
@@ -308,19 +312,19 @@ describe("inspect", () => {
   // --- Part 2 item 2: an empty holder list is never "0%" ---
 
   it("says unknown, not 0%, when the holder list is empty but holders are known to exist", async () => {
-    const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 50 }) });
+    const ex = explorer({ topHolders: page([]), token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 50 }) });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
     expect(find(r, "holders")).toMatchObject({ status: "unknown", title: "Couldn't check holder concentration" });
   });
 
   it("says unknown when the holder list is empty and holdersCount is itself unknown", async () => {
-    const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: null }) });
+    const ex = explorer({ topHolders: page([]), token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: null }) });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
     expect(find(r, "holders").status).toBe("unknown");
   });
 
   it("stays unknown, not pass, even when the explorer's own holdersCount claims zero — supply > 0 guarantees at least one holder", async () => {
-    const ex = explorer({ topHolders: async () => [], token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 0 }) });
+    const ex = explorer({ topHolders: page([]), token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 0 }) });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
     expect(find(r, "holders")).toMatchObject({ status: "unknown", title: "Couldn't check holder concentration" });
   });
@@ -723,7 +727,7 @@ describe("inspect", () => {
   ];
   const withHolders = (holdersCount: number | null) =>
     explorer({
-      topHolders: async () => threeHolders,
+      topHolders: page(threeHolders),
       token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount }),
     });
 
@@ -740,6 +744,58 @@ describe("inspect", () => {
   it("passes a short holder list the explorer confirms is everyone, and counts the wallets truthfully", async () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, withHolders(3));
     expect(find(r, "holders")).toMatchObject({ status: "pass", title: "All 3 wallets hold 24%" });
+  });
+
+  // --- Wave H: "All N wallets" is a claim about the whole list; a floor isn't a concentration ---
+
+  it("accepts the explorer's own last-page marker as confirmation that a short list is everyone", async () => {
+    // No holders_count at all, but `next_page_params: null` said this page is the whole list.
+    const ex = explorer({
+      topHolders: page(threeHolders, true),
+      token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: null }),
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
+    expect(find(r, "holders")).toMatchObject({ status: "pass", title: "All 3 wallets hold 24%" });
+  });
+
+  it("never says 'All N wallets' about one page of a longer list, and won't pass on a floor", async () => {
+    // Ten rows — enough to clear the "fewer than ten" gate — but three of them are the burn
+    // addresses and the token contract itself, so seven wallets are left to add up out of a list
+    // the explorer says has thousands. Counting those seven as "all" of them was the defect.
+    const wallets = Array.from({ length: 7 }, (_, i) => ({
+      address: `0x${(i + 1).toString(16).padStart(40, "0")}`, isContract: false, name: null, value: 20n,
+    }));
+    const ex = explorer({
+      topHolders: page([
+        { address: DEAD, isContract: false, name: null, value: 400n },
+        { address: ZERO, isContract: false, name: null, value: 300n },
+        { address: TOKEN, isContract: true, name: null, value: 100n },
+        ...wallets,
+      ]),
+      token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 5000 }),
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
+    expect(find(r, "holders").status).toBe("unknown"); // 14% is a floor, not the concentration
+    expect(find(r, "holders").title).not.toMatch(/^All /);
+  });
+
+  it("still fails on a floor that already crosses the threshold on its own", async () => {
+    // Same shape, but the seven wallets in hand already hold 56% between them: more holders can
+    // only add to that, so "over half the supply sits in a few wallets" is evidence either way.
+    const wallets = Array.from({ length: 7 }, (_, i) => ({
+      address: `0x${(i + 1).toString(16).padStart(40, "0")}`, isContract: false, name: null, value: 80n,
+    }));
+    const ex = explorer({
+      topHolders: page([
+        { address: DEAD, isContract: false, name: null, value: 400n },
+        { address: ZERO, isContract: false, name: null, value: 30n },
+        { address: TOKEN, isContract: true, name: null, value: 10n },
+        ...wallets,
+      ]),
+      token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 5000 }),
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, ex);
+    expect(find(r, "holders")).toMatchObject({ status: "fail", title: "The top 7 wallets hold at least 56%" });
   });
 
   // --- Wave F item 4: a renounced owner proves nothing about role holders ---
@@ -766,6 +822,33 @@ describe("inspect", () => {
     const ex = explorer({ contract: async () => ({ verified: null, name: null, abi: null, proxyType: null, implementations: [] }) });
     const r = await run({ code: { [TOKEN]: PLAIN } }, ex);
     expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: "The explorer has no record of this contract yet." });
+  });
+
+  // --- Wave H: "verified" has to cover the code that actually runs ---
+
+  const proxyOver = (implVerified: boolean | null) =>
+    explorer({
+      contract: async (a) =>
+        a.toLowerCase() === IMPL.toLowerCase()
+          ? { verified: implVerified, name: "Logic", abi: null, proxyType: null, implementations: [] }
+          : { verified: true, name: "Proxy", abi: null, proxyType: "eip1967", implementations: [] },
+    });
+  const proxied = { code: { [TOKEN]: PLAIN, [IMPL]: PLAIN }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) } };
+
+  it("fails verification when a verified proxy runs unverified code", async () => {
+    const r = await run(proxied, proxyOver(false));
+    expect(find(r, "verified")).toMatchObject({ status: "fail", title: "The code this proxy runs isn't verified" });
+    expect(find(r, "verified").evidenceUrl).toBe(`https://explorer.test/address/${IMPL}?tab=contract`);
+  });
+
+  it("says unknown when the implementation's verification status can't be established", async () => {
+    const r = await run(proxied, proxyOver(null));
+    expect(find(r, "verified")).toMatchObject({ status: "unknown", title: "Couldn't check source verification" });
+  });
+
+  it("passes verification when both the proxy and the implementation are verified", async () => {
+    const r = await run(proxied, proxyOver(true));
+    expect(find(r, "verified")).toMatchObject({ status: "pass", title: "Source code is verified" });
   });
 
   it("still fails verification when the explorer positively says the source isn't verified", async () => {
