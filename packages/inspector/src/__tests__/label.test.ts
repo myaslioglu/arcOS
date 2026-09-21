@@ -7,11 +7,11 @@ describe("cleanLabel", () => {
   });
 
   it("removes a bidi override used to spoof a symbol", () => {
-    expect(cleanLabel("US‮DC", 64)).toBe("USDC");
+    expect(cleanLabel("US\u202eDC", 64)).toBe("USDC");
   });
 
   it("removes zero-width characters", () => {
-    expect(cleanLabel("A​B﻿", 64)).toBe("AB");
+    expect(cleanLabel("A\u200bB\ufeff", 64)).toBe("AB");
   });
 
   it("collapses runs of whitespace, including newlines, to one space", () => {
@@ -29,7 +29,7 @@ describe("cleanLabel", () => {
   });
 
   it("returns null when only zero-width characters remain", () => {
-    expect(cleanLabel("​​", 64)).toBeNull();
+    expect(cleanLabel("\u200b\u200b", 64)).toBeNull();
   });
 
   it("returns null for null", () => {

@@ -269,7 +269,7 @@ describe("inspect", () => {
   });
 
   it("strips spoofing characters from a symbol read on-chain", async () => {
-    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.symbol()`]: "US‮DC" } });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.symbol()`]: "US\u202eDC" } });
     expect(r.token.symbol).toBe("USDC");
   });
 
