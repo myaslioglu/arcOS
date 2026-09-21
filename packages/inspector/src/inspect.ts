@@ -1,8 +1,10 @@
 import { getAddress } from "viem";
+import type { Address } from "@arcos/chain";
 import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
 import {
-  BEACON_SLOT, IMPL_SLOT, addressFromSlot, checkHolders, checkLiquidity, checkLpLock, checkOwnership,
-  checkPrevrandao, checkPrivileges, checkProxy, checkVerified, erc20Abi, findPools, resolveOwner, slotSet,
+  BEACON_SLOT, IMPL_SLOT, addressFromSlot, beaconImplementation, checkHolders, checkLiquidity, checkLpLock,
+  checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified, erc20Abi, findPools, resolveOwner,
+  slotSet, type LogicGap,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import type { ContractInfo, Holder, TokenInfo } from "./explorer";
@@ -72,7 +74,22 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   let topSlotsError: unknown = null;
   let topSlotsSet = false;
   let cloneTargetIsProxy = false;
+  let proxyImpl: Address | null = null;
   let logicCode: string | null;
+  let logicGap: LogicGap | null = null;
+
+  /** Reads the code at a resolved logic address. A thrown read ("couldn't read it") and an empty
+   * answer ("that address holds no code") both leave nothing to score, but they aren't the same
+   * fact, so they don't share a message. Neither is ever evidence of a clean contract. */
+  const readLogic = async (at: Address | null): Promise<[string | null, LogicGap | null]> => {
+    if (!at) return [null, "logic-unreadable"];
+    try {
+      const fetched = await reader.getCode(at);
+      return fetched === null ? [null, "logic-empty"] : [fetched, null];
+    } catch {
+      return [null, "logic-unreadable"];
+    }
+  };
 
   if (cloneOf === null) {
     const slots = await Promise.all([reader.getStorageAt(address, IMPL_SLOT), reader.getStorageAt(address, BEACON_SLOT)]).catch((e: unknown) => {
@@ -80,12 +97,22 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       return null;
     });
     if (slots) topSlotsSet = slotSet(slots[0]) || slotSet(slots[1]);
-    logicCode = code;
+    if (topSlotsSet) {
+      // An EIP-1967 proxy's own bytecode is a trampoline with no function dispatcher: scoring it
+      // would report "no privileged functions" about a token whose implementation can mint. The
+      // implementation slot wins over the beacon slot when both are set, exactly as the EVM's own
+      // ERC-1967 lookup does.
+      proxyImpl = addressFromSlot(slots![0]) ?? (await beaconImplementation(reader, addressFromSlot(slots![1])));
+      [logicCode, logicGap] = await readLogic(proxyImpl);
+    } else {
+      logicCode = code;
+    }
   } else if (!cloneResolved) {
     // The target's code either couldn't be fetched (transport failure) or came back empty (the
     // clone points at nothing) — either way there's no logic to read, so nothing downstream of it
     // can be scored. `checkProxy` itself still distinguishes the two (unknown vs. fail).
     logicCode = null;
+    logicGap = cloneReadFailed ? "logic-unreadable" : "logic-empty";
   } else {
     // The clone's target was fetched — check whether the TARGET is itself an upgradeable proxy.
     const [tImpl, tBeacon] = await Promise.all([
@@ -97,15 +124,26 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       logicCode = cloneImplCode;
     } else {
       // One level of further resolution is enough — a proxy-of-a-proxy-of-a-proxy stays unknown.
-      const grandAddr = addressFromSlot(tImpl) ?? addressFromSlot(tBeacon);
-      logicCode = grandAddr ? await reader.getCode(grandAddr).catch(() => null) : null;
+      // A beacon slot holds the BEACON's address, not the logic's, so it needs its own call.
+      const grandAddr = addressFromSlot(tImpl) ?? (await beaconImplementation(reader, addressFromSlot(tBeacon)));
+      [logicCode, logicGap] = await readLogic(grandAddr);
     }
   }
 
   // Code that delegates calls but resolves to no known clone target or EIP-1967 slot: the engine
   // never read the code that actually runs, so it must not score anything downstream of it.
   const forwardsToUnidentifiedCode = cloneOf === null && !topSlotsSet && usesOpcode(code, DELEGATECALL);
-  if (forwardsToUnidentifiedCode) logicCode = null;
+  if (forwardsToUnidentifiedCode) {
+    logicCode = null;
+    logicGap = "delegates-to-unidentified";
+  }
+  // Last net, for every path above: code with no function dispatcher at all that still delegates
+  // calls is another trampoline, not the logic — whatever chain of proxies led here wasn't followed
+  // to the end, so there is nothing to score.
+  if (logicCode !== null && extractSelectors(logicCode).size === 0 && usesOpcode(logicCode, DELEGATECALL)) {
+    logicCode = null;
+    logicGap = "logic-unidentified";
+  }
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -120,8 +158,12 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, tokenInfo, holders, owner, pools, blockNumber] = await Promise.all([
+  const [contract, implContract, tokenInfo, holders, owner, pools, blockNumber] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
+    // For a proxy, the ABI that describes what can be called is the IMPLEMENTATION's: Blockscout's
+    // record for the proxy address is the proxy's own, and "the proxy's ABI has no privileged
+    // functions" says nothing about the logic behind it.
+    proxyImpl && logicCode !== null ? ask<ContractInfo>(() => explorer!.contract(proxyImpl!)) : Promise.resolve(null),
     ask<TokenInfo | null>(() => explorer!.token(address)),
     ask<Holder[] | null>(() => explorer!.topHolders(address)),
     resolveOwner(reader, address, selectors),
@@ -137,13 +179,16 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     readOr<bigint | null>("totalSupply", tryBig(tokenInfo?.totalSupply ?? null)),
   ]);
 
-  const abiForPrivileges = cloneOf === null ? (contract?.abi ?? null) : null;
+  // The ABI is only evidence about the code that actually runs: the token's own for a plain
+  // contract, the implementation's for an EIP-1967 proxy, and none at all for a clone (whose
+  // explorer record describes the trampoline).
+  const abiForPrivileges = cloneOf !== null ? null : topSlotsSet ? (implContract?.abi ?? null) : (contract?.abi ?? null);
   const found: Privilege[] | null = logicCode === null ? null : combinePrivileges(abiForPrivileges, selectors);
 
   const findings = await Promise.all([
     guard("verified", () => checkVerified(input, contract ? contract.verified : null)),
     guard("ownership", () => checkOwnership(input, owner, found)),
-    guard("privileges", () => checkPrivileges(input, found, forwardsToUnidentifiedCode, owner)),
+    guard("privileges", () => checkPrivileges(input, found, logicGap, owner)),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
       return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, cloneTargetIsProxy, forwardsToUnidentifiedCode, topSlotsSet });
@@ -151,7 +196,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     guard("holders", () => checkHolders(input, holders, supply, pools)),
     guard("liquidity", () => checkLiquidity(input, pools)),
     guard("lp-lock", () => checkLpLock(input, pools)),
-    guard("prevrandao", () => checkPrevrandao(input, logicCode, forwardsToUnidentifiedCode)),
+    guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)),
   ]);
   findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
 

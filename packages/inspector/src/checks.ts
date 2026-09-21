@@ -6,10 +6,12 @@
  *   whether anyone controls it can't be told either way; or there's no owner function but the
  *   contract does have privileged functions (in logic code that WAS read), so who (if anyone) can
  *   call them can't be read.
- * - privileges: the contract's logic code couldn't be read (clone whose implementation is
- *   unreachable or came back empty, or the code delegates calls to a target this check couldn't
- *   identify at all); or privileged functions were found but the owner is unknown, or there's no
- *   owner function at all (can't tell if they're reachable either way).
+ * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone or an
+ *   EIP-1967 proxy whose implementation is unreachable, points at empty code or is itself a proxy,
+ *   or code that delegates calls to a target this check couldn't identify at all); or privileged
+ *   functions were found but the owner is unknown, or there's no owner function at all (can't tell
+ *   if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's bytecode and
+ *   ABI, never on its own trampoline, which has no dispatcher and so would look privilege-free.
  * - proxy: a storage-read failure on the top-level address propagates and is caught by the
  *   orchestrator's guard; an EIP-1167 clone whose implementation couldn't be fetched at all (a
  *   transport failure) is unknown, never "not upgradeable"; a clone whose target read succeeded but
@@ -26,8 +28,8 @@
  * - lp-lock: no DEX is configured, pool discovery failed, only Uniswap v3 pools exist (position
  *   locks need an indexer, which arrives with Radar), or the v2 pair's LP totalSupply is zero (no
  *   evidence to compute a locked share from).
- * - prevrandao: the contract's logic code couldn't be read (clone whose implementation is
- *   unreachable, or the code delegates calls to a target this check couldn't identify at all).
+ * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
+ *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  */
 import { parseAbi } from "viem";
 import { BURN_ADDRESSES, type Address } from "@arcos/chain";
@@ -44,13 +46,29 @@ export const erc20Abi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
 ]);
 const ownableAbi = parseAbi(["function owner() view returns (address)", "function getOwner() view returns (address)"]);
+const beaconAbi = parseAbi(["function implementation() view returns (address)"]);
 const v2FactoryAbi = parseAbi(["function getPair(address,address) view returns (address)"]);
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
 
-const PROXY_LOGIC_UNREADABLE = "This is a minimal proxy and its implementation's code couldn't be fetched.";
 const FORWARDS_TO_UNIDENTIFIED_TITLE = "This contract forwards calls to code that couldn't be identified";
 const FORWARDS_TO_UNIDENTIFIED_DETAIL =
   "The code contains a DELEGATECALL, but no EIP-1167 clone target or EIP-1967 proxy slot could be resolved.";
+
+/**
+ * Why the engine has no logic code to score. A proxy's own bytecode is a trampoline with no
+ * function dispatcher, so scoring it would read "nothing privileged here" off the proxy instead of
+ * off the code that actually runs — every one of these is `unknown`, never a pass. `null` means the
+ * logic code WAS read.
+ */
+export type LogicGap = "delegates-to-unidentified" | "logic-unreadable" | "logic-empty" | "logic-unidentified";
+
+const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
+  "delegates-to-unidentified": { title: FORWARDS_TO_UNIDENTIFIED_TITLE, detail: FORWARDS_TO_UNIDENTIFIED_DETAIL },
+  "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
+  "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
+  "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
+};
+
 const ZERO = "0x0000000000000000000000000000000000000000";
 const GRANT_ROLE = "0x2f2ff15d";
 const lower = (a: string) => a.toLowerCase();
@@ -96,6 +114,22 @@ export async function resolveOwner(reader: ChainReader, token: Address, selector
     }
   }
   return selectors.has(GRANT_ROLE) ? { kind: "roles" } : { kind: "none" };
+}
+
+/**
+ * An EIP-1967 beacon proxy keeps its logic address behind `beacon.implementation()` (selector
+ * 0x5c60da1b) rather than in a storage slot, so the beacon's own code is never the logic. Returns
+ * null when the call reverts, the network doesn't answer, or the answer is the zero address —
+ * "couldn't resolve it" is never evidence about what runs.
+ */
+export async function beaconImplementation(reader: ChainReader, beacon: Address | null): Promise<Address | null> {
+  if (!beacon) return null;
+  try {
+    const impl = await reader.read(beacon, beaconAbi, "implementation");
+    return typeof impl === "string" && lower(impl) !== ZERO ? (impl as Address) : null;
+  } catch {
+    return null;
+  }
 }
 
 export type Pool = { address: Address; version: "v2" | "v3"; quote: string; depth: bigint };
@@ -176,12 +210,11 @@ const PRIVILEGE_TITLE: Record<PrivilegeCategory, string> = {
  * `found` is the union of ABI- and bytecode-derived privileges (see `combinePrivileges`),
  * already resolved by the caller — `null` when the logic code couldn't be read at all.
  */
-export function checkPrivileges(input: InspectInput, found: Privilege[] | null, forwardsToUnidentifiedCode: boolean, owner: Owner): Finding {
+export function checkPrivileges(input: InspectInput, found: Privilege[] | null, gap: LogicGap | null, owner: Owner): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=write_contract`;
   if (found === null) {
-    return forwardsToUnidentifiedCode
-      ? finding("privileges", "unknown", FORWARDS_TO_UNIDENTIFIED_TITLE, FORWARDS_TO_UNIDENTIFIED_DETAIL, { evidenceUrl: url })
-      : finding("privileges", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE, { evidenceUrl: url });
+    const { title, detail } = LOGIC_GAP[gap ?? "logic-unreadable"];
+    return finding("privileges", "unknown", title, detail, { evidenceUrl: url });
   }
   const list = found.map((p) => p.signature).join(", ");
   if (found.length === 0) return finding("privileges", "pass", "No privileged functions found", "No mint, blacklist, fee, limit or pause function in the dispatcher.", { evidenceUrl: url });
@@ -311,11 +344,10 @@ export async function checkLpLock(input: InspectInput, pools: Pool[] | null): Pr
     : finding("lp-lock", "fail", "Liquidity isn't locked", `${formatPct(100 - pct)} of the v2 LP supply sits in wallets that can withdraw it.`, { evidenceUrl: url, fixAppId: "vault" });
 }
 
-export function checkPrevrandao(input: InspectInput, logicCode: string | null, forwardsToUnidentifiedCode: boolean): Finding {
+export function checkPrevrandao(input: InspectInput, logicCode: string | null, gap: LogicGap | null): Finding {
   if (logicCode === null) {
-    return forwardsToUnidentifiedCode
-      ? finding("prevrandao", "unknown", FORWARDS_TO_UNIDENTIFIED_TITLE, FORWARDS_TO_UNIDENTIFIED_DETAIL)
-      : finding("prevrandao", "unknown", "Couldn't read the contract's logic", PROXY_LOGIC_UNREADABLE);
+    const { title, detail } = LOGIC_GAP[gap ?? "logic-unreadable"];
+    return finding("prevrandao", "unknown", title, detail);
   }
   return usesOpcode(logicCode, 0x44)
     ? finding("prevrandao", "warn", "Uses PREVRANDAO, which is always 0 on Arc", "Any randomness derived from it is predictable.", { evidenceUrl: "https://docs.arc.io/arc/references/evm-differences" })

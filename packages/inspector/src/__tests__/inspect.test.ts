@@ -14,11 +14,16 @@ const DEAD = "0x000000000000000000000000000000000000dead";
 const V2 = "0x5555555555555555555555555555555555555555";
 const V3 = "0x6666666666666666666666666666666666666666";
 const GRAND = "0x9999999999999999999999999999999999999999";
+const BEACON = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 const PLAIN = "0x63a9059cbb00"; // PUSH4 transfer · STOP
 const MINTABLE = "0x6340c10f1900"; // PUSH4 mint(address,uint256) · STOP
 const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] };
 const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
+/** A 32-byte EIP-1967 slot value holding `address` in its low 20 bytes. */
+const slotWith = (address: string) => `0x000000000000000000000000${address.slice(2)}`;
+const cloneOf = (target: string) => `0x363d3d373d3d3d363d73${target.slice(2)}5af43d82803e903d91602b57fd5bf3`;
 
 type Fake = {
   code?: Record<string, string>;
@@ -393,6 +398,109 @@ describe("inspect", () => {
     };
     const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
     expect(find(r, "lp-lock").status).toBe("unknown");
+  });
+
+  // --- Wave F item 1: a top-level EIP-1967 proxy is scored on its IMPLEMENTATION's code ---
+
+  it("scores an EIP-1967 proxy on its implementation's code, not on its own trampoline", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+      reads: { [`${TOKEN}.owner()`]: OWNER },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  it("gives a proxy over mintable logic exactly the statuses that same logic gets unproxied", async () => {
+    // The brief's trigger, with the raw 20-byte address in the slot: a proxy must never earn the
+    // "nothing privileged here" passes its own dispatcher-less bytecode would otherwise produce.
+    const proxied = await run({ code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: IMPL } });
+    const bare = await run({ code: { [TOKEN]: MINTABLE } });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(proxied, id).status, find(proxied, id).title]).toEqual([id, find(bare, id).status, find(bare, id).title]);
+    }
+    expect(find(proxied, "privileges").status).toBe("unknown");
+  });
+
+  it("uses the implementation's verified ABI for privileges, never the proxy's own", async () => {
+    const ex = explorer({
+      contract: async (a) =>
+        a.toLowerCase() === IMPL.toLowerCase()
+          ? { verified: true, name: "Logic", abi: [{ type: "function", name: "mint", stateMutability: "nonpayable" }], proxyType: null, implementations: [] }
+          : { verified: true, name: "Proxy", abi: [], proxyType: null, implementations: [] },
+    });
+    const r = await run(
+      {
+        code: { [TOKEN]: PLAIN, [IMPL]: PLAIN }, // neither dispatcher mentions mint — only the ABI does
+        storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+        reads: { [`${TOKEN}.owner()`]: OWNER },
+      },
+      ex,
+    );
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  it("marks the logic-dependent checks unknown when a proxy's implementation code can't be read", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN },
+      codeErrors: { [IMPL]: new Error("ETIMEDOUT") },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    expect(find(r, "ownership").status).toBe("unknown");
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "prevrandao").status).toBe("unknown");
+  });
+
+  it("marks the logic-dependent checks unknown when a proxy's implementation slot points at empty code", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) } });
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "prevrandao").status).toBe("unknown");
+    expect(find(r, "ownership").status).toBe("unknown");
+  });
+
+  it("resolves a beacon proxy through beacon.implementation() and scores that code", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [BEACON]: PLAIN, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${BEACON_SLOT}`]: slotWith(BEACON) },
+      reads: { [`${BEACON}.implementation()`]: IMPL, [`${TOKEN}.owner()`]: OWNER },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  it("never scores the beacon's own code when the beacon won't answer implementation()", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [BEACON]: PLAIN }, // the beacon itself has plain, unprivileged code
+      storage: { [`${TOKEN}:${BEACON_SLOT}`]: slotWith(BEACON) },
+    });
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "prevrandao").status).toBe("unknown");
+    expect(find(r, "ownership").status).toBe("unknown");
+  });
+
+  it("never scores the inner trampoline when a proxy's implementation is itself a clone", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: cloneOf(GRAND), [GRAND]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+    });
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "prevrandao").status).toBe("unknown");
+    expect(find(r, "ownership").status).toBe("unknown");
+  });
+
+  it("never scores a beacon's own code when a clone's target is a beacon proxy", async () => {
+    // The clone's target is an EIP-1967 BEACON proxy: the beacon address is not the logic, so its
+    // own (unprivileged) code must never stand in for the implementation's.
+    const r = await run({
+      code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN, [BEACON]: PLAIN, [GRAND]: MINTABLE },
+      storage: { [`${IMPL}:${BEACON_SLOT}`]: slotWith(BEACON) },
+      reads: { [`${BEACON}.implementation()`]: GRAND, [`${TOKEN}.owner()`]: OWNER },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
   });
 
   // --- Part 3: the inspected address is always checksummed ---
