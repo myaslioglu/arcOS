@@ -2,9 +2,10 @@ import { getAddress } from "viem";
 import type { Address } from "@arcos/chain";
 import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
 import {
-  ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, addressFromSlot, beaconImplementation, checkHolders, checkLiquidity,
-  checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified, dispatcherVisible,
-  erc20Abi, findPools, gateLogicPass, resolveOwner, slotSet, type LogicBlock, type LogicGap,
+  ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, abiDeclaresTransfer, addressFromSlot, beaconImplementation, checkHolders,
+  checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified,
+  dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
+  type LogicBlock, type LogicGap,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import type { ContractInfo, HolderPage, TokenInfo } from "./explorer";
@@ -102,6 +103,8 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const readProxySlots = async (at: Address): Promise<ProxySlots> => {
     try {
       const [impl, beacon] = await Promise.all([reader.getStorageAt(at, IMPL_SLOT), reader.getStorageAt(at, BEACON_SLOT)]);
+      // A malformed answer is no more an answer than a rejected call — see `slotReadable`.
+      if (!slotReadable(impl) || !slotReadable(beacon)) return { read: false, impl: null, beacon: null };
       return { read: true, impl: addressFromSlot(impl), beacon: addressFromSlot(beacon) };
     } catch {
       return { read: false, impl: null, beacon: null };
@@ -126,7 +129,10 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       topSlotsError = e;
       return null;
     });
-    if (slots) topSlotsSet = slotSet(slots[0]) || slotSet(slots[1]);
+    // A malformed answer is treated exactly like a read that threw: `checkProxy` rethrows it and
+    // the logic block refuses to score this code (see `slotReadable`).
+    if (slots && (!slotReadable(slots[0]) || !slotReadable(slots[1]))) topSlotsError = new Error("malformed storage answer");
+    if (slots && !topSlotsError) topSlotsSet = slotSet(slots[0]) || slotSet(slots[1]);
     if (topSlotsSet) {
       // An EIP-1967 proxy's own bytecode is a trampoline with no function dispatcher: scoring it
       // would report "no privileged functions" about a token whose implementation can mint.
@@ -144,7 +150,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
         [logicCode, logicGap] = await readLogic(logicAt);
       }
     } else {
-      // This address's own code, and its own slots were just read and are unset.
+      // This address's own code. Its slots are unset — or the read THREW, which is not the same
+      // thing: `topSlotsError` carries that, `checkProxy` rethrows it, and the logic block below
+      // refuses to score this code as "the code that runs" on the strength of an answer nobody got.
       logicCode = code;
     }
   } else if (!cloneResolved) {
@@ -206,8 +214,14 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * three logic checks — one fact, one place. */
   const logicDelegates = logicCode !== null && usesOpcode(logicCode, DELEGATECALL);
   /** This token demonstrably runs code that isn't its own: a clone, or its EIP-1967 slots are set.
-   * Whether that code was actually identified is `logicAt`. */
+   * Whether that code was actually identified is `logicAt`. Drives which record the ABI evidence
+   * comes from — for a contract that merely DELEGATECALLs, its OWN record still describes the
+   * dispatcher being scored, so that case is deliberately not in here. */
   const runsOtherCode = cloneOf !== null || topSlotsSet;
+  /** ...but for `verified` it is: "anyone can read what this contract does" is false of any address
+   * whose behaviour is decided somewhere else, including a DELEGATECALL to an address that couldn't
+   * be identified at all. */
+  const forwardsCalls = runsOtherCode || forwardsToUnidentifiedCode;
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -253,13 +267,20 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   // why they rank this way. Applied after the checks, in one place, so no check can grow a new
   // pass path that quietly escapes it. (`logicCode === null` needs nothing: those checks already
   // answer `unknown` from `logicGap`.)
-  const block: LogicBlock | null =
+  const dispatcherInCode = dispatcherInBytecode(selectors);
+  const dispatcherRead = dispatcherInCode || abiDeclaresTransfer(abiForPrivileges);
+  /** `forOpcodes` is `prevrandao`'s variant: a published ABI can vouch for a dispatcher this engine
+   * couldn't parse, but nothing about a list of functions vouches for the INSTRUCTIONS in the code,
+   * so that check only accepts the bytecode half. */
+  const blockFor = (forOpcodes: boolean): LogicBlock | null =>
     logicCode === null ? null
+    : topSlotsError !== null ? { kind: "forwards-unknown" }
     : logicDelegates ? { kind: "delegatecall" }
-    : !dispatcherVisible(abiForPrivileges, selectors) ? { kind: "dispatcher" }
-    : upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt }
+    : !(forOpcodes ? dispatcherInCode : dispatcherRead) ? { kind: forOpcodes ? "opcodes" : "dispatcher" }
+    : upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt, privileged: (found?.length ?? 0) > 0 }
     : null;
-  const gate = (f: Finding): Finding => gateLogicPass(input, f, block);
+  const gate = (f: Finding): Finding => gateLogicPass(input, f, blockFor(false));
+  const gateOpcodes = (f: Finding): Finding => gateLogicPass(input, f, blockFor(true));
 
   const findings = await Promise.all([
     // `logicAt` is where the code that runs WOULD live; it is only the code this engine actually
@@ -267,7 +288,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // proxy itself, or that points at empty code, is an address the engine explicitly refused to
     // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
     // finding saying that code couldn't be identified is the report contradicting itself.
-    guard("verified", () => checkVerified(input, contract, runsOtherCode ? { at: logicCode === null ? null : logicAt, info: logicContract } : null)),
+    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
@@ -277,7 +298,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),
     guard("lp-lock", () => checkLpLock(input, poolScan)),
-    guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)).then(gate),
+    guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)).then(gateOpcodes),
   ]);
   findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
 

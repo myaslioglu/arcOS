@@ -279,7 +279,7 @@ describe("inspect", () => {
   it("still resolves when a clone's implementation fetch rejects, marking proxy, ownership, privileges and prevrandao unknown", async () => {
     const clone = `0x363d3d373d3d3d363d73${IMPL.slice(2)}5af43d82803e903d91602b57fd5bf3`;
     const r = await run({ code: { [TOKEN]: clone }, codeErrors: { [IMPL]: new Error("ETIMEDOUT") } });
-    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check whether this clone is upgradeable" });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check if this clone is upgradeable" });
     expect(find(r, "ownership").status).toBe("unknown");
     expect(find(r, "privileges").status).toBe("unknown");
     expect(find(r, "prevrandao").status).toBe("unknown");
@@ -334,7 +334,7 @@ describe("inspect", () => {
   it("treats a non-canonical delegatecall trampoline as unidentified, not as a clean pass", async () => {
     const trampoline = `0x73${IMPL.slice(2)}f400`; // PUSH20 impl · DELEGATECALL · STOP — not a canonical EIP-1167 clone
     const r = await run({ code: { [TOKEN]: trampoline, [IMPL]: MINTABLE } });
-    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "This contract forwards calls to code that couldn't be identified" });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Forwards calls to unidentified code" });
     // No owner function and nothing privileged was found either, but all three findings would rest
     // on a dispatcher this contract doesn't have, in front of code it runs but this scan can't see.
     for (const id of ["ownership", "privileges", "prevrandao"] as const) {
@@ -369,8 +369,8 @@ describe("inspect", () => {
 
   it("marks ownership and privileges unknown, not pass, when there's no owner function but privileged functions exist", async () => {
     const r = await run({ code: { [TOKEN]: MINTABLE } }); // owner()/getOwner() both revert -> Owner{kind:"none"}
-    expect(find(r, "ownership")).toMatchObject({ status: "unknown", title: "No owner function, but the contract has privileged functions" });
-    expect(find(r, "privileges")).toMatchObject({ status: "unknown", title: "Privileged functions found, but who can call them can't be read" });
+    expect(find(r, "ownership")).toMatchObject({ status: "unknown", title: "No owner function, but privileges exist" });
+    expect(find(r, "privileges")).toMatchObject({ status: "unknown", title: "Privileged functions, no owner function" });
   });
 
   it("still passes ownership and privileges when there's no owner function and nothing privileged", async () => {
@@ -440,14 +440,9 @@ describe("inspect", () => {
   // a pass standing.
   it("never gives a proxied token a better logic finding than the same logic unproxied, and never a pass", async () => {
     const REASSURANCE: Record<Finding["status"], number> = { pass: 3, warn: 2, unknown: 2, fail: 1 };
-    // Second case keeps wave F's raw 20-byte slot value (not zero-padded to 32 bytes), which is
-    // what `addressFromSlot` has to cope with either way.
-    const cases = [
-      { reads: {}, slot: slotWith(IMPL) },
-      { reads: { [`${TOKEN}.owner()`]: OWNER }, slot: IMPL },
-    ];
-    for (const { reads, slot } of cases) {
-      const proxied = await run({ code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slot }, reads });
+    const cases = [{ reads: {} }, { reads: { [`${TOKEN}.owner()`]: OWNER } }];
+    for (const { reads } of cases) {
+      const proxied = await run({ code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) }, reads });
       const bare = await run({ code: { [TOKEN]: MINTABLE }, reads });
       for (const id of ["ownership", "privileges", "prevrandao"] as const) {
         const [got, want] = [find(proxied, id).status, find(bare, id).status];
@@ -545,8 +540,12 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: "0x00" } });
     for (const id of ["ownership", "privileges", "prevrandao"] as const) {
       expect([id, find(r, id).status]).toEqual([id, "unknown"]);
-      expect([id, find(r, id).title]).toEqual([id, "Couldn't read this contract's functions"]);
     }
+    // Two wordings, because they rest on different things: the selector scan could have been
+    // vouched for by a published ABI, the opcode scan could not.
+    expect(find(r, "ownership").title).toBe("Couldn't read this contract's functions");
+    expect(find(r, "privileges").title).toBe("Couldn't read this contract's functions");
+    expect(find(r, "prevrandao").title).toBe("Couldn't read this contract's code");
   });
 
   it("still reports a privileged selector it did find, even with no transfer function in sight", async () => {
@@ -557,18 +556,36 @@ describe("inspect", () => {
     expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
   });
 
-  it("accepts a verified ABI as proof the functions were read when the bytecode scan can't see them", async () => {
+  const abiWith = (...entries: unknown[]) =>
+    explorer({ contract: async () => ({ verified: true, name: "Vyper", abi: entries, proxyType: null, implementations: [] }) });
+  const TRANSFER_ENTRY = {
+    type: "function", name: "transfer", stateMutability: "nonpayable",
+    inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }],
+    outputs: [{ type: "bool" }],
+  };
+
+  it("won't take just any verified ABI as proof this contract's functions were read", async () => {
+    // I4: a published ABI with one unrelated function says nothing about whether the rest of the
+    // dispatcher is visible — a stale or partial ABI is exactly the case R2 exists for.
+    const r = await run({ code: { [TOKEN]: "0x00" } }, abiWith({ type: "function", name: "foo", stateMutability: "nonpayable" }));
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+    }
+  });
+
+  it("accepts an ABI that declares ERC-20 transfer as proof the dispatcher was read — but never for the opcode scan", async () => {
     // The way out for a contract whose dispatcher this engine can't parse: the explorer publishes
-    // its functions, so "there is no mint here" rests on something after all.
-    const ex = explorer({
-      contract: async () => ({
-        verified: true, name: "Vyper", abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable" }],
-        proxyType: null, implementations: [],
-      }),
-    });
-    const r = await run({ code: { [TOKEN]: "0x00" } }, ex);
+    // its functions, so "there is no mint here" rests on something after all. PREVRANDAO is not a
+    // function, though, so no ABI can stand in for reading the code.
+    const r = await run({ code: { [TOKEN]: "0x00" } }, abiWith(TRANSFER_ENTRY));
     expect(find(r, "privileges")).toMatchObject({ status: "pass", title: "No privileged functions found" });
     expect(find(r, "ownership")).toMatchObject({ status: "pass", title: "No owner function" });
+    expect(find(r, "prevrandao")).toMatchObject({ status: "unknown", title: "Couldn't read this contract's code" });
+  });
+
+  it("wants the transfer entry to have ERC-20's own arguments, not just the name", async () => {
+    const r = await run({ code: { [TOKEN]: "0x00" } }, abiWith({ ...TRANSFER_ENTRY, inputs: [{ name: "to", type: "address" }] }));
+    expect(find(r, "privileges").status).toBe("unknown");
   });
 
   // --- Wave H: the resolved logic has to answer for itself ---
@@ -622,7 +639,7 @@ describe("inspect", () => {
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
     expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
     expect(find(r, "prevrandao")).toMatchObject({ status: "unknown", title: "Runs code this check can't see" });
-    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "This contract forwards calls to code that couldn't be identified" });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Forwards calls to unidentified code" });
   });
 
   // --- Wave H: with both EIP-1967 slots set, which one runs isn't storage's to say ---
@@ -665,6 +682,20 @@ describe("inspect", () => {
       expect([id, find(r, id).detail]).toEqual([id, expect.stringContaining("0x3333…3333")]);
       expect([id, find(r, id).evidenceUrl]).toEqual([id, `https://explorer.test/address/${TOKEN}?tab=contract`]);
     }
+    // I8: this logic ALREADY has a mint — the renounced owner is all that holds it back — so an
+    // upgrade restores it rather than adding it. And the detail gets one "but", not two.
+    expect(find(r, "privileges").title).toBe("Privileges can be restored by an upgrade");
+    expect(find(r, "ownership").title).toBe("Control can be restored by an upgrade");
+    expect(find(r, "privileges").detail.match(/\bbut\b/gi)).toHaveLength(1);
+  });
+
+  it("says an upgrade would ADD privileges when the current logic has none", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: PLAIN },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${ADMIN_SLOT}`]: slotWith(OWNER) },
+    });
+    expect(find(r, "privileges")).toMatchObject({ status: "warn", title: "Privileges can be added by an upgrade" });
+    expect(find(r, "ownership").title).toBe("Control can be added by an upgrade");
   });
 
   it("says whoever controls upgrades, without naming one, when the admin slot is empty (UUPS or a beacon)", async () => {
@@ -675,7 +706,7 @@ describe("inspect", () => {
     });
     expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
     expect(find(r, "privileges")).toMatchObject({ status: "warn" });
-    expect(find(r, "privileges").detail).toMatch(/whoever controls upgrades/);
+    expect(find(r, "privileges").detail).toMatch(/Whoever controls upgrades/);
   });
 
   it("treats an admin slot that won't read like an empty one, without disturbing any other check", async () => {
@@ -687,7 +718,7 @@ describe("inspect", () => {
     });
     expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
     expect(find(r, "privileges")).toMatchObject({ status: "warn" });
-    expect(find(r, "privileges").detail).toMatch(/whoever controls upgrades/);
+    expect(find(r, "privileges").detail).toMatch(/Whoever controls upgrades/);
   });
 
   it("gives a clone of an upgradeable proxy no logic pass either, however clean the logic behind it is", async () => {
@@ -718,13 +749,57 @@ describe("inspect", () => {
 
   it("says unknown, not 'not upgradeable', when a clone target's EIP-1967 slots can't be read", async () => {
     const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN }, storageError: new Error("ETIMEDOUT") });
-    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check whether this clone is upgradeable" });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check if this clone is upgradeable" });
   });
 
   // Not a wave F fix, despite where it sits: a top-level storage failure already propagated out of
   // checkProxy into the orchestrator's guard before wave F, and this test passes with wave F's
   // change reverted. It is kept as the guard for that pre-existing behaviour — the one thing that
   // must never happen is a storage read failing and the report saying "Not a proxy" anyway.
+  it("treats a slot answer that isn't a full 32-byte word as a read that failed, not as an address", async () => {
+    // I7: a short answer — a bare 20-byte address, a truncated `0x01` — used to satisfy `slotSet`
+    // and then have its last 40 characters taken as the admin, printing things like "0x0x01".
+    // Nothing about a malformed answer says the slot is set, or unset, so it is neither.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await run({ code: { [TOKEN]: PLAIN }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: IMPL } });
+    expect(find(r, "proxy").status).toBe("unknown");
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(JSON.stringify(r)).not.toContain("0x0x");
+    spy.mockRestore();
+  });
+
+  it("still calls a slot the node answers as empty 'not set', not 'not read'", async () => {
+    // Some nodes answer a never-written slot with a bare `0x` rather than a zero word. That IS the
+    // node saying the slot holds nothing, so it must not read as a failed read — otherwise every
+    // clean token on such a node would report an unknown proxy check.
+    const r = await run({ code: { [TOKEN]: PLAIN }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: "0x" } });
+    expect(find(r, "proxy")).toMatchObject({ status: "pass", title: "Not a proxy" });
+  });
+
+  it("won't read an admin out of a malformed admin slot", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${ADMIN_SLOT}`]: "0x01" },
+      reads: { [`${TOKEN}.owner()`]: ZERO }, // renounced, so privileges is a would-be pass R1 rewrites
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    expect(find(r, "privileges").detail).toMatch(/Whoever controls upgrades/);
+  });
+
+  it("claims nothing about the logic when it couldn't tell whether this contract forwards at all", async () => {
+    // I3: `proxy` was already unknown here, but the three logic checks went on scoring this
+    // address's own dispatcher as if it were the code that runs — which is precisely what an
+    // unread proxy slot leaves undecided.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await run({ code: { [TOKEN]: PLAIN }, storageError: new Error("ETIMEDOUT") });
+    expect(find(r, "proxy").status).toBe("unknown");
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+      expect([id, find(r, id).title]).toEqual([id, "Couldn't tell if this contract forwards"]);
+    }
+    spy.mockRestore();
+  });
+
   it("says unknown, not 'Not a proxy', when the token's own EIP-1967 slots can't be read", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await run({ code: { [TOKEN]: PLAIN }, storageError: new Error("ETIMEDOUT") });
@@ -928,6 +1003,13 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) } });
     expect(find(r, "privileges").status).toBe("unknown");
     expect(find(r, "verified").status).not.toBe("pass");
+  });
+
+  it("won't call the source verified when the contract delegates to code it couldn't identify", async () => {
+    // I2: it demonstrably runs code from elsewhere — the explorer's record covers the part that
+    // forwards, and nothing covers the part that decides what happens.
+    const r = await run({ code: { [TOKEN]: `0x73${IMPL.slice(2)}f400`, [IMPL]: MINTABLE } });
+    expect(find(r, "verified")).toMatchObject({ status: "unknown", title: "Couldn't check source verification" });
   });
 
   it("still fails verification when the explorer positively says the source isn't verified", async () => {

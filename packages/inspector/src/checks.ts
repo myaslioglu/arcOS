@@ -70,7 +70,7 @@ const beaconAbi = parseAbi(["function implementation() view returns (address)"])
 const v2FactoryAbi = parseAbi(["function getPair(address,address) view returns (address)"]);
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
 
-const FORWARDS_TO_UNIDENTIFIED_TITLE = "This contract forwards calls to code that couldn't be identified";
+const FORWARDS_TO_UNIDENTIFIED_TITLE = "Forwards calls to unidentified code";
 const FORWARDS_TO_UNIDENTIFIED_DETAIL =
   "The code contains a DELEGATECALL, but no EIP-1167 clone target or EIP-1967 proxy slot could be resolved.";
 
@@ -115,38 +115,95 @@ const shortAddress = (a: string): string => (a.length <= 12 ? a : `${a.slice(0, 
  * that isn't visible, so this is `unknown`, and it outranks `mutable` — a UUPS implementation is
  * both, and "I can't see what it runs" is the stronger fact.
  *
- * `dispatcher` (R2): the scan can't be shown to have read this contract's functions at all — see
- * `dispatcherVisible`. Also `unknown`, and it outranks `mutable` for the same reason.
+ * `dispatcher` / `opcodes` (R2): the scan can't be shown to have read this contract at all — see
+ * `dispatcherVisible`. `dispatcher` is the selector-scan form (a verified ABI declaring `transfer`
+ * can stand in for the bytecode); `opcodes` is the form `prevrandao` uses, where only the bytecode
+ * counts, because no ABI says anything about which instructions a contract contains. Both are
+ * `unknown`, and both outrank `mutable` for the same reason.
+ *
+ * `forwards-unknown`: this address's own EIP-1967 slots couldn't be read, so whether the code being
+ * scored is the code that runs was never established. It outranks everything: without that answer,
+ * the rest is a reading of bytecode that may not be the bytecode in play.
  */
-export type LogicBlock = { kind: "delegatecall" } | { kind: "dispatcher" } | { kind: "mutable"; admin: Address | null; proxy: Address };
+export type LogicBlock =
+  | { kind: "forwards-unknown" }
+  | { kind: "delegatecall" }
+  | { kind: "dispatcher" }
+  | { kind: "opcodes" }
+  | { kind: "mutable"; admin: Address | null; proxy: Address; /** The current logic already exposes
+      privileged functions (they just can't be called today), so an upgrade restores rather than
+      adds. Only changes the wording. */ privileged: boolean };
 
 /**
  * R2 — a scan is evidence of ABSENCE only if it can be shown to have seen this contract's
- * dispatcher. Either the explorer publishes the functions of the address being scored (a verified
- * ABI with entries in it), or the bytecode scan found the ERC-20 `transfer(address,uint256)`
- * selector: the thing being inspected is a token, so a scan that can't even see `transfer` has no
- * standing to say whether there is a `mint`. Vyper's dense dispatcher, Huff, a fallback-only
- * contract and via-IR jump tables all land here, as does `0x00`.
+ * dispatcher. The thing being inspected is a token, so the test is ERC-20's own
+ * `transfer(address,uint256)`: a scan that can't even see `transfer` has no standing to say whether
+ * there is a `mint`. Vyper's dense dispatcher, Huff, a fallback-only contract and via-IR jump
+ * tables all land here, as does `0x00`.
  */
 export function dispatcherVisible(abi: readonly unknown[] | null, selectors: Set<string>): boolean {
-  return (abi !== null && abi.length > 0) || selectors.has(ERC20_TRANSFER);
+  return dispatcherInBytecode(selectors) || abiDeclaresTransfer(abi);
 }
 
-/** Short on purpose: the OG card shows titles only. The address and the reasoning go in `detail`. */
-const MUTABLE_TITLE: Partial<Record<Finding["id"], string>> = {
-  ownership: "Control can be added by an upgrade",
-  privileges: "Privileges can be added by an upgrade",
-  prevrandao: "Randomness can be added by an upgrade",
+/** The bytecode half: the dispatcher itself compares against the `transfer` selector. This is the
+ * only half an OPCODE scan can use — an ABI describes functions and says nothing about what
+ * instructions the contract contains. */
+export function dispatcherInBytecode(selectors: Set<string>): boolean {
+  return selectors.has(ERC20_TRANSFER);
+}
+
+/**
+ * The explorer half: a published ABI that declares `transfer(address,uint256)` — the name AND the
+ * argument types, mirroring exactly what the bytecode half matches. "Any non-empty ABI" was too
+ * weak: a verified contract whose published ABI holds one unrelated function (or a stale, partial
+ * one) would have stood as proof that the whole dispatcher had been read.
+ */
+export function abiDeclaresTransfer(abi: readonly unknown[] | null): boolean {
+  if (abi === null) return false;
+  return abi.some((raw) => {
+    if (typeof raw !== "object" || raw === null) return false;
+    const entry = raw as { type?: unknown; name?: unknown; inputs?: unknown };
+    if (entry.type !== "function" || entry.name !== "transfer" || !Array.isArray(entry.inputs)) return false;
+    const types = entry.inputs.map((i) => (typeof i === "object" && i !== null ? (i as { type?: unknown }).type : null));
+    return types.length === 2 && types[0] === "address" && types[1] === "uint256";
+  });
+}
+
+/**
+ * Short on purpose: the OG card gives a row ONE line at font size 30, which is about 43 characters
+ * — the address and the reasoning go in `detail`. Two sets, because "added" understates logic that
+ * already HAS privileged functions today and is merely held back by a renounced owner: an upgrade
+ * there restores what is already written.
+ */
+const MUTABLE_TITLE: Record<"clean" | "privileged", Partial<Record<Finding["id"], string>>> = {
+  clean: {
+    ownership: "Control can be added by an upgrade",
+    privileges: "Privileges can be added by an upgrade",
+    prevrandao: "Randomness can be added by an upgrade",
+  },
+  privileged: {
+    ownership: "Control can be restored by an upgrade",
+    privileges: "Privileges can be restored by an upgrade",
+    prevrandao: "Randomness can be added by an upgrade",
+  },
 };
 
-const OPAQUE_LOGIC: Record<"delegatecall" | "dispatcher", { title: string; detail: string }> = {
+const OPAQUE_LOGIC: Record<"forwards-unknown" | "delegatecall" | "dispatcher" | "opcodes", { title: string; detail: string }> = {
+  "forwards-unknown": {
+    title: "Couldn't tell if this contract forwards",
+    detail: "This contract's EIP-1967 proxy slots couldn't be read, so whether the code scanned here is the code that actually runs was never established.",
+  },
   delegatecall: {
     title: "Runs code this check can't see",
     detail: "This contract can run code from another address (DELEGATECALL), which this check can't see — so what it found here rules nothing out.",
   },
   dispatcher: {
     title: "Couldn't read this contract's functions",
-    detail: "No ERC-20 transfer function could be found in this contract's bytecode and no verified ABI lists its functions, so this scan can't claim to have seen what it does or doesn't expose.",
+    detail: "No ERC-20 transfer function could be found in this contract's bytecode, and no verified ABI declares one, so this scan can't claim to have seen what it does or doesn't expose.",
+  },
+  opcodes: {
+    title: "Couldn't read this contract's code",
+    detail: "This doesn't read as an ERC-20's bytecode — the transfer function isn't in it — so what an opcode scan finds, or doesn't find, in it says nothing. A published ABI can't answer this one: it describes functions, not instructions.",
   },
 };
 
@@ -158,12 +215,15 @@ const OPAQUE_LOGIC: Record<"delegatecall" | "dispatcher", { title: string; detai
 export function gateLogicPass(input: InspectInput, finding: Finding, block: LogicBlock | null): Finding {
   if (block === null || finding.status !== "pass") return finding;
   if (block.kind === "mutable") {
-    const who = block.admin ? `the proxy admin ${shortAddress(block.admin)}` : "whoever controls upgrades";
+    // No "But" here: the detail it is appended to may already contain one ("Found mint(...), but
+    // ownership is renounced"), and two of them in one paragraph read as a correction of a
+    // correction.
+    const who = block.admin ? `The proxy admin ${shortAddress(block.admin)}` : "Whoever controls upgrades";
     return {
       ...finding,
       status: "warn",
-      title: MUTABLE_TITLE[finding.id] ?? "An upgrade can change this",
-      detail: `${finding.detail} But ${who} can replace this contract's code, so it only describes the logic running now.`,
+      title: MUTABLE_TITLE[block.privileged ? "privileged" : "clean"][finding.id] ?? "An upgrade can change this",
+      detail: `${finding.detail} ${who} can replace this contract's code, so that only describes the logic running now.`,
       evidenceUrl: `${input.explorerBase}/address/${block.proxy}?tab=contract`,
     };
   }
@@ -339,7 +399,7 @@ export function checkOwnership(input: InspectInput, owner: Owner, found: Privile
       return finding("ownership", "unknown", "Couldn't read the contract's logic", "The contract's logic code couldn't be read, so it can't tell whether anyone controls it.", { evidenceUrl: url });
     }
     return found.length > 0
-      ? finding("ownership", "unknown", "No owner function, but the contract has privileged functions", "The contract exposes no owner() or getOwner(), but its code has privileged functions — who (if anyone) can call them can't be read.", { evidenceUrl: url })
+      ? finding("ownership", "unknown", "No owner function, but privileges exist", "The contract exposes no owner() or getOwner(), but its code has privileged functions — who (if anyone) can call them can't be read.", { evidenceUrl: url })
       : finding("ownership", "pass", "No owner function", "The contract exposes no owner() or getOwner().", { evidenceUrl: url });
   }
   if (owner.kind === "roles") {
@@ -381,7 +441,7 @@ export function checkPrivileges(input: InspectInput, found: Privilege[] | null, 
     return finding("privileges", "pass", "Privileged functions can't be called", `Found ${list}, but ownership is renounced.`, { evidenceUrl: url });
   }
   if (owner.kind === "none") {
-    return finding("privileges", "unknown", "Privileged functions found, but who can call them can't be read", `Found: ${list}.`, { evidenceUrl: url });
+    return finding("privileges", "unknown", "Privileged functions, no owner function", `Found: ${list}.`, { evidenceUrl: url });
   }
   const worst = found.find((p) => SEVERE.includes(p.category)) ?? found[0]!;
   const status = SEVERE.includes(worst.category) ? "fail" : "warn";
@@ -393,7 +453,16 @@ export const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6c
 /** EIP-1967 admin slot: who may call `upgradeToAndCall` on a transparent proxy. Empty on a UUPS
  * proxy (the right lives in the implementation) and on a beacon proxy (it lives on the beacon). */
 export const ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
-export const slotSet = (v: string | null) => v !== null && /[1-9a-f]/i.test(v.slice(2));
+/**
+ * An answer this engine can use at all: `null` or a bare `0x` (nodes answer a never-written slot
+ * either way, and both mean "nothing in it"), or a full 32-byte word. Anything else — a truncated
+ * value, a bare 20-byte address — is a malformed answer. It is not evidence that the slot is set,
+ * and it is certainly not an address to read out of: taking the last 40 characters of `0x01` once
+ * printed a proxy admin of "0x0x01". Callers treat it the same way they treat a read that threw.
+ */
+export const slotReadable = (v: string | null): boolean => v === null || v === "0x" || v.length === 66;
+/** A slot that was read AND holds something. A malformed answer is neither set nor unset. */
+export const slotSet = (v: string | null) => v !== null && v.length === 66 && /[1-9a-f]/i.test(v.slice(2));
 /** The 20-byte address a 32-byte storage slot value points at, or null when the slot isn't set. */
 export const addressFromSlot = (v: string | null): Address | null => (slotSet(v) ? (`0x${v!.slice(-40)}` as Address) : null);
 
@@ -432,7 +501,7 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   if (r.cloneOf) {
     const targetUrl = `${input.explorerBase}/address/${r.cloneOf}`;
     if (r.cloneReadFailed) {
-      return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone that forwards to ${r.cloneOf}, whose code couldn't be read.`, { evidenceUrl: targetUrl });
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone that forwards to ${r.cloneOf}, whose code couldn't be read.`, { evidenceUrl: targetUrl });
     }
     if (r.cloneTargetEmpty) {
       return finding("proxy", "fail", "Clone points at an address with no code", `An EIP-1167 clone of ${r.cloneOf}, which has no contract code at all — calls to it will fail.`, { evidenceUrl: targetUrl });
@@ -442,10 +511,10 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
       return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — ${who}can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
     }
     if (!r.targetSlotsRead) {
-      return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
     }
     if (r.logicDelegates) {
-      return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
     }
     return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
   }
@@ -550,7 +619,7 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
 }
 
 export async function checkLpLock(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
-  if (!input.dex) return finding("lp-lock", "unknown", "Liquidity locks aren't checked on this network", "No DEX registry is configured here.");
+  if (!input.dex) return finding("lp-lock", "unknown", "Locks aren't checked on this network", "No DEX registry is configured here.");
   if (scan === null) return finding("lp-lock", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
   const v2 = scan.pools.filter((p) => p.version === "v2");
   if (v2.length === 0) {
