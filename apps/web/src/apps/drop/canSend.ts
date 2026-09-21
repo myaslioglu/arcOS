@@ -19,6 +19,12 @@ export type CanSendInput = {
   /** A send is in progress — in this window, another Drop window, or one this window doesn't remember
    * because it was closed and reopened mid-send. */
   sessionActive: boolean;
+  /** The row count the most recently fetched fee quote was computed for, or `null` while there's no
+   * usable quote (still loading, or the read failed). Must equal `rowCount` for the quote to be
+   * trusted: the quote is fetched debounced (300ms after `rowCount` last changed), so pasting more
+   * rows over a shorter list and clicking Send inside that window must not let a stale quote — still
+   * showing the OLD, shorter list's fee — authorize sending the NEW, longer one (wave E, I1). */
+  quoteCount: number | null;
 };
 
 export type CanSendResult = { ok: boolean; label: string };
@@ -28,10 +34,11 @@ export type CanSendResult = { ok: boolean; label: string };
  * never disagree. Checked in order; the first false condition wins and sets the label.
  */
 export function canSend(input: CanSendInput): CanSendResult {
-  const { busy, ready, decimalsKnown, textIsCurrent, rowCount, sessionActive } = input;
+  const { busy, ready, decimalsKnown, textIsCurrent, rowCount, sessionActive, quoteCount } = input;
   if (busy || sessionActive) return { ok: false, label: "Sending…" };
   if (!textIsCurrent) return { ok: false, label: "Checking the list…" };
   if (!decimalsKnown || !ready) return { ok: false, label: `Send to ${rowCount} wallets` };
   if (rowCount === 0) return { ok: false, label: "Send to 0 wallets" };
+  if (quoteCount !== rowCount) return { ok: false, label: "Reading the fee…" };
   return { ok: true, label: `Send to ${rowCount} wallets` };
 }

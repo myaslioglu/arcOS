@@ -9,6 +9,7 @@ const BASE: CanSendInput = {
   rowCount: 3,
   issueCount: 0,
   sessionActive: false,
+  quoteCount: 3,
 };
 
 describe("canSend", () => {
@@ -47,6 +48,26 @@ describe("canSend", () => {
   });
 
   it("labels the button with the current (non-deferred) row count", () => {
-    expect(canSend({ ...BASE, rowCount: 17 }).label).toBe("Send to 17 wallets");
+    expect(canSend({ ...BASE, rowCount: 17, quoteCount: 17 }).label).toBe("Send to 17 wallets");
+  });
+
+  // Wave E I1: pasting more rows over a shorter list, inside the 300ms debounce window, must not let
+  // a stale quote (computed for the OLD, shorter list) authorize a send of the NEW, longer one.
+  describe("quote/row count mismatch (I1 — the quote must match what's about to be sent)", () => {
+    it("disables with 'Reading the fee…' when the quote hasn't caught up with the current row count", () => {
+      expect(canSend({ ...BASE, rowCount: 400, quoteCount: 100 })).toEqual({ ok: false, label: "Reading the fee…" });
+    });
+
+    it("disables the same way when there's no quote at all yet", () => {
+      expect(canSend({ ...BASE, quoteCount: null })).toEqual({ ok: false, label: "Reading the fee…" });
+    });
+
+    it("allows sending once the quote's count catches up to the current row count", () => {
+      expect(canSend({ ...BASE, rowCount: 400, quoteCount: 400 })).toEqual({ ok: true, label: "Send to 400 wallets" });
+    });
+
+    it("a zero row count still wins over a quote mismatch — 'Send to 0 wallets', not 'Reading the fee…'", () => {
+      expect(canSend({ ...BASE, rowCount: 0, quoteCount: 5 })).toEqual({ ok: false, label: "Send to 0 wallets" });
+    });
   });
 });

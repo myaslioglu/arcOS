@@ -179,6 +179,14 @@ function Form({ params }: Pick<AppProps, "params">) {
     // Mirrors Mint's own fresh-fee guard: refuse to start a paid send without a known fee to compare
     // against, rather than silently skipping the per-batch staleness check below.
     if (quote === null || quote === "error") return notify("Couldn't read the fee. Try again.", "warn");
+    // I1 (wave E): the quote is fetched debounced (300ms after the row count last changed), so a
+    // paste that grows the list and a click on Send can land inside that window — the button's own
+    // canSend() check below already disables for this, but `submit` is the real guard: `quote.count`
+    // (what the fee on screen was computed for) is compared against `fresh.rows.length` (what's about
+    // to actually be sent), both read synchronously right now, never the possibly-stale render props.
+    if (quote.count !== fresh.rows.length) {
+      return notify("The fee shown doesn't match the current list — wait for it to update and try again.", "warn");
+    }
     // Rows the parser rejected (bad address, bad amount, a duplicate, ...) never reach `fresh.rows`,
     // so their line numbers are captured here — the only place that still has them — for the result
     // panel to say a send didn't cover them (see session.ts's excludedLines and ResultPanel.tsx).
@@ -186,7 +194,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     if (!started) return; // a send is already in flight (another click, another window) — do nothing
     setBusy(true);
     try {
-      const result = await send(token, fresh.rows, decimals, quote.basis);
+      const result = await send(token, fresh.rows, decimals, quote);
       trackEvent("drop_success", { recipients: result.delivered.length, batches: result.hashes.length });
     } catch (err) {
       notify(describeContractError(err), "warn", 6000);
@@ -219,6 +227,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     rowCount: rows.length,
     issueCount: issues.length,
     sessionActive,
+    quoteCount: quote && quote !== "error" ? quote.count : null,
   });
 
   const progressLabel = !dropSession.progress

@@ -3,22 +3,28 @@
 import { useCallback } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
-import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, formatUsdc, multisendAbi, unitsToNative, type Address } from "@arcos/chain";
+import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisendAbi, unitsToNative, type Address } from "@arcos/chain";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
-import { dropBatchFee, dropTotalFee } from "./dropFee";
+import { dropBatchFee, dropTotalFee, feeChangeMessage, type DropFeeBasis } from "./dropFee";
 import { BATCH, batchSizes, chunk, formatDropList, type DropRow } from "./parse";
 import { isUserRejection, runDrop, type BatchOutcome, type DropResult } from "./runDrop";
 import { session } from "./session";
 
 export type { DropResult } from "./runDrop";
 export type { DropProgress } from "./session";
+export type { DropFeeBasis } from "./dropFee";
 
-/** The two raw fee inputs a quote was computed from (DROP_PER_RECIPIENT, DROP_MIN — both native wei).
- * Kept around, not just the computed total, so a later batch can re-read the same two values and
- * detect a change instead of only ever comparing an opaque total. */
-export type DropFeeBasis = { perRecipient: bigint; min: bigint };
-export type DropQuote = { total: bigint; basis: DropFeeBasis };
+/**
+ * A fetched fee quote, tagged with the row `count` it was computed for (wave E, I1). `canSend.ts`
+ * refuses to send unless `count` still matches the CURRENT row count: the quote is fetched debounced
+ * (300ms after the row count last changed), so pasting more rows over a shorter list and clicking Send
+ * inside that window must never let a quote computed for the OLD, shorter list authorize sending the
+ * NEW, longer one — the discrepancy is otherwise invisible, since the per-batch fee-basis check below
+ * only compares the two RATES (DROP_PER_RECIPIENT, DROP_MIN), which don't change just because the list
+ * got longer.
+ */
+export type DropQuote = { total: bigint; perRecipient: bigint; min: bigint; count: number };
 
 /** token === null sends native USDC; row amounts are then 6-decimal units. */
 export function useDrop() {
@@ -49,7 +55,7 @@ export function useDrop() {
       try {
         const basis = await readFeeBasis(client);
         const total = dropTotalFee(basis.perRecipient, basis.min, batchSizes(count, BATCH));
-        return { total, basis };
+        return { total, perRecipient: basis.perRecipient, min: basis.min, count };
       } catch {
         return null;
       }
@@ -148,7 +154,9 @@ export function useDrop() {
             // UserFacingError, not a plain Error: this message is already safe and specific — see
             // its doc comment in lib/contract-error.ts for why it must not be replaced by
             // describeContractError's generic fallback when runDrop's catch formats it below.
-            throw new UserFacingError(`The fee changed to ${formatUsdc(fee)} USDC. Check it and submit again.`);
+            // feeChangeMessage quotes the RATE that changed (in USDC) — the number the form actually
+            // showed — rather than this batch's own fee total, which the user never saw on screen.
+            throw new UserFacingError(feeChangeMessage(shownFee, fresh));
           }
 
           // Simulate first: a revert here costs nothing and gives a readable reason. Each branch calls
