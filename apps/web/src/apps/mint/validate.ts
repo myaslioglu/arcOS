@@ -51,9 +51,13 @@ export function validateMint(form: MintForm, holder: Address): { ok: true; args:
 
   if (form.mintable && form.cap.trim() !== "") {
     const c = amount(form.cap, places);
-    // A parsed cap of 0 means "no cap typed", matching TokenFactory's cap == 0 => uncapped semantics.
     if (typeof c === "string") errors.cap = c;
-    else if (c !== 0n && !errors.supply && c < supply) errors.cap = "Cap can't be below the initial supply";
+    // An explicit 0 is rejected rather than silently treated as "uncapped": a typed 0 and a truly
+    // empty field used to mean the same thing on chain (TokenFactory's cap == 0 => uncapped), which
+    // reads as "this token is capped at zero" to anyone who didn't know that convention. Leaving the
+    // field empty (the `form.cap.trim() !== ""` guard above) still means uncapped.
+    else if (c === 0n) errors.cap = "Leave it empty for no cap.";
+    else if (!errors.supply && c < supply) errors.cap = "Cap can't be below the initial supply";
     else cap = c;
   }
 

@@ -35,13 +35,25 @@ describe("validateMint", () => {
     expect(capped.ok && capped.args.cap).toBe(2_000_000n * 10n ** 18n);
   });
 
-  it("treats an explicit zero cap as uncapped, matching the contract", () => {
-    const zero = validateMint(form({ mintable: true, cap: "0" }), HOLDER);
-    expect(zero.ok).toBe(true);
-    expect(zero.ok && zero.args.cap).toBe(0n);
-    const zeroDecimal = validateMint(form({ mintable: true, cap: "0.0" }), HOLDER);
-    expect(zeroDecimal.ok).toBe(true);
-    expect(zeroDecimal.ok && zeroDecimal.args.cap).toBe(0n);
+  it("leaves the cap truly empty as uncapped, matching the contract's cap == 0 semantics", () => {
+    const empty = validateMint(form({ mintable: true, cap: "" }), HOLDER);
+    expect(empty.ok).toBe(true);
+    expect(empty.ok && empty.args.cap).toBe(0n);
+    const blank = validateMint(form({ mintable: true, cap: "   " }), HOLDER);
+    expect(blank.ok).toBe(true);
+    expect(blank.ok && blank.args.cap).toBe(0n);
+  });
+
+  it("rejects an explicit zero cap instead of silently treating it as uncapped — 0 and empty used to be ambiguous", () => {
+    expect(validateMint(form({ mintable: true, cap: "0" }), HOLDER)).toEqual({ ok: false, errors: { cap: "Leave it empty for no cap." } });
+    expect(validateMint(form({ mintable: true, cap: "0.0" }), HOLDER)).toEqual({ ok: false, errors: { cap: "Leave it empty for no cap." } });
+  });
+
+  it("rejects a cap (or supply) that overflows uint256 once scaled by decimals, with a readable message", () => {
+    const hugeCap = validateMint(form({ mintable: true, cap: `1${"0".repeat(60)}` }), HOLDER);
+    expect(hugeCap).toEqual({ ok: false, errors: { cap: "That number is too large." } });
+    const hugeSupply = validateMint(form({ supply: `1${"0".repeat(60)}` }), HOLDER);
+    expect(hugeSupply).toEqual({ ok: false, errors: { supply: "That number is too large." } });
   });
 
   it("mirrors the factory's content rules", () => {

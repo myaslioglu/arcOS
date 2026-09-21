@@ -96,4 +96,25 @@ describe("parseTokenAmount", () => {
     expect(parseTokenAmount("7", 0)).toBe(7n);
     expect(() => parseTokenAmount("1.5", 0)).toThrowError(AmountError);
   });
+
+  it("accepts a value scaled exactly to uint256's max", () => {
+    const max = 2n ** 256n - 1n;
+    expect(parseTokenAmount(max.toString(), 0)).toBe(max);
+  });
+
+  it("rejects a value that overflows uint256 after scaling by decimals, with a readable message", () => {
+    const oneOverMax = (2n ** 256n).toString(); // uint256 max + 1, decimals: 0
+    expect(() => parseTokenAmount(oneOverMax, 0)).toThrowError(AmountError);
+    try {
+      parseTokenAmount(oneOverMax, 0);
+    } catch (e) {
+      expect((e as AmountError).code).toBe("overflow");
+      expect((e as AmountError).message).toBe("That number is too large.");
+    }
+
+    // A value that's small on its own only overflows once scaled by decimals — the check has to run
+    // AFTER scaling, not just on the raw digits typed.
+    const huge = "1" + "0".repeat(60); // 10^60 * 10^18 = 10^78 > 2^256-1 (~1.158e77)
+    expect(() => parseTokenAmount(huge, 18)).toThrowError(AmountError);
+  });
 });

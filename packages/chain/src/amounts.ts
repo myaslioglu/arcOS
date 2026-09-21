@@ -3,7 +3,12 @@ export const USDC_DECIMALS = 6;
 /** 10^(18-6): one ERC-20 USDC unit expressed in native wei. */
 export const DUST_FACTOR = 10n ** 12n;
 
-export type AmountErrorCode = "empty" | "format" | "precision" | "negative";
+export type AmountErrorCode = "empty" | "format" | "precision" | "negative" | "overflow";
+
+/** Solidity's `uint256` max — every amount this app sends on-chain (mint supply/cap, a Drop row,
+ * a fee) is eventually encoded as one, so a value that overflows it must be rejected here, in the
+ * one shared parser, rather than let a value the ABI encoder can't represent reach the wallet. */
+const UINT256_MAX = 2n ** 256n - 1n;
 
 export class AmountError extends Error {
   constructor(
@@ -28,7 +33,11 @@ export function parseTokenAmount(text: string, decimals: number): bigint {
   if (frac.length > decimals) {
     throw new AmountError("precision", `At most ${decimals} decimal places`);
   }
-  return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0");
+  const value = BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, "0") || "0");
+  // Checked AFTER scaling: a value that looks small as typed can still overflow once multiplied out
+  // by `decimals` (e.g. a huge whole number at 18 decimals).
+  if (value > UINT256_MAX) throw new AmountError("overflow", "That number is too large.");
+  return value;
 }
 
 /**
