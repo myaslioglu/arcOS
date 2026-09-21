@@ -2,9 +2,9 @@ import { getAddress } from "viem";
 import type { Address } from "@arcos/chain";
 import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
 import {
-  BEACON_SLOT, IMPL_SLOT, addressFromSlot, beaconImplementation, checkHolders, checkLiquidity, checkLpLock,
-  checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified, erc20Abi, findPools, resolveOwner,
-  slotSet, type LogicGap,
+  ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, addressFromSlot, beaconImplementation, checkHolders, checkLiquidity,
+  checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified, erc20Abi, findPools,
+  gateLogicPass, resolveOwner, slotSet, type LogicBlock, type LogicGap,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import type { ContractInfo, Holder, TokenInfo } from "./explorer";
@@ -137,6 +137,17 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
 
   // Code that delegates calls but resolves to no known clone target or EIP-1967 slot: the engine
   // never read the code that actually runs, so it must not score anything downstream of it.
+  // The ONE value behind both `proxy`'s upgradeability fail and R1's block on the logic checks.
+  const upgradeable = cloneOf === null ? topSlotsSet : cloneTargetIsProxy;
+  // Whose slots make it upgradeable — this address's own, or the clone target's. That is also
+  // where the admin slot lives, and the page to link as evidence for "someone can replace this".
+  const upgradeableAt: Address | null = !upgradeable ? null : cloneOf === null ? address : cloneOf;
+  // A failed admin read is not evidence of an empty slot, but it makes no difference to what can
+  // be said: without an address, both are "whoever controls upgrades".
+  const admin: Address | null = upgradeableAt
+    ? await reader.getStorageAt(upgradeableAt, ADMIN_SLOT).then(addressFromSlot, () => null)
+    : null;
+
   const forwardsToUnidentifiedCode = cloneOf === null && !topSlotsSet && usesOpcode(code, DELEGATECALL);
   if (forwardsToUnidentifiedCode) {
     logicCode = null;
@@ -190,18 +201,24 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const abiForPrivileges = cloneOf !== null ? null : topSlotsSet ? (implContract?.abi ?? null) : (contract?.abi ?? null);
   const found: Privilege[] | null = logicCode === null ? null : combinePrivileges(abiForPrivileges, selectors);
 
+  // R1: what stops the three logic checks from reaching a `pass` — see `LogicBlock`. Applied after
+  // the checks, in one place, so no check can be given a new pass path that quietly escapes it.
+  const block: LogicBlock | null =
+    logicCode !== null && upgradeableAt !== null ? { kind: "mutable", admin, proxy: upgradeableAt } : null;
+  const gate = (f: Finding): Finding => gateLogicPass(input, f, block);
+
   const findings = await Promise.all([
     guard("verified", () => checkVerified(input, contract)),
-    guard("ownership", () => checkOwnership(input, owner, found)),
-    guard("privileges", () => checkPrivileges(input, found, logicGap, owner)),
+    guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
+    guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
-      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, cloneTargetIsProxy, targetSlotsRead, forwardsToUnidentifiedCode, topSlotsSet });
+      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, upgradeable, admin });
     }),
     guard("holders", () => checkHolders(input, holders, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),
     guard("lp-lock", () => checkLpLock(input, poolScan)),
-    guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)),
+    guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)).then(gate),
   ]);
   findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
 

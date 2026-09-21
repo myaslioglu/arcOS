@@ -23,6 +23,7 @@ const MINTABLE = "0x6340c10f1900"; // PUSH4 mint(address,uint256) · STOP
 const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] };
 const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
+const ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
 /** A 32-byte EIP-1967 slot value holding `address` in its low 20 bytes. */
 const slotWith = (address: string) => `0x000000000000000000000000${address.slice(2)}`;
 const cloneOf = (target: string) => `0x363d3d373d3d3d363d73${target.slice(2)}5af43d82803e903d91602b57fd5bf3`;
@@ -34,6 +35,9 @@ type Fake = {
   blockNumberError?: Error;
   codeErrors?: Record<string, Error>;
   storageError?: Error;
+  /** A failure for ONE `address:slot` pair, keyed like `storage` — `storageError` fails every
+   * storage read, which can't express "the implementation slot answered but the admin slot didn't". */
+  storageErrors?: Record<string, Error>;
 };
 
 function reader(f: Fake): ChainReader {
@@ -44,8 +48,11 @@ function reader(f: Fake): ChainReader {
       return (f.code?.[a.toLowerCase()] as `0x${string}` | undefined) ?? null;
     },
     getStorageAt: async (a, slot) => {
+      const key = `${a.toLowerCase()}:${slot}`;
+      const err = f.storageErrors?.[key];
+      if (err) throw err;
       if (f.storageError) throw f.storageError;
-      return (f.storage?.[`${a.toLowerCase()}:${slot}`] as `0x${string}` | undefined) ?? null;
+      return (f.storage?.[key] as `0x${string}` | undefined) ?? null;
     },
     read: async (a, _abi, fn, args = []) => {
       const key = `${a.toLowerCase()}.${fn}(${args.map((x) => String(x).toLowerCase()).join(",")})`;
@@ -418,15 +425,28 @@ describe("inspect", () => {
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
   });
 
-  it("gives a proxy over mintable logic exactly the statuses that same logic gets unproxied", async () => {
-    // The brief's trigger, with the raw 20-byte address in the slot: a proxy must never earn the
-    // "nothing privileged here" passes its own dispatcher-less bytecode would otherwise produce.
-    const proxied = await run({ code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: IMPL } });
-    const bare = await run({ code: { [TOKEN]: MINTABLE } });
-    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
-      expect([id, find(proxied, id).status, find(proxied, id).title]).toEqual([id, find(bare, id).status, find(bare, id).title]);
+  // Wave H, R1: replaces wave F's "gives a proxy over mintable logic exactly the statuses that same
+  // logic gets unproxied". Identical statuses was the wrong invariant — the logic behind a proxy
+  // can be swapped for different logic, so a pass the bare contract earns can't survive proxying.
+  // What must hold is that proxying never makes a logic finding MORE reassuring, and never leaves
+  // a pass standing.
+  it("never gives a proxied token a better logic finding than the same logic unproxied, and never a pass", async () => {
+    const REASSURANCE: Record<Finding["status"], number> = { pass: 3, warn: 2, unknown: 2, fail: 1 };
+    // Second case keeps wave F's raw 20-byte slot value (not zero-padded to 32 bytes), which is
+    // what `addressFromSlot` has to cope with either way.
+    const cases = [
+      { reads: {}, slot: slotWith(IMPL) },
+      { reads: { [`${TOKEN}.owner()`]: OWNER }, slot: IMPL },
+    ];
+    for (const { reads, slot } of cases) {
+      const proxied = await run({ code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slot }, reads });
+      const bare = await run({ code: { [TOKEN]: MINTABLE }, reads });
+      for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+        const [got, want] = [find(proxied, id).status, find(bare, id).status];
+        expect([id, got, REASSURANCE[got] <= REASSURANCE[want]]).toEqual([id, got, true]);
+        expect([id, got]).not.toEqual([id, "pass"]);
+      }
     }
-    expect(find(proxied, "privileges").status).toBe("unknown");
   });
 
   it("uses the implementation's verified ABI for privileges, never the proxy's own", async () => {
@@ -506,6 +526,66 @@ describe("inspect", () => {
     });
     expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  // --- Wave H, R1: mutable logic can't earn a pass about logic ---
+  //
+  // "No privileged functions", "ownership is renounced", "no owner function" and "doesn't use
+  // PREVRANDAO" are all statements about code that whoever controls the proxy can replace. They
+  // stay true of the logic running now, which is why they become `warn` (naming who can replace
+  // it), never `pass`.
+
+  it("never passes ownership or privileges for renounced logic behind an upgradeable proxy", async () => {
+    // The realistic rug shape: the implementation's owner() is renounced, the proxy admin is a
+    // live EOA. "Privileged functions can't be called" is affirmatively false here.
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${ADMIN_SLOT}`]: slotWith(OWNER) },
+      reads: { [`${TOKEN}.owner()`]: ZERO },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable — admin 0x3333…3333" });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "warn"]);
+      expect([id, find(r, id).detail]).toEqual([id, expect.stringContaining("0x3333…3333")]);
+      expect([id, find(r, id).evidenceUrl]).toEqual([id, `https://explorer.test/address/${TOKEN}?tab=contract`]);
+    }
+  });
+
+  it("says whoever controls upgrades, without naming one, when the admin slot is empty (UUPS or a beacon)", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) }, // no admin slot: UUPS keeps the right in the logic
+      reads: { [`${TOKEN}.owner()`]: ZERO },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    expect(find(r, "privileges")).toMatchObject({ status: "warn" });
+    expect(find(r, "privileges").detail).toMatch(/whoever controls upgrades/);
+  });
+
+  it("treats an admin slot that won't read like an empty one, without disturbing any other check", async () => {
+    const r = await run({
+      code: { [TOKEN]: PLAIN, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+      storageErrors: { [`${TOKEN}:${ADMIN_SLOT}`]: new Error("ETIMEDOUT") },
+      reads: { [`${TOKEN}.owner()`]: ZERO },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    expect(find(r, "privileges")).toMatchObject({ status: "warn" });
+    expect(find(r, "privileges").detail).toMatch(/whoever controls upgrades/);
+  });
+
+  it("gives a clone of an upgradeable proxy no logic pass either, however clean the logic behind it is", async () => {
+    const r = await run({
+      code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN, [GRAND]: PLAIN },
+      storage: { [`${IMPL}:${IMPL_SLOT}`]: slotWith(GRAND), [`${IMPL}:${ADMIN_SLOT}`]: slotWith(OWNER) },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "warn"]);
+    }
+    // The admin read happens on the address whose slots make this upgradeable — the clone's target.
+    expect(find(r, "privileges").detail).toMatch(/0x3333…3333/);
+    expect(find(r, "privileges").evidenceUrl).toBe(`https://explorer.test/address/${IMPL}?tab=contract`);
   });
 
   // --- Wave F item 2: a failed storage read is never "the target is not a proxy" ---

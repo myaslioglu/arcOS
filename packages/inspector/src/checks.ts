@@ -41,6 +41,12 @@
  *   pair's LP totalSupply is zero (no evidence to compute a locked share from).
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
+ *
+ * On top of all of that, ownership, privileges and prevrandao are statements about code, so a
+ * `pass` from any of them is conditional on that code being the code that will run — see
+ * `LogicBlock` and `gateLogicPass`: when the logic can be replaced (anything upgradeable), a
+ * would-be pass becomes a `warn` naming who can replace it. Their `fail`/`warn` findings are
+ * about the logic running NOW and stand unchanged.
  */
 import { parseAbi } from "viem";
 import { BURN_ADDRESSES, type Address } from "@arcos/chain";
@@ -84,6 +90,49 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 const GRANT_ROLE = "0x2f2ff15d";
 const lower = (a: string) => a.toLowerCase();
 const isBurn = (a: string) => BURN_ADDRESSES.some((b) => lower(b) === lower(a));
+
+/** `0x1234…abcd`. The web app has its own copy in `apps/web/src/lib/format.ts`; this package is a
+ * leaf that never imports from an app, and one line is cheaper than a shared dependency for it. */
+const shortAddress = (a: string): string => (a.length <= 12 ? a : `${a.slice(0, 6)}…${a.slice(-4)}`);
+
+/**
+ * R1 — why a would-be `pass` about what this contract's logic DOES can't stand, even though the
+ * check found nothing wrong with the code it read.
+ *
+ * `mutable`: the code can be replaced — this address's own EIP-1967 slots are set, or it is a
+ * clone of a contract whose are (exactly the condition `checkProxy` fails on, read from the same
+ * value so the two can never disagree). "No privileged functions", "Ownership is renounced", "No
+ * owner function" and "Doesn't rely on on-chain randomness" are then statements about code that
+ * can be different tomorrow. They stay true of the logic running NOW, which is why this downgrades
+ * to a `warn` naming who can replace it rather than to an `unknown`.
+ */
+export type LogicBlock = { kind: "mutable"; admin: Address | null; proxy: Address };
+
+/** Short on purpose: the OG card shows titles only. The address and the reasoning go in `detail`. */
+const BLOCK_TITLE: Record<LogicBlock["kind"], Partial<Record<Finding["id"], string>>> = {
+  mutable: {
+    ownership: "Control can be added by an upgrade",
+    privileges: "Privileges can be added by an upgrade",
+    prevrandao: "Randomness can be added by an upgrade",
+  },
+};
+
+/**
+ * Applies a `LogicBlock` to a finding one of the three logic checks already produced. Only a
+ * `pass` is ever rewritten: a `fail` or `warn` describes the logic running now and is still true,
+ * and an `unknown` is already the weakest thing this engine says.
+ */
+export function gateLogicPass(input: InspectInput, finding: Finding, block: LogicBlock | null): Finding {
+  if (block === null || finding.status !== "pass") return finding;
+  const who = block.admin ? `the proxy admin ${shortAddress(block.admin)}` : "whoever controls upgrades";
+  return {
+    ...finding,
+    status: "warn",
+    title: BLOCK_TITLE[block.kind][finding.id] ?? "An upgrade can change this",
+    detail: `${finding.detail} But ${who} can replace this contract's code, so it only describes the logic running now.`,
+    evidenceUrl: `${input.explorerBase}/address/${block.proxy}?tab=contract`,
+  };
+}
 
 /** Rounds to at most one decimal and drops a trailing ".0" — "30%", "50.4%", never "50.0%". */
 const formatPct = (pct: number): string => {
@@ -286,6 +335,9 @@ export function checkPrivileges(input: InspectInput, found: Privilege[] | null, 
 
 export const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 export const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50";
+/** EIP-1967 admin slot: who may call `upgradeToAndCall` on a transparent proxy. Empty on a UUPS
+ * proxy (the right lives in the implementation) and on a beacon proxy (it lives on the beacon). */
+export const ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
 export const slotSet = (v: string | null) => v !== null && /[1-9a-f]/i.test(v.slice(2));
 /** The 20-byte address a 32-byte storage slot value points at, or null when the slot isn't set. */
 export const addressFromSlot = (v: string | null): Address | null => (slotSet(v) ? (`0x${v!.slice(-40)}` as Address) : null);
@@ -298,17 +350,22 @@ export type ProxyResolution = {
   /** Only meaningful when `cloneOf` is set and `cloneReadFailed` is false: the read succeeded but
    * the target address has no code (`0x`) — a clone pointing at nothing, which is broken. */
   cloneTargetEmpty: boolean;
-  /** Only meaningful when `cloneOf` is set, the target's code was actually read and
-   * `targetSlotsRead` is true: the target's own EIP-1967 slots were read and at least one is set. */
-  cloneTargetIsProxy: boolean;
   /** Only meaningful when `cloneOf` is set: both of the target's EIP-1967 slot reads answered.
-   * When they didn't, `cloneTargetIsProxy === false` means "not read", not "not set", so the clone
-   * can't be called non-upgradeable. */
+   * When they didn't, `upgradeable === false` means "not read", not "not set", so the clone can't
+   * be called non-upgradeable. */
   targetSlotsRead: boolean;
   /** DELEGATECALL is present but resolves to no known clone target or EIP-1967 slot. */
   forwardsToUnidentifiedCode: boolean;
-  /** Only meaningful when `cloneOf` is null: this address's own EIP-1967 slots are set. */
-  topSlotsSet: boolean;
+  /** The code this token runs can be replaced: its own EIP-1967 implementation or beacon slot is
+   * set, or it is a clone of a contract whose is. THE value — `checkProxy`'s upgradeability `fail`
+   * and R1's block on the logic checks (`LogicBlock`) both read this one field, so the report can
+   * never say "upgradeable proxy" and "ownership is renounced" side by side. */
+  upgradeable: boolean;
+  /** The EIP-1967 admin slot of whichever address makes this upgradeable, when it holds one.
+   * `null` covers all three of: not upgradeable, slot empty (UUPS or beacon), slot unreadable —
+   * they produce the same finding text ("whoever controls upgrades"), because the one thing that
+   * must never be said is a name that wasn't read. */
+  admin: Address | null;
 };
 
 export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
@@ -321,8 +378,9 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     if (r.cloneTargetEmpty) {
       return finding("proxy", "fail", "Clone points at an address with no code", `An EIP-1167 clone of ${r.cloneOf}, which has no contract code at all — calls to it will fail.`, { evidenceUrl: targetUrl });
     }
-    if (r.cloneTargetIsProxy) {
-      return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — whoever controls it can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
+    if (r.upgradeable) {
+      const who = r.admin ? `whose admin ${r.admin} ` : "whoever controls it ";
+      return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — ${who}can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
     }
     if (!r.targetSlotsRead) {
       return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
@@ -332,7 +390,14 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   if (r.forwardsToUnidentifiedCode) {
     return finding("proxy", "unknown", FORWARDS_TO_UNIDENTIFIED_TITLE, FORWARDS_TO_UNIDENTIFIED_DETAIL, { evidenceUrl: url });
   }
-  if (r.topSlotsSet) return finding("proxy", "fail", "Upgradeable proxy", "Whoever controls the proxy admin can replace this contract's logic.", { evidenceUrl: url });
+  if (r.upgradeable) {
+    // Naming the admin is the difference between "someone could" and "this account can".
+    const title = r.admin ? `Upgradeable — admin ${shortAddress(r.admin)}` : "Upgradeable proxy";
+    const detail = r.admin
+      ? `${r.admin} holds the EIP-1967 admin slot and can replace this contract's logic.`
+      : "Whoever controls the proxy admin can replace this contract's logic.";
+    return finding("proxy", "fail", title, detail, { evidenceUrl: url });
+  }
   return finding("proxy", "pass", "Not a proxy", "No EIP-1967 proxy slots are set and the code doesn't delegate calls.", { evidenceUrl: url });
 }
 
