@@ -114,11 +114,17 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Deep links: /#app:inspector?token=0x… opens that window, on load and on change.
+  // Deep links: /#app:inspector?token=0x… opens that window, on load and on change. The hash is
+  // cleared with replaceState right after handling it — for an unknown or coming-soon app id too,
+  // not just a successful open — so the same link can be clicked again later: leaving the hash in
+  // place means a second click on an identical link never fires `hashchange` at all. replaceState
+  // never fires `hashchange` itself, so this can't loop.
   useEffect(() => {
     const openFromHash = () => {
       const target = parseAppHash(window.location.hash);
-      if (target) open(target.appId, target.params);
+      if (!target) return;
+      open(target.appId, target.params);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
     };
     const frame = requestAnimationFrame(openFromHash);
     window.addEventListener("hashchange", openFromHash);

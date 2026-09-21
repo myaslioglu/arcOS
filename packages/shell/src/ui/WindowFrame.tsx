@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Square, X, Copy } from "lucide-react";
 import {
+  shouldEscapeCloseWindow,
   snapRect,
   snapZone,
   MIN_WINDOW,
@@ -70,11 +71,18 @@ export function WindowFrame({
   const gesture = useRef<Gesture | null>(null);
   const [snap, setSnap] = useState<SnapZone | null>(null);
 
-  // ESC closes the active window only; background windows stay put.
+  // ESC closes the active window only; background windows stay put. An overlay above the window
+  // (Launcher, a menu, a context menu) marks the key handled via preventDefault/stopPropagation
+  // before this ever runs, and Escape aimed at a text field (dismissing autofill) never reaches
+  // here as a close request either — see shouldEscapeCloseWindow.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (!shouldEscapeCloseWindow({ defaultPrevented: e.defaultPrevented, target: e.target as HTMLElement | null })) {
+        return;
+      }
+      onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

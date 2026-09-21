@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, CornerDownLeft } from "lucide-react";
 import { searchLauncher, type LauncherHit, type QuickAction } from "../core";
@@ -39,6 +39,21 @@ export function Launcher({ open, onClose, quickActions, onPickApp, onPickAction 
     setCursor(0);
     onClose();
   };
+
+  // Escape dismisses the launcher over whatever window sits behind it. Capture phase plus
+  // stopPropagation, same as MenuBar and ContextMenu: it runs before WindowFrame's own (bubble
+  // phase) document listener ever sees the key, so dismissing the launcher never also closes the
+  // window underneath — losing, say, a half-typed Drop list.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
 
   return (
     <Portal>
@@ -80,9 +95,8 @@ export function Launcher({ open, onClose, quickActions, onPickApp, onPickAction 
                       setCursor((c) => Math.max(c - 1, 0));
                     } else if (e.key === "Enter" && results[selected]) {
                       activate(results[selected]);
-                    } else if (e.key === "Escape") {
-                      onClose();
                     }
+                    // Escape is handled by the capture-phase document listener above, not here.
                   }}
                   placeholder="Search apps, or paste a token address"
                   aria-label="Search"

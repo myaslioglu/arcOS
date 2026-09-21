@@ -15,13 +15,20 @@ function ensureCached(m: AppManifest): void {
   if (!cache[m.id]) cache[m.id] = lazy(m.load);
 }
 
+/** A rejected `import()` (routine when a tab stays open across a redeploy) leaves `lazy()`
+ * re-throwing the same rejected promise forever — "close and reopen" would otherwise do nothing.
+ * Dropping the cache entry makes the next `ensureCached` call for this id start a fresh import. */
+function dropCached(id: string): void {
+  delete cache[id];
+}
+
 export function AppBody({ win }: { win: DesktopWindow }) {
   const m = useRegistry().byId.get(win.appId);
   if (!m) return <div className="os-empty">Unknown app: {win.appId}</div>;
   ensureCached(m);
   const App = cache[m.id];
   return (
-    <WindowErrorBoundary appName={m.name}>
+    <WindowErrorBoundary appName={m.name} onError={() => dropCached(m.id)}>
       <Suspense fallback={<div className="os-loading">Loading…</div>}>
         <App winId={win.winId} params={win.params} />
       </Suspense>

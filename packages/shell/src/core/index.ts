@@ -5,3 +5,4 @@ export * from "./manifest";
 export * from "./deeplink";
 export * from "./launcher";
 export * from "./dnd";
+export * from "./escape";
