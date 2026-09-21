@@ -70,6 +70,7 @@ export function useDrop() {
           delivered: [],
           failed: [],
           remaining: rows,
+          unconfirmed: [],
           hashes: [],
           stoppedBecause: "error" as const,
           message: "Wallet or network isn't ready.",
@@ -107,6 +108,7 @@ export function useDrop() {
               delivered: [],
               failed: [],
               remaining: rows,
+              unconfirmed: [],
               hashes: [],
               stoppedBecause: isUserRejection(err) ? ("rejected" as const) : ("error" as const),
               message: describeContractError(err),
@@ -132,7 +134,15 @@ export function useDrop() {
           // change mid-run, so every batch gets its own check, not just the first. A mismatch stops
           // here, before the wallet opens; runDrop's existing catch handling puts this batch and every
           // batch after it back into `remaining` as a normal partial result.
-          const fresh = await readFeeBasis(client);
+          let fresh: DropFeeBasis;
+          try {
+            fresh = await readFeeBasis(client);
+          } catch {
+            // Nothing was submitted for this batch — only the fee READ failed — so this must not read
+            // as "the transaction didn't go through" (describeContractError's generic fallback), which
+            // would wrongly suggest a signed transaction was attempted.
+            throw new UserFacingError("Couldn't read the fee, so the next batch wasn't sent.");
+          }
           const fee = dropBatchFee(fresh.perRecipient, fresh.min, batch.length);
           if (shownFee && (fresh.perRecipient !== shownFee.perRecipient || fresh.min !== shownFee.min)) {
             // UserFacingError, not a plain Error: this message is already safe and specific — see
@@ -152,7 +162,16 @@ export function useDrop() {
             const { request } = await client.simulateContract({ account: address, address: multisend, abi: multisendAbi, functionName: "sendNative", args: [to, amounts], value: amounts.reduce((s, a) => s + a, 0n) + fee });
             hash = await writeContractAsync(withChain(request, chain.id));
           }
-          const receipt = await client.waitForTransactionReceipt({ hash });
+          let receipt: Awaited<ReturnType<PublicClient["waitForTransactionReceipt"]>>;
+          try {
+            receipt = await client.waitForTransactionReceipt({ hash });
+          } catch {
+            // The transaction WAS broadcast — we just don't know its outcome (RPC timeout, dropped
+            // connection, ...). Reported as "unconfirmed" rather than thrown: this batch's rows must
+            // never go back into `remaining` (that risks a double send) and the run must stop — see
+            // runDrop's handling of BatchOutcome.status === "unconfirmed".
+            return { hash, status: "unconfirmed", failures: [] };
+          }
           // Filtered to the Multisend contract's own logs: without it, any other log in the same transaction
           // that happens to match the TransferFailed signature would be misread as one of this batch's rows.
           // (This viem version's parseEventLogs has no `address` filter of its own.)
@@ -178,6 +197,7 @@ export function useDrop() {
           delivered: [],
           failed: [],
           remaining: rows,
+          unconfirmed: [],
           hashes: [],
           stoppedBecause: "error" as const,
           message: describeContractError(err),

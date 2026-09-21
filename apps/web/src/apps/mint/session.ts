@@ -1,6 +1,7 @@
 import type { Address } from "@arcos/chain";
+import { UserFacingError, describeContractError } from "@/lib/contract-error";
 
-export type MintSessionStatus = "idle" | "minting" | "done";
+export type MintSessionStatus = "idle" | "minting" | "unconfirmed" | "done";
 
 export type MintResult = { token: Address; symbol: string; decimals: number };
 
@@ -12,8 +13,12 @@ export type MintSessionState = {
   symbol: string;
   result: MintResult | null;
   /** Set instead of `result` when the mint failed (a stale fee, a simulate revert, a refused
-   * signature, ...) — never both at once. */
+   * signature, ...) or is unconfirmed — never both `result` and `error` at once. */
   error: string | null;
+  /** The transaction hash once one was actually broadcast — set only by `unconfirmed` (status
+   * "unconfirmed": a hash exists but its receipt couldn't be obtained, so the outcome is genuinely
+   * unknown, not a plain failure) so a reopened window can still show a working explorer link. */
+  hash: `0x${string}` | null;
   startedAt: number | null;
 };
 
@@ -22,6 +27,7 @@ export const initialMintSessionState: MintSessionState = {
   symbol: "",
   result: null,
   error: null,
+  hash: null,
   startedAt: null,
 };
 
@@ -29,27 +35,64 @@ export type MintSessionAction =
   | { type: "start"; symbol: string; startedAt: number }
   | { type: "finish"; result: MintResult }
   | { type: "fail"; message: string }
+  | { type: "unconfirmed"; message: string; hash: `0x${string}` }
   | { type: "dismiss" };
 
 /**
  * Pure state machine for one Mint session — mirrors apps/drop/session.ts, apps/swap/session.ts and
  * apps/bridge/session.ts. A mint is a single paid, irreversible on-chain call: `start` only applies
- * from "idle" or "done" (a no-op from "minting" is the hard guard against a second concurrent —
- * and separately charged — mint, from any number of windows or clicks). `finish`/`fail` only apply
- * from "minting"; `dismiss` only from "done".
+ * from "idle", "done" or "unconfirmed" (a no-op from "minting" is the hard guard against a second
+ * concurrent — and separately charged — mint, from any number of windows or clicks). `finish`/`fail`/
+ * `unconfirmed` only apply from "minting"; `dismiss` applies from "done" or "unconfirmed".
+ *
+ * "unconfirmed" is deliberately a THIRD terminal status, not a flavor of "done": a mint whose receipt
+ * couldn't be obtained (RPC timeout, disconnect, ...) after a transaction was already broadcast has no
+ * definite outcome — it is neither a confirmed success nor a confirmed failure — so it must never be
+ * presented, or ever be mistaken by calling code, as either one. See `classifyMintFailure` below for
+ * how a caught error decides which of "fail"/"unconfirmed" applies.
  */
 export function mintSessionReducer(state: MintSessionState, action: MintSessionAction): MintSessionState {
   switch (action.type) {
     case "start":
       if (state.status === "minting") return state;
-      return { status: "minting", symbol: action.symbol, result: null, error: null, startedAt: action.startedAt };
+      return { status: "minting", symbol: action.symbol, result: null, error: null, hash: null, startedAt: action.startedAt };
     case "finish":
       return state.status === "minting" ? { ...state, status: "done", result: action.result, error: null } : state;
     case "fail":
       return state.status === "minting" ? { ...state, status: "done", result: null, error: action.message } : state;
+    case "unconfirmed":
+      return state.status === "minting"
+        ? { ...state, status: "unconfirmed", result: null, error: action.message, hash: action.hash }
+        : state;
     case "dismiss":
-      return state.status === "done" ? { ...initialMintSessionState } : state;
+      return state.status === "done" || state.status === "unconfirmed" ? { ...initialMintSessionState } : state;
   }
+}
+
+/**
+ * The wave E fix for I3: decides what a mint's catch block should show, and whether the session
+ * store should keep the hash visible ("unconfirmed") rather than reporting a plain failure — pulled
+ * out as a pure function (per the brief) so it's unit-tested without needing a live wallet/RPC.
+ *
+ * `hashKnown` is true once `writeContractAsync` has returned a hash — the transaction was broadcast,
+ * so the user may already have paid. Order matters:
+ * 1. A `UserFacingError` is always this app's own, definite decision about what happened (a stale-fee
+ *    stop before signing, or — once a receipt WAS obtained — an explicit "it reverted" / "no token
+ *    was reported" call in Window.tsx). It is never "unconfirmed", regardless of `hashKnown`: by the
+ *    time either of those throws, the outcome is already known.
+ * 2. Otherwise, if a hash is known, something failed AFTER broadcast with no definite answer — most
+ *    likely `waitForTransactionReceipt` itself rejecting (timeout, dropped connection) — so the mint
+ *    may have gone through. Saying "Try again" here would invite a second, separately-charged mint;
+ *    this reports "unconfirmed" and tells the user to check the explorer instead.
+ * 3. Otherwise nothing was ever sent (simulate reverted, the signature was refused, ...), so the
+ *    normal `describeContractError` mapping applies.
+ */
+export function classifyMintFailure(hashKnown: boolean, err: unknown): { message: string; unconfirmed: boolean } {
+  if (err instanceof UserFacingError) return { message: err.message, unconfirmed: false };
+  if (hashKnown) {
+    return { message: "Your transaction was sent but we couldn't confirm it. Check it on the explorer before minting again.", unconfirmed: true };
+  }
+  return { message: describeContractError(err), unconfirmed: false };
 }
 
 /** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake
@@ -121,7 +164,17 @@ export function createMintSession(target?: BeforeUnloadTarget) {
     emit();
   }
 
-  /** Dismisses a finished session, returning to a blank form; only takes effect while done. */
+  /** Records a broadcast-but-unconfirmed outcome (see `classifyMintFailure`); only takes effect while
+   * minting. Keeps `hash` on the state so a reopened window can still show the explorer link. */
+  function unconfirmed(message: string, hash: `0x${string}`): void {
+    if (state.status !== "minting") return;
+    state = mintSessionReducer(state, { type: "unconfirmed", message, hash });
+    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+  }
+
+  /** Dismisses a finished or unconfirmed session, returning to a blank form; only takes effect from
+   * those two states. */
   function dismiss(): void {
     const next = mintSessionReducer(state, { type: "dismiss" });
     if (next === state) return;
@@ -129,7 +182,7 @@ export function createMintSession(target?: BeforeUnloadTarget) {
     emit();
   }
 
-  return { getSnapshot, subscribe, start, finish, fail, dismiss };
+  return { getSnapshot, subscribe, start, finish, fail, unconfirmed, dismiss };
 }
 
 export const session = createMintSession();

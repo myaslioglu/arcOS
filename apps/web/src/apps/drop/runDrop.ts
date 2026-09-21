@@ -6,10 +6,16 @@ import { failedRowsFor, type FailedRow } from "./result";
  * What one batch attempt resolved to. `failures` are the rows this batch's contract call itself reported
  * as failed transfers (not a revert): `index` is that row's position WITHIN the batch, mirroring the
  * contract's `TransferFailed` event.
+ *
+ * `"unconfirmed"` is a batch whose transaction WAS broadcast (a real `hash`) but whose receipt could
+ * not be obtained — an RPC timeout or dropped connection, not a decoded outcome. It is deliberately a
+ * third status, not folded into a `sendBatch` rejection: whether the batch actually landed is unknown,
+ * so its rows must never be treated as either delivered or safely re-sendable — see `runDrop`'s
+ * handling below and the wave E brief's fund-safety note on this exact hazard.
  */
 export type BatchOutcome = {
   hash: string;
-  status: "success" | "reverted";
+  status: "success" | "reverted" | "unconfirmed";
   failures: { index: number; amount: bigint }[];
 };
 
@@ -25,8 +31,12 @@ export type DropResult = {
   failed: FailedRow[];
   /** Rows never attempted, or whose batch reverted or was refused. Never re-attempted automatically. */
   remaining: DropRow[];
+  /** Rows of a batch whose transaction was broadcast but whose receipt couldn't be confirmed — neither
+   * delivered nor safe to put back in `remaining` (that would risk sending them twice). See
+   * `BatchOutcome`'s "unconfirmed" status. Always empty unless `stoppedBecause === "unconfirmed"`. */
+  unconfirmed: DropRow[];
   hashes: string[];
-  stoppedBecause: null | "rejected" | "reverted" | "error";
+  stoppedBecause: null | "rejected" | "reverted" | "error" | "unconfirmed";
   /** Human-readable reason, set exactly when `stoppedBecause` is set. */
   message: string | null;
 };
@@ -60,7 +70,7 @@ export function isUserRejection(err: unknown): boolean {
  */
 export async function runDrop(rows: DropRow[], batchSize: number, deps: DropDeps): Promise<DropResult> {
   const batches = chunk(rows, batchSize);
-  const result: DropResult = { delivered: [], failed: [], remaining: [], hashes: [], stoppedBecause: null, message: null };
+  const result: DropResult = { delivered: [], failed: [], remaining: [], unconfirmed: [], hashes: [], stoppedBecause: null, message: null };
 
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
@@ -82,6 +92,20 @@ export async function runDrop(rows: DropRow[], batchSize: number, deps: DropDeps
       result.remaining.push(...batches.slice(i).flat());
       result.stoppedBecause = "reverted";
       result.message = `Batch ${i + 1} of ${batches.length} reverted — nothing in it was sent.`;
+      return result;
+    }
+
+    if (outcome.status === "unconfirmed") {
+      // This batch's transaction was broadcast — it may already be mined and delivered — so its rows
+      // go to `unconfirmed`, never to `remaining` (which would invite sending them a second time) and
+      // never to `delivered` (nothing confirms they landed). Every batch after this one was never
+      // attempted at all, so those rows are still safe to put back in `remaining`. The run stops here
+      // either way: continuing against an RPC/wallet that just failed to confirm a receipt is not safe.
+      result.hashes.push(outcome.hash);
+      result.unconfirmed.push(...batch);
+      result.remaining.push(...batches.slice(i + 1).flat());
+      result.stoppedBecause = "unconfirmed";
+      result.message = `Batch ${i + 1} of ${batches.length} was sent but is unconfirmed — check the explorer before sending the rest.`;
       return result;
     }
 

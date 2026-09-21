@@ -12,6 +12,7 @@ function makeRows(n: number): DropRow[] {
 
 const success = (hash: string, failures: BatchOutcome["failures"] = []): BatchOutcome => ({ hash, status: "success", failures });
 const reverted = (hash: string): BatchOutcome => ({ hash, status: "reverted", failures: [] });
+const unconfirmed = (hash: string): BatchOutcome => ({ hash, status: "unconfirmed", failures: [] });
 
 describe("runDrop", () => {
   it("delivers nothing from a reverted batch, stops, and puts every one of its rows in remaining", async () => {
@@ -148,7 +149,46 @@ describe("runDrop", () => {
     const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => success("0xhash"));
     const result = await runDrop([], 200, { sendBatch });
 
-    expect(result).toEqual({ delivered: [], failed: [], remaining: [], hashes: [], stoppedBecause: null, message: null });
+    expect(result).toEqual({ delivered: [], failed: [], remaining: [], unconfirmed: [], hashes: [], stoppedBecause: null, message: null });
     expect(sendBatch).not.toHaveBeenCalled();
+  });
+
+  // Fund-safety item from the wave E review: a batch whose transaction hash is known but whose
+  // receipt could not be obtained (RPC timeout, dropped connection, ...) is neither delivered nor
+  // safely re-sendable — it must never land back in `remaining` (that risks a double send) and the
+  // run must stop instead of trying the next batch against an unknown wallet/chain state.
+  describe("a batch reported as 'unconfirmed' (hash known, receipt couldn't be obtained)", () => {
+    it("keeps its rows out of both delivered and remaining, stops the run, and records the hash", async () => {
+      const rows = makeRows(3);
+      const sendBatch = vi.fn<DropDeps["sendBatch"]>(async (_batch, n) => {
+        if (n === 1) return success("0xhash1");
+        if (n === 2) return unconfirmed("0xhash2");
+        throw new Error("must not be called after an unconfirmed batch");
+      });
+
+      const result = await runDrop(rows, 1, { sendBatch });
+
+      expect(result.delivered).toEqual([rows[0]]);
+      expect(result.unconfirmed).toEqual([rows[1]]);
+      // Batch 2's row must NOT reappear in remaining — that would invite resending it on top of a
+      // send that may have already landed.
+      expect(result.remaining).toEqual([rows[2]]);
+      expect(result.hashes).toEqual(["0xhash1", "0xhash2"]);
+      expect(result.stoppedBecause).toBe("unconfirmed");
+      expect(result.message).toMatch(/unconfirmed/i);
+      expect(result.message).toMatch(/explorer/i);
+      expect(sendBatch).toHaveBeenCalledTimes(2);
+    });
+
+    it("puts every row of a multi-row unconfirmed batch in `unconfirmed`, not just the first", async () => {
+      const rows = makeRows(4);
+      const sendBatch = vi.fn<DropDeps["sendBatch"]>(async () => unconfirmed("0xhash"));
+
+      const result = await runDrop(rows, 4, { sendBatch });
+
+      expect(result.unconfirmed).toEqual(rows);
+      expect(result.remaining).toEqual([]);
+      expect(result.delivered).toEqual([]);
+    });
   });
 });

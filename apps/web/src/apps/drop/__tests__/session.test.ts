@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DropResult } from "../runDrop";
 import { dropSessionReducer, initialDropSessionState, session, type DropSessionState } from "../session";
 
-const emptyResult: DropResult = { delivered: [], failed: [], remaining: [], hashes: [], stoppedBecause: null, message: null };
+const emptyResult: DropResult = { delivered: [], failed: [], remaining: [], unconfirmed: [], hashes: [], stoppedBecause: null, message: null };
 
 const sendingState = (over: Partial<DropSessionState> = {}): DropSessionState => ({
   status: "sending",
