@@ -1,5 +1,6 @@
 import type { Report } from "@arcos/inspector";
 import { shortAddress } from "./format";
+import { findingRowBudget } from "./og-layout";
 import { NAME_DISCLOSURE, passLine, rankFindings, shortLabel, tokenLabel } from "./proof";
 
 /**
@@ -8,11 +9,25 @@ import { NAME_DISCLOSURE, passLine, rankFindings, shortLabel, tokenLabel } from 
  * previous fix picked ✔ (U+2714) and a plain ASCII "X" instead — but ✔ still isn't in the default
  * font, so satori falls back to an emoji font for it, and an emoji glyph ignores the `color` CSS
  * property entirely: ✔ rendered dark/untinted while "!"/"X"/"?" (ordinary text glyphs) took their
- * tint normally, so the four statuses read as visually inconsistent. Small solid-colour circles —
- * plain `background`/`borderRadius` divs, not text at all — sidestep font fallback entirely, so
- * every status tints the same way.
+ * tint normally, so the four statuses read as visually inconsistent. Small solid-colour marks —
+ * plain `background`/`border`/`borderRadius` divs, not text at all — sidestep font fallback
+ * entirely, so every status tints the same way.
  */
 const TINT = { pass: "#0c8a4e", warn: "#b97309", fail: "#b42318", unknown: "#6b6f79" } as const;
+
+/**
+ * Green, amber and red are the classic colour-blind confusion set, and this card is often the only
+ * part of a report anyone sees — it's what a link preview shows in a chat. So the marks differ by
+ * SHAPE as well as hue: a filled circle passed, a filled square failed, a diamond warns, and a
+ * hollow ring means the check couldn't be resolved (nothing inside it, because nothing is known).
+ * All four are drawn divs, for the font-fallback reason above.
+ */
+const MARK = {
+  pass: { width: 22, height: 22, borderRadius: 11, background: TINT.pass },
+  warn: { width: 17, height: 17, background: TINT.warn, transform: "rotate(45deg)" },
+  fail: { width: 20, height: 20, borderRadius: 3, background: TINT.fail },
+  unknown: { width: 22, height: 22, borderRadius: 11, border: `4px solid ${TINT.unknown}` },
+} as const;
 
 /**
  * The whole card as a function of the report, so its worst case — explorer unreachable, a long
@@ -23,15 +38,16 @@ const TINT = { pass: "#0c8a4e", warn: "#b97309", fail: "#b42318", unknown: "#6b6
  * into each other and overlap. The thing that goes first is the footer — the disclosure that this
  * name was chosen by whoever deployed the contract.
  *
- * The budget is 630 minus 2x48 padding = 534px, spent by: kicker 31 · symbol 77+12 · pass line
- * 48+4 · explorer note 27+6 · three rows at 46 plus "+N more" at 46, 24 above them · footer 16+27
- * and the disclosure at 22+4. That comes to ~482 WITH the explorer note, which is the normal case
- * for the server run on mainnet, where the explorer is behind a bot check. Three rows (not four)
- * is most of what buys the room; `rankFindings` puts the worst findings in them, so what the
- * "+N more" hides is never the worst news.
+ * How many finding rows fit is computed from everything else on the card — see `og-layout.ts`,
+ * which owns that budget and is unit-tested, so a line added here can't silently spend the room
+ * the footer needs. `rankFindings` fills the rows worst-first, so what "+N more" hides is never
+ * the worst news.
  */
 export function ogCard(report: Report | null) {
-  const { shown: rows, hiddenCount } = report ? rankFindings(report.findings, 3) : { shown: [], hiddenCount: 0 };
+  const explorerNote = report !== null && !report.explorerReachable;
+  const { shown: rows, hiddenCount } = report
+    ? rankFindings(report.findings, findingRowBudget(explorerNote))
+    : { shown: [], hiddenCount: 0 };
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 48, background: "#f6f7f9", color: "#14161c", fontSize: 30 }}>
       <div style={{ display: "flex", fontSize: 26, color: "#555a66" }}>
@@ -43,14 +59,14 @@ export function ogCard(report: Report | null) {
       </div>
       <div style={{ display: "flex", fontSize: 64, marginTop: 12 }}>{report ? shortLabel(tokenLabel(report), 16) : "Token not found"}</div>
       {report && <div style={{ display: "flex", fontSize: 40, marginTop: 4 }}>{passLine(report)}</div>}
-      {report && !report.explorerReachable && (
+      {explorerNote && (
         <div style={{ display: "flex", fontSize: 22, marginTop: 6, color: "#6b6f79" }}>The explorer didn&apos;t answer some checks.</div>
       )}
       <div style={{ display: "flex", flexDirection: "column", marginTop: 24 }}>
         {rows.map((f) => (
           <div key={f.id} style={{ display: "flex", alignItems: "center", marginTop: 10 }}>
-            <div style={{ display: "flex", width: 44, alignItems: "center" }}>
-              <div style={{ display: "flex", width: 22, height: 22, borderRadius: 11, background: TINT[f.status] }} />
+            <div style={{ display: "flex", width: 44, height: 26, alignItems: "center", justifyContent: "center" }}>
+              <div style={{ display: "flex", ...MARK[f.status] }} />
             </div>
             <div style={{ display: "flex" }}>{f.title}</div>
           </div>
