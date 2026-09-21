@@ -25,7 +25,9 @@
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
  *   holders-count field claims — or (with a DEX configured) pool discovery failed, so pools can't be
- *   excluded from the holder list.
+ *   excluded from the holder list; or the list is shorter than ten rows without the explorer's own
+ *   holders-count confirming that those rows are every holder there is, since a share added up from
+ *   an unknown fraction of the holders isn't a concentration figure.
  * - liquidity: no DEX is configured for this network, or pool discovery failed at the network level.
  * - lp-lock: no DEX is configured, pool discovery failed, only Uniswap v3 pools exist (position
  *   locks need an indexer, which arrives with Radar), or the v2 pair's LP totalSupply is zero (no
@@ -286,7 +288,18 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   return finding("proxy", "pass", "Not a proxy", "No EIP-1967 proxy slots are set and the code doesn't delegate calls.", { evidenceUrl: url });
 }
 
-export function checkHolders(input: InspectInput, holders: Holder[] | null, totalSupply: bigint | null, pools: Pool[] | null): Finding {
+/**
+ * `holdersCount` is the explorer's own count of every holder of this token (`holders_count`), the
+ * only thing that can tell a complete top-holder list from a truncated one: the list itself looks
+ * identical either way, and "the top 3 of 5,000 holders hold 24%" is not a concentration figure.
+ */
+export function checkHolders(
+  input: InspectInput,
+  holders: Holder[] | null,
+  totalSupply: bigint | null,
+  pools: Pool[] | null,
+  holdersCount: number | null,
+): Finding {
   const url = `${input.explorerBase}/token/${input.address}?tab=holders`;
   if (holders === null || !totalSupply) return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer didn't answer, or total supply is unknown.", { evidenceUrl: url });
   // totalSupply > 0 (just checked above) guarantees at least one holder exists, so an empty list
@@ -299,13 +312,25 @@ export function checkHolders(input: InspectInput, holders: Holder[] | null, tota
   if (pools === null && input.dex) {
     return finding("holders", "unknown", "Couldn't check holder concentration", "The pool lookup failed, so a liquidity pool could be miscounted as a whale.", { evidenceUrl: url });
   }
+  // Fewer than ten rows is only a complete picture when the explorer positively says that's
+  // everyone. Otherwise this is one page of a longer list and the share it adds up to is a floor,
+  // not a measurement — a share computed from an unknown fraction of the holders is never a pass.
+  if (holders.length < 10 && (holdersCount === null || holdersCount > holders.length)) {
+    return finding("holders", "unknown", "Couldn't check holder concentration", `The explorer returned ${holders.length} holder(s) but doesn't confirm that's all of them, so this would only be part of the concentration.`, { evidenceUrl: url });
+  }
   const knownPools = pools ?? [];
   const skip = new Set([lower(input.address), ...knownPools.map((p) => lower(p.address)), ...input.knownLockers.map(lower)]);
   const ranked = [...holders].sort((a, b) => (a.value < b.value ? 1 : a.value > b.value ? -1 : 0));
   const top = ranked.filter((h) => !isBurn(h.address) && !skip.has(lower(h.address))).slice(0, 10);
   const held = top.reduce((sum, h) => sum + h.value, 0n);
   const pct = Number((held * 10000n) / totalSupply) / 100;
-  const title = `Top 10 wallets hold ${formatPct(pct)}`;
+  // Say how many wallets the figure actually covers: "Top 10" on a token with three holders is a
+  // claim about seven wallets that don't exist.
+  const title =
+    top.length >= 10 ? `Top 10 wallets hold ${formatPct(pct)}`
+    : top.length === 0 ? "No wallet holds any of the supply"
+    : top.length === 1 ? `The only wallet holds ${formatPct(pct)}`
+    : `All ${top.length} wallets hold ${formatPct(pct)}`;
   const detail = "Excludes burn addresses, liquidity pools and known lock contracts.";
   if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
   if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });

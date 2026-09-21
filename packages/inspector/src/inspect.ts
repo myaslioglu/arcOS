@@ -198,7 +198,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
       return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, cloneTargetIsProxy, targetSlotsRead, forwardsToUnidentifiedCode, topSlotsSet });
     }),
-    guard("holders", () => checkHolders(input, holders, supply, pools)),
+    guard("holders", () => checkHolders(input, holders, supply, pools, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, pools)),
     guard("lp-lock", () => checkLpLock(input, pools)),
     guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)),

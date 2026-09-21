@@ -157,7 +157,9 @@ describe("inspect", () => {
       [`${PAIR}.balanceOf(${DEAD})`]: 100n,
     };
     const r = await run({ code: { [TOKEN]: PLAIN }, reads }, holders, dex);
-    expect(find(r, "holders")).toMatchObject({ status: "warn", title: "Top 10 wallets hold 30%" });
+    // Three holders, and the explorer's own holders_count agrees that's all of them; the pool and
+    // the burn address are excluded, which leaves exactly one wallet to name.
+    expect(find(r, "holders")).toMatchObject({ status: "warn", title: "The only wallet holds 30%" });
     expect(find(r, "liquidity").status).toBe("pass");
     expect(find(r, "lp-lock")).toMatchObject({ status: "pass", fixAppId: null });
   });
@@ -240,9 +242,10 @@ describe("inspect", () => {
         { address: "0x8888888888888888888888888888888888888888", isContract: false, name: null, value: 4n },
         { address: OWNER, isContract: false, name: null, value: 500n },
       ],
+      token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount: 2 }),
     });
     const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, holders);
-    expect(find(r, "holders")).toMatchObject({ status: "fail", title: "Top 10 wallets hold 50.4%" });
+    expect(find(r, "holders")).toMatchObject({ status: "fail", title: "All 2 wallets hold 50.4%" });
   });
 
   it("says unknown — not pass — when the owner's own code fetch fails at the network level", async () => {
@@ -515,6 +518,34 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, storageError: new Error("ETIMEDOUT") });
     expect(find(r, "proxy").status).toBe("unknown");
     spy.mockRestore();
+  });
+
+  // --- Wave F item 3: a truncated top-holder list is never a pass ---
+
+  const threeHolders = [
+    { address: OWNER, isContract: false, name: null, value: 80n },
+    { address: GRAND, isContract: false, name: null, value: 80n },
+    { address: "0x8888888888888888888888888888888888888888", isContract: false, name: null, value: 80n },
+  ];
+  const withHolders = (holdersCount: number | null) =>
+    explorer({
+      topHolders: async () => threeHolders,
+      token: async () => ({ name: "T", symbol: "T", decimals: 18, totalSupply: "1000", holdersCount }),
+    });
+
+  it("says unknown when the explorer returned fewer than ten holders but counts thousands", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, withHolders(5000));
+    expect(find(r, "holders")).toMatchObject({ status: "unknown", title: "Couldn't check holder concentration" });
+  });
+
+  it("says unknown when a short holder list can't be confirmed complete", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, withHolders(null));
+    expect(find(r, "holders").status).toBe("unknown");
+  });
+
+  it("passes a short holder list the explorer confirms is everyone, and counts the wallets truthfully", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.totalSupply()`]: 1000n } }, withHolders(3));
+    expect(find(r, "holders")).toMatchObject({ status: "pass", title: "All 3 wallets hold 24%" });
   });
 
   // --- Part 3: the inspected address is always checksummed ---
