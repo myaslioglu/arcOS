@@ -13,12 +13,14 @@
  *   if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's bytecode and
  *   ABI, never on its own trampoline, which has no dispatcher and so would look privilege-free.
  * - proxy: a storage-read failure on the top-level address propagates and is caught by the
- *   orchestrator's guard; an EIP-1167 clone whose implementation couldn't be fetched at all (a
- *   transport failure) is unknown, never "not upgradeable"; a clone whose target read succeeded but
- *   came back with no code at all is a fail (it points at nothing); a resolved clone whose target is
- *   itself an EIP-1967 proxy is a fail ("Clone of an upgradeable proxy"), not a pass; code that
- *   delegates calls (DELEGATECALL) but resolves to no known clone target or EIP-1967 slot is
- *   unknown, not "not a proxy".
+ *   orchestrator's guard, so "Not a proxy" only ever rests on slots that were actually read; an
+ *   EIP-1167 clone whose implementation couldn't be fetched at all (a transport failure) is
+ *   unknown, never "not upgradeable"; a clone whose target read succeeded but came back with no
+ *   code at all is a fail (it points at nothing); a resolved clone whose target is itself an
+ *   EIP-1967 proxy is a fail ("Clone of an upgradeable proxy"), not a pass; a clone whose target's
+ *   own EIP-1967 slots couldn't be read is unknown, because an unread slot is not an unset one;
+ *   code that delegates calls (DELEGATECALL) but resolves to no known clone target or EIP-1967 slot
+ *   is unknown, not "not a proxy".
  * - holders: the explorer didn't answer, total supply is unknown, or the holder list came back
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
@@ -246,9 +248,13 @@ export type ProxyResolution = {
   /** Only meaningful when `cloneOf` is set and `cloneReadFailed` is false: the read succeeded but
    * the target address has no code (`0x`) — a clone pointing at nothing, which is broken. */
   cloneTargetEmpty: boolean;
-  /** Only meaningful when `cloneOf` is set and the target's code was actually read: the target's
-   * own EIP-1967 slots are set too. */
+  /** Only meaningful when `cloneOf` is set, the target's code was actually read and
+   * `targetSlotsRead` is true: the target's own EIP-1967 slots were read and at least one is set. */
   cloneTargetIsProxy: boolean;
+  /** Only meaningful when `cloneOf` is set: both of the target's EIP-1967 slot reads answered.
+   * When they didn't, `cloneTargetIsProxy === false` means "not read", not "not set", so the clone
+   * can't be called non-upgradeable. */
+  targetSlotsRead: boolean;
   /** DELEGATECALL is present but resolves to no known clone target or EIP-1967 slot. */
   forwardsToUnidentifiedCode: boolean;
   /** Only meaningful when `cloneOf` is null: this address's own EIP-1967 slots are set. */
@@ -267,6 +273,9 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     }
     if (r.cloneTargetIsProxy) {
       return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — whoever controls it can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
+    }
+    if (!r.targetSlotsRead) {
+      return finding("proxy", "unknown", "Couldn't check whether this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
     }
     return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
   }

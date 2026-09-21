@@ -74,6 +74,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   let topSlotsError: unknown = null;
   let topSlotsSet = false;
   let cloneTargetIsProxy = false;
+  let targetSlotsRead = true;
   let proxyImpl: Address | null = null;
   let logicCode: string | null;
   let logicGap: LogicGap | null = null;
@@ -115,10 +116,14 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     logicGap = cloneReadFailed ? "logic-unreadable" : "logic-empty";
   } else {
     // The clone's target was fetched — check whether the TARGET is itself an upgradeable proxy.
-    const [tImpl, tBeacon] = await Promise.all([
-      reader.getStorageAt(cloneOf, IMPL_SLOT).catch(() => null),
-      reader.getStorageAt(cloneOf, BEACON_SLOT).catch(() => null),
-    ]);
+    // A slot read that THREW says nothing: without it, "no slot is set" is an assumption, not a
+    // reading, so `checkProxy` must not turn it into "not upgradeable".
+    const readTargetSlot = (slot: typeof IMPL_SLOT | typeof BEACON_SLOT) =>
+      reader.getStorageAt(cloneOf, slot).catch(() => {
+        targetSlotsRead = false;
+        return null;
+      });
+    const [tImpl, tBeacon] = await Promise.all([readTargetSlot(IMPL_SLOT), readTargetSlot(BEACON_SLOT)]);
     cloneTargetIsProxy = slotSet(tImpl) || slotSet(tBeacon);
     if (!cloneTargetIsProxy) {
       logicCode = cloneImplCode;
@@ -191,7 +196,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
-      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, cloneTargetIsProxy, forwardsToUnidentifiedCode, topSlotsSet });
+      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, cloneTargetIsProxy, targetSlotsRead, forwardsToUnidentifiedCode, topSlotsSet });
     }),
     guard("holders", () => checkHolders(input, holders, supply, pools)),
     guard("liquidity", () => checkLiquidity(input, pools)),

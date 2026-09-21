@@ -503,6 +503,20 @@ describe("inspect", () => {
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
   });
 
+  // --- Wave F item 2: a failed storage read is never "the target is not a proxy" ---
+
+  it("says unknown, not 'not upgradeable', when a clone target's EIP-1967 slots can't be read", async () => {
+    const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN }, storageError: new Error("ETIMEDOUT") });
+    expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check whether this clone is upgradeable" });
+  });
+
+  it("says unknown, not 'Not a proxy', when the token's own EIP-1967 slots can't be read", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await run({ code: { [TOKEN]: PLAIN }, storageError: new Error("ETIMEDOUT") });
+    expect(find(r, "proxy").status).toBe("unknown");
+    spy.mockRestore();
+  });
+
   // --- Part 3: the inspected address is always checksummed ---
 
   it("checksums the inspected address regardless of the casing passed in", async () => {
