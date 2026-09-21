@@ -111,6 +111,12 @@ but does have privileged functions, both the ownership and privileges findings r
 - "Nothing found" counts only when the scan can be shown to have read the contract's functions. A
   non-standard dispatcher (Vyper, Huff, fallback-only), custom proxy storage, a diamond (EIP-2535)
   or a `DELEGATECALL` to code it can't identify all read "unknown" rather than clean.
+- What makes a selector scan count as complete is seeing ERC-20 `transfer` in the bytecode (or in a
+  verified ABI). A contract that shows `transfer` and routes its other functions through a jump
+  table could still hide one from the scan.
+- A token that uses `DELEGATECALL` at all — including to its own address, as OpenZeppelin's
+  `Multicall` does, or to a linked library — reads "unknown" rather than clean, and a clone of a
+  clone is not followed.
 - Privileged functions are recognised by selector and by verified-ABI name; one whose name and
   signature appear in neither list isn't detected.
 - Holder figures are only as complete as the explorer's index, and exclude burn addresses, known
