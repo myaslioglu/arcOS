@@ -262,7 +262,12 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const gate = (f: Finding): Finding => gateLogicPass(input, f, block);
 
   const findings = await Promise.all([
-    guard("verified", () => checkVerified(input, contract, runsOtherCode ? { at: logicAt, info: logicContract } : null)),
+    // `logicAt` is where the code that runs WOULD live; it is only the code this engine actually
+    // scored when `logicCode` came back with something. An implementation that turned out to be a
+    // proxy itself, or that points at empty code, is an address the engine explicitly refused to
+    // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
+    // finding saying that code couldn't be identified is the report contradicting itself.
+    guard("verified", () => checkVerified(input, contract, runsOtherCode ? { at: logicCode === null ? null : logicAt, info: logicContract } : null)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {

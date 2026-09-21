@@ -888,6 +888,48 @@ describe("inspect", () => {
     expect(find(r, "verified")).toMatchObject({ status: "fail", title: "The code this proxy runs isn't verified" });
   });
 
+  // I1 (wave I): the report must never name an address as "the implementation it runs" when the
+  // engine itself refused to score that address as the logic. Each of these three leaves
+  // `privileges` saying the code that runs couldn't be identified, so `verified` cannot
+  // simultaneously say it has checked it.
+
+  /** Everything verified except `unverified`, which the explorer positively reports as not. */
+  const allVerifiedExcept = (unverified: string) =>
+    explorer({
+      contract: async (a) => ({
+        verified: a.toLowerCase() !== unverified.toLowerCase(),
+        name: null, abi: null, proxyType: null, implementations: [],
+      }),
+    });
+
+  it("won't vouch for an implementation that is itself a proxy over unverified logic", async () => {
+    const r = await run(
+      {
+        code: { [TOKEN]: PLAIN, [IMPL]: "0x63f851a440f400", [GRAND]: MINTABLE },
+        storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${IMPL}:${IMPL_SLOT}`]: slotWith(GRAND) },
+      },
+      allVerifiedExcept(GRAND),
+    );
+    expect(find(r, "privileges").status).toBe("unknown"); // the logic was never identified...
+    expect(find(r, "verified").status).not.toBe("pass"); // ...so nothing can be vouched for either
+    expect(find(r, "verified").detail).not.toContain(IMPL);
+  });
+
+  it("won't vouch for a clone target that is itself a clone over unverified logic", async () => {
+    const r = await run(
+      { code: { [TOKEN]: cloneOf(IMPL), [IMPL]: cloneOf(GRAND), [GRAND]: MINTABLE } },
+      allVerifiedExcept(GRAND),
+    );
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "verified").status).not.toBe("pass");
+  });
+
+  it("won't vouch for an implementation slot that points at empty code", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) } });
+    expect(find(r, "privileges").status).toBe("unknown");
+    expect(find(r, "verified").status).not.toBe("pass");
+  });
+
   it("still fails verification when the explorer positively says the source isn't verified", async () => {
     const ex = explorer({ contract: async () => ({ verified: false, name: null, abi: null, proxyType: null, implementations: [] }) });
     const r = await run({ code: { [TOKEN]: PLAIN } }, ex);
