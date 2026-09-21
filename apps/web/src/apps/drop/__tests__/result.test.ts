@@ -125,14 +125,23 @@ describe("remainingBannerText (N2 — the banner must not undercount after an un
   it("names only the unconfirmed count when every OTHER batch had already been attempted (nothing left in remaining)", () => {
     const unconfirmedRows: DropRow[] = [{ line: 1, address: A, amount: 1n }];
     expect(remainingBannerText({ remaining: [], unconfirmed: unconfirmedRows, stoppedBecause: "unconfirmed" })).toBe(
-      "1 rows are unconfirmed — see below.",
+      "1 row is unconfirmed — see below.",
     );
   });
 
   it("falls back to the ordinary wording if stoppedBecause says unconfirmed but there are somehow no unconfirmed rows", () => {
     const rows: DropRow[] = [{ line: 1, address: A, amount: 1n }];
     expect(remainingBannerText({ remaining: rows, unconfirmed: [], stoppedBecause: "unconfirmed" })).toBe(
-      "1 rows weren't sent. They're in the list below — check and send again.",
+      "1 row wasn't sent. It's in the list below — check and send again.",
+    );
+  });
+
+  // I6: one row is "1 row", like excludedRowsText in the same file — a banner that says
+  // "1 rows are unconfirmed" reads as a bug in the very panel that is asking to be trusted.
+  it("counts one row in the singular, in both halves of the sentence", () => {
+    const one: DropRow[] = [{ line: 1, address: A, amount: 1n }];
+    expect(remainingBannerText({ remaining: one, unconfirmed: one, stoppedBecause: "unconfirmed" })).toBe(
+      "1 row is unconfirmed — see below. 1 row wasn't sent and is in the list.",
     );
   });
 

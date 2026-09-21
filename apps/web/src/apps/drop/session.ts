@@ -156,11 +156,15 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Starts a session; refuses — returns `false`, changes nothing — if one is already sending.
+/** Starts a session; refuses — returns `false`, changes nothing — if one is already sending, or if
+ * the last result still holds an unresolved unconfirmed batch (`canDismissResult`). The reducer is
+ * the single authority on both: whatever it refuses, this refuses, instead of answering `true` and
+ * letting the caller run a send whose `finish` would overwrite the result those rows live in.
  * `excludedRows` defaults to empty for callers (and the many existing tests) that don't pass one. */
 function start(tokenLabel: string, token: Address | null, decimals: number, text: string, excludedRows: ExcludedRow[] = []): boolean {
-  if (state.status === "sending") return false;
-  state = dropSessionReducer(state, { type: "start", tokenLabel, token, decimals, text, excludedRows, startedAt: Date.now() });
+  const next = dropSessionReducer(state, { type: "start", tokenLabel, token, decimals, text, excludedRows, startedAt: Date.now() });
+  if (next === state) return false;
+  state = next;
   if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeUnloadGuard);
   emit();
   return true;

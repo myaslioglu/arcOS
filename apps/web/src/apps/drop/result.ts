@@ -81,11 +81,16 @@ export function canDismissResult(result: Pick<DropResult, "unconfirmed"> | null)
  * case; otherwise unchanged from the original wording. `null` when nothing is unsent at all.
  */
 export function remainingBannerText(result: Pick<DropResult, "remaining" | "unconfirmed" | "stoppedBecause">): string | null {
-  if (result.stoppedBecause === "unconfirmed" && result.unconfirmed.length > 0) {
-    const unconfirmedPart = `${result.unconfirmed.length} rows are unconfirmed — see below.`;
-    if (result.remaining.length === 0) return unconfirmedPart;
-    return `${unconfirmedPart} ${result.remaining.length} rows weren't sent and are in the list.`;
+  const unconfirmed = result.unconfirmed.length;
+  const remaining = result.remaining.length;
+  if (result.stoppedBecause === "unconfirmed" && unconfirmed > 0) {
+    const unconfirmedPart = unconfirmed === 1 ? "1 row is unconfirmed — see below." : `${unconfirmed} rows are unconfirmed — see below.`;
+    if (remaining === 0) return unconfirmedPart;
+    const remainingPart = remaining === 1 ? "1 row wasn't sent and is in the list." : `${remaining} rows weren't sent and are in the list.`;
+    return `${unconfirmedPart} ${remainingPart}`;
   }
-  if (result.remaining.length === 0) return null;
-  return `${result.remaining.length} rows weren't sent. They're in the list below — check and send again.`;
+  if (remaining === 0) return null;
+  return remaining === 1
+    ? "1 row wasn't sent. It's in the list below — check and send again."
+    : `${remaining} rows weren't sent. They're in the list below — check and send again.`;
 }

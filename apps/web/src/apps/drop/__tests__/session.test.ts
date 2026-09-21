@@ -356,6 +356,21 @@ describe("session store", () => {
     unsubscribe();
   });
 
+  // I5: the reducer refuses `start` while an unconfirmed batch is unresolved, but a store that
+  // still answered `true` would have the caller go on and run the send — and `finish` would then
+  // overwrite the very result holding those rows.
+  it("start() answers false, and changes nothing, while an unconfirmed batch is unresolved", () => {
+    session.start("USDC", null, 6, `${A},1`);
+    session.finish(unconfirmedResult([{ line: 1, address: A, amount: 1_000_000n }]), "");
+
+    expect(session.start("USDC", null, 6, `${B},2`)).toBe(false);
+    expect(session.getSnapshot()).toMatchObject({ status: "done" });
+    expect(session.getSnapshot().result?.unconfirmed).toHaveLength(1);
+
+    session.dismissUnconfirmed();
+    expect(session.start("USDC", null, 6, `${B},2`)).toBe(true);
+  });
+
   it("dismissUnconfirmed() only takes effect once a session is done with an unconfirmed batch to clear", () => {
     session.dismissUnconfirmed(); // idle — no-op
     expect(session.getSnapshot().status).toBe("idle");
