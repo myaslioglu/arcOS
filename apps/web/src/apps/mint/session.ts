@@ -15,10 +15,17 @@ export type MintSessionState = {
   /** Set instead of `result` when the mint failed (a stale fee, a simulate revert, a refused
    * signature, ...) or is unconfirmed — never both `result` and `error` at once. */
   error: string | null;
-  /** The transaction hash once one was actually broadcast — set only by `unconfirmed` (status
-   * "unconfirmed": a hash exists but its receipt couldn't be obtained, so the outcome is genuinely
-   * unknown, not a plain failure) so a reopened window can still show a working explorer link. */
+  /** The transaction hash of THIS session, once one was actually broadcast — whether the outcome
+   * was unconfirmed (a hash exists but no receipt could be obtained, so the outcome is genuinely
+   * unknown) or a definite failure with a receipt (a revert). Either way a reopened window can
+   * still show a working explorer link. */
   hash: `0x${string}` | null;
+  /** The hash of the PREVIOUS session's transaction, kept through `dismiss` so the form can offer
+   * it as "Last transaction" — dismissing means "I have seen this", not "throw away the only link
+   * to a transaction I may still need to look up". Cleared when the next mint starts, since from
+   * then on `hash` describes the current one. Lives here rather than in the window's own state so
+   * closing and reopening the window doesn't lose it. */
+  lastHash: `0x${string}` | null;
   startedAt: number | null;
 };
 
@@ -28,13 +35,14 @@ export const initialMintSessionState: MintSessionState = {
   result: null,
   error: null,
   hash: null,
+  lastHash: null,
   startedAt: null,
 };
 
 export type MintSessionAction =
   | { type: "start"; symbol: string; startedAt: number }
   | { type: "finish"; result: MintResult }
-  | { type: "fail"; message: string }
+  | { type: "fail"; message: string; hash?: `0x${string}` }
   | { type: "unconfirmed"; message: string; hash: `0x${string}` }
   | { type: "dismiss" };
 
@@ -55,17 +63,21 @@ export function mintSessionReducer(state: MintSessionState, action: MintSessionA
   switch (action.type) {
     case "start":
       if (state.status === "minting") return state;
-      return { status: "minting", symbol: action.symbol, result: null, error: null, hash: null, startedAt: action.startedAt };
+      return { status: "minting", symbol: action.symbol, result: null, error: null, hash: null, lastHash: null, startedAt: action.startedAt };
     case "finish":
       return state.status === "minting" ? { ...state, status: "done", result: action.result, error: null } : state;
     case "fail":
-      return state.status === "minting" ? { ...state, status: "done", result: null, error: action.message } : state;
+      // A failure can still have a hash: a mint that reverts was broadcast and mined, and the
+      // receipt that proves it reverted is the thing a user will want to look at.
+      return state.status === "minting" ? { ...state, status: "done", result: null, error: action.message, hash: action.hash ?? null } : state;
     case "unconfirmed":
       return state.status === "minting"
         ? { ...state, status: "unconfirmed", result: null, error: action.message, hash: action.hash }
         : state;
     case "dismiss":
-      return state.status === "done" || state.status === "unconfirmed" ? { ...initialMintSessionState } : state;
+      return state.status === "done" || state.status === "unconfirmed"
+        ? { ...initialMintSessionState, lastHash: state.hash ?? state.lastHash }
+        : state;
   }
 }
 
@@ -159,10 +171,11 @@ export function createMintSession(target?: BeforeUnloadTarget) {
     emit();
   }
 
-  /** Records a failure; only takes effect while minting. */
-  function fail(message: string): void {
+  /** Records a failure; only takes effect while minting. `hash` is set when the transaction had
+   * already been broadcast (a revert), so the failure can still be linked to the explorer. */
+  function fail(message: string, hash?: `0x${string}`): void {
     if (state.status !== "minting") return;
-    state = mintSessionReducer(state, { type: "fail", message });
+    state = mintSessionReducer(state, { type: "fail", message, hash });
     resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
     emit();
   }

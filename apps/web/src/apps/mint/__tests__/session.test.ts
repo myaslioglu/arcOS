@@ -19,6 +19,7 @@ const mintingState = (over: Partial<MintSessionState> = {}): MintSessionState =>
   result: null,
   error: null,
   hash: null,
+  lastHash: null,
   startedAt: 1,
   ...over,
 });
@@ -34,7 +35,7 @@ describe("mintSessionReducer", () => {
   describe("start", () => {
     it("starts a session from idle", () => {
       const next = mintSessionReducer(initialMintSessionState, { type: "start", symbol: "DUKE", startedAt: 10 });
-      expect(next).toEqual({ status: "minting", symbol: "DUKE", result: null, error: null, hash: null, startedAt: 10 });
+      expect(next).toEqual({ status: "minting", symbol: "DUKE", result: null, error: null, hash: null, lastHash: null, startedAt: 10 });
     });
 
     it("starts a session from done (minting another token after one finished)", () => {
@@ -112,12 +113,53 @@ describe("mintSessionReducer", () => {
 
     it("also applies from unconfirmed — the user has seen the hash and chosen to move on", () => {
       const unconfirmed = mintSessionReducer(mintingState(), { type: "unconfirmed", message: "x", hash: HASH });
-      expect(mintSessionReducer(unconfirmed, { type: "dismiss" })).toEqual(initialMintSessionState);
+      // Everything else resets, but the hash of a transaction that was actually broadcast is kept
+      // as `lastHash`: dismissing is "I checked, let me move on", not "forget the only link to a
+      // transaction whose outcome I may still need to look up".
+      expect(mintSessionReducer(unconfirmed, { type: "dismiss" })).toEqual({ ...initialMintSessionState, lastHash: HASH });
     });
 
     it("is a no-op outside done/unconfirmed", () => {
       const state = mintingState();
       expect(mintSessionReducer(state, { type: "dismiss" })).toBe(state);
+    });
+  });
+
+  // Wave H: the "Last transaction" link used to live in Mint's component state, so it vanished the
+  // moment the window was closed — exactly when a user goes looking for it. It belongs to the
+  // session, like every other fact about a mint that outlives its window.
+  describe("the last broadcast transaction", () => {
+    it("keeps a reverted mint's hash, so the failure branch can link it", () => {
+      const next = mintSessionReducer(mintingState(), { type: "fail", message: "The transaction reverted.", hash: HASH });
+      expect(next).toMatchObject({ status: "done", error: "The transaction reverted.", hash: HASH });
+    });
+
+    it("has no hash when nothing was ever broadcast", () => {
+      const next = mintSessionReducer(mintingState(), { type: "fail", message: "Signature refused." });
+      expect(next.hash).toBeNull();
+    });
+
+    it("survives dismissing a failed mint as well as an unconfirmed one", () => {
+      const failed = mintSessionReducer(mintingState(), { type: "fail", message: "x", hash: HASH });
+      expect(mintSessionReducer(failed, { type: "dismiss" }).lastHash).toBe(HASH);
+    });
+
+    it("is cleared when the next mint starts — it describes the previous transaction, not this one", () => {
+      const dismissed = mintSessionReducer(
+        mintSessionReducer(mintingState(), { type: "unconfirmed", message: "x", hash: HASH }),
+        { type: "dismiss" },
+      );
+      expect(mintSessionReducer(dismissed, { type: "start", symbol: "OTHER", startedAt: 40 }).lastHash).toBeNull();
+    });
+
+    it("isn't overwritten by a later mint that never got as far as a transaction", () => {
+      const dismissed = mintSessionReducer(
+        mintSessionReducer(mintingState(), { type: "unconfirmed", message: "x", hash: HASH }),
+        { type: "dismiss" },
+      );
+      const started = mintSessionReducer(dismissed, { type: "start", symbol: "OTHER", startedAt: 40 });
+      const failedBeforeSending = mintSessionReducer(started, { type: "fail", message: "Signature refused." });
+      expect(mintSessionReducer(failedBeforeSending, { type: "dismiss" }).lastHash).toBeNull();
     });
   });
 });
@@ -203,7 +245,8 @@ describe("session store", () => {
     session.start("DUKE");
     session.unconfirmed("x", HASH);
     session.dismiss();
-    expect(session.getSnapshot()).toEqual(initialMintSessionState);
+    // Back to a blank form, except for the link to the transaction that was actually broadcast.
+    expect(session.getSnapshot()).toEqual({ ...initialMintSessionState, lastHash: HASH });
   });
 });
 

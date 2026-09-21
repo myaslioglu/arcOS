@@ -23,14 +23,6 @@ function Form() {
   const { open, notify } = useDesktop();
   const [form, setForm] = useState<MintForm>(EMPTY);
   const [errors, setErrors] = useState<Partial<Record<keyof MintForm, string>>>({});
-  // Should-fix (wave G): dismissing an unconfirmed mint ("I checked — start a new mint") keeps the
-  // form's parameters filled in (convenient — the normal fee-confirmation path in submit() still
-  // applies before anything is sent again), but that also means the hash session.dismiss() clears
-  // from the session store becomes otherwise unreachable. Kept here, outside the session store,
-  // purely as a "last transaction" convenience link for THIS window — not persisted across a close/
-  // reopen, unlike the session-backed states — until the next mint actually starts.
-  const [lastUnconfirmedHash, setLastUnconfirmedHash] = useState<`0x${string}` | null>(null);
-
   // The mint session lives outside this component (see ./session) so it survives the window closing
   // mid-mint: a reopened window shows the pending or finished state — including the created token's
   // address — instead of a blank form that would invite a second, separately-charged mint.
@@ -65,7 +57,6 @@ function Form() {
     const shownFee = fee.data;
     const started = session.start(result.args.symbol);
     if (!started) return; // a mint is already in flight (another click, another window) — do nothing
-    setLastUnconfirmedHash(null); // a new mint starting is what retires the previous one's link
     // Set once writeContractAsync returns — everything after that point knows a transaction was
     // broadcast, which is what tells the catch block below (via classifyMintFailure) whether a
     // failure means "nothing happened" or "we don't know what happened, don't invite a second charge".
@@ -126,7 +117,7 @@ function Form() {
     } catch (err) {
       const outcome = classifyMintFailure(hash !== undefined, err);
       if (outcome.unconfirmed) session.unconfirmed(outcome.message, hash!);
-      else session.fail(outcome.message);
+      else session.fail(outcome.message, hash);
     }
   };
 
@@ -142,14 +133,7 @@ function Form() {
             {mintSession.hash}
           </a>
         )}
-        <button
-          type="button"
-          className="mt-3 rounded-md border border-border-2 px-3 py-1.5"
-          onClick={() => {
-            setLastUnconfirmedHash(mintSession.hash);
-            session.dismiss();
-          }}
-        >
+        <button type="button" className="mt-3 rounded-md border border-border-2 px-3 py-1.5" onClick={() => session.dismiss()}>
           I checked — start a new mint
         </button>
       </div>
@@ -171,9 +155,17 @@ function Form() {
         </div>
       );
     }
+    // A mint that reverted was still broadcast and mined: "Try again" is the right verb (a revert
+    // refunds `value` atomically, so nothing was charged), but the receipt that proves it is the
+    // first thing anyone will want to look at, so the hash is shown whenever there is one.
     return (
       <div className="p-5 text-sm">
         <p className="text-accent-3-text">{mintSession.error}</p>
+        {mintSession.hash && (
+          <a className="mt-1 block break-all font-mono text-xs text-accent-text" href={explorerUrl("tx", mintSession.hash)} target="_blank" rel="noreferrer">
+            {mintSession.hash}
+          </a>
+        )}
         <button type="button" className="mt-3 rounded-md border border-border-2 px-3 py-1.5" onClick={() => session.dismiss()}>Try again</button>
       </div>
     );
@@ -215,11 +207,14 @@ function Form() {
       </label>
       {form.mintable && field("cap", "Maximum supply (optional)", "Leave empty for no cap")}
       <p className="text-xs text-muted">The supply goes to your wallet. The contract has no fees, no blacklist and no pause.</p>
-      {lastUnconfirmedHash && (
+      {/* The previous mint's transaction, kept by the session store through `dismiss` (see
+          session.ts's `lastHash`) so it survives this window being closed and reopened — which is
+          exactly when someone goes looking for it. Cleared once the next mint starts. */}
+      {mintSession.lastHash && (
         <p className="text-xs text-muted">
           {"Last transaction: "}
-          <a className="break-all text-accent-text" href={explorerUrl("tx", lastUnconfirmedHash)} target="_blank" rel="noreferrer">
-            {lastUnconfirmedHash}
+          <a className="break-all text-accent-text" href={explorerUrl("tx", mintSession.lastHash)} target="_blank" rel="noreferrer">
+            {mintSession.lastHash}
           </a>
         </p>
       )}
