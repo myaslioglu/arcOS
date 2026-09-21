@@ -1,12 +1,20 @@
+import type { DropAsset } from "./asset";
+
 export type CanSendInput = {
   /** This component's own submit() call hasn't settled yet — a local, same-tick safety net. `sessionActive`
    * is the authoritative guard once the shared session store reflects it (which happens synchronously, but
    * a moment before this component necessarily re-renders from it). */
   busy: boolean;
   ready: boolean;
-  /** The active token's `decimals` resolved to a number — false while it's still loading OR failed to
-   * read; either way there's no safe scale to parse or send amounts at. */
-  decimalsKnown: boolean;
+  /** What this send will actually move — see asset.ts. Refused outright while `"unresolved"` (N8):
+   * an empty or still-loading "Another token" pick must never be sendable, since the old
+   * "null means native" convention let exactly that fall through to a native USDC send. */
+  asset: DropAsset;
+  /** Only meaningful when `asset.kind === "unresolved"`: whether the token-address field currently
+   * holds a syntactically valid address. Tells apart the two reasons a token asset isn't ready —
+   * "nothing valid typed yet" vs. "a valid address is typed and its metadata is still loading (or
+   * failed to read)" — which get two different button labels below. */
+  tokenAddressEntered: boolean;
   /** `text === deferredText`. False for the paintable moment after a send resolves and `setText` commits
    * before `useDeferredValue` catches up — the displayed row count can't be trusted yet, so a click here
    * must not be allowed to re-send whatever the deferred (stale) parse still shows. */
@@ -34,10 +42,13 @@ export type CanSendResult = { ok: boolean; label: string };
  * never disagree. Checked in order; the first false condition wins and sets the label.
  */
 export function canSend(input: CanSendInput): CanSendResult {
-  const { busy, ready, decimalsKnown, textIsCurrent, rowCount, sessionActive, quoteCount } = input;
+  const { busy, ready, asset, tokenAddressEntered, textIsCurrent, rowCount, sessionActive, quoteCount } = input;
   if (busy || sessionActive) return { ok: false, label: "Sending…" };
   if (!textIsCurrent) return { ok: false, label: "Checking the list…" };
-  if (!decimalsKnown || !ready) return { ok: false, label: `Send to ${rowCount} wallets` };
+  if (asset.kind === "unresolved") {
+    return { ok: false, label: tokenAddressEntered ? "Reading the token…" : "Enter the token's address first." };
+  }
+  if (!ready) return { ok: false, label: `Send to ${rowCount} wallets` };
   if (rowCount === 0) return { ok: false, label: "Send to 0 wallets" };
   if (quoteCount !== rowCount) return { ok: false, label: "Reading the fee…" };
   return { ok: true, label: `Send to ${rowCount} wallets` };

@@ -3,9 +3,10 @@
 import { useCallback } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
-import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisendAbi, unitsToNative, type Address } from "@arcos/chain";
+import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisendAbi, unitsToNative } from "@arcos/chain";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
+import type { DropAsset } from "./asset";
 import { dropBatchFee, dropTotalFee, feeChangeMessage, type DropFeeBasis } from "./dropFee";
 import { BATCH, batchSizes, chunk, formatDropList, type DropRow } from "./parse";
 import { isUserRejection, runDrop, type BatchOutcome, type DropResult } from "./runDrop";
@@ -70,7 +71,29 @@ export function useDrop() {
   // reporting "sending" forever (which would also block any future send, since the store refuses to start
   // a second one while one is already in flight).
   const send = useCallback(
-    async (token: Address | null, rows: DropRow[], decimals: number, shownFee: DropFeeBasis | null) => {
+    async (asset: DropAsset, rows: DropRow[], shownFee: DropFeeBasis | null) => {
+      if (asset.kind === "unresolved") {
+        // Structural guarantee for N8: `token` below is derived from `asset` only once it's
+        // definitely resolved to "native" or a specific "token" — an unresolved "Another token"
+        // pick (empty or still-loading address) is refused right here, before `token` even exists,
+        // so it can never fall through to the native branch further down. canSend.ts / Window.tsx's
+        // submit() already refuse to call send() in this state; this is the same defence-in-depth
+        // as assertWalletOnChain's per-batch re-check below.
+        const result: DropResult = {
+          delivered: [],
+          failed: [],
+          remaining: rows,
+          unconfirmed: [],
+          hashes: [],
+          stoppedBecause: "error" as const,
+          message: "Enter the token's address first.",
+        };
+        session.finish(result, formatDropList(rows, null, 6));
+        return result;
+      }
+      const token = asset.kind === "token" ? asset.address : null;
+      const decimals = asset.kind === "token" ? asset.decimals : 6;
+
       if (!client || !multisend || !address) {
         const result: DropResult = {
           delivered: [],

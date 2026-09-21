@@ -10,6 +10,7 @@ import { ConnectGate } from "@/components/ConnectGate";
 import { describeContractError } from "@/lib/contract-error";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
+import { resolveDropAsset } from "./asset";
 import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
 import { IssuesList } from "./IssuesList";
@@ -83,30 +84,54 @@ function Form({ params }: Pick<AppProps, "params">) {
     }
   }
 
-  const token = mode === "token" && isAddress(tokenAddr, { strict: false }) ? (tokenAddr as Address) : null;
+  // The address currently valid enough to READ metadata for — distinct from `asset` below, which is
+  // the authoritative "what will this send actually move" decision. Kept separate so the read query
+  // itself doesn't depend on the answer it's trying to produce.
+  const tokenCandidate = mode === "token" && isAddress(tokenAddr, { strict: false }) ? (tokenAddr as Address) : null;
 
   const meta = useReadContracts({
-    contracts: token
+    contracts: tokenCandidate
       ? [
-          { address: token, abi: erc20Abi, functionName: "symbol", chainId: chain.id } as const,
-          { address: token, abi: erc20Abi, functionName: "decimals", chainId: chain.id } as const,
+          { address: tokenCandidate, abi: erc20Abi, functionName: "symbol", chainId: chain.id } as const,
+          { address: tokenCandidate, abi: erc20Abi, functionName: "decimals", chainId: chain.id } as const,
         ]
       : [],
-    query: { enabled: !!token },
+    query: { enabled: !!tokenCandidate },
   });
   // Distinguishes "still loading" from "the read failed" — either the whole multicall failed (meta.status
   // === "error") or it succeeded but this particular call reverted (meta.data[N].status === "failure").
   // Mirrors how a failed fee read is already handled below: a dedicated message instead of an endless
   // "Reading…" state, and Send stays disabled either way.
-  const symbolFailed = token ? meta.status === "error" || meta.data?.[0]?.status === "failure" : false;
-  const decimalsFailed = token ? meta.status === "error" || meta.data?.[1]?.status === "failure" : false;
+  const symbolFailed = tokenCandidate ? meta.status === "error" || meta.data?.[0]?.status === "failure" : false;
+  const decimalsFailed = tokenCandidate ? meta.status === "error" || meta.data?.[1]?.status === "failure" : false;
   // A token whose name/symbol can't be read still needs a label somewhere the user can trust — its
   // own address, short-formed, rather than an endless "…" that never resolves. The raw symbol() read
-  // is a value the token's own creator fully controls, so it's never shown or stored uncleaned.
-  const symbol = token ? (symbolFailed ? shortAddress(token) : (cleanLabel(meta.data?.[0]?.result as string | undefined, 32) ?? "…")) : "USDC";
-  // `null` while a real token's decimals are still loading, or failed — never default to 18, which would
-  // parse and quote every amount at the wrong scale until the read comes back.
-  const decimals = token ? ((meta.data?.[1]?.result as number | undefined) ?? null) : 6;
+  // is a value the token's own creator fully controls, so it's never shown or stored uncleaned. `null`
+  // only while genuinely still loading — a failed read resolves to the fallback label rather than
+  // blocking (unlike a failed decimals read, which must block: amounts can't be scaled without it).
+  const resolvedSymbol = tokenCandidate
+    ? (symbolFailed ? shortAddress(tokenCandidate) : (cleanLabel(meta.data?.[0]?.result as string | undefined, 32) ?? null))
+    : null;
+  // `null` while a real token's decimals are still loading, or failed — never default to 18 or 6,
+  // which would parse and quote every amount at the wrong scale (or as the wrong asset — N8) before
+  // the read comes back.
+  const resolvedDecimals = tokenCandidate ? ((meta.data?.[1]?.result as number | undefined) ?? null) : null;
+
+  // N8: the single source of truth for what this send will actually move — never "null means
+  // native". An empty or still-resolving "Another token" pick is `"unresolved"`, which canSend.ts
+  // refuses and useDrop.ts's `send()` can never route to a native send. See asset.ts.
+  const asset = resolveDropAsset({ mode, tokenAddr, decimals: resolvedDecimals, symbol: resolvedSymbol });
+  const symbol = asset.kind === "token" ? asset.symbol : asset.kind === "native" ? "USDC" : "…";
+  // No default decimals for an unresolved token (N8) — mirrors `dropAssetDecimals(asset)` (which
+  // asset.test.ts tests directly against `resolveDropAsset`'s output) but computed from the same
+  // primitives `asset` itself was built from, rather than by reading a property off `asset`, so the
+  // React Compiler can still verify the `useMemo`'s dependency below (it otherwise can't prove a
+  // property read off a value returned from an imported function is stable across renders). Needs
+  // BOTH resolved, exactly like `resolveDropAsset` does: a real multicall settles both fields
+  // together, but a token that resolves decimals while its symbol reads back empty/unusable must
+  // still stay unresolved here — never scale amounts at a decimals value `asset` itself wouldn't
+  // call "resolved" yet.
+  const decimals = mode === "usdc" ? 6 : resolvedDecimals !== null && resolvedSymbol !== null ? resolvedDecimals : null;
 
   // Deferred so typing into a long list doesn't block on re-parsing it every keystroke. Only ever used for
   // the preview (row count, issues, fee) and for detecting staleness below — never for what gets sent.
@@ -116,7 +141,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     () => (decimals === null ? { rows: [], issues: [], total: 0n } : parseDropList(deferredText, decimals)),
     [deferredText, decimals],
   );
-  const totalDisplay = decimals === null ? "" : token ? formatUnits(total, decimals) : formatUsdc(unitsToNative(total));
+  const totalDisplay = decimals === null ? "" : asset.kind === "token" ? formatUnits(total, asset.decimals) : formatUsdc(unitsToNative(total));
   const batches = Math.ceil(rows.length / BATCH) || 0;
   // Derived, not reset from inside the effect below (which would mean calling setState synchronously
   // during an effect, on every row-count change): a stale quote from a previous, longer list must
@@ -194,11 +219,14 @@ function Form({ params }: Pick<AppProps, "params">) {
     // excludedRows, result.ts's ExcludedRow, ResultPanel.tsx).
     const textLines = text.split(/\r?\n/);
     const excludedRows = fresh.issues.map((i) => ({ line: i.line, text: textLines[i.line - 1] ?? "", reason: i.message }));
+    // Only ever "token" or "native" here — `decimals === null` above already returned for
+    // "unresolved" (see asset.ts's doc comment / N8).
+    const token = asset.kind === "token" ? asset.address : null;
     const started = session.start(token ? symbol : "USDC", token, decimals, text, excludedRows);
     if (!started) return; // a send is already in flight (another click, another window) — do nothing
     setBusy(true);
     try {
-      const result = await send(token, fresh.rows, decimals, quote);
+      const result = await send(asset, fresh.rows, quote);
       trackEvent("drop_success", { recipients: result.delivered.length, batches: result.hashes.length });
     } catch (err) {
       notify(describeContractError(err), "warn", 6000);
@@ -226,7 +254,8 @@ function Form({ params }: Pick<AppProps, "params">) {
   const decision = canSend({
     busy,
     ready,
-    decimalsKnown: decimals !== null,
+    asset,
+    tokenAddressEntered: tokenCandidate !== null,
     textIsCurrent,
     rowCount: rows.length,
     issueCount: issues.length,
@@ -308,10 +337,10 @@ function Form({ params }: Pick<AppProps, "params">) {
             <p className="mt-3">{progressLabel}</p>
             <p className="mt-1 text-xs text-muted">Keep this tab open until it finishes. You can close this window; the send continues.</p>
           </>
-        ) : token && decimalsFailed ? (
+        ) : tokenCandidate && decimalsFailed ? (
           <p className="mt-3 text-accent-3-text">{"Couldn't read this token. Check the address."}</p>
         ) : decimals === null ? (
-          <p className="mt-3 text-muted">Reading the token…</p>
+          <p className="mt-3 text-muted">{tokenCandidate ? "Reading the token…" : "Enter the token's address first."}</p>
         ) : (
           <>
             <p className="mt-3">

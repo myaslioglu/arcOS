@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { DropAsset } from "../asset";
 import { canSend, type CanSendInput } from "../canSend";
+
+const NATIVE: DropAsset = { kind: "native" };
+const TOKEN: DropAsset = { kind: "token", address: "0x1111111111111111111111111111111111111111", decimals: 18, symbol: "DUKE" };
+const UNRESOLVED: DropAsset = { kind: "unresolved" };
 
 const BASE: CanSendInput = {
   busy: false,
   ready: true,
-  decimalsKnown: true,
+  asset: NATIVE,
+  tokenAddressEntered: false,
   textIsCurrent: true,
   rowCount: 3,
   issueCount: 0,
@@ -17,6 +23,10 @@ describe("canSend", () => {
     expect(canSend(BASE)).toEqual({ ok: true, label: "Send to 3 wallets" });
   });
 
+  it("allows sending from a resolved token asset too", () => {
+    expect(canSend({ ...BASE, asset: TOKEN })).toEqual({ ok: true, label: "Send to 3 wallets" });
+  });
+
   it("disables while busy", () => {
     expect(canSend({ ...BASE, busy: true }).ok).toBe(false);
   });
@@ -27,10 +37,6 @@ describe("canSend", () => {
 
   it("disables when not ready (wallet, network or contract missing)", () => {
     expect(canSend({ ...BASE, ready: false }).ok).toBe(false);
-  });
-
-  it("disables while decimals aren't known — covers both still loading and a failed read", () => {
-    expect(canSend({ ...BASE, decimalsKnown: false }).ok).toBe(false);
   });
 
   it("disables with zero rows", () => {
@@ -68,6 +74,37 @@ describe("canSend", () => {
 
     it("a zero row count still wins over a quote mismatch — 'Send to 0 wallets', not 'Reading the fee…'", () => {
       expect(canSend({ ...BASE, rowCount: 0, quoteCount: 5 })).toEqual({ ok: false, label: "Send to 0 wallets" });
+    });
+  });
+
+  // N8: "Another token" selected with an unresolved address must refuse, with wording that tells
+  // the user what to do — never silently fall through to a native send (see asset.ts's doc comment).
+  describe("an unresolved token asset (N8 — the wrong-asset send hazard)", () => {
+    it("refuses with 'Enter the token's address first.' when nothing valid has been typed yet", () => {
+      expect(canSend({ ...BASE, asset: UNRESOLVED, tokenAddressEntered: false })).toEqual({
+        ok: false,
+        label: "Enter the token's address first.",
+      });
+    });
+
+    it("refuses with 'Reading the token…' once a valid address is typed but its metadata isn't back yet (or failed)", () => {
+      expect(canSend({ ...BASE, asset: UNRESOLVED, tokenAddressEntered: true })).toEqual({
+        ok: false,
+        label: "Reading the token…",
+      });
+    });
+
+    it("an unresolved asset refuses even when every other condition (ready, rows, quote) looks sendable", () => {
+      const result = canSend({ ...BASE, asset: UNRESOLVED, tokenAddressEntered: true, ready: true, rowCount: 300, quoteCount: 300 });
+      expect(result.ok).toBe(false);
+    });
+
+    it("busy/session-active still wins over an unresolved asset — the label stays 'Sending…'", () => {
+      expect(canSend({ ...BASE, asset: UNRESOLVED, sessionActive: true })).toEqual({ ok: false, label: "Sending…" });
+    });
+
+    it("stale text still wins over an unresolved asset — the button reflects the parse still catching up first", () => {
+      expect(canSend({ ...BASE, asset: UNRESOLVED, textIsCurrent: false })).toEqual({ ok: false, label: "Checking the list…" });
     });
   });
 });
