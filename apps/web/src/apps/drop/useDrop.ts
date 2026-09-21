@@ -8,7 +8,7 @@ import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisen
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import { wagmiConfig } from "@/providers/wagmi";
-import type { DropAsset } from "./asset";
+import { dropAssetDecimals, dropAssetTokenAddress, type DropAsset } from "./asset";
 import { dropBatchFee, dropTotalFee, feeChangeMessage, type DropFeeBasis } from "./dropFee";
 import { BATCH, batchSizes, chunk, formatDropList, type DropRow } from "./parse";
 import { isUserRejection, runDrop, type BatchOutcome, type DropResult } from "./runDrop";
@@ -93,8 +93,11 @@ export function useDrop() {
         session.finish(result, formatDropList(rows, null, 6));
         return result;
       }
-      const token = asset.kind === "token" ? asset.address : null;
-      const decimals = asset.kind === "token" ? asset.decimals : 6;
+      // Both come from asset.ts, the one place that decides what a send moves. `dropAssetDecimals`
+      // returns null only for an unresolved asset, which the guard above already refused — the
+      // `?? 6` is for TypeScript, not a fallback anything can reach.
+      const token = dropAssetTokenAddress(asset);
+      const decimals = dropAssetDecimals(asset) ?? 6;
 
       if (!client || !multisend || !address) {
         const result: DropResult = {

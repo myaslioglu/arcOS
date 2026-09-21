@@ -32,9 +32,11 @@ export type DropAssetInput = {
 
 /**
  * The single place that decides native vs. a specific resolved token vs. "not ready to send from
- * yet" — threaded through `canSend.ts` (refuses while unresolved), the amount parsing in
- * `Window.tsx` (via `dropAssetDecimals` below — no default scale for an unresolved token) and
- * `useDrop.ts`'s `send()` (so `sendNative` is reachable only once this resolves to `"native"`).
+ * yet" — threaded through `canSend.ts` (which refuses while unresolved) and `useDrop.ts`'s `send()`
+ * (which reads the two accessors below, so `sendNative` is reachable only once this resolves to
+ * `"native"`). `Window.tsx`'s own amount parsing reproduces `dropAssetDecimals`' rule inline rather
+ * than calling it, for the React Compiler reason documented at that call site — the two are kept
+ * honest by asset.test.ts, which asserts the rule against `resolveDropAsset`'s output.
  */
 export function resolveDropAsset(input: DropAssetInput): DropAsset {
   if (input.mode === "usdc") return { kind: "native" };
@@ -44,15 +46,17 @@ export function resolveDropAsset(input: DropAssetInput): DropAsset {
 }
 
 /** The decimals to parse/format amounts at for `asset` — `null` (never a default) while
- * unresolved, so an unresolved token's rows are never parsed at the wrong scale, or at all. */
+ * unresolved, so an unresolved token's rows are never parsed at the wrong scale, or at all. Used by
+ * `useDrop.ts`'s `send()`. */
 export function dropAssetDecimals(asset: DropAsset): number | null {
   if (asset.kind === "native") return 6;
   if (asset.kind === "token") return asset.decimals;
   return null;
 }
 
-/** The token address `send()` should move funds in — `null` for native (the multisend contract's
- * `sendNative` path) or while unresolved (never a guess), the resolved address otherwise. */
+/** The token address `useDrop.ts`'s `send()` moves funds in — `null` for native (the multisend
+ * contract's `sendNative` path) or while unresolved (never a guess), the resolved address
+ * otherwise. */
 export function dropAssetTokenAddress(asset: DropAsset): Address | null {
   return asset.kind === "token" ? asset.address : null;
 }

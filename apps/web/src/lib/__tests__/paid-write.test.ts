@@ -118,17 +118,38 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
     expect(matchedFiles.some((f) => f.endsWith(path.join("apps", "drop", "useDrop.ts")))).toBe(true);
   });
 
+  /**
+   * Renames that would hide a paid write from the call-site scan below — and ONLY those. A bare
+   * `name: something` matches far more than a rename: `({ writeContractAsync: mockWrite })` in a
+   * test's wagmi mock, and `writeContract: (args) => Promise<void>` in an interface, are both
+   * perfectly ordinary and neither puts a call anywhere. What actually defeats the scan is a
+   * BINDING — `const { writeContractAsync: doIt } = useWriteContract()` — so the pattern has to be
+   * matched inside a destructuring pattern on the left of an `=`, not anywhere a colon appears.
+   */
+  function aliasesIn(source: string): string[] {
+    const found: string[] = [];
+    const destructurings = source.matchAll(/(?:const|let|var)\s*\{([^{}]*)\}\s*=/g);
+    for (const [, bindings] of destructurings) {
+      for (const name of FUNCTION_NAMES) {
+        const alias = new RegExp(`\\b${name}\\s*:\\s*([A-Za-z_$][\\w$]*)`).exec(bindings ?? "");
+        if (alias && alias[1] !== name) found.push(`${name}: ${alias[1]}`);
+      }
+    }
+    return found;
+  }
+
+  it("recognises a destructuring rename, and only that — not a mock's object literal or a type member", () => {
+    expect(aliasesIn("const { writeContractAsync: doIt } = useWriteContract();")).toEqual(["writeContractAsync: doIt"]);
+    expect(aliasesIn("const { writeContractAsync } = useWriteContract();")).toEqual([]);
+    expect(aliasesIn("vi.mock('wagmi', () => ({ useWriteContract: () => ({ writeContractAsync: mockWrite }) }));")).toEqual([]);
+    expect(aliasesIn("interface FakeWagmi { writeContract: (args: unknown) => Promise<void> }")).toEqual([]);
+  });
+
   it("finds no destructuring alias of writeContractAsync/writeContract/sendTransaction — that would let a call bypass this whole scan", () => {
     const offenders: string[] = [];
     for (const file of matchedFiles) {
       const stripped = stripComments(readFileSync(file, "utf8"));
-      for (const name of FUNCTION_NAMES) {
-        const re = new RegExp(`\\b${name}\\s*:\\s*([A-Za-z_$][\\w$]*)`, "g");
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(stripped))) {
-          if (m[1] !== name) offenders.push(`${path.relative(root, file)}: \`${name}: ${m[1]}\``);
-        }
-      }
+      for (const alias of aliasesIn(stripped)) offenders.push(`${path.relative(root, file)}: \`${alias}\``);
     }
     expect(offenders, `found a destructuring rename that would hide a paid write from this scan:\n${offenders.join("\n")}`).toEqual([]);
   });
