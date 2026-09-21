@@ -26,11 +26,9 @@ describe("withDeadline", () => {
     release("too late"); // the underlying work keeps running — this must not throw or hang the test
   });
 
-  it("never fires the timeout once the real result has already won the race", async () => {
+  it("clears the deadline timer once the real result has already won the race, leaving nothing pending", async () => {
     const p = withDeadline(Promise.resolve("fast"));
     await expect(p).resolves.toBe("fast");
-    // If the timer weren't cleared, advancing past the deadline would be harmless here anyway
-    // (nothing is still awaiting `p`), but this documents the intent: no dangling timer leaks.
-    await vi.advanceTimersByTimeAsync(15_000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

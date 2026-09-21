@@ -3,7 +3,7 @@ import { isAddress } from "viem";
 import type { Address } from "@arcos/chain";
 import { NotAContract } from "@arcos/inspector";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
-import { passLine, rankFindings, shortLabel, tokenLabel } from "@/lib/proof";
+import { NAME_DISCLOSURE, passLine, rankFindings, shortLabel, tokenLabel } from "@/lib/proof";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -52,7 +52,13 @@ export default async function Image({ params }: { params: Promise<{ address: str
           ))}
           {hiddenCount > 0 && <div style={{ display: "flex", marginTop: 10, marginLeft: 48, color: "#6b6f79" }}>{`+${hiddenCount} more`}</div>}
         </div>
-        <div style={{ display: "flex", marginTop: "auto", fontSize: 22, color: "#6b6f79" }}>Automated analysis, not investment advice.</div>
+        <div style={{ display: "flex", flexDirection: "column", marginTop: "auto" }}>
+          <div style={{ display: "flex", fontSize: 22, color: "#6b6f79" }}>Automated analysis, not investment advice.</div>
+          {/* The symbol above is shown large with no other hint that the token's creator chose it
+              and can make it imitate another token — this line carries that, bounded to a width
+              that leaves room to wrap without pushing the card past its fixed 630px height. */}
+          {report && <div style={{ display: "flex", fontSize: 18, marginTop: 4, color: "#6b6f79", maxWidth: 1000 }}>{NAME_DISCLOSURE}</div>}
+        </div>
       </div>
     ),
     size,

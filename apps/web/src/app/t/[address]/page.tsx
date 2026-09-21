@@ -5,11 +5,9 @@ import { explorerUrl, type Address } from "@arcos/chain";
 import { NotAContract, type Report } from "@arcos/inspector";
 import { formatAppHash } from "@arcos/shell/core";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
-import { passLine, readAtLine, summaryLine, tokenLabel } from "@/lib/proof";
+import { NAME_DISCLOSURE, passLine, readAtLine, summaryLine, tokenLabel } from "@/lib/proof";
 
 type Props = { params: Promise<{ address: string }> };
-
-const ATTACKER_NAME_LINE = "The name and symbol are chosen by whoever deployed this contract and can imitate another token. Check the address.";
 
 type LoadResult = Report | null | "busy" | "error";
 
@@ -64,7 +62,7 @@ export default async function ProofPage({ params }: Props) {
     <main className="mx-auto max-w-2xl p-6 text-sm">
       <p className="text-xs text-muted">ARC.os · proof page</p>
       <h1 className="mt-1 text-xl font-medium break-words">{report.token.name ?? tokenLabel(report)}</h1>
-      <p className="mt-1 text-xs text-muted">{ATTACKER_NAME_LINE}</p>
+      <p className="mt-1 text-xs text-muted">{NAME_DISCLOSURE}</p>
       <a className="break-all font-mono text-xs text-accent-text" href={explorerUrl("token", report.address)}>{report.address}</a>
       <p className="mt-4 inline-block rounded-md bg-surface-2 px-2 py-1">{passLine(report)}</p>
       {!report.explorerReachable && (

@@ -36,15 +36,18 @@ function ipv6Prefix64(addr: string): string {
 }
 
 /**
- * The rate-limit bucket for a request: `x-vercel-forwarded-for` when present (the platform's own,
- * trusted value); otherwise the RIGHTMOST entry of `x-forwarded-for` — the hop added by the
- * nearest proxy, since every entry to its left is client-supplied and trivially spoofed; then
- * `x-real-ip`; then `"unknown"`. Normalised (trimmed, lowercased) and, for IPv6, collapsed to its
- * /64 prefix so a client cycling through addresses in the same block doesn't dodge the limit.
- * See SECURITY.md for the trusted-proxy assumption this relies on.
+ * The rate-limit bucket for a request: `x-vercel-forwarded-for` when present AND this process is
+ * actually running on Vercel (`process.env.VERCEL === "1"` — set by the platform itself, never by
+ * a request); otherwise the RIGHTMOST entry of `x-forwarded-for` — the hop added by the nearest
+ * proxy, since every entry to its left is client-supplied and trivially spoofed; then `x-real-ip`;
+ * then `"unknown"`. Off Vercel, nothing distinguishes a genuine `x-vercel-forwarded-for` from one a
+ * client set on itself, so it's ignored there rather than trusted. Normalised (trimmed,
+ * lowercased) and, for IPv6, collapsed to its /64 prefix so a client cycling through addresses in
+ * the same block doesn't dodge the limit. See SECURITY.md for the trusted-proxy assumption this
+ * relies on.
  */
 export function clientKey(headers: Pick<Headers, "get">): string {
-  const vercel = headers.get("x-vercel-forwarded-for")?.trim();
+  const vercel = process.env.VERCEL === "1" ? headers.get("x-vercel-forwarded-for")?.trim() : undefined;
   const forwardedFor = headers.get("x-forwarded-for");
   const rightmost = forwardedFor
     ?.split(",")

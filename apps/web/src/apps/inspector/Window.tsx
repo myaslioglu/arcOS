@@ -10,11 +10,9 @@ import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/she
 import { inspectInput } from "@/lib/inspect-input";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
-import { passLine } from "@/lib/proof";
+import { NAME_DISCLOSURE, passLine } from "@/lib/proof";
 import { FindingRow } from "./FindingRow";
 import { inspector } from "./manifest";
-
-const ATTACKER_NAME_LINE = "The name and symbol are chosen by whoever deployed this contract and can imitate another token. Check the address.";
 
 export default function InspectorWindow({ winId, params }: AppProps) {
   const chain = activeChain();
@@ -104,7 +102,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
                 {passLine(report)}
               </span>
             </div>
-            <p className="mt-1 text-xs text-muted">{ATTACKER_NAME_LINE}</p>
+            <p className="mt-1 text-xs text-muted">{NAME_DISCLOSURE}</p>
             {!report.explorerReachable && (
               <p className="mt-2 text-xs text-muted">{"The explorer didn't answer, so some checks are marked unknown."}</p>
             )}

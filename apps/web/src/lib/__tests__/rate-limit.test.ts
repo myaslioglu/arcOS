@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clientKey, inFlightGate, rateLimiter } from "../rate-limit";
 
 describe("rateLimiter", () => {
@@ -68,9 +68,22 @@ describe("inFlightGate", () => {
 });
 
 describe("clientKey", () => {
-  it("prefers x-vercel-forwarded-for over everything else", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("prefers x-vercel-forwarded-for over everything else, when actually running on Vercel", () => {
+    vi.stubEnv("VERCEL", "1");
     const h = new Headers({ "x-vercel-forwarded-for": "203.0.113.9", "x-forwarded-for": "1.2.3.4, 5.6.7.8", "x-real-ip": "9.9.9.9" });
     expect(clientKey(h)).toBe("203.0.113.9");
+  });
+
+  // Off Vercel (a self-hosted deploy, or a local/dev server) nothing verifies x-vercel-forwarded-for
+  // came from the platform — a client could set it on itself just as easily as x-forwarded-for. It
+  // must be ignored there and the request must fall through to the rightmost x-forwarded-for hop.
+  it("ignores x-vercel-forwarded-for off-platform and falls through to the rightmost x-forwarded-for hop", () => {
+    const h = new Headers({ "x-vercel-forwarded-for": "203.0.113.9", "x-forwarded-for": "1.2.3.4, 5.6.7.8", "x-real-ip": "9.9.9.9" });
+    expect(clientKey(h)).toBe("5.6.7.8");
   });
 
   it("uses the RIGHTMOST entry of x-forwarded-for — the hop the nearest trusted proxy added", () => {

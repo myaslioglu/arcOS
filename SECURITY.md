@@ -30,16 +30,17 @@ fixed. Coordinated disclosure — please give us time to address a report before
 
 ## Rate limiting and the trusted-proxy assumption
 
-`/api/inspect` keys its per-client rate limit off `x-vercel-forwarded-for` when present, otherwise
-the rightmost entry of `x-forwarded-for`, otherwise `x-real-ip` (see `clientKey` in
-`apps/web/src/lib/rate-limit.ts`). This assumes the deployment sits behind a proxy layer (Vercel's
-edge network in production) that appends the real client IP as the last hop of that header chain
-and strips or overwrites anything a client tried to inject — the leftmost entries of
-`x-forwarded-for` are client-controlled and never trusted for this decision. Running this app
-behind a different reverse proxy that doesn't set one of these headers correctly (or exposing it
-directly to the internet without one) would let every request collapse onto the `"unknown"` key,
-sharing one limit — not a security hole in itself, but it does mean the safety valve for that
-endpoint stops being per-client.
+`/api/inspect` keys its per-client rate limit off `x-vercel-forwarded-for` when present AND
+`process.env.VERCEL === "1"` (set by the platform itself, never by a request — so a deployment
+that isn't actually running on Vercel never trusts a header a client could set on itself),
+otherwise the rightmost entry of `x-forwarded-for`, otherwise `x-real-ip` (see `clientKey` in
+`apps/web/src/lib/rate-limit.ts`). On Vercel, this assumes the platform's edge network appends the
+real client IP as the last hop of that header chain and strips or overwrites anything a client
+tried to inject — the leftmost entries of `x-forwarded-for` are client-controlled and never
+trusted for this decision. Running this app behind a different reverse proxy that doesn't set one
+of these headers correctly (or exposing it directly to the internet without one) would let every
+request collapse onto the `"unknown"` key, sharing one limit — not a security hole in itself, but
+it does mean the safety valve for that endpoint stops being per-client.
 
 ## Dependency exceptions
 

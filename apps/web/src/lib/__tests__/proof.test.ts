@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Report } from "@arcos/inspector";
-import { badgeColor, badgeSvg, passLine, rankFindings, readAtLine, shortLabel, summaryLine } from "../proof";
+import { NAME_DISCLOSURE, badgeColor, badgeSvg, passLine, rankFindings, readAtLine, shortLabel, summaryLine } from "../proof";
 
 const report = (over: Partial<Report> = {}): Report => ({
   address: "0x1111111111111111111111111111111111111111",
@@ -80,8 +80,16 @@ describe("badgeColor", () => {
   it("is grey — not red or amber — when unknowns pile up with nothing worse found", () => {
     expect(badgeColor({ pass: 5, warn: 0, fail: 0, unknown: 3 })).toBe("#6b6f79");
   });
-  it("is green when unknowns are few and nothing worse was found", () => {
-    expect(badgeColor({ pass: 6, warn: 0, fail: 0, unknown: 2 })).toBe("#0c8a4e");
+  // A green badge reads as "all checks passed" to anyone who never reads the text — so it must not
+  // render green while even one check is still unresolved, no matter how few (was: only >= 3).
+  it("is grey — not green — when even a single check is unknown and nothing worse was found", () => {
+    expect(badgeColor({ pass: 7, warn: 0, fail: 0, unknown: 1 })).toBe("#6b6f79");
+  });
+  it("is grey when unknowns are few (was the exact threshold that used to slip through green)", () => {
+    expect(badgeColor({ pass: 6, warn: 0, fail: 0, unknown: 2 })).toBe("#6b6f79");
+  });
+  it("is green only when there are zero fails, zero warns and zero unknowns", () => {
+    expect(badgeColor({ pass: 8, warn: 0, fail: 0, unknown: 0 })).toBe("#0c8a4e");
   });
 });
 
@@ -113,13 +121,18 @@ describe("badgeSvg", () => {
   });
   it("carries the disclaimer in a <title> as the first child, and in aria-label", () => {
     const svg = badgeSvg(report());
-    const expected = "DUKE: 3/8 pass — automated analysis, not investment advice";
+    const expected = `DUKE: 3/8 pass — automated analysis, not investment advice — ${NAME_DISCLOSURE}`;
     expect(svg).toContain(`<svg xmlns="http://www.w3.org/2000/svg" width="108" height="22" role="img" aria-label="${expected}"><title>${expected}</title>`);
   });
-  it("neutral badge title has no disclaimer clause", () => {
+  it("neutral badge title has no disclaimer clause, and no name disclosure (there's no name to disclose)", () => {
     const svg = badgeSvg(null);
     expect(svg).toContain("<title>ARC.os: not inspected</title>");
     expect(svg).not.toContain("investment advice");
+    expect(svg).not.toContain(NAME_DISCLOSURE);
+  });
+  it("carries the name-is-creator-chosen disclosure in the title too, same wording as the proof page", () => {
+    const svg = badgeSvg(report());
+    expect(svg).toContain(NAME_DISCLOSURE);
   });
   it("appends the explorer-didn't-answer fact to the title when the explorer wasn't reachable", () => {
     const svg = badgeSvg(report({ explorerReachable: false }));

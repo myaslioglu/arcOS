@@ -3,6 +3,11 @@ import { shortAddress } from "./format";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/** The one disclosure every surface that shows a token's name/symbol must carry: they're chosen
+ * by whoever deployed the contract and can imitate another token. Defined once here and reused by
+ * the proof page, the OG card and the badge `<title>`/aria-label — never a second wording. */
+export const NAME_DISCLOSURE = "The name and symbol are chosen by whoever deployed this contract and can imitate another token. Check the address.";
+
 export const tokenLabel = (r: Report): string => r.token.symbol ?? shortAddress(r.address);
 
 /** "5 of 8 checks pass" — with an explicit unknown clause whenever there is one to show, so a
@@ -27,15 +32,17 @@ export function readAtLine(r: Report): string {
 }
 
 /**
- * Colour is driven by fails and warns only — `unknown` (missing evidence) must never read as a
- * failure. Grey only kicks in once unknowns dominate (3 or more) with nothing worse found, so a
- * report that's mostly "couldn't be checked" doesn't look as clean as an all-green one.
+ * Colour is driven, in order, by fails, then warns, then unknowns — `unknown` (missing evidence)
+ * must never read as a failure, but it must also never be invisible: a single unresolved check is
+ * enough to hold the badge at neutral grey instead of green, because a green badge is read as "all
+ * checks passed" by anyone who never reads the accompanying text. Green is reserved for a report
+ * with zero fails, zero warns AND zero unknowns.
  */
 export function badgeColor(counts: Report["counts"] | null): string {
   if (!counts) return "#6b6f79";
   if (counts.fail > 0) return "#b42318";
   if (counts.warn > 0) return "#b97309";
-  if (counts.unknown >= 3) return "#6b6f79";
+  if (counts.unknown > 0) return "#6b6f79";
   return "#0c8a4e";
 }
 
@@ -57,7 +64,8 @@ export function badgeSvg(r: Report | null): string {
     : "not inspected";
   const disclaimer = r ? " — automated analysis, not investment advice" : "";
   const explorerNote = r && !r.explorerReachable ? " — the explorer didn't answer some checks" : "";
-  const title = `${left}: ${right}${disclaimer}${explorerNote}`;
+  const nameNote = r ? ` — ${NAME_DISCLOSURE}` : "";
+  const title = `${left}: ${right}${disclaimer}${explorerNote}${nameNote}`;
   const color = badgeColor(r ? r.counts : null);
   const lw = 12 + left.length * 7;
   const rw = 12 + right.length * 7;
