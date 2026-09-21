@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
-import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "../tokens";
+import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, symbolKey, type TokenFile } from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
 const B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -67,6 +67,34 @@ describe("duplicateSymbols", () => {
   it("flags a symbol that only looks different because of a zero-width space, even when it arrives uncleaned", () => {
     const files = [file({ address: A, symbol: "USD\u200bC" }), file({ address: B, symbol: "USDC" })];
     expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
+  });
+
+  // Every token whose symbol() read is still pending shows the same placeholder, which isn't a
+  // collision between two tokens claiming the same name \u2014 it's the same "not read yet".
+  it("never flags the placeholders shown while a symbol read is pending or has failed", () => {
+    const files = [file({ address: A, symbol: "\u2026" }), file({ address: B, symbol: "\u2026" }), file({ address: C, symbol: "?" }), file({ address: "0xdddddddddddddddddddddddddddddddddddddddd", symbol: "?" })];
+    expect(duplicateSymbols(files)).toEqual(new Set());
+  });
+
+  it("still flags real symbols in a list that also holds placeholders", () => {
+    const files = [file({ address: A, symbol: "\u2026" }), file({ address: B, symbol: "USDC" }), file({ address: C, symbol: "USDC" })];
+    expect(duplicateSymbols(files)).toEqual(new Set(["usdc"]));
+  });
+});
+
+describe("symbolKey", () => {
+  // The Finder's only call site asks `dupes.has(...)` with a token's raw symbol, so the key the
+  // caller builds has to be the key duplicateSymbols stored \u2014 one exported normaliser, used by
+  // both, or the whole defence is bypassed at the point it's meant to fire.
+  it("keys a raw, uncleaned symbol exactly the way duplicateSymbols keyed it", () => {
+    const dirty = " USD\u200bC ";
+    const files = [file({ address: A, symbol: dirty }), file({ address: B, symbol: "USDC" })];
+    expect(duplicateSymbols(files).has(symbolKey(dirty))).toBe(true);
+    expect(symbolKey(dirty)).toBe("usdc");
+  });
+
+  it("gives a placeholder a key that is never in the duplicate set", () => {
+    expect(duplicateSymbols([file({ address: A, symbol: "?" }), file({ address: B, symbol: "?" })]).has(symbolKey("?"))).toBe(false);
   });
 });
 

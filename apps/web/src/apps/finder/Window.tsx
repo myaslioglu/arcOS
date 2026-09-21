@@ -10,7 +10,7 @@ import { blockscoutSource, cleanLabel } from "@arcos/inspector";
 import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { shortAddress } from "@/lib/format";
-import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "./tokens";
+import { duplicateSymbols, latestSliceStart, mergeTokens, officialSymbol, symbolKey, type TokenFile } from "./tokens";
 
 /** Page size for `tokensOfSlice`: Finder only ever shows the creator's most recent tokens. */
 const CREATED_PAGE_SIZE = 100;
@@ -103,7 +103,7 @@ function Files() {
           <ul className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1">
             {files.map((f) => {
               const official = officialSymbol(f.address, network);
-              const collides = dupes.has(f.symbol.trim().toLowerCase());
+              const collides = dupes.has(symbolKey(f.symbol));
               return (
                 <li key={f.address}>
                   <button

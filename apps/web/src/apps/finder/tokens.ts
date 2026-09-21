@@ -28,14 +28,26 @@ export function mergeTokens(
   return [...mine, ...rest];
 }
 
-/** Lower-cased symbols that appear on more than one token in the list. Cleans each symbol itself
- * (control/format/zero-width characters stripped) before comparing, so a spoofed symbol that looks
- * identical to a real one still collides here even if the caller never ran it through `cleanLabel` —
- * the guarantee doesn't depend on every source (on-chain read, explorer) having already cleaned it. */
+/** Stand-ins the Finder shows for a symbol it hasn't got: `mergeTokens`' "?" for a holding the
+ * explorer returned without one, and Window.tsx's "…" while the on-chain `symbol()` read is
+ * pending or after it failed. Two of them side by side are the same absence, not two tokens
+ * claiming the same name, so they must never be reported as a collision. */
+const PLACEHOLDER_SYMBOLS = new Set(["…", "?"]);
+
+/** The one way a symbol is turned into a comparison key: cleaned (control/format/zero-width
+ * characters stripped, so a spoofed symbol still collides with the one it imitates), trimmed and
+ * lower-cased. Exported because `duplicateSymbols`' caller has to look its own symbols up with the
+ * same key — keying one side and querying with the other silently bypasses the whole check. */
+export function symbolKey(symbol: string): string {
+  return (cleanLabel(symbol, 32) ?? symbol).trim().toLowerCase();
+}
+
+/** Keys (see `symbolKey`) that appear on more than one token in the list, placeholders excluded. */
 export function duplicateSymbols(files: TokenFile[]): Set<string> {
   const addressesBySymbol = new Map<string, Set<string>>();
   for (const f of files) {
-    const symbol = (cleanLabel(f.symbol, 32) ?? f.symbol).trim().toLowerCase();
+    const symbol = symbolKey(f.symbol);
+    if (PLACEHOLDER_SYMBOLS.has(symbol)) continue;
     const addresses = addressesBySymbol.get(symbol) ?? new Set<string>();
     addresses.add(f.address.toLowerCase());
     addressesBySymbol.set(symbol, addresses);
