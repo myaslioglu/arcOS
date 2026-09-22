@@ -1,6 +1,7 @@
 # Deploying ARC.os contracts
 
-You run these yourself. Your private key never leaves your terminal and is never pasted into a chat, a file or an env var.
+You sign every transaction yourself, either with a keystore key in your terminal or in your browser wallet. Your private
+key is never pasted into a chat, a file or an env var.
 
 All commands below are run from `packages/contracts` inside the `arc-os` repo. Open a terminal there first:
 
@@ -30,6 +31,42 @@ transfer) or does the whole transaction revert? This can't be verified locally �
 network policy, not something Anvil or a local fork can reproduce. Test it on testnet against a
 Circle-documented blocklisted test address, if one is published, before relying on the per-row failure
 behavior in the UI.
+
+## Alternative: sign in a browser wallet (no key export)
+
+The key never leaves the wallet extension. Nothing below needs a private key, a keystore or `--account`.
+This is how the testnet deployment of 2026-09-22 was made (Foundry 1.7.1, Trust Wallet extension).
+
+    export ARCOS_OWNER=0xYourAddress ARCOS_FEE_RECIPIENT=0xYourAddress
+    npx forge script script/DeployR0.s.sol --rpc-url arc_testnet --broadcast --slow \
+      --browser --browser-disable-open --sender $ARCOS_OWNER
+
+Then, in the browser that has the wallet:
+
+1. Open **http://127.0.0.1:9545**, not `localhost:9545`. The page calls `127.0.0.1`; opened from
+   `localhost` it is a different origin and every call is blocked by CORS.
+2. **Connect Wallet** → **Confirm Connection** → **Sign & Send** → confirm in the wallet.
+3. Foundry 1.7.1's page handles **one transaction per page load**. When the Receipt box shows
+   `"status": "success"`, reload the page and repeat step 2 for the next transaction (six in all).
+4. **Never reload before the receipt shows success.** A reload while Foundry still holds the request
+   sends the same transaction again, and a wallet that picks its own nonce (Trust Wallet does) turns
+   the copy into a real transaction. Here a second `addKey(DROP_MIN)` reverted with `KeyExists`,
+   Foundry stopped with `Transaction Failure`, and the spent nonce moved every later address.
+
+If the script stops part-way, don't `--resume` (its recorded nonces no longer match the chain). Check
+which steps landed (`feeOf` for each key, `cast codesize` for each contract) and deploy what's missing
+one contract per command. `--constructor-args` must be the **last** flag; it swallows everything after it:
+
+    npx forge create src/TokenFactory.sol:TokenFactory --rpc-url arc_testnet --broadcast \
+      --browser --browser-disable-open --constructor-args <FeeController-address>
+    npx forge create src/Multisend.sol:Multisend --rpc-url arc_testnet --broadcast \
+      --browser --browser-disable-open --constructor-args <FeeController-address>
+
+Take the addresses from each command's `Deployed to:` line, not from `broadcast/…/run-latest.json`,
+whose predicted addresses are wrong once a nonce has been spent on something else.
+
+For mainnet, use a wallet made for this (or a multisig) as `ARCOS_OWNER` and `ARCOS_FEE_RECIPIENT`, not a
+personal wallet: an EVM address is the same on every chain, and the public repo ties it to its owner.
 
 ## Once: store the deployer key in Foundry's encrypted keystore
 
@@ -135,11 +172,20 @@ This is the on-chain half of the address sanity check. The off-chain half — th
 are each well-formed, checksummed, non-zero and pairwise distinct — is `checkArcosAddresses` in
 `packages/chain/src/addressSanity.ts` (pure, unit-tested, no RPC call, no network needed).
 
+## Deployments
+
+| Network | Contract | Address |
+|---|---|---|
+| Arc Testnet (5042002) | FeeController | [`0xC470753e83c151a6A4A360869270291A6ED70d99`](https://explorer.testnet.arc.io/address/0xC470753e83c151a6A4A360869270291A6ED70d99) |
+| Arc Testnet (5042002) | TokenFactory | [`0x41FaFc54ED3be1545695B82af4aA490607447884`](https://explorer.testnet.arc.io/address/0x41FaFc54ED3be1545695B82af4aA490607447884) |
+| Arc Testnet (5042002) | Multisend | [`0x113f3864C94ff6a14310a789bD671de5b78D6CBf`](https://explorer.testnet.arc.io/address/0x113f3864C94ff6a14310a789bD671de5b78D6CBf) |
+| Arc (5042) | — | not deployed yet |
+
+These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads.
+
 ## What the agent still needs from you
 
-Deployment (steps above) needs your private key, so the agent stops here and waits for you. Once you've deployed to testnet, give the agent one of:
-
-- the three testnet addresses (`FeeController`, `TokenFactory`, `Multisend`) — they're public, safe to paste anywhere, or
-- permission to read `broadcast/DeployR0.s.sol/5042002/run-latest.json` itself (inside `packages/contracts`).
-
-Either way, the agent then fills in `ARCOS.testnet` in `packages/chain/src/addresses.ts` and confirms the on-chain checks in the brief — nothing else changes until it has one of these two things from you.
+Every step that signs a transaction is yours: with a keystore key in your terminal, or with the browser-wallet
+path above, where the agent can run the command but only you can confirm each transaction in your wallet.
+After a deployment, give the agent the three addresses (they're public) so it can fill in `ARCOS.<network>`
+and run the checks under "After wiring the addresses".
