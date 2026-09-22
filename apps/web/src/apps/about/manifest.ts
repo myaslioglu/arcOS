@@ -4,7 +4,7 @@ import type { AppManifest } from "@arcos/shell";
 export const about: AppManifest = {
   id: "about",
   name: "About",
-  blurb: "What 4rcOS is",
+  blurb: "What 4rc.OS is",
   icon: Info,
   category: "system",
   window: { w: 460, h: 360 },

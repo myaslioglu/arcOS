@@ -1,5 +1,5 @@
 /*
- * 4rcOS: the desktop's own styles.
+ * 4rc.OS: the desktop's own styles.
  *
  * Imported by the desktop shell only, so a route that never mounts it does
  * not download this stylesheet. Every selector here is namespaced `.os-*`:
@@ -8,7 +8,7 @@
  */
 
 /* ---------------------------------------------------------------
-   4rcOS — desktop
+   4rc.OS — desktop
    The shell's device language: same tokens, own layout.
    --------------------------------------------------------------- */
 .os-root {

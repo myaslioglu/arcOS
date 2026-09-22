@@ -55,7 +55,7 @@ export function ogCard(report: Report | null) {
             the card — this is that address, short-formed, fixed-width regardless of the token's
             own (attacker-controlled) name/symbol length above, so it never risks the header line
             wrapping. */}
-        {report ? `4rcOS · token report on Arc · ${shortAddress(report.address)}` : "4rcOS · token report on Arc"}
+        {report ? `4rc.OS · token report on Arc · ${shortAddress(report.address)}` : "4rc.OS · token report on Arc"}
       </div>
       <div style={{ display: "flex", fontSize: 64, marginTop: 12 }}>{report ? shortLabel(tokenLabel(report), 16) : "Token not found"}</div>
       {report && <div style={{ display: "flex", fontSize: 40, marginTop: 4 }}>{passLine(report)}</div>}

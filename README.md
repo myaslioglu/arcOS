@@ -1,6 +1,6 @@
-# 4rcOS
+# 4rc.OS
 
-4rcOS is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
+4rc.OS is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
 contract, mint one without writing code, and send a token to many wallets in one flow.
 
 Automated analysis, not investment advice.
@@ -11,12 +11,12 @@ Automated analysis, not investment advice.
 | --- | --- | --- |
 | Finder | Your token holdings and self-created tokens, as files you can drag onto other apps | Live |
 | Inspector | Reads a token's contract and reports what it can do to holders | Live |
-| Mint | Creates a fixed-supply, mintable or burnable token | Needs deployed contracts |
-| Drop | Sends a token to many wallets in one or more transactions | Needs deployed contracts |
+| Mint | Creates a fixed-supply, mintable or burnable token | Live on testnet |
+| Drop | Sends a token to many wallets in one or more transactions | Live on testnet |
 | Swap | USDC, EURC and cirBTC | Live |
 | Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
-| About | What 4rcOS is, read from inside the app | Live |
+| About | What 4rc.OS is, read from inside the app | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
@@ -24,8 +24,9 @@ Automated analysis, not investment advice.
 | Revoke | Remove token approvals | Coming soon |
 | Terminal | Do all of this by typing | Coming soon |
 
-Mint and Drop call `TokenFactory` and `Multisend`, which are not deployed yet — both windows show
-"isn't deployed on this network yet" until they are (see `packages/contracts/DEPLOY.md`). Swap and
+Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc Testnet (addresses in
+`packages/contracts/DEPLOY.md`); on mainnet both windows show "isn't deployed on this network yet"
+until the mainnet deployment. Swap and
 Bridge run on Circle's App Kit SDK in keyless mode (no Circle API key ships to the browser) and
 charge a 0.20% platform fee, split 90/10 between `NEXT_PUBLIC_FEE_RECIPIENT` and Circle, when that
 address is set — with it unset, both apps still work and simply charge no fee. Installing App Kit
@@ -90,8 +91,9 @@ paid action starts reverting until the owner points `FeeController` at a working
 `setRecipient`. This is a risk to the ACTION (it stops working until fixed), not to your funds:
 these contracts hold no funds between transactions, so nothing here is ever at risk of being lost.
 
-None of the contracts are deployed yet, and none have been audited. See
-`packages/contracts/DEPLOY.md` for how deployment works and what it needs from whoever runs it.
+The contracts are deployed on Arc Testnet but not yet on mainnet, and none have been audited. See
+`packages/contracts/DEPLOY.md` for the addresses, how deployment works and what it needs from
+whoever runs it.
 
 ## How Inspector decides things
 

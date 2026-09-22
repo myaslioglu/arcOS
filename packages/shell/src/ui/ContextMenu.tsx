@@ -93,7 +93,7 @@ export function ContextMenu({ x, y, hasWindows, onClose, onTile, onMinimizeAll, 
       <div role="separator" className="os-menu-sep" />
       <button type="button" role="menuitem" className="os-menu-item" onClick={run(onAbout)}>
         <span className="os-menu-check" aria-hidden />
-        <span className="os-menu-label">About 4rcOS</span>
+        <span className="os-menu-label">About 4rc.OS</span>
       </button>
     </div>
   );

@@ -1,4 +1,4 @@
-# Deploying 4rcOS contracts
+# Deploying 4rc.OS contracts
 
 You sign every transaction yourself, either with a keystore key in your terminal or in your browser wallet. Your private
 key is never pasted into a chat, a file or an env var.

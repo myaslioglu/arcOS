@@ -40,7 +40,7 @@ export const DEX: Record<NetworkId, DexConfig | null> = {
   testnet: null,
 };
 
-/** Lock contracts whose token holdings count as locked. 4rcOS Vault joins this list in R2. */
+/** Lock contracts whose token holdings count as locked. 4rc.OS Vault joins this list in R2. */
 export const KNOWN_LOCKERS: Record<NetworkId, Address[]> = { mainnet: [], testnet: [] };
 
 export type ArcosContracts = { feeController: Address; tokenFactory: Address; multisend: Address };

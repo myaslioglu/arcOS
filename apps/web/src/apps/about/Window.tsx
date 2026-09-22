@@ -12,7 +12,7 @@ export default function AboutWindow() {
 
   return (
     <div className="p-5 text-sm leading-6">
-      <p className="text-base font-medium">4rcOS</p>
+      <p className="text-base font-medium">4rc.OS</p>
       <p className="mt-2 text-muted">
         {"A desktop for Circle's Arc network: inspect a token, mint one and send to many wallets at once."}
       </p>
