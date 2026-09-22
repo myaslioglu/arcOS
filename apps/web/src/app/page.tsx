@@ -10,7 +10,7 @@ import { quickActions } from "@/lib/quick-actions";
 export default function Home() {
   return (
     <Web3Provider>
-      <DesktopShell apps={APPS} brand="ARC.os" aboutAppId="about" statusSlot={<StatusBar />} quickActions={quickActions} />
+      <DesktopShell apps={APPS} brand="4rcOS" aboutAppId="about" statusSlot={<StatusBar />} quickActions={quickActions} />
     </Web3Provider>
   );
 }

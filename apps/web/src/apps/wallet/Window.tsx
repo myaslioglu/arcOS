@@ -32,7 +32,7 @@ export default function WalletWindow() {
     return (
       <div className="p-5 text-sm">
         <p className="font-medium">Connect a wallet</p>
-        <p className="mt-1 text-muted">ARC.os never sees your keys. Every action is signed in your wallet.</p>
+        <p className="mt-1 text-muted">4rcOS never sees your keys. Every action is signed in your wallet.</p>
         {connectors.length > 0 ? (
           <ul className="mt-4 grid gap-2">
             {connectors.map((c) => (

@@ -1,5 +1,5 @@
 /*
- * ARC.os: the desktop's own styles.
+ * 4rcOS: the desktop's own styles.
  *
  * Imported by the desktop shell only, so a route that never mounts it does
  * not download this stylesheet. Every selector here is namespaced `.os-*`:
@@ -8,7 +8,7 @@
  */
 
 /* ---------------------------------------------------------------
-   ARC.os — desktop
+   4rcOS — desktop
    The shell's device language: same tokens, own layout.
    --------------------------------------------------------------- */
 .os-root {

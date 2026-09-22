@@ -3,4 +3,4 @@
  * consumer must check for that and skip rendering the link rather than pointing at a
  * dead URL.
  */
-export const REPO_URL = "";
+export const REPO_URL = "https://github.com/myaslioglu/arcOS";

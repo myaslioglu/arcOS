@@ -12,7 +12,7 @@ const noop = () => () => {};
  * `filter`, `transform`, `perspective`, `backdrop-filter` or `will-change`
  * becomes the containing block for `position: fixed`, so `inset-0` would size
  * the overlay to that ancestor instead of the viewport. Several wrappers in
- * ARC.os animate `filter` via framer-motion, which is exactly that case.
+ * 4rcOS animate `filter` via framer-motion, which is exactly that case.
  */
 export function Portal({ children }: { children: React.ReactNode }) {
   // false while prerendering and during the hydration pass, true afterwards —

@@ -1,4 +1,4 @@
-# ARC.os R0 — manual QA script
+# 4rcOS R0 — manual QA script
 
 For the project owner to run by hand: first on testnet, then again on mainnet once
 `ARCOS.mainnet` is filled in (see `packages/contracts/DEPLOY.md`). Items marked **(no wallet
@@ -69,7 +69,7 @@ Bridge" section below for what to check, including the fee split).
     some checks are marked unknown."
 13. Click "Share proof page": the clipboard gets `http://<host>/t/<address>`. Open that link in a
     tab with JavaScript disabled — the page still renders (it's server-rendered), with the same
-    findings, an "Open in ARC.os" link back to the app, and the disclaimer line.
+    findings, an "Open in 4rcOS" link back to the app, and the disclaimer line.
 14. Load `/badge/<address>` directly: the response is an `image/svg+xml` badge, not an app page.
 15. Check the social card: fetching `/t/<address>` with a link-preview tool (or `curl -s
     .../t/<address> | grep -i og:image`) shows an `opengraph-image` that reflects the same token.
@@ -93,9 +93,9 @@ Bridge" section below for what to check, including the fee split).
     you hit item 17's throttle instead, while a `503` with a `retry-after: 5` header means you hit
     this gate. Expect: once more than 8 uncached inspections are in flight at the same moment, the
     excess requests get `503`; loading the proof page (`/t/<address>`) for one of those addresses
-    while the gate is saturated shows "ARC.os is busy reading other tokens. Reload in a few
+    while the gate is saturated shows "4rcOS is busy reading other tokens. Reload in a few
     seconds."; and `/badge/<address>` for a saturated address falls back to the neutral
-    "ARC.os: not inspected" grey badge rather than caching a broken result for five minutes.
+    "4rcOS: not inspected" grey badge rather than caching a broken result for five minutes.
 
 ## Mint
 

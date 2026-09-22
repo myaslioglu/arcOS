@@ -7,7 +7,7 @@ import { ogCard } from "@/lib/og-card";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
-export const alt = "ARC.os token report";
+export const alt = "4rcOS token report";
 // Cached-by-default per next/og's route-segment-config behaviour; re-render at most every 5
 // minutes so a badge doesn't go stale for the full life of a shared link.
 export const revalidate = 300;

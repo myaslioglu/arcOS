@@ -1,6 +1,6 @@
-# ARC.os
+# 4rcOS
 
-ARC.os is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
+4rcOS is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
 contract, mint one without writing code, and send a token to many wallets in one flow.
 
 Automated analysis, not investment advice.
@@ -16,7 +16,7 @@ Automated analysis, not investment advice.
 | Swap | USDC, EURC and cirBTC | Live |
 | Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
-| About | What ARC.os is, read from inside the app | Live |
+| About | What 4rcOS is, read from inside the app | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |

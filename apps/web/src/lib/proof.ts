@@ -56,7 +56,7 @@ export function badgeColor(counts: Report["counts"] | null): string {
  * checks are unknown).
  */
 export function badgeSvg(r: Report | null): string {
-  const left = r ? shortLabel(tokenLabel(r), 16) : "ARC.os";
+  const left = r ? shortLabel(tokenLabel(r), 16) : "4rcOS";
   const right = r
     ? r.counts.unknown > 0
       ? `${r.counts.pass}/${r.total} pass · ${r.counts.unknown} ?`

@@ -126,7 +126,7 @@ describe("badgeSvg", () => {
   });
   it("neutral badge title has no disclaimer clause, and no name disclosure (there's no name to disclose)", () => {
     const svg = badgeSvg(null);
-    expect(svg).toContain("<title>ARC.os: not inspected</title>");
+    expect(svg).toContain("<title>4rcOS: not inspected</title>");
     expect(svg).not.toContain("investment advice");
     expect(svg).not.toContain(NAME_DISCLOSURE);
   });
