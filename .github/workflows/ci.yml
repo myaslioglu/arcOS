@@ -30,6 +30,13 @@ jobs:
       # forge-std (an npm devDependency fetched from GitHub by tag, "forge-std":
       # "github:foundry-rs/forge-std#v1.16.2" in packages/contracts/package.json) exactly the way a
       # local `npm install` does — no separate curl-install-foundry step.
+      # npm 10 (bundled with Node 22) leaves out the forge/cast/anvil command links: each
+      # @foundry-rs/<tool> wrapper and each of its per-platform packages declare the same bin name,
+      # and when npm 10 skips the packages built for other platforms it also deletes that shared
+      # node_modules/.bin link. The contracts step then fails with "forge: not found". npm 11 keeps
+      # the wrapper's link (checked with 11.6.2 and 11.19.1), so CI pins the version it was verified with.
+      - run: npm install -g npm@11.19.1
+
       - run: npm ci
 
       - name: Typecheck
