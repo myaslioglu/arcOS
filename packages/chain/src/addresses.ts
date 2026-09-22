@@ -45,5 +45,15 @@ export const KNOWN_LOCKERS: Record<NetworkId, Address[]> = { mainnet: [], testne
 
 export type ArcosContracts = { feeController: Address; tokenFactory: Address; multisend: Address };
 
-/** Our own deployments. null until Task 16 deploys them. */
-export const ARCOS: Record<NetworkId, ArcosContracts | null> = { mainnet: null, testnet: null };
+/**
+ * Our own deployments. null until deployed on that network.
+ * Testnet: deployed 2026-09-22; each contract's `feeController()` was read back on chain and matches.
+ */
+export const ARCOS: Record<NetworkId, ArcosContracts | null> = {
+  mainnet: null,
+  testnet: {
+    feeController: "0xC470753e83c151a6A4A360869270291A6ED70d99",
+    tokenFactory: "0x41FaFc54ED3be1545695B82af4aA490607447884",
+    multisend: "0x113f3864C94ff6a14310a789bD671de5b78D6CBf",
+  },
+};

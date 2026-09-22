@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isAddress } from "viem";
 import { ARCOS, BURN_ADDRESSES, DEX, EURC, KNOWN_LOCKERS, USDC } from "../addresses";
+import { checkArcosAddresses } from "../addressSanity";
 
 const all = [
   USDC, EURC.mainnet, EURC.testnet, ...BURN_ADDRESSES, ...KNOWN_LOCKERS.mainnet, ...KNOWN_LOCKERS.testnet,
@@ -15,5 +16,9 @@ describe("addresses", () => {
   it("quotes liquidity against USDC first", () => {
     expect(DEX.mainnet?.quoteTokens[0]).toEqual({ address: USDC, symbol: "USDC" });
     expect(DEX.testnet).toBeNull();
+  });
+  it("wires a testnet deployment that passes the shape check, and nothing on mainnet yet", () => {
+    expect(checkArcosAddresses(ARCOS.testnet)).toEqual({ status: "ok" });
+    expect(checkArcosAddresses(ARCOS.mainnet)).toEqual({ status: "not-deployed" });
   });
 });
