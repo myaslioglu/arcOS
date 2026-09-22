@@ -1,0 +1,20 @@
+# Firebase App Hosting settings for the public testnet site
+# (https://arcos--arcos-c80cf.europe-west4.hosted.app). Public values only: nothing here is a secret.
+# NEXT_PUBLIC_FEE_RECIPIENT is deliberately unset, so Swap and Bridge charge no platform fee on this site.
+
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  memoryMiB: 1024
+
+env:
+  - variable: NEXT_PUBLIC_ARC_NETWORK
+    value: testnet
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_SITE_URL
+    value: https://arcos--arcos-c80cf.europe-west4.hosted.app
+    availability:
+      - BUILD
+      - RUNTIME

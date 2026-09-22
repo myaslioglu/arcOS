@@ -1,0 +1,21 @@
+{
+  "apphosting": [
+    {
+      "backendId": "arcos",
+      "rootDir": "apps/web",
+      "ignore": [
+        "node_modules",
+        ".git",
+        ".superpowers",
+        ".claude",
+        ".next",
+        ".env.local",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "packages/contracts/out",
+        "packages/contracts/cache",
+        "packages/contracts/broadcast"
+      ]
+    }
+  ]
+}

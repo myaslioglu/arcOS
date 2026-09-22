@@ -13,3 +13,6 @@ packages/contracts/broadcast
 playwright-report
 test-results
 .claude/
+firebase-debug.log
+firebase-debug.*.log
+.firebase/
