@@ -17,5 +17,26 @@
         "packages/contracts/broadcast"
       ]
     }
-  ]
+  ],
+  "hosting": {
+    "site": "arcos",
+    "public": "firebase-hosting",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "redirects": [
+      {
+        "source": "/",
+        "destination": "https://arcos--arcos-c80cf.europe-west4.hosted.app/",
+        "type": 302
+      },
+      {
+        "source": "/:path*",
+        "destination": "https://arcos--arcos-c80cf.europe-west4.hosted.app/:path*",
+        "type": 302
+      }
+    ]
+  }
 }
