@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "build": "forge build",
-    "test": "forge test -vv",
-    "fmt": "forge fmt --check",
-    "sizes": "forge build --sizes",
-    "abis": "forge build && node scripts/export-abis.mjs"
+    "build": "node scripts/forge.mjs build",
+    "test": "node scripts/forge.mjs test -vv",
+    "fmt": "node scripts/forge.mjs fmt --check",
+    "sizes": "node scripts/forge.mjs build --sizes",
+    "abis": "node scripts/forge.mjs build && node scripts/export-abis.mjs"
   },
   "devDependencies": {
     "@foundry-rs/anvil": "1.7.1",

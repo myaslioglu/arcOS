@@ -51,6 +51,8 @@ jobs:
       - name: Test (JS workspaces)
         run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector
 
+      # The contracts scripts run forge through packages/contracts/scripts/forge.mjs: the npm `forge`
+      # command (@foundry-rs/forge 1.7.1) exits 0 even when a test fails, which kept this step green.
       - name: Test (contracts — forge)
         run: npm run test -w @arcos/contracts
 
