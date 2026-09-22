@@ -10,9 +10,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@arcos/chain": "*",
-    "@arcos/inspector": "*",
-    "@arcos/shell": "*",
+    "@arcos/chain": "file:../../packages/chain",
+    "@arcos/inspector": "file:../../packages/inspector",
+    "@arcos/shell": "file:../../packages/shell",
     "@circle-fin/adapter-viem-v2": "^1.18.0",
     "@circle-fin/app-kit": "^1.15.2",
     "@tanstack/react-query": "^5.103.1",
