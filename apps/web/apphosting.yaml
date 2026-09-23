@@ -1,5 +1,5 @@
-# Firebase App Hosting settings for the public testnet site
-# (https://arcos--arcos-c80cf.europe-west4.hosted.app). Public values only: nothing here is a secret.
+# Firebase App Hosting settings for the public testnet site, https://4rcos.com (the backend's own
+# address is https://arcos--arcos-c80cf.europe-west4.hosted.app). Public values only: nothing here is a secret.
 # NEXT_PUBLIC_FEE_RECIPIENT is deliberately unset, so Swap and Bridge charge no platform fee on this site.
 
 runConfig:
@@ -14,7 +14,7 @@ env:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_SITE_URL
-    value: https://arcos--arcos-c80cf.europe-west4.hosted.app
+    value: https://4rcos.com
     availability:
       - BUILD
       - RUNTIME
