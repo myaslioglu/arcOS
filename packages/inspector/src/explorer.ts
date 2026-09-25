@@ -62,12 +62,19 @@ const big = (v: unknown): bigint => {
   }
 };
 
-export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch): ExplorerSource {
+/**
+ * `apiKey` is a Blockscout PRO API key (api.blockscout.com). It travels in the Authorization header, never in the URL,
+ * so no logged URL or error message can carry it. A refused key is an outage like any other: checks read "unknown".
+ */
+export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch, apiKey?: string): ExplorerSource {
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
   /** null = 404. Anything else that isn't a 2xx JSON answer is an outage. */
   async function get(path: string): Promise<unknown | null> {
     let res: Response;
     try {
-      res = await fetchFn(`${apiUrl}${path}`, { headers: { accept: "application/json" } });
+      res = await fetchFn(`${apiUrl}${path}`, { headers });
     } catch (e) {
       throw new ExplorerUnavailable(null, `Explorer unreachable: ${e instanceof Error ? e.message : String(e)}`);
     }

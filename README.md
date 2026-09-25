@@ -11,8 +11,8 @@ Automated analysis, not investment advice.
 | --- | --- | --- |
 | Finder | Your token holdings and self-created tokens, as files you can drag onto other apps | Live |
 | Inspector | Reads a token's contract and reports what it can do to holders | Live |
-| Mint | Creates a fixed-supply, mintable or burnable token | Live on testnet |
-| Drop | Sends a token to many wallets in one or more transactions | Live on testnet |
+| Mint | Creates a fixed-supply, mintable or burnable token | Live |
+| Drop | Sends a token to many wallets in one or more transactions | Live |
 | Swap | USDC, EURC and cirBTC | Live |
 | Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
@@ -24,9 +24,8 @@ Automated analysis, not investment advice.
 | Revoke | Remove token approvals | Coming soon |
 | Terminal | Do all of this by typing | Coming soon |
 
-Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc Testnet (addresses in
-`packages/contracts/DEPLOY.md`); on mainnet both windows show "isn't deployed on this network yet"
-until the mainnet deployment. Swap and
+Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
+(addresses in `packages/contracts/DEPLOY.md`). Swap and
 Bridge run on Circle's App Kit SDK in keyless mode (no Circle API key ships to the browser) and
 charge a 0.20% platform fee, split 90/10 between `NEXT_PUBLIC_FEE_RECIPIENT` and Circle, when that
 address is set — with it unset, both apps still work and simply charge no fee. Installing App Kit
@@ -49,9 +48,14 @@ npm run dev
 Open http://localhost:3000. The app runs against Arc testnet by default.
 
 To point it at mainnet, set `NEXT_PUBLIC_ARC_NETWORK=mainnet` in `apps/web/.env.local` (copy from
-`apps/web/.env.example`). Don't do this before `ARCOS.mainnet` in
-`packages/chain/src/addresses.ts` has the real deployed addresses — until then, mainnet mode would
-just show every contract-backed app as not deployed.
+`apps/web/.env.example`). https://4rcos.com runs on mainnet.
+
+Arc mainnet's public explorer answers browsers but refuses requests from servers. The Inspector
+window runs in your browser, so it isn't affected. The pages the server builds (the
+`/t/<address>` report, its preview image, `/badge` and `/api/inspect`) read the same explorer data
+from Blockscout's PRO API when `BLOCKSCOUT_API_KEY` is set. It's a server-only variable, never
+`NEXT_PUBLIC_`; on App Hosting it's a Secret Manager secret. Without it, the explorer-backed checks
+on those pages (source verification, holder concentration) read "unknown".
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`.
@@ -92,7 +96,7 @@ paid action starts reverting until the owner points `FeeController` at a working
 `setRecipient`. This is a risk to the ACTION (it stops working until fixed), not to your funds:
 these contracts hold no funds between transactions, so nothing here is ever at risk of being lost.
 
-The contracts are deployed on Arc Testnet but not yet on mainnet, and none have been audited. See
+The contracts are deployed on Arc mainnet and Arc Testnet, and none have been audited. See
 `packages/contracts/DEPLOY.md` for the addresses, how deployment works and what it needs from
 whoever runs it.
 

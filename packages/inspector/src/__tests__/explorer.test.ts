@@ -251,3 +251,38 @@ describe("blockscoutSource", () => {
     });
   });
 });
+
+describe("blockscoutSource with a Blockscout PRO API key", () => {
+  function recording() {
+    const calls: { url: string; headers: Headers }[] = [];
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers) });
+      return json({ is_verified: true, name: "Duke" });
+    }) as typeof fetch;
+    return { calls, fetchFn };
+  }
+
+  it("sends the key as a bearer header and keeps it out of the URL", async () => {
+    const { calls, fetchFn } = recording();
+    await blockscoutSource(API, fetchFn, "proapi_secret").contract(T);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${API}/smart-contracts/${T}`);
+    expect(calls[0]!.headers.get("authorization")).toBe("Bearer proapi_secret");
+    expect(calls[0]!.headers.get("accept")).toBe("application/json");
+  });
+
+  it("sends no authorization header without a key", async () => {
+    const { calls, fetchFn } = recording();
+    await blockscoutSource(API, fetchFn).contract(T);
+    expect(calls[0]!.headers.has("authorization")).toBe(false);
+  });
+
+  it("treats a refused key (401, 402) as an outage whose message doesn't carry the key", async () => {
+    for (const status of [401, 402]) {
+      const src = blockscoutSource(API, (async () => json({ error: "Proceed with API key" }, status)) as typeof fetch, "proapi_wrong");
+      await expect(src.contract(T)).rejects.toBeInstanceOf(ExplorerUnavailable);
+      await expect(src.contract(T)).rejects.toThrow(`Explorer answered ${status}`);
+      await expect(src.contract(T)).rejects.not.toThrow(/proapi_wrong/);
+    }
+  });
+});

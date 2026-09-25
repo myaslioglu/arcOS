@@ -3,7 +3,7 @@ import { createPublicClient, http } from "viem";
 import { activeChain, type Address } from "@arcos/chain";
 import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
-import { inspectInput } from "./inspect-input";
+import { inspectInput, proExplorerApi } from "./inspect-input";
 import { inFlightGate } from "./rate-limit";
 import { ttlCache } from "./ttl-cache";
 
@@ -27,8 +27,14 @@ export class InspectorBusy extends Error {
 const gate = inFlightGate(8, () => new InspectorBusy());
 
 export function cachedInspection(address: Address): Promise<Report> {
+  // Arc mainnet's public explorer refuses server requests (a Cloudflare bot check), so with a key the server
+  // reads the same data from Blockscout's PRO API. Without one (local dev) it uses the public explorer. The key
+  // is a runtime secret, read here on each call rather than at module load.
+  const explorerApi = proExplorerApi(activeChain().id, process.env.BLOCKSCOUT_API_KEY);
   // The deadline races INSIDE the gate: gate.run()'s own `finally` frees the slot the instant the
   // race settles (timeout or real result), even if the underlying inspect() call keeps running.
   // ttlCache never caches a rejected promise (see ttl-cache.ts), so a timeout is never cached.
-  return cache.get(address.toLowerCase(), () => gate.run(() => withDeadline(inspect(inspectInput(address, client)))));
+  return cache.get(address.toLowerCase(), () =>
+    gate.run(() => withDeadline(inspect(inspectInput(address, client, fetch, explorerApi)))),
+  );
 }
