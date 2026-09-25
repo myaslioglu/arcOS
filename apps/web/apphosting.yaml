@@ -1,6 +1,7 @@
-# Firebase App Hosting settings for the public testnet site, https://4rcos.com (the backend's own
+# Firebase App Hosting settings for the public site on Arc mainnet, https://4rcos.com (the backend's own
 # address is https://arcos--arcos-c80cf.europe-west4.hosted.app). Public values only: nothing here is a secret.
-# NEXT_PUBLIC_FEE_RECIPIENT is deliberately unset, so Swap and Bridge charge no platform fee on this site.
+# NEXT_PUBLIC_FEE_RECIPIENT is the project's own fee wallet (also the mainnet FeeController's owner and recipient);
+# with it set, Swap and Bridge add the platform fee (SWAP_FEE_BPS in src/lib/appkit.ts), shown before confirming.
 
 runConfig:
   minInstances: 0
@@ -9,7 +10,12 @@ runConfig:
 
 env:
   - variable: NEXT_PUBLIC_ARC_NETWORK
-    value: testnet
+    value: mainnet
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FEE_RECIPIENT
+    value: "0x463A81a017326E9029DcCA2a2d9AA42599Bef12c"
     availability:
       - BUILD
       - RUNTIME
