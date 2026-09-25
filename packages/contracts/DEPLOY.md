@@ -183,6 +183,9 @@ are each well-formed, checksummed, non-zero and pairwise distinct — is `checkA
 
 These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads.
 
+The testnet `TokenFactory` predates the current name rule (it refuses only ASCII control characters in names); the
+mainnet deployment uses the current source.
+
 ## What the agent still needs from you
 
 Every step that signs a transaction is yours: with a keystore key in your terminal, or with the browser-wallet

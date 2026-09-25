@@ -14,6 +14,8 @@ evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 bytecode_hash = "ipfs"
+# test/TokenFactoryNames.t.sol reads the name vectors it shares with the Mint form's tests.
+fs_permissions = [{ access = "read", path = "./test/vectors" }]
 
 [fuzz]
 runs = 512

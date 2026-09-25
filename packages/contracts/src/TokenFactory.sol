@@ -143,18 +143,68 @@ contract TokenFactory {
     }
 
     /// @dev `isArcosToken` is a provenance marker apps rely on to say "this token was created here", so the
-    /// content that can end up in it is restricted on-chain rather than left to a front end. Every byte must
-    /// be >= 0x20 and != 0x7F (no ASCII control characters); multi-byte UTF-8 is otherwise unrestricted. The
-    /// first and last byte must not be a space (0x20) either, so a name can't be padded into looking blank
-    /// or into colliding with a trimmed display of a different name.
+    /// content that can end up in it is restricted on-chain rather than left to a front end. A name is 1-64 bytes
+    /// of well-formed UTF-8 (Unicode Table 3-7). Its first and last byte must not be a space (0x20), so a name
+    /// can't be padded into looking blank or into colliding with a trimmed display of a different name. It
+    /// contains none of these code points: the controls U+0000-U+001F and U+007F-U+009F, the bidirectional
+    /// controls U+061C, U+200E, U+200F, U+202A-U+202E and U+2066-U+2069 (U+202E followed by "CDSU" renders as
+    /// "USDC"), the line and paragraph separators U+2028 and U+2029 (with the controls already banned, this rules
+    /// out every forced line break), and the invisible spaces U+200B, U+2060 and U+FEFF. Allowed on purpose: ZWNJ
+    /// and ZWJ (U+200C, U+200D), variation selectors and tag characters, which emoji need.
     function _validateName(string calldata name) private pure {
-        bytes memory b = bytes(name);
+        bytes calldata b = bytes(name);
         if (b.length == 0 || b.length > 64) revert BadName();
         if (b[0] == 0x20 || b[b.length - 1] == 0x20) revert BadName();
-        for (uint256 i; i < b.length; ++i) {
-            bytes1 c = b[i];
-            if (c < 0x20 || c == 0x7F) revert BadName();
+        uint256 i;
+        while (i < b.length) {
+            uint256 c = uint8(b[i]);
+            if (c < 0x80) {
+                // U+0000-U+007F: 00-7F. The C0 controls and DEL are banned.
+                if (c < 0x20 || c == 0x7F) revert BadName();
+                i += 1;
+            } else if (c < 0xC2) {
+                // 80-BF only continue a character; C0 and C1 could only start an overlong form.
+                revert BadName();
+            } else if (c < 0xE0) {
+                // U+0080-U+07FF: C2-DF, 80-BF. The C1 controls (below U+00A0) and U+061C are banned.
+                uint256 cp = ((c & 0x1F) << 6) | _continuation(b, i + 1, 0x80, 0xBF);
+                if (cp < 0xA0 || _isBidiControlLineBreakOrInvisibleSpace(cp)) revert BadName();
+                i += 2;
+            } else if (c < 0xF0) {
+                // U+0800-U+FFFF: E0 A0-BF (no overlong form), ED 80-9F (no surrogate), other leads 80-BF; then 80-BF.
+                uint256 cp = ((c & 0x0F) << 12)
+                    | (_continuation(b, i + 1, c == 0xE0 ? 0xA0 : 0x80, c == 0xED ? 0x9F : 0xBF) << 6)
+                    | _continuation(b, i + 2, 0x80, 0xBF);
+                if (_isBidiControlLineBreakOrInvisibleSpace(cp)) revert BadName();
+                i += 3;
+            } else if (c < 0xF5) {
+                // U+10000-U+10FFFF: F0 90-BF (no overlong form), F4 80-8F (nothing above U+10FFFF), F1-F3 80-BF;
+                // then 80-BF twice. No code point this long is banned.
+                _continuation(b, i + 1, c == 0xF0 ? 0x90 : 0x80, c == 0xF4 ? 0x8F : 0xBF);
+                _continuation(b, i + 2, 0x80, 0xBF);
+                _continuation(b, i + 3, 0x80, 0xBF);
+                i += 4;
+            } else {
+                // F5-FF could only start a value above U+10FFFF.
+                revert BadName();
+            }
         }
+    }
+
+    /// @dev The low six bits of b[j], which must exist and lie in [lo, hi]: a continuation byte (80-BF, or the
+    /// narrower range Table 3-7 gives the byte after E0, ED, F0 or F4).
+    function _continuation(bytes calldata b, uint256 j, uint256 lo, uint256 hi) private pure returns (uint256) {
+        if (j >= b.length) revert BadName();
+        uint256 c = uint8(b[j]);
+        if (c < lo || c > hi) revert BadName();
+        return c & 0x3F;
+    }
+
+    /// @dev The twelve bidirectional controls (Unicode property Bidi_Control), the line and paragraph separators
+    /// U+2028 and U+2029, and three invisible spaces. U+2028-U+202E is both separators and five bidi controls.
+    function _isBidiControlLineBreakOrInvisibleSpace(uint256 cp) private pure returns (bool) {
+        return cp == 0x061C || cp == 0x200E || cp == 0x200F || (cp >= 0x2028 && cp <= 0x202E)
+            || (cp >= 0x2066 && cp <= 0x2069) || cp == 0x200B || cp == 0x2060 || cp == 0xFEFF;
     }
 
     /// @dev Symbols are restricted to printable, non-space ASCII (0x21-0x7E) — no control characters, no
