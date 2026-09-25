@@ -154,7 +154,10 @@ Each command prints one `0x`-prefixed hex string. Some Blockscout forms want it 
 mentioning `0x`, or it rejects the value as printed, strip the leading `0x` and paste the rest.
 
 Before mainnet: every test passes, the testnet deployment has been used end to end from the app, and
-`ARCOS_OWNER` is a wallet you can't lose.
+`ARCOS_OWNER` is a wallet you can't lose. The testnet `TokenFactory` predates the current name rule, so that
+end-to-end use doesn't exercise it. Cover the rule instead with the forge suite (`test/TokenFactoryNames.t.sol`,
+shared vectors in `test/vectors/names.json`), a rehearsal of this deployment on a local fork of mainnet, and
+`docs/QA-R0.md` run on mainnet right after the deployment.
 
 ## After wiring the addresses
 
@@ -183,7 +186,7 @@ are each well-formed, checksummed, non-zero and pairwise distinct — is `checkA
 
 These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads.
 
-The testnet `TokenFactory` predates the current name rule (it refuses only ASCII control characters in names); the
+The testnet `TokenFactory` predates the current name rule (it checks each byte only for ASCII control characters, so malformed UTF-8 and bidi, line-break and invisible characters still pass there); the
 mainnet deployment uses the current source.
 
 ## What the agent still needs from you

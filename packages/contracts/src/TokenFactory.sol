@@ -145,8 +145,8 @@ contract TokenFactory {
     /// @dev `isArcosToken` is a provenance marker apps rely on to say "this token was created here", so the
     /// content that can end up in it is restricted on-chain rather than left to a front end. A name is 1-64 bytes
     /// of well-formed UTF-8 (Unicode Table 3-7). Its first and last byte must not be a space (0x20), so a name
-    /// can't be padded into looking blank or into colliding with a trimmed display of a different name. It
-    /// contains none of these code points: the controls U+0000-U+001F and U+007F-U+009F, the bidirectional
+    /// can't be padded with ASCII spaces into looking blank or into colliding with a trimmed display of a different
+    /// name. It contains none of these code points: the controls U+0000-U+001F and U+007F-U+009F, the bidirectional
     /// controls U+061C, U+200E, U+200F, U+202A-U+202E and U+2066-U+2069 (U+202E followed by "CDSU" renders as
     /// "USDC"), the line and paragraph separators U+2028 and U+2029 (with the controls already banned, this rules
     /// out every forced line break), and the invisible spaces U+200B, U+2060 and U+FEFF. Allowed on purpose: ZWNJ
