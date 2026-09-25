@@ -27,9 +27,10 @@ export class InspectorBusy extends Error {
 const gate = inFlightGate(8, () => new InspectorBusy());
 
 // Blockscout's free tier allows 5 requests a second, and one inspection makes up to 4 explorer calls
-// at once. A burst of inspections therefore waits its turn here instead of being refused and cached as
-// "unknown" for 5 minutes. The worst case per instance, 8 inspections × 4 calls at 4 a second, still
-// fits inside the 15 s deadline.
+// at once, plus up to 2 follow-up calls when a contract record is incomplete. A burst of inspections
+// therefore waits its turn here instead of being refused and cached as "unknown" for 5 minutes. The
+// worst case per instance, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the
+// 15 s deadline.
 const explorerTurn = perSecond(4);
 const explorerFetch: typeof fetch = async (input, init) => {
   await explorerTurn();
