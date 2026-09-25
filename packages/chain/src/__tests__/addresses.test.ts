@@ -17,8 +17,8 @@ describe("addresses", () => {
     expect(DEX.mainnet?.quoteTokens[0]).toEqual({ address: USDC, symbol: "USDC" });
     expect(DEX.testnet).toBeNull();
   });
-  it("wires a testnet deployment that passes the shape check, and nothing on mainnet yet", () => {
+  it("wires a deployment that passes the shape check on both networks", () => {
     expect(checkArcosAddresses(ARCOS.testnet)).toEqual({ status: "ok" });
-    expect(checkArcosAddresses(ARCOS.mainnet)).toEqual({ status: "not-deployed" });
+    expect(checkArcosAddresses(ARCOS.mainnet)).toEqual({ status: "ok" });
   });
 });

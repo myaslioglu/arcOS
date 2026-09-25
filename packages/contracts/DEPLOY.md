@@ -182,7 +182,9 @@ are each well-formed, checksummed, non-zero and pairwise distinct — is `checkA
 | Arc Testnet (5042002) | FeeController | [`0xC470753e83c151a6A4A360869270291A6ED70d99`](https://explorer.testnet.arc.io/address/0xC470753e83c151a6A4A360869270291A6ED70d99) |
 | Arc Testnet (5042002) | TokenFactory | [`0x41FaFc54ED3be1545695B82af4aA490607447884`](https://explorer.testnet.arc.io/address/0x41FaFc54ED3be1545695B82af4aA490607447884) |
 | Arc Testnet (5042002) | Multisend | [`0x113f3864C94ff6a14310a789bD671de5b78D6CBf`](https://explorer.testnet.arc.io/address/0x113f3864C94ff6a14310a789bD671de5b78D6CBf) |
-| Arc (5042) | — | not deployed yet |
+| Arc (5042) | FeeController | [`0x2B37F9a9443B2DfaE6B7C7063586935a574B5699`](https://explorer.arc.io/address/0x2B37F9a9443B2DfaE6B7C7063586935a574B5699) |
+| Arc (5042) | TokenFactory | [`0xa68edD822048C00dC816d93005B72F8a50234a24`](https://explorer.arc.io/address/0xa68edD822048C00dC816d93005B72F8a50234a24) |
+| Arc (5042) | Multisend | [`0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47`](https://explorer.arc.io/address/0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47) |
 
 These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads.
 
