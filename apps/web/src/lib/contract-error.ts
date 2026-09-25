@@ -10,6 +10,10 @@ import { formatUsdc } from "@arcos/chain";
  */
 export const GENERIC_TRANSACTION_ERROR = "The transaction didn't go through. Try again.";
 
+/** Shown when the sender's balance can't cover the transaction's value (a fee, a Drop's total) plus gas, so
+ * retrying as-is can't help. */
+export const INSUFFICIENT_FUNDS_ERROR = "Your wallet doesn't have enough USDC to cover this and its gas. Add USDC on Arc, then try again.";
+
 /**
  * A message this app already wrote for the user, as opposed to a wallet/RPC/contract error whose raw
  * text must never reach them directly — e.g. Drop's "the fee changed mid-send, stop before signing"
@@ -91,6 +95,27 @@ function findDecodedRevert(err: unknown): DecodedRevert | null {
   return null;
 }
 
+/**
+ * True when `err`, or anything in its `cause` chain, says the sender's balance can't cover the transaction.
+ * Arc's node answers an eth_call whose value exceeds the balance with {"code": -32003, "message":
+ * "revert: OutOfFunds"} (measured on rpc.mainnet.arc.io, 2026-09-26). viem leaves that as a generic
+ * TransactionRejectedRpcError rather than its own `InsufficientFundsError`, so both are matched here, plus a
+ * geth-style "insufficient funds" message. The text is only matched, never shown.
+ */
+function isInsufficientFunds(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const e = current as { name?: unknown; details?: unknown; shortMessage?: unknown; message?: unknown; cause?: unknown };
+    if (e.name === "InsufficientFundsError") return true;
+    const text = [e.details, e.shortMessage, e.message].filter((t) => typeof t === "string").join(" ");
+    if (/OutOfFunds|insufficient funds/i.test(text)) return true;
+    current = e.cause;
+  }
+  return false;
+}
+
 type ErrorFormatter = (args: readonly unknown[]) => string;
 
 /**
@@ -149,7 +174,8 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
  * 1. `UserFacingError` — a message this app already wrote, returned as-is.
  * 2. A wallet-level user rejection ("You cancelled the request in your wallet.").
  * 3. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
- * 4. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
+ * 4. A balance too low for the value plus gas (`INSUFFICIENT_FUNDS_ERROR`).
+ * 5. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
@@ -169,6 +195,8 @@ export function describeContractError(err: unknown): string {
       }
     }
   }
+
+  if (isInsufficientFunds(err)) return INSUFFICIENT_FUNDS_ERROR;
 
   return GENERIC_TRANSACTION_ERROR;
 }

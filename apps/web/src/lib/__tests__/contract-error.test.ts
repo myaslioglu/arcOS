@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { feeControllerAbi, multisendAbi, tokenFactoryAbi } from "@arcos/chain";
-import { describeContractError, GENERIC_TRANSACTION_ERROR, UserFacingError } from "../contract-error";
+import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
 
 type AbiErrorItem = { type: string; name?: string };
 
@@ -234,5 +234,51 @@ describe("UserFacingError is only ever constructed from an app-authored literal 
     // fixtures) would make the loop above pass trivially, which must fail loudly instead: it would
     // mean the pattern this test guards moved, was renamed, or was refactored out from under it.
     expect(totalSites).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("describeContractError — a wallet that can't cover the transaction", () => {
+  /** What viem hands Mint's catch block when Arc's node refuses an eth_call whose value exceeds the
+   * sender's balance: measured on rpc.mainnet.arc.io on 2026-09-26, the node answers
+   * {"code": -32003, "message": "revert: OutOfFunds"} and viem wraps it as below. */
+  const arcOutOfFunds = {
+    name: "ContractFunctionExecutionError",
+    message: "Transaction creation failed.",
+    cause: {
+      name: "CallExecutionError",
+      cause: {
+        name: "TransactionRejectedRpcError",
+        code: -32003,
+        details: "revert: OutOfFunds",
+        cause: { name: "RpcRequestError", code: -32003, details: "revert: OutOfFunds" },
+      },
+    },
+  };
+
+  it("explains Arc's OutOfFunds answer instead of inviting a pointless retry", () => {
+    expect(describeContractError(arcOutOfFunds)).toBe(INSUFFICIENT_FUNDS_ERROR);
+  });
+
+  it("recognizes viem's own InsufficientFundsError, by name, anywhere in the cause chain", () => {
+    expect(describeContractError({ name: "CallExecutionError", cause: { name: "InsufficientFundsError" } })).toBe(INSUFFICIENT_FUNDS_ERROR);
+  });
+
+  it("recognizes a geth-style 'insufficient funds' node message", () => {
+    expect(describeContractError({ name: "RpcRequestError", details: "insufficient funds for gas * price + value" })).toBe(INSUFFICIENT_FUNDS_ERROR);
+  });
+
+  it("keeps any other -32003 rejection generic", () => {
+    expect(describeContractError({ name: "TransactionRejectedRpcError", code: -32003, details: "nonce too low" })).toBe(GENERIC_TRANSACTION_ERROR);
+  });
+
+  it("still lets a decoded revert win over the balance check", () => {
+    const both = { name: "ContractFunctionRevertedError", data: { errorName: "BadName", args: [] }, details: "revert: OutOfFunds" };
+    expect(describeContractError(both)).toMatch(/^Name must be/);
+  });
+
+  it("names USDC and gas, and carries no raw node text", () => {
+    expect(INSUFFICIENT_FUNDS_ERROR).toMatch(/USDC/);
+    expect(INSUFFICIENT_FUNDS_ERROR).toMatch(/gas/);
+    expect(INSUFFICIENT_FUNDS_ERROR).not.toMatch(/OutOfFunds|-32003|revert/i);
   });
 });
