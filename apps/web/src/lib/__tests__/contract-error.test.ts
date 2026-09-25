@@ -63,6 +63,7 @@ describe("describeContractError", () => {
   it("maps BadName/BadSymbol to the actual on-chain rule, not a made-up one", () => {
     expect(describeContractError(revertError("BadName"))).toMatch(/64 bytes/);
     expect(describeContractError(revertError("BadName"))).toMatch(/space/);
+    expect(describeContractError(revertError("BadName"))).toMatch(/control, invisible or text-direction characters/);
     expect(describeContractError(revertError("BadSymbol"))).toMatch(/16/);
     expect(describeContractError(revertError("BadSymbol"))).toMatch(/ASCII/);
   });

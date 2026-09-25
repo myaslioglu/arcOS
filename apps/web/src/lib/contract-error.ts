@@ -118,7 +118,7 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
 
   // --- TokenFactory ---
   BadDecimals: () => "Decimals must be a whole number from 0 to 18.",
-  BadName: () => "Name must be 1-64 bytes, can't start or end with a space, and can't contain control characters.",
+  BadName: () => "Name must be 1-64 bytes, can't start or end with a space, and can't contain control, invisible or text-direction characters.",
   BadSymbol: () => "Symbol must be 1-16 characters of printable ASCII — letters, digits and punctuation, no spaces or accents.",
   CapBelowSupply: () => "The cap can't be below the initial supply.",
   CapWithoutMint: () => "Only a mintable token can have a cap.",

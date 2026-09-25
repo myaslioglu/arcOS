@@ -14,11 +14,55 @@ const amount = (text: string, decimals: number): bigint | string => {
 
 const byteLength = (s: string) => new TextEncoder().encode(s).length;
 
-/** Mirrors TokenFactory's `_validateName`: every byte must be >= 0x20 and != 0x7F; multi-byte UTF-8 is unrestricted. */
-const hasControlByte = (s: string) => {
-  for (const b of new TextEncoder().encode(s)) if (b < 0x20 || b === 0x7f) return true;
-  return false;
-};
+/** Half of a UTF-16 surrogate pair on its own. TextEncoder (and viem, which uses it) sends U+FFFD in its place. */
+const LONE_SURROGATE = /\p{Surrogate}/u;
+
+/**
+ * The code points TokenFactory refuses in a name: the controls U+0000-U+001F and U+007F-U+009F, the bidirectional
+ * controls U+061C, U+200E, U+200F, U+202A-U+202E and U+2066-U+2069, the line and paragraph separators U+2028 and
+ * U+2029, and the invisible spaces U+200B, U+2060 and U+FEFF.
+ */
+const isBannedInName = (cp: number) =>
+  cp < 0x20 ||
+  (cp >= 0x7f && cp <= 0x9f) ||
+  cp === 0x061c ||
+  cp === 0x200e ||
+  cp === 0x200f ||
+  (cp >= 0x2028 && cp <= 0x202e) ||
+  (cp >= 0x2066 && cp <= 0x2069) ||
+  cp === 0x200b ||
+  cp === 0x2060 ||
+  cp === 0xfeff;
+
+/**
+ * Mirrors TokenFactory's `_validateName` on the bytes a name is sent as: 1-64 bytes of well-formed UTF-8 (Unicode
+ * Table 3-7), no space (0x20) as the first or last byte, and no banned code point. The contract's tests and this
+ * one's read the same cases (packages/contracts/test/vectors/names.json).
+ */
+export function isValidNameBytes(b: Uint8Array): boolean {
+  if (b.length === 0 || b.length > 64 || b[0] === 0x20 || b[b.length - 1] === 0x20) return false;
+  for (let i = 0; i < b.length; ) {
+    const lead = b[i];
+    // The sequence's length, and the range Table 3-7 allows for its second byte (every later byte is 80-BF).
+    let size: number, lo: number, hi: number;
+    if (lead < 0x80) [size, lo, hi] = [1, 0, 0];
+    else if (lead < 0xc2) return false; // 80-BF only continue a character; C0 and C1 could only start an overlong form
+    else if (lead < 0xe0) [size, lo, hi] = [2, 0x80, 0xbf];
+    else if (lead < 0xf0) [size, lo, hi] = [3, lead === 0xe0 ? 0xa0 : 0x80, lead === 0xed ? 0x9f : 0xbf];
+    else if (lead < 0xf5) [size, lo, hi] = [4, lead === 0xf0 ? 0x90 : 0x80, lead === 0xf4 ? 0x8f : 0xbf];
+    else return false; // F5-FF could only start a value above U+10FFFF
+    if (i + size > b.length) return false;
+    let cp = size === 1 ? lead : lead & (0x7f >> size);
+    for (let k = 1; k < size; k++) {
+      const next = b[i + k];
+      if (k === 1 ? next < lo || next > hi : next < 0x80 || next > 0xbf) return false;
+      cp = (cp << 6) | (next & 0x3f);
+    }
+    if (isBannedInName(cp)) return false;
+    i += size;
+  }
+  return true;
+}
 
 /** Mirrors TokenFactory's `_validateSymbol`: every byte must be printable, non-space ASCII (0x21-0x7E). */
 const isPrintableAsciiSymbol = (s: string) => {
@@ -31,11 +75,14 @@ export function validateMint(form: MintForm, holder: Address): { ok: true; args:
   const name = form.name.trim();
   const symbol = form.symbol.trim();
   if (name === "") errors.name = "Enter a name";
+  else if (LONE_SURROGATE.test(name)) errors.name = "A name can't contain a broken character, such as half of an emoji";
   // "bytes", not "characters": the contract's _validateName counts UTF-8 bytes, and byteLength()
   // above mirrors that — an accented letter or emoji is 1 JS "character" but 2-4 bytes, so a string
   // that reads as short can still hit this limit well before its character count would suggest.
   else if (byteLength(name) > 64) errors.name = "At most 64 bytes (accented letters and emoji count as more than one)";
-  else if (hasControlByte(name)) errors.name = "A name can't contain control characters";
+  // What's left for the contract's rule to refuse is a banned code point: a trimmed name has no space at either
+  // end, and TextEncoder writes well-formed UTF-8 once there's no lone surrogate.
+  else if (!isValidNameBytes(new TextEncoder().encode(name))) errors.name = "A name can't contain control, invisible or text-direction characters";
   if (symbol === "") errors.symbol = "Enter a symbol";
   else if (byteLength(symbol) > 16) errors.symbol = "At most 16 bytes (accented letters and emoji count as more than one)";
   else if (!isPrintableAsciiSymbol(symbol)) errors.symbol = "Use letters, digits and punctuation only — no spaces or accents";

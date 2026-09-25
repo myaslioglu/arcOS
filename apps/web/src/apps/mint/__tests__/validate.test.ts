@@ -1,10 +1,31 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { hexToBytes, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
-import { validateMint, type MintForm } from "../validate";
+import { isValidNameBytes, validateMint, type MintForm } from "../validate";
 
 const HOLDER = "0x1111111111111111111111111111111111111111";
 const form = (over: Partial<MintForm> = {}): MintForm => ({
   name: "Duke", symbol: "DUKE", decimals: "18", supply: "1,000,000", mintable: false, burnable: false, cap: "", ...over,
 });
+
+const CHARACTERS = "A name can't contain control, invisible or text-direction characters";
+const BROKEN = "A name can't contain a broken character, such as half of an emoji";
+
+/** The case list TokenFactory's own tests read: a name's exact bytes, and whether the contract accepts it. */
+type NameVector = { name: Hex; valid: boolean; note: string };
+const VECTORS: NameVector[] = JSON.parse(
+  readFileSync(path.resolve(import.meta.dirname, "../../../../../../packages/contracts/test/vectors/names.json"), "utf8"),
+).names;
+
+/** The string whose UTF-8 encoding is exactly `bytes`, or undefined when the bytes aren't well-formed UTF-8. */
+const decode = (bytes: Uint8Array): string | undefined => {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+};
 
 describe("validateMint", () => {
   it("builds contract arguments from a valid form", () => {
@@ -94,8 +115,59 @@ describe("validateMint", () => {
   it("mirrors the factory's content rules", () => {
     expect(validateMint(form({ symbol: "DU KE" }), HOLDER)).toEqual({ ok: false, errors: { symbol: "Use letters, digits and punctuation only — no spaces or accents" } });
     expect(validateMint(form({ symbol: "USDС" }), HOLDER)).toEqual({ ok: false, errors: { symbol: "Use letters, digits and punctuation only — no spaces or accents" } }); // Cyrillic С
-    expect(validateMint(form({ name: "Bad\u0001Name" }), HOLDER)).toEqual({ ok: false, errors: { name: "A name can't contain control characters" } });
+    expect(validateMint(form({ name: "Bad\u0001Name" }), HOLDER)).toEqual({ ok: false, errors: { name: CHARACTERS } });
     expect(validateMint(form({ name: "Türk Lirası" }), HOLDER).ok).toBe(true);
     expect(validateMint(form({ symbol: "USD-T_2.0" }), HOLDER).ok).toBe(true);
+  });
+
+  it("refuses bidirectional controls, line separators and invisible spaces, the way TokenFactory does", () => {
+    // Stored as U+202E then "CDSU", a name renders as "USDC".
+    expect(validateMint(form({ name: "\u202eCDSU" }), HOLDER)).toEqual({ ok: false, errors: { name: CHARACTERS } });
+    for (const name of ["Du\u200bke", "Du\u2028ke", "Du\u2029ke", "Du\u2060ke", "Du\ufeffke", "Du\u200fke", "Du\u0085ke"]) {
+      expect(validateMint(form({ name }), HOLDER)).toEqual({ ok: false, errors: { name: CHARACTERS } });
+    }
+  });
+
+  it("keeps what emoji and Turkish need: ZWJ, ZWNJ, variation selectors and tag characters", () => {
+    for (const name of ["Köpek", "Şeker", "\u{1f468}\u200d\u{1f4bb} Dev", "\u2764\ufe0f Love", "a\u200cb", "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}"]) {
+      expect(validateMint(form({ name }), HOLDER).ok).toBe(true);
+    }
+  });
+
+  // JS strings are UTF-16. TextEncoder (and viem, which uses it) turns an unpaired surrogate into U+FFFD, so the
+  // name on chain would differ from the one typed; the form refuses it instead.
+  it("refuses a lone surrogate rather than let it become U+FFFD on chain", () => {
+    for (const name of ["Bad\ud800Name", "Bad\udfffName", "\ud83d", "Rocket \ude80", "\ude80\ud83d"]) {
+      expect(validateMint(form({ name }), HOLDER)).toEqual({ ok: false, errors: { name: BROKEN } });
+    }
+    expect(validateMint(form({ name: "Rocket \ud83d\ude80" }), HOLDER).ok).toBe(true); // the pair, whole
+  });
+});
+
+describe("the name rule, against the vectors TokenFactory's tests read (packages/contracts/test/vectors/names.json)", () => {
+  it("has names to accept and names to reject", () => {
+    expect(VECTORS.some((v) => v.valid)).toBe(true);
+    expect(VECTORS.some((v) => !v.valid)).toBe(true);
+  });
+
+  // Byte for byte, as the contract sees them, including byte strings no JS string encodes to.
+  it.each(VECTORS)("isValidNameBytes: $note", ({ name, valid }) => {
+    expect(isValidNameBytes(hexToBytes(name))).toBe(valid);
+  });
+
+  // Through the form, for every vector a JS string can express.
+  it.each(VECTORS)("validateMint: $note", ({ name, valid }) => {
+    const text = decode(hexToBytes(name));
+    if (text === undefined) {
+      expect(valid).toBe(false); // not UTF-8: no string encodes to these bytes, and the contract must refuse them
+      return;
+    }
+    const result = validateMint(form({ name: text }), HOLDER);
+    if (text.trim() === text) {
+      expect(result.ok).toBe(valid);
+    } else if (result.ok) {
+      // The form sends the trimmed name, so that is the one the contract has to accept.
+      expect(isValidNameBytes(new TextEncoder().encode(result.args.name))).toBe(true);
+    }
   });
 });
