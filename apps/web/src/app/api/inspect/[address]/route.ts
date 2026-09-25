@@ -4,6 +4,9 @@ import { NotAContract } from "@arcos/inspector";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
 import { clientKey, rateLimiter } from "@/lib/rate-limit";
 
+// Rendered on every request: an inspection is live chain data, and the explorer key is a runtime-only secret.
+export const dynamic = "force-dynamic";
+
 const limiter = rateLimiter(30, 60_000);
 
 export async function GET(req: Request, ctx: { params: Promise<{ address: string }> }) {

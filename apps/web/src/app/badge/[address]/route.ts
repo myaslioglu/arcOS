@@ -4,6 +4,9 @@ import { NotAContract } from "@arcos/inspector";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
 import { badgeSvg } from "@/lib/proof";
 
+// Rendered on every request: an inspection is live chain data, and the explorer key is a runtime-only secret.
+export const dynamic = "force-dynamic";
+
 export async function GET(_req: Request, ctx: { params: Promise<{ address: string }> }) {
   const { address } = await ctx.params;
   let report = null;

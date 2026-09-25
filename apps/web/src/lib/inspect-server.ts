@@ -4,7 +4,7 @@ import { activeChain, type Address } from "@arcos/chain";
 import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
 import { inspectInput, proExplorerApi } from "./inspect-input";
-import { inFlightGate } from "./rate-limit";
+import { inFlightGate, perSecond } from "./rate-limit";
 import { ttlCache } from "./ttl-cache";
 
 export { InspectionTimeout } from "./deadline";
@@ -26,6 +26,16 @@ export class InspectorBusy extends Error {
 // same address never reaches this gate: ttlCache only calls its loader for genuinely new work.
 const gate = inFlightGate(8, () => new InspectorBusy());
 
+// Blockscout's free tier allows 5 requests a second, and one inspection makes up to 4 explorer calls
+// at once. A burst of inspections therefore waits its turn here instead of being refused and cached as
+// "unknown" for 5 minutes. The worst case per instance, 8 inspections × 4 calls at 4 a second, still
+// fits inside the 15 s deadline.
+const explorerTurn = perSecond(4);
+const explorerFetch: typeof fetch = async (input, init) => {
+  await explorerTurn();
+  return fetch(input, init);
+};
+
 export function cachedInspection(address: Address): Promise<Report> {
   // Arc mainnet's public explorer refuses server requests (a Cloudflare bot check), so with a key the server
   // reads the same data from Blockscout's PRO API. Without one (local dev) it uses the public explorer. The key
@@ -35,6 +45,6 @@ export function cachedInspection(address: Address): Promise<Report> {
   // race settles (timeout or real result), even if the underlying inspect() call keeps running.
   // ttlCache never caches a rejected promise (see ttl-cache.ts), so a timeout is never cached.
   return cache.get(address.toLowerCase(), () =>
-    gate.run(() => withDeadline(inspect(inspectInput(address, client, fetch, explorerApi)))),
+    gate.run(() => withDeadline(inspect(inspectInput(address, client, explorerFetch, explorerApi)))),
   );
 }

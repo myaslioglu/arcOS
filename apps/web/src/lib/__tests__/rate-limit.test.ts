@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clientKey, inFlightGate, rateLimiter } from "../rate-limit";
+import { clientKey, inFlightGate, perSecond, rateLimiter } from "../rate-limit";
 
 describe("rateLimiter", () => {
   it("allows `limit` calls then refuses with a positive whole-second retryAfterSec", () => {
@@ -122,5 +122,49 @@ describe("clientKey", () => {
 
   it("leaves an IPv4 address alone", () => {
     expect(clientKey(new Headers({ "x-real-ip": "203.0.113.5" }))).toBe("203.0.113.5");
+  });
+});
+
+describe("perSecond", () => {
+  function fakeClock() {
+    let t = 0;
+    const sleeps: number[] = [];
+    return {
+      now: () => t,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        t += ms;
+      },
+      advance: (ms: number) => {
+        t += ms;
+      },
+      sleeps,
+    };
+  }
+
+  it("starts the first `limit` calls at once", async () => {
+    const c = fakeClock();
+    const turn = perSecond(4, c.now, c.sleep);
+    await Promise.all([turn(), turn(), turn(), turn()]);
+    expect(c.sleeps).toEqual([]);
+  });
+
+  it("holds the next call until the oldest start in the window is a second old, in arrival order", async () => {
+    const c = fakeClock();
+    const turn = perSecond(4, c.now, c.sleep);
+    const started: [number, number][] = [];
+    await Promise.all([0, 1, 2, 3, 4, 5].map((i) => turn().then(() => started.push([i, c.now()]))));
+    expect(c.sleeps).toEqual([1000]);
+    expect(started).toEqual([[0, 0], [1, 0], [2, 0], [3, 0], [4, 1000], [5, 1000]]);
+  });
+
+  it("doesn't wait once the window has passed", async () => {
+    const c = fakeClock();
+    const turn = perSecond(2, c.now, c.sleep);
+    await turn();
+    await turn();
+    c.advance(1500);
+    await turn();
+    expect(c.sleeps).toEqual([]);
   });
 });

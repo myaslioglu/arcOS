@@ -277,8 +277,8 @@ describe("blockscoutSource with a Blockscout PRO API key", () => {
     expect(calls[0]!.headers.has("authorization")).toBe(false);
   });
 
-  it("treats a refused key (401, 402) as an outage whose message doesn't carry the key", async () => {
-    for (const status of [401, 402]) {
+  it("treats a refused or rate-limited key (401, 402, 429) as an outage whose message doesn't carry the key", async () => {
+    for (const status of [401, 402, 429]) {
       const src = blockscoutSource(API, (async () => json({ error: "Proceed with API key" }, status)) as typeof fetch, "proapi_wrong");
       await expect(src.contract(T)).rejects.toBeInstanceOf(ExplorerUnavailable);
       await expect(src.contract(T)).rejects.toThrow(`Explorer answered ${status}`);

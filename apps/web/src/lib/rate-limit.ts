@@ -62,6 +62,31 @@ export function clientKey(headers: Pick<Headers, "get">): string {
 }
 
 /**
+ * Spaces calls out per process: at most `limit` start in any one-second window, in arrival order.
+ * `await turn()` before each call. Unlike `rateLimiter`, nothing is refused; later calls wait.
+ */
+export function perSecond(
+  limit: number,
+  now: () => number = Date.now,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): () => Promise<void> {
+  const starts: number[] = [];
+  let queue: Promise<void> = Promise.resolve();
+  return () => {
+    const turn = queue.then(async () => {
+      if (starts.length >= limit) {
+        const wait = starts[0]! + 1000 - now();
+        if (wait > 0) await sleep(wait);
+        starts.shift();
+      }
+      starts.push(now());
+    });
+    queue = turn;
+    return turn;
+  };
+}
+
+/**
  * Bounds concurrent work per process. `run` throws the caller-supplied error once `max` calls
  * are already in flight; the slot frees in `finally` whether the call succeeds or fails.
  */

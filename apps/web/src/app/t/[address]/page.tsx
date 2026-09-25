@@ -7,6 +7,9 @@ import { formatAppHash } from "@arcos/shell/core";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
 import { NAME_DISCLOSURE, passLine, readAtLine, summaryLine, tokenLabel } from "@/lib/proof";
 
+// Rendered on every request: an inspection is live chain data, and the explorer key is a runtime-only secret.
+export const dynamic = "force-dynamic";
+
 type Props = { params: Promise<{ address: string }> };
 
 type LoadResult = Report | null | "busy" | "error";
