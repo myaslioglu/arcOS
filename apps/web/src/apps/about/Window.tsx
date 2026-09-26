@@ -1,14 +1,29 @@
 "use client";
 
-import { ARCOS, activeChain, activeNetwork, explorerUrl } from "@arcos/chain";
+import { useReadContracts } from "wagmi";
+import { ARCOS, FEE_KEYS, activeChain, activeNetwork, explorerUrl, feeControllerAbi } from "@arcos/chain";
 import { REPO_URL } from "@/lib/site";
+import { feeSentence, readingsFrom } from "./fees";
 
 const CONTRACT_LABEL = { feeController: "FeeController", tokenFactory: "TokenFactory", multisend: "Multisend" } as const;
+
+/** Read in this order; `readingsFrom` relies on it. */
+const FEE_ORDER = [FEE_KEYS.MINT_FLAT, FEE_KEYS.DROP_PER_RECIPIENT, FEE_KEYS.DROP_MIN] as const;
 
 export default function AboutWindow() {
   const network = activeNetwork();
   const chain = activeChain();
   const contracts = ARCOS[network];
+  // Read live, so the stated fees follow the FeeController (a decrease applies at once) instead of going stale.
+  const fees = useReadContracts({
+    contracts: contracts
+      ? FEE_ORDER.flatMap((key) => [
+          { address: contracts.feeController, abi: feeControllerAbi, functionName: "feeOf", args: [key], chainId: chain.id } as const,
+          { address: contracts.feeController, abi: feeControllerAbi, functionName: "capOf", args: [key], chainId: chain.id } as const,
+        ])
+      : [],
+    query: { enabled: !!contracts },
+  });
 
   return (
     <div className="p-5 text-sm leading-6">
@@ -46,10 +61,7 @@ export default function AboutWindow() {
       <p className="mt-4 text-muted">Contracts are not upgradeable and hold no funds between transactions.</p>
 
       <div className="mt-2 grid gap-1 text-muted">
-        <p>
-          Current fees: Mint 15 USDC flat (capped at 50 USDC). Drop 0.05 USDC per recipient, 2 USDC
-          minimum (capped at 0.5 USDC per recipient, 10 USDC minimum).
-        </p>
+        {contracts && <p>{feeSentence(fees.isError ? "error" : readingsFrom(fees.data))}</p>}
         <p>A fee decrease applies immediately. An increase only applies 48 hours after it&apos;s scheduled.</p>
         <p>
           Every paid action forwards its fee to one fee-recipient address in the same transaction. If
