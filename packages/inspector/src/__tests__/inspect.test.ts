@@ -1140,3 +1140,39 @@ describe("inspect", () => {
     expect(r.address).toBe("0x000000000000000000000000000000000000dEaD");
   });
 });
+
+describe("source verification through the 4rc.OS TokenFactory", () => {
+  const FACTORY = "0xfa00000000000000000000000000000000000fac";
+  const made = { [`${FACTORY}.isArcosToken(${TOKEN})`]: true };
+  const notMade = { [`${FACTORY}.isArcosToken(${TOKEN})`]: false };
+  const withFactory = (f: Fake, ex: ExplorerSource | null): Promise<Report> =>
+    inspect({
+      address: TOKEN, network: "testnet", reader: reader(f), explorer: ex, dex: null, knownLockers: [],
+      explorerBase: "https://explorer.test", arcosTokenFactory: FACTORY, now: () => new Date("2026-09-20T00:00:00Z"),
+    });
+  const unverified = explorer({ contract: async () => ({ verified: false, name: null, abi: null, proxyType: null, implementations: [] }) });
+
+  it("passes a token the factory created, even while the explorer hasn't verified the address itself", async () => {
+    const v = find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: { ...made, [`${TOKEN}.owner()`]: ZERO } }, unverified), "verified");
+    expect(v.status).toBe("pass");
+    expect(v.title).toContain("4rc.OS");
+    expect(v.evidenceUrl).toBe(`https://explorer.test/address/${FACTORY}?tab=contract`);
+  });
+
+  it("passes it when the explorer can't be reached at all", async () => {
+    expect(find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: made }, null), "verified").status).toBe("pass");
+  });
+
+  it("keeps the explorer's answer for a token the factory didn't create", async () => {
+    expect(find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: notMade }, unverified), "verified").status).toBe("fail");
+  });
+
+  it("claims nothing when the factory can't be read", async () => {
+    expect(find(await withFactory({ code: { [TOKEN]: PLAIN } }, null), "verified").status).toBe("unknown");
+  });
+
+  it("never claims it for code that forwards its calls", async () => {
+    const r = await withFactory({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN }, reads: made }, unverified);
+    expect(find(r, "verified").title).not.toContain("4rc.OS");
+  });
+});

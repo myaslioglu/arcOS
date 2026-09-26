@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PublicClient } from "viem";
-import { activeChain } from "@arcos/chain";
+import { ARCOS, activeChain, activeNetwork } from "@arcos/chain";
 import { inspectInput, proExplorerApi } from "../inspect-input";
 
 const T = "0x1111111111111111111111111111111111111111";
@@ -44,6 +44,11 @@ describe("inspectInput", () => {
     await inspectInput(T, client, fetchFn, PRO).explorer!.contract(T);
     expect(calls[0].url).toBe(`${PRO.url}/smart-contracts/${T}`);
     expect(calls[0].headers.get("authorization")).toBe("Bearer proapi_k");
+  });
+
+  it("names this network's 4rc.OS TokenFactory, so its tokens can be recognized", () => {
+    expect(inspectInput(T, client).arcosTokenFactory).toBe(ARCOS[activeNetwork()]?.tokenFactory ?? null);
+    expect(inspectInput(T, client).arcosTokenFactory).toMatch(/^0x[0-9a-fA-F]{40}$/);
   });
 
   it("keeps linking evidence to the public explorer either way", () => {

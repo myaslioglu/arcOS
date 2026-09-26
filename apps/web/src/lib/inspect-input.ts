@@ -1,5 +1,5 @@
 import type { PublicClient } from "viem";
-import { DEX, KNOWN_LOCKERS, activeChain, activeNetwork, type Address } from "@arcos/chain";
+import { ARCOS, DEX, KNOWN_LOCKERS, activeChain, activeNetwork, type Address } from "@arcos/chain";
 import { blockscoutSource, viemReader, type InspectInput } from "@arcos/inspector";
 
 /** An explorer API to read instead of the chain's public one, with the key it needs. */
@@ -32,5 +32,7 @@ export function inspectInput(
     knownLockers: KNOWN_LOCKERS[network],
     // Evidence links are for people, and the public explorer answers browsers.
     explorerBase: explorer?.url ?? "",
+    // A token our own TokenFactory made counts as source-verified through the factory (see checkVerified).
+    arcosTokenFactory: ARCOS[network]?.tokenFactory ?? null,
   };
 }

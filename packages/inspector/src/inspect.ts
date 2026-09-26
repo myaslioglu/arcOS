@@ -1,5 +1,5 @@
 import { getAddress } from "viem";
-import type { Address } from "@arcos/chain";
+import { tokenFactoryAbi, type Address } from "@arcos/chain";
 import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, abiDeclaresTransfer, addressFromSlot, beaconImplementation, checkHolders,
@@ -236,7 +236,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber] = await Promise.all([
+  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber, arcosTemplate] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
     // For anything that forwards, the record that matters is the one for the code that RUNS:
     // Blockscout's record for a proxy or a clone address describes the forwarding code, and
@@ -247,6 +247,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     resolveOwner(reader, address, selectors),
     findPools(input).catch(() => null),
     reader.blockNumber().catch(() => null),
+    input.arcosTokenFactory
+      ? reader.read(input.arcosTokenFactory, tokenFactoryAbi, "isArcosToken", [address]).then((v) => v === true).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   const readOr = async <T>(fn: string, fallback: T): Promise<T> => (reader.read(address, erc20Abi, fn) as Promise<T>).catch(() => fallback);
@@ -288,7 +291,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // proxy itself, or that points at empty code, is an address the engine explicitly refused to
     // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
     // finding saying that code couldn't be identified is the report contradicting itself.
-    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null)),
+    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null, arcosTemplate)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
