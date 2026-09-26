@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { keccak256, toBytes } from "viem";
 import type { DexConfig } from "@arcos/chain";
 import { extractSelectors } from "../bytecode";
+import { ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT } from "../checks";
 import { ExplorerUnavailable, blockscoutSource, type ExplorerSource, type Holder } from "../explorer";
 import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
@@ -1138,6 +1140,122 @@ describe("inspect", () => {
       explorerBase: "https://explorer.test",
     });
     expect(r.address).toBe("0x000000000000000000000000000000000000dEaD");
+  });
+});
+
+// Circle's FiatToken proxies predate EIP-1967 and keep their implementation and admin in ZeppelinOS's slots. They are
+// read exactly like the EIP-1967 ones, after them: EIP-1167 clone, then EIP-1967, then ZeppelinOS.
+describe("ZeppelinOS-style proxies", () => {
+  const ZOS_IMPL = keccak256(toBytes("org.zeppelinos.proxy.implementation"));
+  const ZOS_ADMIN = keccak256(toBytes("org.zeppelinos.proxy.admin"));
+  /** GAS · DELEGATECALL · STOP: forwards every call, without the EIP-1167 shape. */
+  const FORWARDER = "0x5af400";
+
+  it("uses the hashes of ZeppelinOS's slot names", () => {
+    expect(ZEPPELINOS_IMPL_SLOT).toBe(keccak256(toBytes("org.zeppelinos.proxy.implementation")));
+    expect(ZEPPELINOS_ADMIN_SLOT).toBe(keccak256(toBytes("org.zeppelinos.proxy.admin")));
+  });
+
+  it("scores the implementation its slot names and calls it upgradeable by the admin in its admin slot", async () => {
+    const r = await run({
+      code: { [TOKEN]: FORWARDER, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${ZOS_IMPL}`]: slotWith(IMPL), [`${TOKEN}:${ZOS_ADMIN}`]: slotWith(OWNER) },
+      reads: { [`${TOKEN}.owner()`]: GRAND },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable — admin 0x3333…3333" });
+    expect(find(r, "proxy").detail).toBe(`${OWNER} holds the admin slot of this ZeppelinOS-style proxy and can replace this contract's logic.`);
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+    expect(find(r, "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
+  });
+
+  it("names the slot kind when there's no admin to name", async () => {
+    const r = await run({ code: { [TOKEN]: FORWARDER, [IMPL]: MINTABLE }, storage: { [`${TOKEN}:${ZOS_IMPL}`]: slotWith(IMPL) } });
+    expect(find(r, "proxy")).toMatchObject({
+      status: "fail",
+      title: "Upgradeable ZeppelinOS-style proxy",
+      detail: "Whoever controls this ZeppelinOS-style proxy's admin can replace this contract's logic.",
+    });
+  });
+
+  it("gives the logic behind it no pass, naming the ZeppelinOS admin as the one who can replace it", async () => {
+    const r = await run({
+      code: { [TOKEN]: FORWARDER, [IMPL]: PLAIN },
+      storage: { [`${TOKEN}:${ZOS_IMPL}`]: slotWith(IMPL), [`${TOKEN}:${ZOS_ADMIN}`]: slotWith(OWNER) },
+      reads: { [`${TOKEN}.owner()`]: ZERO },
+    });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "warn"]);
+      expect([id, find(r, id).detail]).toEqual([id, expect.stringContaining("The proxy admin 0x3333…3333")]);
+    }
+  });
+
+  it("checks the implementation's source, not just the proxy's", async () => {
+    const ex = explorer({
+      contract: async (a) => ({ verified: a.toLowerCase() !== IMPL.toLowerCase(), name: null, abi: null, proxyType: null, implementations: [] }),
+    });
+    const r = await run({ code: { [TOKEN]: FORWARDER, [IMPL]: PLAIN }, storage: { [`${TOKEN}:${ZOS_IMPL}`]: slotWith(IMPL) } }, ex);
+    expect(find(r, "verified")).toMatchObject({ status: "fail", title: "The code this proxy runs isn't verified" });
+    expect(find(r, "verified").evidenceUrl).toBe(`https://explorer.test/address/${IMPL}?tab=contract`);
+  });
+
+  it("reads it as an EIP-1967 proxy when both kinds of slot name the same implementation", async () => {
+    const r = await run({
+      code: { [TOKEN]: FORWARDER, [IMPL]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${ZOS_IMPL}`]: slotWith(IMPL), [`${TOKEN}:${ADMIN_SLOT}`]: slotWith(OWNER) },
+      reads: { [`${TOKEN}.owner()`]: GRAND },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable — admin 0x3333…3333" });
+    expect(find(r, "proxy").detail).toContain("EIP-1967");
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  it.each([
+    ["an EIP-1967 implementation", { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) }],
+    ["an EIP-1967 beacon", { [`${TOKEN}:${BEACON_SLOT}`]: slotWith(BEACON) }],
+  ])("scores nothing when %s and the ZeppelinOS slot point at different code", async (_, eip1967) => {
+    const r = await run({
+      code: { [TOKEN]: FORWARDER, [IMPL]: MINTABLE, [BEACON]: PLAIN, [GRAND]: PLAIN },
+      storage: { ...eip1967, [`${TOKEN}:${ZOS_IMPL}`]: slotWith(GRAND) },
+      reads: { [`${BEACON}.implementation()`]: IMPL },
+    });
+    expect(find(r, "proxy").status).toBe("fail"); // upgradeable, whichever one runs
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+    }
+    expect(find(r, "privileges")).toMatchObject({ title: "Couldn't read the contract's logic" });
+    expect(find(r, "privileges").detail).toMatch(/ZeppelinOS/);
+  });
+
+  it("won't score an implementation that is itself a ZeppelinOS-style proxy", async () => {
+    const r = await run({
+      code: { [TOKEN]: FORWARDER, [IMPL]: FORWARDER, [GRAND]: MINTABLE },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${IMPL}:${ZOS_IMPL}`]: slotWith(GRAND) },
+    });
+    expect(find(r, "privileges")).toMatchObject({ status: "unknown", title: "Couldn't read the contract's logic" });
+    expect(find(r, "privileges").detail).toMatch(/further proxy/);
+  });
+
+  it("fails a clone of a ZeppelinOS-style proxy and reads the logic behind it", async () => {
+    const r = await run({
+      code: { [TOKEN]: cloneOf(IMPL), [IMPL]: FORWARDER, [GRAND]: MINTABLE },
+      storage: { [`${IMPL}:${ZOS_IMPL}`]: slotWith(GRAND), [`${IMPL}:${ZOS_ADMIN}`]: slotWith(OWNER) },
+      reads: { [`${TOKEN}.owner()`]: OWNER },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
+    expect(find(r, "proxy").detail).toBe(
+      `An EIP-1167 clone of ${IMPL}, which is itself a ZeppelinOS-style upgradeable proxy — whose admin ${OWNER} can replace what this token's logic actually delegates to.`,
+    );
+    expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
+  });
+
+  it("claims nothing about the logic when the ZeppelinOS slot won't read", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await run({ code: { [TOKEN]: PLAIN }, storageErrors: { [`${TOKEN}:${ZOS_IMPL}`]: new Error("ETIMEDOUT") } });
+    expect(find(r, "proxy").status).toBe("unknown");
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).title]).toEqual([id, "Couldn't tell if this contract forwards"]);
+    }
+    spy.mockRestore();
   });
 });
 

@@ -2,10 +2,10 @@ import { getAddress } from "viem";
 import { tokenFactoryAbi, type Address } from "@arcos/chain";
 import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
 import {
-  ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, abiDeclaresTransfer, addressFromSlot, beaconImplementation, checkHolders,
-  checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges, checkProxy, checkVerified,
-  dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
-  type LogicBlock, type LogicGap,
+  ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, abiDeclaresTransfer, addressFromSlot,
+  beaconImplementation, checkHolders, checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges,
+  checkProxy, checkVerified, dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
+  type LogicBlock, type LogicGap, type ProxySlotKind,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import { ExplorerUnavailable, type ContractInfo, type ExplorerSource, type HolderPage, type TokenInfo } from "./explorer";
@@ -44,6 +44,28 @@ function tryBig(v: string | number | null | undefined): bigint | null {
     return null;
   }
 }
+
+/** The slots a proxy can name its logic in, in the order they are read: EIP-1967's implementation and beacon slots,
+ * then ZeppelinOS's implementation slot. */
+const PROXY_SLOTS = [IMPL_SLOT, BEACON_SLOT, ZEPPELINOS_IMPL_SLOT] as const;
+
+/** What one address's proxy slots hold. `read` is false when any of them couldn't be read. */
+type ProxySlots = { read: boolean; impl: Address | null; beacon: Address | null; zeppelinos: Address | null };
+const UNREAD: ProxySlots = { read: false, impl: null, beacon: null, zeppelinos: null };
+
+/** Slot values read in `PROXY_SLOTS` order, every one of them `slotReadable`. */
+const slotsFrom = (values: readonly (string | null)[]): ProxySlots => {
+  const [impl = null, beacon = null, zeppelinos = null] = values.map(addressFromSlot);
+  return { read: true, impl, beacon, zeppelinos };
+};
+
+/** Whose layout the set slots follow: EIP-1967's first, then ZeppelinOS's. `null` when none is set. */
+const kindOf = (s: ProxySlots): ProxySlotKind | null => (s.impl || s.beacon ? "eip1967" : s.zeppelinos ? "zeppelinos" : null);
+
+/** The ZeppelinOS slot names something other than what the EIP-1967 slots name: a beacon, or a different
+ * implementation. Only the proxy's own bytecode decides which it reads, so neither is "the logic". */
+const zeppelinosConflicts = (s: ProxySlots): boolean =>
+  s.zeppelinos !== null && (s.beacon !== null || (s.impl !== null && s.impl.toLowerCase() !== s.zeppelinos.toLowerCase()));
 
 /** Runs a call and tells `onFailure` when it rejects with an error `isFailure` accepts. The outcome passes through
  * unchanged: what a failed read means for a finding is still each check's own business. */
@@ -121,12 +143,15 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const cloneResolved = cloneOf !== null && cloneImplCode !== null;
   const cloneTargetEmpty = cloneOf !== null && !cloneReadFailed && cloneImplCode === null;
 
-  // Resolve what code actually runs, and what (if anything) this address's own EIP-1967 slots say.
+  // Resolve what code actually runs, and what (if anything) this address's own proxy slots say.
   // These three outcomes are mutually exclusive:
   let topSlotsError: unknown = null;
   let topSlotsSet = false;
   let cloneTargetIsProxy = false;
   let targetSlotsRead = true;
+  /** Whose layout the slots that make this upgradeable follow — this address's own, or the clone
+   * target's. Picks the admin slot below and the proxy finding's wording. */
+  let slotKind: ProxySlotKind | null = null;
   let logicCode: string | null;
   let logicGap: LogicGap | null = null;
   /** Where the code that runs lives, when that isn't this token's own code. `null` covers both
@@ -150,15 +175,13 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  type ProxySlots = { read: boolean; impl: Address | null; beacon: Address | null };
   const readProxySlots = async (at: Address): Promise<ProxySlots> => {
     try {
-      const [impl, beacon] = await Promise.all([reader.getStorageAt(at, IMPL_SLOT), reader.getStorageAt(at, BEACON_SLOT)]);
+      const values = await Promise.all(PROXY_SLOTS.map((slot) => reader.getStorageAt(at, slot)));
       // A malformed answer is no more an answer than a rejected call — see `slotReadable`.
-      if (!slotReadable(impl) || !slotReadable(beacon)) return { read: false, impl: null, beacon: null };
-      return { read: true, impl: addressFromSlot(impl), beacon: addressFromSlot(beacon) };
+      return values.every(slotReadable) ? slotsFrom(values) : UNREAD;
     } catch {
-      return { read: false, impl: null, beacon: null };
+      return UNREAD;
     }
   };
 
@@ -166,38 +189,39 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * One rule for every address the engine resolves as "the logic": it is only the logic if it
    * isn't a proxy in its own right. A TransparentUpgradeableProxy, most BeaconProxy builds and any
    * proxy with a function of its own all have a dispatcher, so "has no dispatcher" catches none of
-   * them — its EIP-1967 slots and its clone shape do. One hop is all this engine follows, so a
+   * them — its proxy slots and its clone shape do. One hop is all this engine follows, so a
    * second one is simply unidentified; and a slot that wouldn't read leaves "it isn't a proxy" as
    * an assumption, which is not something to score a report on.
    */
   const vet = (codeAt: string, slots: ProxySlots): LogicGap | null => {
     if (!slots.read) return "logic-unreadable";
-    return minimalProxyTarget(codeAt) || slots.impl || slots.beacon ? "logic-unidentified" : null;
+    return minimalProxyTarget(codeAt) || slots.impl || slots.beacon || slots.zeppelinos ? "logic-unidentified" : null;
   };
 
   if (cloneOf === null) {
-    const slots = await Promise.all([reader.getStorageAt(address, IMPL_SLOT), reader.getStorageAt(address, BEACON_SLOT)]).catch((e: unknown) => {
+    const values = await Promise.all(PROXY_SLOTS.map((slot) => reader.getStorageAt(address, slot))).catch((e: unknown) => {
       topSlotsError = e;
       return null;
     });
     // A malformed answer is treated exactly like a read that threw: `checkProxy` rethrows it and
     // the logic block refuses to score this code (see `slotReadable`).
-    if (slots && (!slotReadable(slots[0]) || !slotReadable(slots[1]))) topSlotsError = new Error("malformed storage answer");
-    if (slots && !topSlotsError) topSlotsSet = slotSet(slots[0]) || slotSet(slots[1]);
+    if (values && !values.every(slotReadable)) topSlotsError = new Error("malformed storage answer");
+    if (values && !topSlotsError) topSlotsSet = values.some(slotSet);
     if (topSlotsSet) {
-      // An EIP-1967 proxy's own bytecode is a trampoline with no function dispatcher: scoring it
-      // would report "no privileged functions" about a token whose implementation can mint.
-      const implSlot = addressFromSlot(slots![0]);
-      const beaconSlot = addressFromSlot(slots![1]);
-      if (implSlot && beaconSlot) {
+      // A proxy's own bytecode is a trampoline with no function dispatcher: scoring it would
+      // report "no privileged functions" about a token whose implementation can mint.
+      const slots = slotsFrom(values!);
+      slotKind = kindOf(slots);
+      if ((slots.impl && slots.beacon) || zeppelinosConflicts(slots)) {
         // Nothing in the EVM resolves this: the proxy's OWN BYTECODE decides which slot it reads,
         // and a BeaconProxy with a stale or decoy implementation slot would be scored on code that
         // never runs. Two candidates is no candidate.
         logicCode = null;
         logicGap = "logic-ambiguous";
       } else {
-        // A beacon slot holds the BEACON's address, not the logic's, so it needs its own call.
-        logicAt = implSlot ?? (await beaconImplementation(reader, beaconSlot));
+        // EIP-1967 first, then ZeppelinOS. A beacon slot holds the BEACON's address, not the
+        // logic's, so it needs its own call.
+        logicAt = slots.impl ?? slots.zeppelinos ?? (await beaconImplementation(reader, slots.beacon));
         [logicCode, logicGap] = await readLogic(logicAt);
       }
     } else {
@@ -218,7 +242,8 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // reading, so `checkProxy` must not turn it into "not upgradeable".
     const targetSlots = await readProxySlots(cloneOf);
     targetSlotsRead = targetSlots.read;
-    cloneTargetIsProxy = targetSlots.impl !== null || targetSlots.beacon !== null;
+    slotKind = kindOf(targetSlots);
+    cloneTargetIsProxy = slotKind !== null;
     if (!cloneTargetIsProxy) {
       // The target's slots have just been read, so `vet` only has the clone-of-a-clone shape (and
       // the unread-slot case) left to rule out.
@@ -226,10 +251,15 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       logicCode = logicGap === null ? cloneImplCode : null;
       logicAt = cloneOf;
       logicVetted = true;
+    } else if (zeppelinosConflicts(targetSlots)) {
+      // Two candidates is no candidate, here as on a proxy of its own.
+      logicCode = null;
+      logicGap = "logic-ambiguous";
     } else {
       // One level of further resolution is enough — a proxy-of-a-proxy-of-a-proxy stays unknown.
-      // A beacon slot holds the BEACON's address, not the logic's, so it needs its own call.
-      const grandAddr = targetSlots.impl ?? (await beaconImplementation(reader, targetSlots.beacon));
+      // EIP-1967 first, then ZeppelinOS. A beacon slot holds the BEACON's address, not the
+      // logic's, so it needs its own call.
+      const grandAddr = targetSlots.impl ?? targetSlots.zeppelinos ?? (await beaconImplementation(reader, targetSlots.beacon));
       [logicCode, logicGap] = await readLogic(grandAddr);
       logicAt = grandAddr;
     }
@@ -247,15 +277,18 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   // The ONE value behind both `proxy`'s upgradeability fail and R1's block on the logic checks.
   const upgradeable = cloneOf === null ? topSlotsSet : cloneTargetIsProxy;
   // Whose slots make it upgradeable — this address's own, or the clone target's. That is also
-  // where the admin slot lives, and the page to link as evidence for "someone can replace this".
+  // where the admin slot lives (the one of the same kind), and the page to link as evidence for
+  // "someone can replace this".
   const upgradeableAt: Address | null = !upgradeable ? null : cloneOf === null ? address : cloneOf;
   // A failed admin read is not evidence of an empty slot, but it makes no difference to what can
   // be said: without an address, both are "whoever controls upgrades".
   const admin: Address | null = upgradeableAt
-    ? await reader.getStorageAt(upgradeableAt, ADMIN_SLOT).then(addressFromSlot, () => null)
+    ? await reader
+        .getStorageAt(upgradeableAt, slotKind === "zeppelinos" ? ZEPPELINOS_ADMIN_SLOT : ADMIN_SLOT)
+        .then(addressFromSlot, () => null)
     : null;
 
-  // Code that delegates calls but resolves to no known clone target or EIP-1967 slot. `checkProxy`
+  // Code that delegates calls but resolves to no known clone target or proxy slot. `checkProxy`
   // reports this shape on its own; what it must NOT do is discard the contract's own dispatcher,
   // whose privileged selectors are real evidence. Everything it can't vouch for is blocked by the
   // DELEGATECALL rule below instead — the same rule on every path.
@@ -264,7 +297,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * check (a clone whose logic does this isn't "not replaceable" after all) and by the gate on the
    * three logic checks — one fact, one place. */
   const logicDelegates = logicCode !== null && usesOpcode(logicCode, DELEGATECALL);
-  /** This token demonstrably runs code that isn't its own: a clone, or its EIP-1967 slots are set.
+  /** This token demonstrably runs code that isn't its own: a clone, or its proxy slots are set.
    * Whether that code was actually identified is `logicAt`. Drives which record the ABI evidence
    * comes from — for a contract that merely DELEGATECALLs, its OWN record still describes the
    * dispatcher being scored, so that case is deliberately not in here. */
@@ -312,8 +345,8 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   ]);
 
   // The ABI is only evidence about the code that actually runs: this address's own record for a
-  // plain contract, and the resolved implementation's for anything that forwards (an EIP-1967
-  // proxy or an EIP-1167 clone) — never the forwarding contract's own.
+  // plain contract, and the resolved implementation's for anything that forwards (an EIP-1967 or
+  // ZeppelinOS-style proxy, or an EIP-1167 clone) — never the forwarding contract's own.
   const abiForPrivileges = runsOtherCode ? (logicContract?.abi ?? null) : (contract?.abi ?? null);
   const found: Privilege[] | null = logicCode === null ? null : combinePrivileges(abiForPrivileges, selectors);
 
@@ -347,7 +380,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
-      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, upgradeable, admin });
+      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, upgradeable, slotKind, admin });
     }),
     guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),

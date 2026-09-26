@@ -11,21 +11,24 @@
  *   role-based admins can't be ruled out. "Ownership is renounced" is reserved for a burn-address
  *   owner() on logic that WAS read and has no `grantRole`: with AccessControl in the code, a
  *   renounced Ownable leaves the roles untouched, so it's reported as role-based admin (a warn).
- * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone or an
- *   EIP-1967 proxy whose implementation is unreachable, points at empty code, is itself a proxy, or
- *   can't be picked out because both proxy slots are set); or privileged functions were found but
- *   the owner is unknown, or there's no owner function at all (can't tell if they're reachable
- *   either way). A proxy is always judged on its IMPLEMENTATION's bytecode and ABI, never on its
- *   own trampoline, which has no dispatcher and so would look privilege-free.
- * - proxy: a storage-read failure on the top-level address propagates and is caught by the
+ * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone, or an
+ *   EIP-1967 or ZeppelinOS-style proxy, whose implementation is unreachable, points at empty code,
+ *   is itself a proxy, or can't be picked out because its slots name two candidates); or
+ *   privileged functions were found but the owner is unknown, or there's no owner function at all
+ *   (can't tell if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's
+ *   bytecode and ABI, never on its own trampoline, which has no dispatcher and so would look
+ *   privilege-free.
+ * - proxy: the proxy slots are EIP-1967's and, read after them, the older ZeppelinOS ones that
+ *   Circle's FiatToken proxies use; a ZeppelinOS-style proxy is judged exactly like an EIP-1967
+ *   one. A storage-read failure on the top-level address propagates and is caught by the
  *   orchestrator's guard, so "Not a proxy" only ever rests on slots that were actually read; an
  *   EIP-1167 clone whose implementation couldn't be fetched at all (a transport failure) is
  *   unknown, never "not upgradeable"; a clone whose target read succeeded but came back with no
  *   code at all is a fail (it points at nothing); a resolved clone whose target is itself an
- *   EIP-1967 proxy is a fail ("Clone of an upgradeable proxy"), not a pass; a clone whose target's
- *   own EIP-1967 slots couldn't be read is unknown, because an unread slot is not an unset one;
- *   code that delegates calls (DELEGATECALL) but resolves to no known clone target or EIP-1967 slot
- *   is unknown, not "not a proxy".
+ *   upgradeable proxy is a fail ("Clone of an upgradeable proxy"), not a pass; a clone whose
+ *   target's own proxy slots couldn't be read is unknown, because an unread slot is not an unset
+ *   one; code that delegates calls (DELEGATECALL) but resolves to no known clone target or proxy
+ *   slot is unknown, not "not a proxy".
  * - holders: the explorer didn't answer, total supply is unknown, or the holder list came back
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
@@ -72,7 +75,7 @@ const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view re
 
 const FORWARDS_TO_UNIDENTIFIED_TITLE = "Forwards calls to unidentified code";
 const FORWARDS_TO_UNIDENTIFIED_DETAIL =
-  "The code contains a DELEGATECALL, but no EIP-1167 clone target or EIP-1967 proxy slot could be resolved.";
+  "The code contains a DELEGATECALL, but no EIP-1167 clone target, EIP-1967 proxy slot or ZeppelinOS proxy slot could be resolved.";
 
 /**
  * Why the engine has no logic code to score. A proxy's own bytecode is a trampoline with no
@@ -86,7 +89,7 @@ const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
   "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
   "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
   "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
-  "logic-ambiguous": { title: "Couldn't read the contract's logic", detail: "Both the EIP-1967 implementation and beacon slots are set, and only this proxy's own bytecode decides which of the two it runs — so which code to read can't be told." },
+  "logic-ambiguous": { title: "Couldn't read the contract's logic", detail: "This proxy's slots name two different places its logic could live — both of EIP-1967's slots, or an EIP-1967 slot and the ZeppelinOS one — and only its own bytecode decides which it runs, so which code to read can't be told." },
 };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -103,12 +106,13 @@ const shortAddress = (a: string): string => (a.length <= 12 ? a : `${a.slice(0, 
  * Why a would-be `pass` about what this contract's logic DOES can't stand, even though the check
  * found nothing wrong with the code it read.
  *
- * `mutable` (R1): the code can be replaced — this address's own EIP-1967 slots are set, or it is a
- * clone of a contract whose are (exactly the condition `checkProxy` fails on, read from the same
- * value so the two can never disagree). "No privileged functions", "Ownership is renounced", "No
- * owner function" and "Doesn't rely on on-chain randomness" are then statements about code that
- * can be different tomorrow. They stay true of the logic running NOW, which is why this downgrades
- * to a `warn` naming who can replace it rather than to an `unknown`.
+ * `mutable` (R1): the code can be replaced — this address's own proxy slots (EIP-1967's or
+ * ZeppelinOS's) are set, or it is a clone of a contract whose are (exactly the condition
+ * `checkProxy` fails on, read from the same value so the two can never disagree). "No privileged
+ * functions", "Ownership is renounced", "No owner function" and "Doesn't rely on on-chain
+ * randomness" are then statements about code that can be different tomorrow. They stay true of
+ * the logic running NOW, which is why this downgrades to a `warn` naming who can replace it
+ * rather than to an `unknown`.
  *
  * `delegatecall`: the code being scored can run code from another address, which this scan never
  * sees, so "nothing of the sort is in here" doesn't rule it out. Nothing is known about the code
@@ -121,7 +125,7 @@ const shortAddress = (a: string): string => (a.length <= 12 ? a : `${a.slice(0, 
  * counts, because no ABI says anything about which instructions a contract contains. Both are
  * `unknown`, and both outrank `mutable` for the same reason.
  *
- * `forwards-unknown`: this address's own EIP-1967 slots couldn't be read, so whether the code being
+ * `forwards-unknown`: this address's own proxy slots couldn't be read, so whether the code being
  * scored is the code that runs was never established. It outranks everything: without that answer,
  * the rest is a reading of bytecode that may not be the bytecode in play.
  */
@@ -191,7 +195,7 @@ const MUTABLE_TITLE: Record<"clean" | "privileged", Partial<Record<Finding["id"]
 const OPAQUE_LOGIC: Record<"forwards-unknown" | "delegatecall" | "dispatcher" | "opcodes", { title: string; detail: string }> = {
   "forwards-unknown": {
     title: "Couldn't tell if this contract forwards",
-    detail: "This contract's EIP-1967 proxy slots couldn't be read, so whether the code scanned here is the code that actually runs was never established.",
+    detail: "This contract's EIP-1967 and ZeppelinOS proxy slots couldn't be read, so whether the code scanned here is the code that actually runs was never established.",
   },
   delegatecall: {
     title: "Runs code this check can't see",
@@ -465,6 +469,15 @@ export const BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6c
  * proxy (the right lives in the implementation) and on a beacon proxy (it lives on the beacon). */
 export const ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
 /**
+ * The slots proxies used before EIP-1967, from ZeppelinOS: `keccak256("org.zeppelinos.proxy.implementation")` and
+ * `keccak256("org.zeppelinos.proxy.admin")`. Circle's FiatToken proxies, EURC on Arc among them, still keep their
+ * implementation and admin there. They are read exactly like the EIP-1967 slots, and after them.
+ */
+export const ZEPPELINOS_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3";
+export const ZEPPELINOS_ADMIN_SLOT = "0x10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b";
+/** Whose layout a proxy's slots follow: EIP-1967's, or ZeppelinOS's older one. */
+export type ProxySlotKind = "eip1967" | "zeppelinos";
+/**
  * An answer this engine can use at all: `null` or a bare `0x` (nodes answer a never-written slot
  * either way, and both mean "nothing in it"), or a full 32-byte word. Anything else — a truncated
  * value, a bare 20-byte address — is a malformed answer. It is not evidence that the slot is set,
@@ -485,26 +498,47 @@ export type ProxyResolution = {
   /** Only meaningful when `cloneOf` is set and `cloneReadFailed` is false: the read succeeded but
    * the target address has no code (`0x`) — a clone pointing at nothing, which is broken. */
   cloneTargetEmpty: boolean;
-  /** Only meaningful when `cloneOf` is set: both of the target's EIP-1967 slot reads answered.
-   * When they didn't, `upgradeable === false` means "not read", not "not set", so the clone can't
-   * be called non-upgradeable. */
+  /** Only meaningful when `cloneOf` is set: every one of the target's proxy slot reads (EIP-1967's
+   * and ZeppelinOS's) answered. When they didn't, `upgradeable === false` means "not read", not
+   * "not set", so the clone can't be called non-upgradeable. */
   targetSlotsRead: boolean;
-  /** DELEGATECALL is present but resolves to no known clone target or EIP-1967 slot. */
+  /** DELEGATECALL is present but resolves to no known clone target or proxy slot. */
   forwardsToUnidentifiedCode: boolean;
   /** The code finally scored as this token's logic contains a DELEGATECALL of its own. A clone is
    * not re-pointable, but "its logic can't be replaced" is a claim about the code that ends up
    * running, and whoever controls the address behind that DELEGATECALL controls exactly that. */
   logicDelegates: boolean;
-  /** The code this token runs can be replaced: its own EIP-1967 implementation or beacon slot is
-   * set, or it is a clone of a contract whose is. THE value — `checkProxy`'s upgradeability `fail`
-   * and R1's block on the logic checks (`LogicBlock`) both read this one field, so the report can
-   * never say "upgradeable proxy" and "ownership is renounced" side by side. */
+  /** The code this token runs can be replaced: one of its own proxy slots (EIP-1967's implementation
+   * or beacon slot, or ZeppelinOS's implementation slot) is set, or it is a clone of a contract
+   * whose is. THE value — `checkProxy`'s upgradeability `fail` and R1's block on the logic checks
+   * (`LogicBlock`) both read this one field, so the report can never say "upgradeable proxy" and
+   * "ownership is renounced" side by side. */
   upgradeable: boolean;
-  /** The EIP-1967 admin slot of whichever address makes this upgradeable, when it holds one.
-   * `null` covers all three of: not upgradeable, slot empty (UUPS or beacon), slot unreadable —
-   * they produce the same finding text ("whoever controls upgrades"), because the one thing that
-   * must never be said is a name that wasn't read. */
+  /** Whose layout the slots that make this upgradeable follow (EIP-1967 wins when both kinds are
+   * set). It decides which admin slot `admin` was read from, and the wording. `null` when this
+   * isn't upgradeable. */
+  slotKind: ProxySlotKind | null;
+  /** The admin slot (EIP-1967's, or ZeppelinOS's for a ZeppelinOS-style proxy) of whichever address
+   * makes this upgradeable, when it holds one. `null` covers all three of: not upgradeable, slot
+   * empty (UUPS or beacon), slot unreadable — they produce the same finding text ("whoever controls
+   * upgrades"), because the one thing that must never be said is a name that wasn't read. */
   admin: Address | null;
+};
+
+/** The wording for each kind of upgradeable proxy. EIP-1967's is the one this check always had. */
+const UPGRADEABLE: Record<ProxySlotKind, { kind: string; title: string; admin: (admin: Address) => string; noAdmin: string }> = {
+  eip1967: {
+    kind: "an EIP-1967",
+    title: "Upgradeable proxy",
+    admin: (admin) => `${admin} holds the EIP-1967 admin slot and can replace this contract's logic.`,
+    noAdmin: "Whoever controls the proxy admin can replace this contract's logic.",
+  },
+  zeppelinos: {
+    kind: "a ZeppelinOS-style",
+    title: "Upgradeable ZeppelinOS-style proxy",
+    admin: (admin) => `${admin} holds the admin slot of this ZeppelinOS-style proxy and can replace this contract's logic.`,
+    noAdmin: "Whoever controls this ZeppelinOS-style proxy's admin can replace this contract's logic.",
+  },
 };
 
 export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
@@ -519,10 +553,11 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     }
     if (r.upgradeable) {
       const who = r.admin ? `whose admin ${r.admin} ` : "whoever controls it ";
-      return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself an EIP-1967 upgradeable proxy — ${who}can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
+      const { kind } = UPGRADEABLE[r.slotKind ?? "eip1967"];
+      return finding("proxy", "fail", "Clone of an upgradeable proxy", `An EIP-1167 clone of ${r.cloneOf}, which is itself ${kind} upgradeable proxy — ${who}can replace what this token's logic actually delegates to.`, { evidenceUrl: targetUrl });
     }
     if (!r.targetSlotsRead) {
-      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, whose own EIP-1967 and ZeppelinOS proxy slots couldn't be read.`, { evidenceUrl: targetUrl });
     }
     if (r.logicDelegates) {
       return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
@@ -534,13 +569,12 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
   }
   if (r.upgradeable) {
     // Naming the admin is the difference between "someone could" and "this account can".
-    const title = r.admin ? `Upgradeable — admin ${shortAddress(r.admin)}` : "Upgradeable proxy";
-    const detail = r.admin
-      ? `${r.admin} holds the EIP-1967 admin slot and can replace this contract's logic.`
-      : "Whoever controls the proxy admin can replace this contract's logic.";
+    const words = UPGRADEABLE[r.slotKind ?? "eip1967"];
+    const title = r.admin ? `Upgradeable — admin ${shortAddress(r.admin)}` : words.title;
+    const detail = r.admin ? words.admin(r.admin) : words.noAdmin;
     return finding("proxy", "fail", title, detail, { evidenceUrl: url });
   }
-  return finding("proxy", "pass", "Not a proxy", "No EIP-1967 proxy slots are set and the code doesn't delegate calls.", { evidenceUrl: url });
+  return finding("proxy", "pass", "Not a proxy", "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.", { evidenceUrl: url });
 }
 
 /**
