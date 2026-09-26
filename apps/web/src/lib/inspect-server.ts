@@ -3,6 +3,7 @@ import { createPublicClient } from "viem";
 import { activeChain, type Address } from "@arcos/chain";
 import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
+import { explorerFetch } from "./explorer-fetch";
 import { inspectInput, proExplorerApi } from "./inspect-input";
 import { inFlightGate, perSecond } from "./rate-limit";
 import { reportMaxAge } from "./report-cache";
@@ -36,14 +37,11 @@ const gate = inFlightGate(8, () => new InspectorBusy());
 
 // Blockscout's free tier allows 5 requests a second, and one inspection makes up to 4 explorer calls
 // at once, plus up to 2 follow-up calls when a contract record is incomplete. A burst of inspections
-// therefore waits its turn here instead of being refused and cached as "unknown" for 5 minutes. The
-// worst case per instance, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the
-// 15 s deadline.
+// therefore waits its turn here instead of being refused and cached as "unknown". The worst case per
+// instance, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the 15 s deadline;
+// each request then gets at most 8 s, and none is still sent once its inspection's deadline has
+// passed (see explorer-fetch.ts).
 const explorerTurn = perSecond(4);
-const explorerFetch: typeof fetch = async (input, init) => {
-  await explorerTurn();
-  return fetch(input, init);
-};
 
 export function cachedInspection(address: Address): Promise<Report> {
   // Arc mainnet's public explorer refuses server requests (a Cloudflare bot check), so with a key the server
@@ -53,7 +51,13 @@ export function cachedInspection(address: Address): Promise<Report> {
   // The deadline races INSIDE the gate: gate.run()'s own `finally` frees the slot the instant the
   // race settles (timeout or real result), even if the underlying inspect() call keeps running.
   // ttlCache never caches a rejected promise (see ttl-cache.ts), so a timeout is never cached.
+  // Each inspection has its own controller: when its deadline passes, its explorer requests stop,
+  // and no other inspection's do.
   return cache.get(address.toLowerCase(), () =>
-    gate.run(() => withDeadline(inspect(inspectInput(address, client, explorerFetch, explorerApi)))),
+    gate.run(() => {
+      const controller = new AbortController();
+      const fetchFn = explorerFetch(explorerTurn, controller.signal);
+      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi)), controller);
+    }),
   );
 }

@@ -13,10 +13,15 @@ export class InspectionTimeout extends Error {
 const DEADLINE_MS = 15_000;
 
 /** Races `p` against `ms`. On timeout, `p` itself keeps running in the background — this only
- * makes the CALLER stop waiting on it, so whatever slot it was holding can free immediately. */
-export function withDeadline<T>(p: Promise<T>, ms = DEADLINE_MS): Promise<T> {
+ * makes the CALLER stop waiting on it, so whatever slot it was holding can free immediately — and
+ * `controller`, when given, is aborted, so the parts of that work that listen to its signal (the
+ * inspection's explorer requests) stop as well. */
+export function withDeadline<T>(p: Promise<T>, controller?: AbortController, ms = DEADLINE_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new InspectionTimeout()), ms);
+    const timer = setTimeout(() => {
+      controller?.abort();
+      reject(new InspectionTimeout());
+    }, ms);
     p.then(
       (v) => {
         clearTimeout(timer);

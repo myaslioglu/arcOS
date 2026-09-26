@@ -26,6 +26,24 @@ describe("withDeadline", () => {
     release("too late"); // the underlying work keeps running — this must not throw or hang the test
   });
 
+  it("aborts the work's controller when it gives up, so the work can stop too", async () => {
+    const controller = new AbortController();
+    const p = withDeadline(new Promise<string>(() => {}), controller);
+    const assertion = expect(p).rejects.toBeInstanceOf(InspectionTimeout);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(controller.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("leaves the controller alone when the work finishes first", async () => {
+    const controller = new AbortController();
+    await expect(withDeadline(Promise.resolve("fast"), controller)).resolves.toBe("fast");
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
   it("clears the deadline timer once the real result has already won the race, leaving nothing pending", async () => {
     const p = withDeadline(Promise.resolve("fast"));
     await expect(p).resolves.toBe("fast");
