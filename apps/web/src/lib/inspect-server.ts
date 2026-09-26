@@ -1,18 +1,24 @@
 import "server-only";
-import { createPublicClient, http } from "viem";
+import { createPublicClient } from "viem";
 import { activeChain, type Address } from "@arcos/chain";
 import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
 import { inspectInput, proExplorerApi } from "./inspect-input";
 import { inFlightGate, perSecond } from "./rate-limit";
 import { reportMaxAge } from "./report-cache";
+import { rpcTransport } from "./rpc-transport";
 import { ttlCache } from "./ttl-cache";
 
 export { InspectionTimeout } from "./deadline";
 
-// 8s per RPC call, one retry — an inspection makes several sequential calls, so this is a bound
-// on any single one of them, not on the inspection as a whole (see withDeadline for that).
-const client = createPublicClient({ chain: activeChain(), transport: http(undefined, { timeout: 8_000, retryCount: 1 }) });
+// Each RPC call tries the chain's URLs in order, one 8 s attempt each (see rpc-transport.ts). An inspection's reads run
+// in about ten sequential steps (code, proxy slots, the logic's code and slots, admin, owner and pools, token fields,
+// LP lock), with the rest in parallel inside each step. An endpoint that refuses (5xx, 429, a reset connection) costs
+// about one round trip before the next URL answers, so the inspection still ends well inside the 15 s deadline: that
+// is the failure the fallback is for. One that accepts connections but never answers costs 8 s per step, so two steps
+// reach the deadline, and one call over URLs that all hang (32 s on mainnet) outlasts it on its own. The deadline, not
+// the transport, bounds an inspection; a timed-out one answers "busy" and is never cached.
+const client = createPublicClient({ chain: activeChain(), transport: rpcTransport(activeChain()) });
 // A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
 const cache = ttlCache<Report>((report) => reportMaxAge(report) * 1000);
 
