@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublicClient } from "viem";
-import { ARCOS, activeChain, activeNetwork } from "@arcos/chain";
+import { activeChain } from "@arcos/chain";
 import { inspectInput, proExplorerApi } from "../inspect-input";
 
 const T = "0x1111111111111111111111111111111111111111";
@@ -29,6 +29,7 @@ describe("proExplorerApi", () => {
 });
 
 describe("inspectInput", () => {
+  afterEach(() => vi.unstubAllEnvs());
   const client = {} as PublicClient;
   const chainExplorer = activeChain().blockExplorers!.default;
 
@@ -46,9 +47,11 @@ describe("inspectInput", () => {
     expect(calls[0].headers.get("authorization")).toBe("Bearer proapi_k");
   });
 
-  it("names this network's 4rc.OS TokenFactory, so its tokens can be recognized", () => {
-    expect(inspectInput(T, client).arcosTokenFactory).toBe(ARCOS[activeNetwork()]?.tokenFactory ?? null);
-    expect(inspectInput(T, client).arcosTokenFactory).toMatch(/^0x[0-9a-fA-F]{40}$/);
+  it("names each network's own 4rc.OS TokenFactory, so its tokens can be recognized", () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    expect(inspectInput(T, client).arcosTokenFactory).toBe("0xa68edD822048C00dC816d93005B72F8a50234a24");
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
+    expect(inspectInput(T, client).arcosTokenFactory).toBe("0x41FaFc54ED3be1545695B82af4aA490607447884");
   });
 
   it("keeps linking evidence to the public explorer either way", () => {

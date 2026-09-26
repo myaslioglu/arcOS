@@ -368,8 +368,8 @@ export function checkVerified(
   // Positive evidence from chain, not the explorer: the 4rc.OS TokenFactory marks only the tokens it deploys itself,
   // each from one of its fixed templates, and the templates are published with the factory's verified source. It
   // never covers code that forwards its calls, and a failed read (null) claims nothing.
-  if (arcosTemplate === true && logic === null && input.arcosTokenFactory) {
-    return finding("verified", "pass", "Source code is verified (4rc.OS template)", "Created by the 4rc.OS TokenFactory, so its code is one of the factory's fixed templates, published with the factory's verified source.", { evidenceUrl: `${input.explorerBase}/address/${input.arcosTokenFactory}?tab=contract` });
+  if (arcosTemplate === true && logic === null && input.arcosTokenFactory && contract?.verified !== true) {
+    return finding("verified", "pass", "Source code is verified (through the 4rc.OS TokenFactory)", "The 4rc.OS TokenFactory created this token, and it can only deploy four fixed templates, whose source is part of its verified source. This address's own explorer page may still say it isn't verified.", { evidenceUrl: `${input.explorerBase}/address/${input.arcosTokenFactory}?tab=contract` });
   }
   if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer didn't answer.", { evidenceUrl: url });
   if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });

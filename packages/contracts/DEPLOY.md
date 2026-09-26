@@ -161,6 +161,10 @@ shared vectors in `test/vectors/names.json`), a rehearsal of this deployment on 
 
 ## After wiring the addresses
 
+Verify the TokenFactory's source on the explorer before its address goes into `ARCOS.<network>`: the Inspector
+counts every token that factory creates as source-verified through it, which is only true once the factory's own
+source is verified.
+
 Once `ARCOS.<network>` in `packages/chain/src/addresses.ts` has the three real addresses, sanity-check
 that they're actually wired together — read-only, no private key needed:
 

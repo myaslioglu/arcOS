@@ -55,7 +55,8 @@ window runs in your browser, so it isn't affected. The pages the server builds (
 `/t/<address>` report, its preview image, `/badge` and `/api/inspect`) read the same explorer data
 from Blockscout's PRO API when `BLOCKSCOUT_API_KEY` is set. It's a server-only variable, never
 `NEXT_PUBLIC_`; on App Hosting it's a Secret Manager secret. Without it, the explorer-backed checks
-on those pages (source verification, holder concentration) read "unknown".
+on those pages (source verification, holder concentration) read "unknown", except that a token made
+by 4rc.OS's own TokenFactory still passes source verification through the factory (see below).
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`.
@@ -134,6 +135,10 @@ but does have privileged functions, both the ownership and privileges findings r
   pools and lock contracts. A list the explorer won't confirm is complete gives a floor, not a
   concentration.
 - The name and symbol are chosen by whoever deployed the contract and can imitate another token.
+- A token made by this network's 4rc.OS TokenFactory passes source verification through the factory:
+  `isArcosToken(token)` is on-chain evidence that its code is one of the factory's four fixed
+  templates, whose source is part of the factory's verified source. Its own explorer page can still say
+  it isn't verified. This never applies to code that forwards its calls.
 
 ## Known limits
 

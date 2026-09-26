@@ -1163,6 +1163,13 @@ describe("source verification through the 4rc.OS TokenFactory", () => {
     expect(find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: made }, null), "verified").status).toBe("pass");
   });
 
+  it("uses the explorer's own record when the address itself is verified", async () => {
+    const v = find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: made }, explorer()), "verified");
+    expect(v.status).toBe("pass");
+    expect(v.title).not.toContain("4rc.OS");
+    expect(v.evidenceUrl).toBe(`https://explorer.test/address/${TOKEN}?tab=contract`);
+  });
+
   it("keeps the explorer's answer for a token the factory didn't create", async () => {
     expect(find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: notMade }, unverified), "verified").status).toBe("fail");
   });
