@@ -12,13 +12,16 @@ import { ttlCache } from "./ttl-cache";
 
 export { InspectionTimeout } from "./deadline";
 
-// Each RPC call tries the chain's URLs in order, one 8 s attempt each (see rpc-transport.ts). An inspection's reads run
-// in about ten sequential steps (code, proxy slots, the logic's code and slots, admin, owner and pools, token fields,
-// LP lock), with the rest in parallel inside each step. An endpoint that refuses (5xx, 429, a reset connection) costs
-// about one round trip before the next URL answers, so the inspection still ends well inside the 15 s deadline: that
-// is the failure the fallback is for. One that accepts connections but never answers costs 8 s per step, so two steps
-// reach the deadline, and one call over URLs that all hang (32 s on mainnet) outlasts it on its own. The deadline, not
-// the transport, bounds an inspection; a timed-out one answers "busy" and is never cached.
+// The RPC budget against the 15 s deadline. An inspection's RPC reads run in sequential steps, with the rest of each
+// step in parallel. Measured by timing the engine over a reader whose every call takes 1 s: 5 steps for a plain token
+// on testnet, 7 on mainnet (with a v2 pool to check), 8 through getOwner(), 10 for an EIP-1967 or ZeppelinOS proxy
+// such as EURC, 12 for a beacon proxy, and 13 at most (a clone of a beacon proxy). Each call tries the chain's URLs in
+// order, one 3 s attempt each, and every call on this instance skips a URL that failed for the next 60 s (see
+// rpc-transport.ts). So a hung primary costs one 3 s timeout per instance per minute, and an inspection meets it at
+// most once: after timing out, the primary is skipped for longer than any inspection runs. With a healthy secondary
+// the deepest path takes 3 s plus one round trip per step, under 7 s for 13 steps at 0.3 s each. Every endpoint
+// hanging is an outage: one call alone takes 12 s on mainnet (4 × 3 s), the deadline cuts the inspection off, and it
+// answers "busy" (503) without being cached.
 const client = createPublicClient({ chain: activeChain(), transport: rpcTransport(activeChain()) });
 // A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
 const cache = ttlCache<Report>((report) => reportMaxAge(report) * 1000);
