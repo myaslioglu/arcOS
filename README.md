@@ -79,7 +79,7 @@ build`.
 `FeeController`, `TokenFactory` and `Multisend` are not upgradeable and hold no funds between
 transactions — every paid call forwards its fee to the fee recipient in the same transaction.
 
-Current fees: Mint 15 USDC flat; Drop 0.05 USDC per recipient, 2 USDC minimum, charged per
+Current fees on mainnet: Mint 1 USDC flat; Drop 0.05 USDC per recipient, 2 USDC minimum, charged per
 recipient submitted including any that fail. Each fee is hard-capped on chain at deployment and can
 never be raised past that cap: Mint's cap is 50 USDC; Drop's per-recipient cap is 0.5 USDC, and its
 minimum's cap is 10 USDC. A fee decrease takes effect immediately; an increase only takes effect 48

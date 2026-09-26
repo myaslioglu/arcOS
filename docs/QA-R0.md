@@ -100,7 +100,7 @@ Bridge" section below for what to check, including the fee split).
 ## Mint
 
 19. Create a fixed-supply token (e.g. name "Duke", symbol "DUKE", supply "1,000,000", decimals
-    18, both checkboxes off): exactly one wallet prompt for 15 USDC (as native value) plus gas —
+    18, both checkboxes off): exactly one wallet prompt for the Mint fee (1 USDC on mainnet, 15 USDC on testnet) as native value, plus gas —
     confirm the requested value matches the fee shown on the submit button. After signing, the
     window shows "DUKE is live" with a working explorer link.
 20. Create a token with 6 decimals (matching the ERC-20 USDC convention): the same flow works,
