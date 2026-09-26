@@ -2,6 +2,9 @@
 # address is https://arcos--arcos-c80cf.europe-west4.hosted.app). Public values only: nothing here is a secret.
 # NEXT_PUBLIC_FEE_RECIPIENT is the project's own fee wallet (also the mainnet FeeController's owner and recipient);
 # with it set, Swap and Bridge add the platform fee (SWAP_FEE_BPS in src/lib/appkit.ts), shown before confirming.
+# BLOCKSCOUT_API_KEY is a Secret Manager secret (never a NEXT_PUBLIC_ value): the server-built Inspector pages read
+# explorer data through Blockscout's PRO API with it, because explorer.arc.io refuses server requests. Pinned to a
+# version so a stray new value can't change what the site uses.
 
 runConfig:
   minInstances: 0
@@ -23,4 +26,8 @@ env:
     value: https://4rcos.com
     availability:
       - BUILD
+      - RUNTIME
+  - variable: BLOCKSCOUT_API_KEY
+    secret: BLOCKSCOUT_API_KEY@1
+    availability:
       - RUNTIME
