@@ -27,6 +27,40 @@ describe("ttlCache", () => {
     expect(await cache.get("a", async () => 2)).toBe(2);
   });
 
+  it("chooses each entry's TTL from the value it loaded, counted from when its load started", async () => {
+    let t = 0;
+    const cache = ttlCache<{ degraded: boolean }>((v) => (v.degraded ? 30 : 300), 10, () => t);
+    const degraded = vi.fn(async () => ({ degraded: true }));
+    const clean = vi.fn(async () => ({ degraded: false }));
+    await cache.get("d", degraded);
+    await cache.get("c", clean);
+    t = 30;
+    await cache.get("d", degraded);
+    await cache.get("c", clean);
+    expect([degraded.mock.calls.length, clean.mock.calls.length]).toEqual([1, 1]);
+    t = 31;
+    await cache.get("d", degraded);
+    await cache.get("c", clean);
+    expect([degraded.mock.calls.length, clean.mock.calls.length]).toEqual([2, 1]);
+    t = 301;
+    await cache.get("c", clean);
+    expect(clean).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares a load still in flight, however short a TTL its value will get", async () => {
+    let t = 0;
+    const cache = ttlCache<number>(() => 1, 10, () => t);
+    let release: (v: number) => void = () => {};
+    const first = vi.fn(() => new Promise<number>((r) => (release = r)));
+    const second = vi.fn(async () => 2);
+    const p1 = cache.get("a", first);
+    t = 1000;
+    const p2 = cache.get("a", second);
+    release(1);
+    expect([await p1, await p2]).toEqual([1, 1]);
+    expect(second).not.toHaveBeenCalled();
+  });
+
   it("evicts the oldest entry past max", async () => {
     const cache = ttlCache<number>(1000, 2);
     const load = vi.fn(async () => 1);

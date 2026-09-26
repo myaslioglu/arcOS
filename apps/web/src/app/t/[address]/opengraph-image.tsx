@@ -1,28 +1,34 @@
 import { ImageResponse } from "next/og";
 import { isAddress } from "viem";
 import type { Address } from "@arcos/chain";
-import { NotAContract } from "@arcos/inspector";
+import { NotAContract, type Report } from "@arcos/inspector";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
 import { ogCard } from "@/lib/og-card";
+import { FAILED_INSPECTION_CACHE_CONTROL, reportCacheControl } from "@/lib/report-cache";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 export const alt = "4rc.OS token report";
-// Cached-by-default per next/og's route-segment-config behaviour; re-render at most every 5
-// minutes so a badge doesn't go stale for the full life of a shared link.
-export const revalidate = 300;
+// Rendered on every request, like the badge: a card drawn from a degraded report mustn't be kept for 5 minutes by
+// Next's own cache. How long a CDN may keep it is the cache-control header below, the same as the badge's.
+export const dynamic = "force-dynamic";
 
 export default async function Image({ params }: { params: Promise<{ address: string }> }) {
   const { address } = await params;
-  const report = isAddress(address, { strict: false })
-    ? await cachedInspection(address as Address).catch((e) => {
-        // NotAContract (no token there), InspectorBusy and InspectionTimeout (both backpressure)
-        // are expected outcomes, not failures worth an operator's attention.
-        if (!(e instanceof NotAContract) && !(e instanceof InspectorBusy) && !(e instanceof InspectionTimeout)) {
-          console.error("og inspect failed", address, e);
-        }
-        return null;
-      })
-    : null;
-  return new ImageResponse(ogCard(report), size);
+  let report: Report | null = null;
+  let inspectionFailed = false;
+  if (isAddress(address, { strict: false })) {
+    try {
+      report = await cachedInspection(address as Address);
+    } catch (e) {
+      inspectionFailed = true;
+      // NotAContract (no token there), InspectorBusy and InspectionTimeout (both backpressure)
+      // are expected outcomes, not failures worth an operator's attention.
+      if (!(e instanceof NotAContract) && !(e instanceof InspectorBusy) && !(e instanceof InspectionTimeout)) {
+        console.error("og inspect failed", address, e);
+      }
+    }
+  }
+  const cacheControl = inspectionFailed ? FAILED_INSPECTION_CACHE_CONTROL : reportCacheControl(report);
+  return new ImageResponse(ogCard(report), { ...size, headers: { "cache-control": cacheControl } });
 }

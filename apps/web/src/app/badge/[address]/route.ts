@@ -3,6 +3,7 @@ import type { Address } from "@arcos/chain";
 import { NotAContract } from "@arcos/inspector";
 import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
 import { badgeSvg } from "@/lib/proof";
+import { FAILED_INSPECTION_CACHE_CONTROL, reportCacheControl } from "@/lib/report-cache";
 
 // Rendered on every request: an inspection is live chain data, and the explorer key is a runtime-only secret.
 export const dynamic = "force-dynamic";
@@ -24,8 +25,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ address: strin
     }
   }
   // A failed inspection (busy instance, network hiccup) isn't cached for five minutes like a
-  // normal neutral badge — five seconds keeps the badge honest once capacity frees up.
-  const cacheControl = inspectionFailed ? "public, s-maxage=5" : "public, s-maxage=300, stale-while-revalidate=600";
+  // normal neutral badge — five seconds keeps the badge honest once capacity frees up. A degraded
+  // report gets 30 seconds (see report-cache.ts).
+  const cacheControl = inspectionFailed ? FAILED_INSPECTION_CACHE_CONTROL : reportCacheControl(report);
   return new Response(badgeSvg(report), {
     headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": cacheControl },
   });

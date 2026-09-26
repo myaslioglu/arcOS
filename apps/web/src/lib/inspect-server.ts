@@ -5,6 +5,7 @@ import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
 import { inspectInput, proExplorerApi } from "./inspect-input";
 import { inFlightGate, perSecond } from "./rate-limit";
+import { reportMaxAge } from "./report-cache";
 import { ttlCache } from "./ttl-cache";
 
 export { InspectionTimeout } from "./deadline";
@@ -12,7 +13,8 @@ export { InspectionTimeout } from "./deadline";
 // 8s per RPC call, one retry — an inspection makes several sequential calls, so this is a bound
 // on any single one of them, not on the inspection as a whole (see withDeadline for that).
 const client = createPublicClient({ chain: activeChain(), transport: http(undefined, { timeout: 8_000, retryCount: 1 }) });
-const cache = ttlCache<Report>(5 * 60_000);
+// A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
+const cache = ttlCache<Report>((report) => reportMaxAge(report) * 1000);
 
 /** Thrown when 8 uncached inspections are already running on this instance — backpressure, not a hard failure. */
 export class InspectorBusy extends Error {
