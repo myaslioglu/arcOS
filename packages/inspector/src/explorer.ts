@@ -18,6 +18,9 @@ export type ContractInfo = {
   abi: readonly unknown[] | null;
   proxyType: string | null;
   implementations: string[];
+  /** A request behind this record ended in `ExplorerUnavailable` and it came back without that part, so a field left
+   * empty may be an outage rather than the explorer's answer. Absent means every request answered. */
+  degraded?: boolean;
 };
 export type TokenInfo = {
   name: string | null;
@@ -118,8 +121,9 @@ export function blockscoutSource(apiUrl: string, fetchFn: typeof fetch = fetch, 
         a = (await get(`/addresses/${address}`)) as Json | null;
       } catch (e) {
         // An outage on this second call must not sink whatever the first call already produced
-        // (abi, implementations, ...) — it only means `verified` stays unknown, same as a 404.
-        if (e instanceof ExplorerUnavailable) return info;
+        // (abi, implementations, ...) — it only means `verified` stays unknown, same as a 404. It is
+        // still an outage, though, and the record says so.
+        if (e instanceof ExplorerUnavailable) return { ...info, degraded: true };
         throw e;
       }
       if (a && a.is_contract === true && typeof a.is_verified === "boolean") {

@@ -1141,6 +1141,79 @@ describe("inspect", () => {
   });
 });
 
+// A degraded report is one where some read failed at the transport level. It is still produced and its findings mean
+// what they always meant; the flag only tells whoever caches it that some of its unknowns may be a network hiccup.
+describe("degraded", () => {
+  it("is false when every read answered", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.owner()`]: ZERO, [`${TOKEN}.totalSupply()`]: 1000n } });
+    expect(r.degraded).toBe(false);
+  });
+
+  it.each<[string, Fake]>([
+    // The owner's own code can't be fetched.
+    ["getCode", { code: { [TOKEN]: MINTABLE }, reads: { [`${TOKEN}.owner()`]: OWNER }, codeErrors: { [OWNER]: new Error("ETIMEDOUT") } }],
+    // The proxy admin slot won't read (the engine carries on without naming an admin).
+    ["getStorageAt", {
+      code: { [TOKEN]: PLAIN, [IMPL]: PLAIN },
+      storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) },
+      storageErrors: { [`${TOKEN}:${ADMIN_SLOT}`]: new Error("ETIMEDOUT") },
+    }],
+    // name() times out (the report falls back to the explorer's name).
+    ["read", { code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.name()`]: new Error("ETIMEDOUT") } }],
+    ["blockNumber", { code: { [TOKEN]: PLAIN }, blockNumberError: new Error("ETIMEDOUT") }],
+  ])("is true when a %s call fails at the transport level, and the report is still produced", async (_, fake) => {
+    const r = await run(fake);
+    expect(r.degraded).toBe(true);
+    expect(r.total).toBe(8);
+  });
+
+  it("is false when calls revert or a read comes back empty — both are answers", async () => {
+    // owner() and getOwner() revert (nothing is configured for them), and the clone's target has no code at all.
+    const r = await run({ code: { [TOKEN]: cloneOf(IMPL) } });
+    expect(find(r, "proxy").title).toBe("Clone points at an address with no code");
+    expect(r.degraded).toBe(false);
+  });
+
+  it("is true when an explorer call ends in ExplorerUnavailable", async () => {
+    const down = explorer({ token: async () => { throw new ExplorerUnavailable(503, "Explorer answered 503"); } });
+    const r = await run({ code: { [TOKEN]: PLAIN } }, down);
+    expect(r.explorerReachable).toBe(false);
+    expect(r.degraded).toBe(true);
+  });
+
+  it("is false when the explorer answers that it has no record", async () => {
+    const empty = explorer({
+      contract: async () => ({ verified: null, name: null, abi: null, proxyType: null, implementations: [] }),
+      token: async () => null,
+      topHolders: async () => null,
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN } }, empty);
+    expect(r.degraded).toBe(false);
+  });
+
+  it("is false when no explorer is configured at all", async () => {
+    expect((await run({ code: { [TOKEN]: PLAIN } }, null)).degraded).toBe(false);
+  });
+
+  it("is true when the explorer's /addresses fallback fails, even though the contract record came back", async () => {
+    // blockscoutSource keeps what /smart-contracts sent and swallows the fallback's outage, so `verified` is unknown
+    // for a reason a second try could fix.
+    const apiUrl = "https://explorer.test/api/v2";
+    const fakeFetch = (async (input: RequestInfo | URL) => {
+      const path = String(input).replace(apiUrl, "");
+      if (path === `/smart-contracts/${TOKEN}`) {
+        return new Response(JSON.stringify({ implementations: [], proxy_type: null }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (path === `/addresses/${TOKEN}`) return new Response("{}", { status: 503 });
+      return new Response(JSON.stringify({ message: "Not found" }), { status: 404 });
+    }) as typeof fetch;
+    const r = await run({ code: { [TOKEN]: PLAIN } }, blockscoutSource(apiUrl, fakeFetch));
+    expect(r.explorerReachable).toBe(true);
+    expect(find(r, "verified").status).toBe("unknown");
+    expect(r.degraded).toBe(true);
+  });
+});
+
 describe("source verification through the 4rc.OS TokenFactory", () => {
   const FACTORY = "0xfa00000000000000000000000000000000000fac";
   const made = { [`${FACTORY}.isArcosToken(${TOKEN})`]: true };

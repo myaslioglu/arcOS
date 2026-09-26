@@ -11,6 +11,7 @@ const report = (over: Partial<Report> = {}): Report => ({
   total: 8,
   counts: { pass: 3, warn: 3, fail: 2, unknown: 0 },
   explorerReachable: true,
+  degraded: false,
   blockNumber: "1",
   generatedAt: "2026-09-20T00:00:00.000Z",
   ...over,

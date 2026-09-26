@@ -8,9 +8,9 @@ import {
   type LogicBlock, type LogicGap,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
-import type { ContractInfo, HolderPage, TokenInfo } from "./explorer";
+import { ExplorerUnavailable, type ContractInfo, type ExplorerSource, type HolderPage, type TokenInfo } from "./explorer";
 import { cleanLabel } from "./label";
-import type { CheckId, Finding, InspectInput, Report } from "./types";
+import { CallReverted, type ChainReader, type CheckId, type Finding, type InspectInput, type Report } from "./types";
 
 export class NotAContract extends Error {
   constructor(address: string) {
@@ -45,10 +45,61 @@ function tryBig(v: string | number | null | undefined): bigint | null {
   }
 }
 
+/** Runs a call and tells `onFailure` when it rejects with an error `isFailure` accepts. The outcome passes through
+ * unchanged: what a failed read means for a finding is still each check's own business. */
+const watching =
+  (isFailure: (e: unknown) => boolean, onFailure: () => void) =>
+  async <T>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (e) {
+      if (isFailure(e)) onFailure();
+      throw e;
+    }
+  };
+
+/** Reports every call that fails at the transport level: anything but `CallReverted`, which is the contract answering. */
+function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
+  const watch = watching((e) => !(e instanceof CallReverted), onFailure);
+  return {
+    getCode: (address) => watch(() => reader.getCode(address)),
+    getStorageAt: (address, slot) => watch(() => reader.getStorageAt(address, slot)),
+    read: (address, abi, functionName, args) => watch(() => reader.read(address, abi, functionName, args)),
+    blockNumber: () => watch(() => reader.blockNumber()),
+  };
+}
+
+/** Reports every request that ended in `ExplorerUnavailable`, including one a contract record absorbed and flagged
+ * (`ContractInfo.degraded`). A 404 is the explorer answering, not an outage. */
+function watchExplorer(explorer: ExplorerSource, onFailure: () => void): ExplorerSource {
+  const watch = watching((e) => e instanceof ExplorerUnavailable, onFailure);
+  return {
+    contract: async (address) => {
+      const info = await watch(() => explorer.contract(address));
+      if (info.degraded) onFailure();
+      return info;
+    },
+    token: (address) => watch(() => explorer.token(address)),
+    topHolders: (address) => watch(() => explorer.topHolders(address)),
+    tokenBalances: (address) => watch(() => explorer.tokenBalances(address)),
+  };
+}
+
 export async function inspect(rawInput: InspectInput): Promise<Report> {
+  // Every read the checks make goes through these two wrappers — `input.reader` and `input.explorer` are the only way
+  // to the chain and the explorer — so no read, including one a check adds later, can fail without `degraded` hearing.
+  let degraded = false;
+  const markDegraded = () => {
+    degraded = true;
+  };
   // Checksum once so `Report.address` (and every evidence URL built from `input.address`) is
   // consistent regardless of the casing whoever triggered this inspection happened to pass in.
-  const input: InspectInput = { ...rawInput, address: getAddress(rawInput.address) };
+  const input: InspectInput = {
+    ...rawInput,
+    address: getAddress(rawInput.address),
+    reader: watchReader(rawInput.reader, markDegraded),
+    explorer: rawInput.explorer && watchExplorer(rawInput.explorer, markDegraded),
+  };
   const { reader, explorer, address } = input;
   const code = await reader.getCode(address);
   if (!code) throw new NotAContract(address);
@@ -326,6 +377,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     total: findings.length,
     counts,
     explorerReachable,
+    degraded,
     blockNumber: blockNumber === null ? "unknown" : blockNumber.toString(),
     generatedAt: (input.now?.() ?? new Date()).toISOString(),
   };

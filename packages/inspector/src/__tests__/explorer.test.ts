@@ -249,6 +249,13 @@ describe("blockscoutSource", () => {
       }));
       await expect(src.contract(T)).resolves.toMatchObject({ verified: null });
     });
+
+    it("marks a record whose fallback call was an outage as degraded, so an unknown `verified` isn't taken for the explorer's answer", async () => {
+      for (const outage of [json({}, 503), new Error("ECONNRESET")]) {
+        const src = blockscoutSource(API, fakeFetch({ [`/smart-contracts/${T}`]: json(unverifiedSmartContractsBody), [`/addresses/${T}`]: outage }));
+        expect((await src.contract(T)).degraded).toBe(true);
+      }
+    });
   });
 });
 

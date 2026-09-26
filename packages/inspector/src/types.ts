@@ -34,6 +34,12 @@ export type Report = {
   /** The same numbers, broken out by status — every surface should show `unknown` explicitly rather than folding it into "not pass". */
   counts: { pass: number; warn: number; fail: number; unknown: number };
   explorerReachable: boolean;
+  /**
+   * Some read this report relies on failed at the transport level: a `ChainReader` call rejected with anything but
+   * `CallReverted`, or an explorer request ended in `ExplorerUnavailable`. The findings mean what they always do; this
+   * only says that some of its unknowns may be a network hiccup, so the report shouldn't be kept for long.
+   */
+  degraded: boolean;
   blockNumber: string;
   generatedAt: string;
 };
