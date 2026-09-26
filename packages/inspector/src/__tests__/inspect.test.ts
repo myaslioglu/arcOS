@@ -1159,6 +1159,11 @@ describe("source verification through the 4rc.OS TokenFactory", () => {
     expect(v.evidenceUrl).toBe(`https://explorer.test/address/${FACTORY}?tab=contract`);
   });
 
+  it("passes it while the explorer has no record of the fresh address yet", async () => {
+    const noRecord = explorer({ contract: async () => ({ verified: null, name: null, abi: null, proxyType: null, implementations: [] }) });
+    expect(find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: made }, noRecord), "verified").status).toBe("pass");
+  });
+
   it("passes it when the explorer can't be reached at all", async () => {
     expect(find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: made }, null), "verified").status).toBe("pass");
   });

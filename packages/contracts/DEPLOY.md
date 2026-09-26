@@ -122,6 +122,8 @@ Paste the key at the hidden prompt, then choose a password. Check the address:
 
 5. Tell the agent the three addresses (they're public), or let it read them from
    `broadcast/DeployR0.s.sol/5042002/run-latest.json` (this path is relative to `packages/contracts`, where you're standing).
+   Do this only after step 4 has verified the TokenFactory: the Inspector counts every token that factory creates as
+   source-verified through it, which is true only once the factory's own source is verified.
 
 ## Mainnet
 
@@ -160,10 +162,6 @@ shared vectors in `test/vectors/names.json`), a rehearsal of this deployment on 
 `docs/QA-R0.md` run on mainnet right after the deployment.
 
 ## After wiring the addresses
-
-Verify the TokenFactory's source on the explorer before its address goes into `ARCOS.<network>`: the Inspector
-counts every token that factory creates as source-verified through it, which is only true once the factory's own
-source is verified.
 
 Once `ARCOS.<network>` in `packages/chain/src/addresses.ts` has the three real addresses, sanity-check
 that they're actually wired together — read-only, no private key needed:
