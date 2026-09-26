@@ -166,6 +166,10 @@ but does have privileged functions, both the ownership and privileges findings r
 
 See [SECURITY.md](./SECURITY.md) for how to report a vulnerability.
 
+## Acknowledgments
+
+Built with help from [Claude](https://www.anthropic.com/claude), Anthropic's AI assistant.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

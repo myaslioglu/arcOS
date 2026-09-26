@@ -47,7 +47,7 @@ export type ArcosContracts = { feeController: Address; tokenFactory: Address; mu
 
 /**
  * Our own deployments. null until deployed on that network.
- * Mainnet: deployed 2026-09-25 from ab1df0a; each contract's `feeController()` was read back on chain and matches, and
+ * Mainnet: deployed 2026-09-25 from 8b9eb2a; each contract's `feeController()` was read back on chain and matches, and
  * the runtime bytecode equals that commit's build (immutables masked).
  * Testnet: deployed 2026-09-22; each contract's `feeController()` was read back on chain and matches.
  */
