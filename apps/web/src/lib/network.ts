@@ -57,7 +57,7 @@ function errorCode(error: unknown): number | undefined {
  * request open (its own "add network" or "connect" dialog, from an earlier click). Factored out so
  * `switchNetworkErrorMessage` and `connectErrorMessage` can't drift into two different sentences for
  * the same wallet state. */
-const ALREADY_OPEN_MESSAGE = "Your wallet already has a request open. Check your wallet and try again.";
+export const ALREADY_OPEN_MESSAGE = "Your wallet already has a request open. Check your wallet and try again.";
 
 /**
  * Maps a `switchChain` failure to copy the user can act on — never the wallet/RPC/transport's own

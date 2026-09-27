@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SwapResult } from "@circle-fin/app-kit";
-import { createSwapSession, initialSwapSessionState, session, swapSessionReducer, type BeforeUnloadTarget, type SwapSessionState } from "../session";
+import { KitError, RateLimitError, type SwapResult } from "@circle-fin/app-kit";
+import {
+  classifySwapFailure,
+  createSwapSession,
+  initialSwapSessionState,
+  session,
+  swapSessionReducer,
+  type BeforeUnloadTarget,
+  type SwapSessionState,
+} from "../session";
 
 const result = { txHash: "0xabc" } as unknown as SwapResult;
 
@@ -77,6 +85,43 @@ describe("swapSessionReducer", () => {
       const state = swappingState();
       expect(swapSessionReducer(state, { type: "dismiss" })).toBe(state);
     });
+  });
+});
+
+// The follow-up this wave fixes: Swap's submit catch-all used to fall back to
+// GENERIC_TRANSACTION_ERROR ("...Try again."), same as every other unrecognized wallet/RPC/SDK
+// failure this app shows — safe text, but "Try again" reads as "nothing happened", and a swap whose
+// promise rejected AFTER it was actually broadcast (a lost wallet response, a timeout) could invite a
+// second, separately-charged swap. Mirrors Mint's classifyMintFailure (mint/session.ts): pulled out as
+// a pure function so it's unit-tested without a live wallet/RPC/SDK.
+describe("classifySwapFailure", () => {
+  it("reads as a rejection and keeps its own sentence — nothing was ever signed, so there's nothing to hedge about", () => {
+    const err = new Error("User rejected the request");
+    expect(classifySwapFailure(err)).toBe("Cancelled.");
+  });
+
+  it("reads a rate limit (a real KitError, Circle's own pre-flight API throttle) and keeps its own sentence — the request never reached the chain", () => {
+    const err = new KitError({ ...RateLimitError.RATE_LIMIT_EXCEEDED, recoverability: "RETRYABLE", message: "Rate limit exceeded, please retry later" });
+    expect(classifySwapFailure(err)).toBe("The swap service is busy. Try again in a minute.");
+  });
+
+  // The defect this follow-up fixes: kit.swap() is one opaque promise with no signal for whether a
+  // transaction actually went out before it rejected (no onProgress/hash callback — see SwapParams/
+  // SwapConfig in node_modules/@circle-fin/app-kit/index.d.ts). A rejection that isn't a recognized
+  // cancellation or rate limit could just as easily follow a lost wallet response or a timeout AFTER
+  // the swap was broadcast, so it must never say "Try again" alone — that reads as "nothing happened"
+  // and could invite a second, separately-charged swap. Mirrors Bridge's identical hedge
+  // (bridge/Window.tsx, inFlight.ts's explorerCheckNote) for the same reason.
+  it("hedges an unrecognized failure instead of inviting a second payment — never 'try again' alone, and never the error's own text", () => {
+    const err = new Error("some raw detail: https://internal.example/x");
+    const message = classifySwapFailure(err);
+    expect(message).toBe("The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.");
+    expect(message).not.toMatch(/internal\.example/);
+  });
+
+  it("hedges a thrown non-Error value the same way", () => {
+    expect(classifySwapFailure("nope")).toBe("The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.");
+    expect(classifySwapFailure(null)).toBe("The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.");
   });
 });
 

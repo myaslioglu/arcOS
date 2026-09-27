@@ -3,16 +3,15 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useAccount } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
-import { AppKit, isRateLimitError, isUserCancellationError } from "@circle-fin/app-kit";
+import { AppKit, isRateLimitError } from "@circle-fin/app-kit";
 import { useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, SWAP_TOKENS, SWAP_TOKEN_DECIMALS, adapterFor, feePercentLabel, feeRecipient } from "@/lib/appkit";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
-import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
 import { canSwap } from "./canSwap";
 import { presentSwapResult } from "./presentResult";
-import { session } from "./session";
+import { classifySwapFailure, session } from "./session";
 import { slippageBpsFor, slippagePercentLabel } from "./slippage";
 import { flipTokens, pickToken, type SwapToken, type TokenPair } from "./tokenPair";
 
@@ -87,11 +86,11 @@ function Form() {
       if (presentation.isSuccess) trackEvent("swap_success", { pair: `${pair.tokenIn}-${pair.tokenOut}` });
       notify(presentation.headline, presentation.tone);
     } catch (err) {
-      if (isUserCancellationError(err)) session.fail("Cancelled.");
-      else if (isRateLimitError(err)) session.fail("The swap service is busy. Try again in a minute.");
-      // Never getErrorMessage(err)'s raw text — same rule as every other wallet/RPC/SDK error this
-      // app shows (see lib/contract-error.ts's GENERIC_TRANSACTION_ERROR, reused here).
-      else session.fail(GENERIC_TRANSACTION_ERROR);
+      // classifySwapFailure (./session) decides Cancelled / rate-limited / hedged-unknown — see its
+      // own doc comment for why the unknown case can't just say "Try again" the way
+      // GENERIC_TRANSACTION_ERROR does elsewhere: a swap whose promise rejected AFTER it was actually
+      // broadcast (a lost wallet response, a timeout) must not read as "nothing happened".
+      session.fail(classifySwapFailure(err));
     }
   };
 

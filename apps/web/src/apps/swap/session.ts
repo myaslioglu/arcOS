@@ -1,4 +1,4 @@
-import type { SwapResult } from "@circle-fin/app-kit";
+import { isRateLimitError, isUserCancellationError, type SwapResult } from "@circle-fin/app-kit";
 import type { SwapToken } from "./tokenPair";
 
 export type SwapSessionStatus = "idle" | "swapping" | "done";
@@ -56,6 +56,31 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
     case "dismiss":
       return state.status === "done" ? { ...initialSwapSessionState } : state;
   }
+}
+
+/**
+ * Decides what Swap's submit catch-all should show — pulled out as a pure function (mirrors Mint's
+ * `classifyMintFailure`, apps/mint/session.ts) so it's unit-tested without a live wallet/RPC/SDK.
+ *
+ * A cancellation and a rate limit are both definite, pre-broadcast failures: `isUserCancellationError`
+ * fires before any signature is even requested, and `isRateLimitError` is Circle's own API throttling
+ * gate (its doc: "RATE_LIMIT errors indicate API throttling or request frequency limits") — neither
+ * can follow a broadcast, so both keep their own plain sentence.
+ *
+ * Anything else is a genuine unknown: `kit.swap()` is one opaque promise with no `onProgress`/hash
+ * signal before it settles (unlike Mint's `writeContractAsync`, which hands back a hash synchronously
+ * in Window.tsx — see `classifyMintFailure`'s `hashKnown`), so a rejection here could just as easily
+ * follow a lost wallet response or a timeout AFTER the swap was actually broadcast as it could precede
+ * one. Saying "Try again" alone would read as "nothing happened" and could invite a second,
+ * separately-charged swap — this hedges instead, mirroring Bridge's identical reasoning
+ * (bridge/Window.tsx's catch, bridge/inFlight.ts's `explorerCheckNote`) adapted for Swap, which has no
+ * per-attempt explorer link to offer at this point (only a successful `SwapResult` carries one).
+ * Never the underlying error's own text, same rule as every other wallet/RPC/SDK error this app shows.
+ */
+export function classifySwapFailure(err: unknown): string {
+  if (isUserCancellationError(err)) return "Cancelled.";
+  if (isRateLimitError(err)) return "The swap service is busy. Try again in a minute.";
+  return "The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.";
 }
 
 /** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake

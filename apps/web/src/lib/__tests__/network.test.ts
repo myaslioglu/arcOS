@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { BaseError, ResourceUnavailableRpcError, SwitchChainError, UserRejectedRequestError } from "viem";
-import { connectErrorMessage, switchNetworkErrorMessage } from "../network";
+import { ALREADY_OPEN_MESSAGE, connectErrorMessage, switchNetworkErrorMessage } from "../network";
 
 const CHAIN_NAME = "Arc";
 const REJECTED = "Your wallet didn't switch networks. Try again, or add Arc in your wallet.";
 const GENERIC = "Something went wrong switching networks.";
-const ALREADY_OPEN = "Your wallet already has a request open. Check your wallet and try again.";
 
 describe("switchNetworkErrorMessage", () => {
   it("reads as a rejection for a viem UserRejectedRequestError", () => {
@@ -60,14 +59,14 @@ describe("switchNetworkErrorMessage", () => {
   it("finds the real code underneath a SwitchChainError: a wrapped ResourceUnavailableRpcError (-32002) reads as already-open, not isn't-added", () => {
     const err = new SwitchChainError(new ResourceUnavailableRpcError(new Error("x")));
     const message = switchNetworkErrorMessage(err, CHAIN_NAME);
-    expect(message).toBe(ALREADY_OPEN);
+    expect(message).toBe(ALREADY_OPEN_MESSAGE);
     expect(message).not.toMatch(/isn't added/i);
   });
 
   it("maps code -32002 (a request is already pending in the wallet) to a specific sentence", () => {
     const err = { code: -32002, message: "Request of type 'wallet_switchEthereumChain' already pending" };
     const message = switchNetworkErrorMessage(err, CHAIN_NAME);
-    expect(message).toBe(ALREADY_OPEN);
+    expect(message).toBe(ALREADY_OPEN_MESSAGE);
     expect(message).not.toMatch(/wallet_switchEthereumChain/);
   });
 
@@ -108,7 +107,7 @@ describe("connectErrorMessage", () => {
 
   it("maps code -32002 (a request is already pending in the wallet) to the same already-open sentence switching uses", () => {
     const err = new ResourceUnavailableRpcError(new Error("x"));
-    expect(connectErrorMessage(err)).toBe(ALREADY_OPEN);
+    expect(connectErrorMessage(err)).toBe(ALREADY_OPEN_MESSAGE);
   });
 
   it("never returns the error's own text — an unknown error's message is not shown, even in part", () => {
