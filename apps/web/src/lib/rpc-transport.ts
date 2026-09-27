@@ -1,13 +1,10 @@
-import { HttpRequestError, TimeoutError, createTransport, http, type Chain, type EIP1193RequestFn, type Transport } from "viem";
+import { createTransport, http, type Chain, type EIP1193RequestFn, type Transport } from "viem";
+import { isNodeAnswer } from "@arcos/inspector";
 
 /** viem's per-request timeout for one attempt at one URL. */
 const ATTEMPT_MS = 3_000;
-/** How long an endpoint that failed at the transport level is skipped. */
+/** How long an endpoint that failed is skipped. */
 const COOLDOWN_MS = 60_000;
-
-/** The endpoint failed (it timed out, answered an HTTP error status, or couldn't be reached), as opposed to answering
- * the call with a JSON-RPC error: a revert, invalid params or OutOfFunds is the chain's answer. */
-const endpointFailed = (e: unknown): boolean => e instanceof HttpRequestError || e instanceof TimeoutError;
 
 type Endpoint = ReturnType<Transport>;
 
@@ -20,11 +17,13 @@ export type RpcTransportOptions = {
 
 /**
  * The server's RPC transport. Every call tries the chain's URLs (`rpcUrls.default.http`) in list order, the first one
- * primary, one attempt of at most 3 s each, and returns the first answer. An endpoint whose call fails at the transport
- * level is skipped by every call for the next 60 s, so a hung endpoint costs one 3 s timeout per minute instead of one
- * per call. If every endpoint is cooling down, all of them are tried in list order again, and one that answers is back
- * in use at once. A JSON-RPC error is the chain answering: it goes straight back to the caller, no other endpoint is
- * asked and nothing cools down.
+ * primary, one attempt of at most 3 s each, and returns the first answer. The node's answer includes a revert and
+ * -32602 invalid params: those go straight back to the caller, no other endpoint is asked and nothing cools down.
+ * Anything else is the endpoint failing (a timeout, an HTTP error, or any other JSON-RPC error, such as a gateway's
+ * -32603 or a rate limit's -32005 or -32007, whatever HTTP status carried it; see rpc-errors.ts in @arcos/inspector):
+ * the next URL is asked, and this one is skipped by every call for the next 60 s. So a hung endpoint costs one 3 s
+ * timeout per minute instead of one per call. If every endpoint is cooling down, all of them are tried in list order
+ * again, and one that answers is back in use at once.
  *
  * The cooldowns are one timestamp per URL, compared against `now()` when a call starts; nothing runs in the background.
  * They live as long as the transport, and inspect-server.ts builds its one when it loads, so they are per instance.
@@ -50,7 +49,7 @@ export function rpcTransport(
           coolingUntil.delete(url);
           return answer;
         } catch (e) {
-          if (!endpointFailed(e)) throw e;
+          if (isNodeAnswer(e)) throw e;
           coolingUntil.set(url, now() + COOLDOWN_MS);
           failure = e;
         }

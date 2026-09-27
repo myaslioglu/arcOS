@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpRequestError, RpcRequestError, TimeoutError, createTransport, type EIP1193RequestFn, type Transport } from "viem";
+import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, createTransport, type EIP1193RequestFn, type Transport } from "viem";
 import { CHAINS } from "@arcos/chain";
+import { inspect, viemReader } from "@arcos/inspector";
 import { rpcTransport } from "../rpc-transport";
 
 type Built = ReturnType<ReturnType<typeof rpcTransport>>;
@@ -196,5 +197,103 @@ describe("rpcTransport over viem's HTTP transport", () => {
     await expect(blockNumber(transport)).rejects.toMatchObject({ code: 3 });
     await expect(blockNumber(transport)).rejects.toMatchObject({ code: 3 });
     expect(tried).toEqual([urls[0], urls[0]]);
+  });
+});
+
+// Which errors are the node's answer (they come straight back, and the endpoint stays in use) and which are the endpoint
+// failing (the next URL is asked, and this one is skipped for 60 s). The rule is rpc-errors.ts's, shared with the
+// reader: only a revert or -32602 is an answer, whatever HTTP status carried it.
+describe("rpcTransport: which errors skip an endpoint", () => {
+  const chain = CHAINS.mainnet;
+  const urls = chain.rpcUrls.default.http.map((u) => new URL(u).href);
+  const rpcError = (code: number, message: string, status = 200, data?: unknown) => () =>
+    Response.json({ jsonrpc: "2.0", id: 1, error: { code, message, ...(data === undefined ? {} : { data }) } }, { status });
+  const result = (value: string) => Response.json({ jsonrpc: "2.0", id: 1, result: value });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The primary answers with `respond`; every other URL answers 0x10. */
+  function primaryAnswers(respond: () => Response) {
+    const tried: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      tried.push(String(input));
+      return String(input) === urls[0] ? respond() : result("0x10");
+    });
+    return { tried, transport: rpcTransport(chain)({ chain }) };
+  }
+
+  it.each([
+    ["code 3, execution reverted", rpcError(3, "execution reverted", 200, "0x")],
+    ["-32000 execution reverted", rpcError(-32000, "execution reverted")],
+    ["-32003 revert: OutOfFunds (Arc)", rpcError(-32003, "revert: OutOfFunds")],
+    ["-32602 invalid params", rpcError(-32602, "invalid argument 0: hex string has length 38")],
+    ["a revert carried by an HTTP 500", rpcError(3, "execution reverted", 500, "0x")],
+  ])("%s is the node's answer: it comes straight back, and the endpoint stays in use", async (_, respond) => {
+    const { tried, transport } = primaryAnswers(respond);
+    await expect(blockNumber(transport)).rejects.toThrow();
+    await expect(blockNumber(transport)).rejects.toThrow();
+    expect(tried).toEqual([urls[0], urls[0]]);
+  });
+
+  it.each([
+    ["-32603 internal error", rpcError(-32603, "internal error")],
+    ["-32603 in an HTTP 503 (review probe I-1)", rpcError(-32603, "upstream unavailable", 503)],
+    ["-32005 in an HTTP 429 (review probe I-2)", rpcError(-32005, "limit exceeded", 429)],
+    ["-32007 request limit reached", rpcError(-32007, "10/second request limit reached")],
+    ["-32000 without revert", rpcError(-32000, "header not found")],
+    ["-32601 method not found", rpcError(-32601, "the method eth_call does not exist/is not available")],
+    ["-1 unknown error", rpcError(-1, "unknown error")],
+    ["an HTTP 502 with no JSON-RPC body", () => new Response("bad gateway", { status: 502 })],
+  ])("%s is the endpoint failing: the next URL answers, and this one is skipped", async (_, respond) => {
+    const { tried, transport } = primaryAnswers(respond);
+    await expect(blockNumber(transport)).resolves.toBe("0x10");
+    await expect(blockNumber(transport)).resolves.toBe("0x10");
+    expect(tried).toEqual([urls[0], urls[1], urls[1]]);
+  });
+});
+
+// The review's probe I-1 end to end: owner() answered with an HTTP 503 carrying -32603 must never become "No owner
+// function". With a healthy URL behind it, the owner is read from there; with none, the owner is unknown and the report
+// is degraded.
+describe("an inspection over rpcTransport when owner() gets a gateway error", () => {
+  const chain = CHAINS.mainnet;
+  const urls = chain.rpcUrls.default.http.map((u) => new URL(u).href);
+  const TOKEN = "0x1111111111111111111111111111111111111111";
+  const OWNER = "0x3333333333333333333333333333333333333333";
+  const OWNER_SELECTOR = "0x8da5cb5b";
+  const reply = (body: object, status = 200) => Response.json({ jsonrpc: "2.0", id: 1, ...body }, { status });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A plain token: transfer in its dispatcher, no proxy slots, every call reverting except owner(). */
+  function node(owner: (url: string) => Response) {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init: RequestInit) => {
+      const { method, params } = JSON.parse(String(init.body)) as { method: string; params: [Record<string, string>, ...unknown[]] };
+      if (method === "eth_getCode") return reply({ result: String(params[0]).toLowerCase() === TOKEN ? "0x63a9059cbb00" : "0x" });
+      if (method === "eth_getStorageAt") return reply({ result: `0x${"0".repeat(64)}` });
+      if (method === "eth_blockNumber") return reply({ result: "0x1" });
+      if (method === "eth_call" && (params[0].data ?? params[0].input ?? "").startsWith(OWNER_SELECTOR)) return owner(String(input));
+      return reply({ error: { code: 3, message: "execution reverted", data: "0x" } });
+    });
+    return inspect({
+      address: TOKEN, network: "mainnet", reader: viemReader(createPublicClient({ chain, transport: rpcTransport(chain) })),
+      explorer: null, dex: null, knownLockers: [], explorerBase: "https://explorer.test",
+    });
+  }
+  const gatewayError = () => reply({ error: { code: -32603, message: "upstream unavailable" } }, 503);
+
+  it("reads the owner from the next URL when only the primary fails", async () => {
+    const r = await node((url) => (url === urls[0] ? gatewayError() : reply({ result: `0x${OWNER.slice(2).padStart(64, "0")}` })));
+    expect(r.findings.find((f) => f.id === "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
+  });
+
+  it("says the owner is unknown, and the report is degraded, when no URL answers", async () => {
+    const r = await node(() => gatewayError());
+    expect(r.findings.find((f) => f.id === "ownership")).toMatchObject({ status: "unknown", title: "Couldn't read the owner" });
+    expect(r.degraded).toBe(true);
   });
 });
