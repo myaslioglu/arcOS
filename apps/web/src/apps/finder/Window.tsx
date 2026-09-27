@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { erc20Abi, formatUnits } from "viem";
@@ -99,6 +99,17 @@ function Files() {
   const dupes = useMemo(() => duplicateSymbols(files), [files]);
   const shown = useMemo(() => visibleFiles(files, limit, network), [files, limit, network]);
   const showing = showingLine(shown.length, files.length);
+
+  // Show more moves focus to the first tile it draws: the list only grows, so that's the old length.
+  // The button itself is gone once every token is drawn, which would otherwise drop focus to <body>.
+  const list = useRef<HTMLUListElement>(null);
+  const focusTile = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const i = focusTile.current;
+    if (i === null) return;
+    focusTile.current = null;
+    list.current?.children[i]?.querySelector("button")?.focus();
+  }, [shown]);
   const stillReading = holdings.isLoading || createdCount.isLoading || created.isLoading;
 
   return (
@@ -118,7 +129,7 @@ function Files() {
           <p className="p-3 text-muted">{stillReading ? "Reading your tokens…" : "No tokens yet. Create one in Mint, or receive some."}</p>
         ) : (
           <>
-            <ul className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1">
+            <ul ref={list} className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1">
               {shown.map((f) => {
                 const official = officialSymbol(f.address, network);
                 const collides = isDuplicateSymbol(dupes, f.symbol);
@@ -162,8 +173,17 @@ function Files() {
             </ul>
             {showing && (
               <div className="flex items-center justify-between gap-2 px-1 pt-3 text-xs">
-                <span className="text-muted">{showing}</span>
-                <button type="button" className="rounded-md border border-border-2 px-2 py-1" onClick={() => setLimit((n) => n + FILES_PAGE)}>
+                <span role="status" className="text-muted">
+                  {showing}
+                </span>
+                <button
+                  type="button"
+                  className="rounded-md border border-border-2 px-2 py-1"
+                  onClick={() => {
+                    focusTile.current = shown.length;
+                    setLimit((n) => n + FILES_PAGE);
+                  }}
+                >
                   Show more
                 </button>
               </div>
