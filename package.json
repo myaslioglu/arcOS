@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "npm@11.19.1",
   "workspaces": ["apps/*", "packages/*"],
-  "engines": { "node": ">=22.16" },
+  "engines": { "node": "^22.16.0" },
   "scripts": {
     "dev": "npm run dev -w @arcos/web",
     "build": "npm run build -w @arcos/web",
