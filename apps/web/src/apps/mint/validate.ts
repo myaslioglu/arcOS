@@ -1,4 +1,5 @@
 import { AmountError, parseTokenAmount, type Address } from "@arcos/chain";
+import { formatTokenAmount } from "@/lib/amount";
 
 export type MintForm = { name: string; symbol: string; decimals: string; supply: string; mintable: boolean; burnable: boolean; cap: string };
 export type MintArgs = { name: string; symbol: string; decimals: number; initialSupply: bigint; mintable: boolean; burnable: boolean; cap: bigint; holder: Address };
@@ -11,6 +12,27 @@ const amount = (text: string, decimals: number): bigint | string => {
     return e instanceof AmountError ? e.message : "Enter a number";
   }
 };
+
+/**
+ * The supply or cap field's amount as the chain will actually receive it, formatted for the small
+ * "= 100 DUKE" note under the field — or `null` while the field is empty, the amount doesn't parse
+ * (including "ambiguous"), or `decimals` itself isn't a whole number from 0 to 18 yet.
+ *
+ * I3/m3: the rule this fix ships still reads a decimal POINT written with 3 zeros as a thousands
+ * group — "100.000" parses as 100, not "a hundred thousand" — because a dot-thousands mirror was
+ * out of scope for the decided rule (see the fix's report). Mint is the one place that misread can't
+ * be corrected afterward: the supply is minted, once. Echoing the parsed amount live is cheap and
+ * catches it before signing, without changing what the field accepts.
+ */
+export function amountEcho(text: string, decimals: number, symbol: string): string | null {
+  if (text.trim() === "" || !Number.isInteger(decimals) || decimals < 0 || decimals > 18) return null;
+  try {
+    const units = parseTokenAmount(text, decimals);
+    return units > 0n ? `= ${formatTokenAmount(units, decimals)} ${symbol}` : null;
+  } catch {
+    return null;
+  }
+}
 
 const byteLength = (s: string) => new TextEncoder().encode(s).length;
 

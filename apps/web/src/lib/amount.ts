@@ -30,8 +30,10 @@ export function normalizedAmount(text: string, decimals: number = USDC_DECIMALS)
 
 /** Integer token units → display string at `decimals` places, trailing zeros trimmed. Generic
  * counterpart to @arcos/chain's `formatUsdc`, which is hardcoded to USDC's 6-decimal, native-wei
- * round trip and so can't represent cirBTC's 8 decimal places. */
-function formatTokenAmount(units: bigint, decimals: number): string {
+ * round trip and so can't represent cirBTC's 8 decimal places. Exported for Mint's supply/cap echo
+ * (`apps/web/src/apps/mint/validate.ts`'s `amountEcho`), the app's own formatting for "what the
+ * chain will actually receive" (I3). */
+export function formatTokenAmount(units: bigint, decimals: number): string {
   const base = 10n ** BigInt(decimals);
   const whole = units / base;
   const frac = (units % base).toString().padStart(decimals, "0").replace(/0+$/, "");

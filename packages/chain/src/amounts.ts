@@ -29,25 +29,36 @@ const SHAPE = /^(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$/;
  * behavior is untouched. */
 const ONE_COMMA_NO_DOT = /^(\d+),(\d+)$/;
 
-/** Exactly three digits after a lone comma, with only 1-3 before it, is the one shape neither rule
- * can read safely: a thousands group ("1,500" meaning 1500) and a decimal comma ("1,500" meaning
- * 1.5) are both plausible, and they're 1000x apart. Four or more digits before it rules the
- * thousands reading out on its own — no group leads with 4+ digits — so that shape (e.g.
- * "1000,000") is read as a decimal comma below instead of ever reaching this check. */
+/** Exactly three digits after a lone comma, with 1-3 before it and NOT starting with 0, is the one
+ * shape neither rule can read safely: a thousands group ("1,500" meaning 1500) and a decimal comma
+ * ("1,500" meaning 1.5) are both plausible, and they're 1000x apart. Four or more digits before it
+ * rules the thousands reading out on its own — no group leads with 4+ digits — and a leading 0 does
+ * too, for the same reason — no group leads with 0 either — so both shapes (e.g. "1000,000" and
+ * "0,250") are read as a decimal comma below instead of ever reaching this check. */
 function isAmbiguousGrouping(before: string, after: string): boolean {
-  return after.length === 3 && before.length <= 3;
+  return after.length === 3 && before.length <= 3 && before[0] !== "0";
 }
 
-/** Builds the ambiguous-comma message, e.g. `"1,500" could mean 1500 or 1.5. Write 1500, or 1.5
- * with a dot.` Both readings come from the same digits: the thousands reading just drops the comma,
- * and the decimal reading trims trailing zeros off the digits after it, so "0,250" reads as "0.25",
- * not "0.250". */
-function ambiguousMessage(text: string, before: string, after: string): string {
+/** The text as it appears inside an error message: the TRIMMED input (never the raw text, so
+ * surrounding whitespace, an NBSP or a BOM never shows up inside the quotes), capped at 24
+ * characters plus "…" so pasting a megabyte into the box doesn't echo a megabyte back. */
+function quoted(trimmedText: string): string {
+  return trimmedText.length > 24 ? `${trimmedText.slice(0, 24)}…` : trimmedText;
+}
+
+/** Builds the ambiguous-comma message from the same digits both readings come from: the thousands
+ * reading just drops the comma, and the decimal reading turns it into a dot and trims trailing
+ * zeros, so "0,250" (not itself ambiguous, see above, but the same digit math) would read "could
+ * mean 250 or 0.25". When trimming leaves no fractional digits at all — a round thousand, e.g.
+ * "5,000" — the decimal reading is a whole number, and "with a dot" is dropped too: `"5,000" could
+ * mean 5000 or 5. Write 5000 or 5.` */
+function ambiguousMessage(trimmed: string, before: string, after: string): string {
   const thousands = BigInt(before + after).toString();
   const wholePart = BigInt(before).toString();
   const fracPart = after.replace(/0+$/, "");
   const decimal = fracPart ? `${wholePart}.${fracPart}` : wholePart;
-  return `"${text}" could mean ${thousands} or ${decimal}. Write ${thousands}, or ${decimal} with a dot.`;
+  const writeAs = fracPart ? `${thousands}, or ${decimal} with a dot` : `${thousands} or ${decimal}`;
+  return `"${quoted(trimmed)}" could mean ${thousands} or ${decimal}. Write ${writeAs}.`;
 }
 
 /**
@@ -57,8 +68,9 @@ function ambiguousMessage(text: string, before: string, after: string): string {
  * before ("1,234.5", "1,000,000"). A single comma with no dot is read as a DECIMAL point instead —
  * "1,5" is 1.5 — because that's how many regions, and a phone's comma-only decimal keypad, write a
  * fraction. The one shape that's genuinely unreadable either way — exactly three digits after that
- * lone comma, with only 1-3 before it ("1,500", "12,345") — is refused as "ambiguous" rather than
- * guessed at: every reading is 1000x off for someone.
+ * lone comma, with 1-3 before it and not starting with 0 ("1,500", "12,345", but not "0,250": no
+ * thousands group starts with 0) — is refused as "ambiguous" rather than guessed at: every reading
+ * is 1000x off for someone.
  */
 export function parseTokenAmount(text: string, decimals: number): bigint {
   const trimmed = text.trim();
@@ -72,12 +84,12 @@ export function parseTokenAmount(text: string, decimals: number): bigint {
   if (oneComma) {
     const [, before = "", after = ""] = oneComma;
     if (isAmbiguousGrouping(before, after)) {
-      throw new AmountError("ambiguous", ambiguousMessage(text, before, after));
+      throw new AmountError("ambiguous", ambiguousMessage(trimmed, before, after));
     }
     shaped = `${before}.${after}`;
   }
 
-  if (!SHAPE.test(shaped)) throw new AmountError("format", `"${text}" isn't a number`);
+  if (!SHAPE.test(shaped)) throw new AmountError("format", `"${quoted(trimmed)}" isn't a number`);
   const raw = shaped.replace(/,/g, "");
   const [whole = "0", frac = ""] = raw.split(".");
   if (frac.length > decimals) {
@@ -88,6 +100,15 @@ export function parseTokenAmount(text: string, decimals: number): bigint {
   // by `decimals` (e.g. a huge whole number at 18 decimals).
   if (value > UINT256_MAX) throw new AmountError("overflow", "That number is too large.");
   return value;
+}
+
+/** True when `text`, once trimmed, has exactly one comma and no dot — the shape
+ * `parseTokenAmount` reads as a decimal comma, or refuses as ambiguous. Exported for Drop
+ * (`apps/web/src/apps/drop/parse.ts`), which refuses this shape outright right after a
+ * comma-separated address: there, the same comma could just as easily be a third CSV column, and
+ * the row can't tell which. */
+export function hasLoneComma(text: string): boolean {
+  return ONE_COMMA_NO_DOT.test(text.trim());
 }
 
 /**

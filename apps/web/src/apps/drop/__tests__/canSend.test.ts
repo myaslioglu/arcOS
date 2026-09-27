@@ -14,6 +14,7 @@ const BASE: CanSendInput = {
   textIsCurrent: true,
   rowCount: 3,
   issueCount: 0,
+  hasAmbiguousRow: false,
   sessionActive: false,
   unconfirmedPending: false,
   quoteCount: 3,
@@ -52,6 +53,34 @@ describe("canSend", () => {
 
   it("does not disable for issues alone, as long as a valid row exists — bad rows are excluded, not fatal", () => {
     expect(canSend({ ...BASE, issueCount: 4 })).toEqual({ ok: true, label: "Send to 3 wallets" });
+  });
+
+  // m5/I4: unlike an ordinary bad row (above), an ambiguous one blocks the WHOLE list — the list's
+  // own number-writing convention is in doubt, so even the rows that parsed fine could be under the
+  // wrong reading.
+  describe("an ambiguous row (m5 — the list's number convention is in doubt)", () => {
+    it("blocks Send even though valid rows exist", () => {
+      expect(canSend({ ...BASE, hasAmbiguousRow: true })).toEqual({ ok: false, label: "Fix the ambiguous amounts first." });
+    });
+
+    it("wins over a zero row count too — retyping the ambiguous row comes first", () => {
+      expect(canSend({ ...BASE, hasAmbiguousRow: true, rowCount: 0 })).toEqual({ ok: false, label: "Fix the ambiguous amounts first." });
+    });
+
+    it("still reports an in-flight send first — that one is about to resolve on its own", () => {
+      expect(canSend({ ...BASE, hasAmbiguousRow: true, sessionActive: true })).toEqual({ ok: false, label: "Sending…" });
+    });
+
+    it("still reports an unresolved unconfirmed batch first", () => {
+      expect(canSend({ ...BASE, hasAmbiguousRow: true, unconfirmedPending: true })).toEqual({
+        ok: false,
+        label: "Resolve the unconfirmed batch first.",
+      });
+    });
+
+    it("clears once no row is ambiguous anymore", () => {
+      expect(canSend({ ...BASE, hasAmbiguousRow: false })).toEqual({ ok: true, label: "Send to 3 wallets" });
+    });
   });
 
   it("labels the button with the current (non-deferred) row count", () => {

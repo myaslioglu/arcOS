@@ -10,7 +10,7 @@ import { UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import { trackEvent } from "@/lib/analytics";
 import { classifyMintFailure, session } from "./session";
-import { validateMint, type MintForm } from "./validate";
+import { amountEcho, validateMint, type MintForm } from "./validate";
 
 const EMPTY: MintForm = { name: "", symbol: "", decimals: "18", supply: "", mintable: false, burnable: false, cap: "" };
 
@@ -41,6 +41,13 @@ function Form() {
   if (!contracts) return <p className="p-5 text-sm text-muted">{"Mint isn't deployed on this network yet."}</p>;
 
   const set = <K extends keyof MintForm>(key: K, value: MintForm[K]) => setForm((f) => ({ ...f, [key]: value }));
+
+  // I3/m3: read the same way validateMint reads them, but live, on every keystroke — see the echo
+  // rendered under the supply/cap fields below and amountEcho's own doc comment for why.
+  const decimalsNum = /^\d+$/.test(form.decimals.trim()) ? Number(form.decimals) : NaN;
+  const symbolLabel = form.symbol.trim() || "tokens";
+  const supplyEcho = amountEcho(form.supply, decimalsNum, symbolLabel);
+  const capEcho = form.mintable ? amountEcho(form.cap, decimalsNum, symbolLabel) : null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,7 +178,7 @@ function Form() {
     );
   }
 
-  const field = (key: "name" | "symbol" | "decimals" | "supply" | "cap", label: string, placeholder: string) => (
+  const field = (key: "name" | "symbol" | "decimals" | "supply" | "cap", label: string, placeholder: string, echo?: string | null) => (
     <label className="block">
       <span className="text-xs text-muted">{label}</span>
       <input
@@ -182,7 +189,11 @@ function Form() {
         onChange={(e) => set(key, e.target.value)}
         aria-invalid={!!errors[key]}
       />
-      {errors[key] && <span className="mt-1 block text-xs text-accent-3-text">{errors[key]}</span>}
+      {errors[key] ? (
+        <span className="mt-1 block text-xs text-accent-3-text">{errors[key]}</span>
+      ) : (
+        echo && <span className="mt-1 block text-xs text-muted">{echo}</span>
+      )}
     </label>
   );
 
@@ -191,7 +202,7 @@ function Form() {
       {field("name", "Name", "Duke Token")}
       {field("symbol", "Symbol", "DUKE")}
       <div className="grid grid-cols-2 gap-3">
-        {field("supply", "Initial supply", "1,000,000,000")}
+        {field("supply", "Initial supply", "1000000000", supplyEcho)}
         {field("decimals", "Decimals", "18")}
       </div>
       <label className="flex items-start gap-2">
@@ -205,7 +216,7 @@ function Form() {
           <span className="block text-xs text-muted">{'Inspector will show "Owner can mint new supply" until you renounce ownership.'}</span>
         </span>
       </label>
-      {form.mintable && field("cap", "Maximum supply (optional)", "Leave empty for no cap")}
+      {form.mintable && field("cap", "Maximum supply (optional)", "Leave empty for no cap", capEcho)}
       <p className="text-xs text-muted">The supply goes to your wallet. The contract has no fees, no blacklist and no pause.</p>
       {/* The previous mint's transaction, kept by the session store through `dismiss` (see
           session.ts's `lastHash`) so it survives this window being closed and reopened — which is

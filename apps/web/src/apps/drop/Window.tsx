@@ -16,7 +16,7 @@ import { failedRowsText } from "./clipboard";
 import { dropFeeText } from "./dropFee";
 import { IssuesList } from "./IssuesList";
 import { drop } from "./manifest";
-import { BATCH, formatDropList, parseDropList } from "./parse";
+import { BATCH, formatDropList, hasAmbiguousIssue, parseDropList } from "./parse";
 import { canDismissResult, remainingBannerText } from "./result";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
@@ -293,6 +293,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     textIsCurrent,
     rowCount: rows.length,
     issueCount: issues.length,
+    hasAmbiguousRow: hasAmbiguousIssue(issues),
     sessionActive,
     unconfirmedPending: !canDismiss,
     quoteCount: quote && quote !== "error" ? quote.count : null,
@@ -376,6 +377,9 @@ function Form({ params }: Pick<AppProps, "params">) {
             <p className="mt-3">
               {rows.length} recipients{issues.length > 0 ? ` · ${issues.length} excluded` : ""} · total {totalDisplay} {symbol}
             </p>
+            {hasAmbiguousIssue(issues) && (
+              <p className="mt-2 text-accent-3-text">Some amounts could be read two ways. Fix those rows before sending.</p>
+            )}
             <IssuesList issues={issues} />
             {quote === "error" ? (
               <p className="mt-3 text-xs text-accent-3-text">

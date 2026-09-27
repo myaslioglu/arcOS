@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { hexToBytes, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
-import { isValidNameBytes, validateMint, type MintForm } from "../validate";
+import { amountEcho, isValidNameBytes, validateMint, type MintForm } from "../validate";
 
 const HOLDER = "0x1111111111111111111111111111111111111111";
 const form = (over: Partial<MintForm> = {}): MintForm => ({
@@ -169,5 +169,42 @@ describe("the name rule, against the vectors TokenFactory's tests read (packages
       // The form sends the trimmed name, so that is the one the contract has to accept.
       expect(isValidNameBytes(new TextEncoder().encode(result.args.name))).toBe(true);
     }
+  });
+});
+
+// I3/m3: the one remaining silent misread this fix's rule still allows — "100.000" meaning "a
+// hundred thousand" parses as 100 — can't be corrected once the supply is minted. The echo shows
+// what will actually be minted before the wallet ever opens.
+describe("amountEcho", () => {
+  it("echoes a decimal-point-as-thousands misread as what it actually parses to, catching I3 live", () => {
+    expect(amountEcho("100.000", 18, "DUKE")).toBe("= 100 DUKE");
+  });
+
+  it("reads a decimal comma the same as a dot", () => {
+    expect(amountEcho("1,5", 18, "DUKE")).toBe("= 1.5 DUKE");
+  });
+
+  it("echoes a whole number as typed", () => {
+    expect(amountEcho("1000000", 18, "DUKE")).toBe("= 1000000 DUKE");
+  });
+
+  it("is null for empty, zero, ambiguous or otherwise invalid input — nothing rather than a wrong or noisy echo", () => {
+    expect(amountEcho("", 18, "DUKE")).toBeNull();
+    expect(amountEcho("   ", 18, "DUKE")).toBeNull();
+    expect(amountEcho("0", 18, "DUKE")).toBeNull();
+    expect(amountEcho("abc", 18, "DUKE")).toBeNull();
+    expect(amountEcho("100,000", 18, "DUKE")).toBeNull(); // ambiguous
+  });
+
+  it("is null while decimals itself isn't a whole number from 0 to 18 yet", () => {
+    expect(amountEcho("100", NaN, "DUKE")).toBeNull();
+    expect(amountEcho("100", 19, "DUKE")).toBeNull();
+    expect(amountEcho("100", -1, "DUKE")).toBeNull();
+    expect(amountEcho("100", 1.5, "DUKE")).toBeNull();
+  });
+
+  it("respects the token's own decimals, same as validateMint", () => {
+    expect(amountEcho("0.25", 0, "DUKE")).toBeNull(); // "At most 0 decimal places" — same refusal as validateMint
+    expect(amountEcho("100", 0, "DUKE")).toBe("= 100 DUKE");
   });
 });

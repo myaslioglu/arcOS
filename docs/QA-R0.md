@@ -190,12 +190,14 @@ text matches this if it happens to come up while running the rest of this sectio
     "0.20%" line duplicating it); if it's unset (or malformed), that line is absent entirely and no
     fee is charged — confirm both states by toggling the env var and restarting `npm run dev`. A
     fee entry whose amount comes back `null` reads "unknown", never silently disappears.
-38. Type "1,5" into the amount box: `"1,5" isn't a number` appears (a comma is never read as a
-    decimal point) and Swap is disabled. Clear it and type a valid amount to confirm the message
-    clears and Swap re-enables. Switch "You send" to cirBTC and type "0.12345678" (8 decimal
-    places): no error, Swap enables once the debounced estimate settles — cirBTC is validated at
-    its own 8 decimal places, not USDC/EURC's 6. Switch back to USDC and try the same 8-decimal
-    text: refused, since USDC only allows 6.
+38. Type "1,5" into the amount box: no message appears, and within about 400ms the estimate is for
+    1.5 (not 1,500 times that). Clear it and type "1,500": `"1,500" could mean 1500 or 1.5. Write
+    1500, or 1.5 with a dot.` appears and Swap is disabled. Clear it and type "1,500.25": no
+    message, and the estimate is for 1500.25. Clear it and type a valid amount to confirm the
+    message clears and Swap re-enables. Switch "You send" to cirBTC and type "0.12345678" (8
+    decimal places): no error, Swap enables once the debounced estimate settles — cirBTC is
+    validated at its own 8 decimal places, not USDC/EURC's 6. Switch back to USDC and try the same
+    8-decimal text: refused, since USDC only allows 6.
 39. Type an amount, then edit it again inside the 400ms debounce window (before the estimate
     updates): the button immediately reads "Updating the quote…" and is disabled — it does not stay
     enabled against the stale estimate from before the edit. Confirm the amount that actually
@@ -293,6 +295,28 @@ text matches this if it happens to come up while running the rest of this sectio
     1 send successfully, then switch networks before approving batch 2: batch 2 is refused the same
     way (checked live, not just once at the start of the whole send) rather than being signed on the
     wrong chain.
+
+## Fix round 1
+
+52. Drop, an ambiguous amount blocks the whole list: paste
+    ```
+    0x1111111111111111111111111111111111111111,1
+    0x2222222222222222222222222222222222222222,100,1
+    ```
+    (the second row's amount, "100,1", is a lone comma right after a comma-separated address — it
+    could be a decimal comma or a third column, and the row can't tell which). Expect: "Some
+    amounts could be read two ways. Fix those rows before sending." appears above the issues list,
+    the second row shows excluded with `In a comma-separated list, write decimals with a dot, or
+    separate the columns with a semicolon or a tab.`, and Send is disabled even though the first row
+    is fine on its own. Retype the second row's amount as "100.1" (or move it after a semicolon,
+    e.g. "0x2222…;100,1"): the sentence and the disabled Send both clear. Separately, a row like
+    "0x3333…;1,500" (a semicolon separator, three digits after the comma, no leading zero) blocks
+    Send the same way, through the parser's own ambiguous message rather than the comma-column one.
+53. Mint, the supply/cap echo: type "100.000" into the Initial supply field — "= 100 DUKE" (or
+    whatever symbol is set) appears under the field, confirming what will actually be minted is 100,
+    not a hundred thousand. Type "1,5" instead: the echo reads "= 1.5 DUKE". Clear the field, or
+    type something that doesn't parse (e.g. "abc" or "100,000", which is ambiguous): the echo
+    disappears. With "I can mint more later" checked, repeat for the Maximum supply field.
 
 ## Before mainnet — gate list
 

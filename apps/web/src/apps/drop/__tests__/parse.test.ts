@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BATCH, MAX_BATCH, batchSizes, chunk, formatDropList, parseDropList } from "../parse";
+import { BATCH, MAX_BATCH, batchSizes, chunk, formatDropList, hasAmbiguousIssue, parseDropList } from "../parse";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -83,17 +83,40 @@ describe("thousands separators", () => {
   });
 });
 
-describe("decimal and ambiguous commas", () => {
-  it("reads a lone decimal comma right after a comma-separated address, same as a dot", () => {
-    const { rows, issues } = parseDropList(`${A},1,5`, 6);
-    expect(issues).toEqual([]);
-    expect(rows).toEqual([{ line: 1, address: A, amount: 1_500_000n }]);
+describe("a lone comma right after a comma-separated address (I4, m5)", () => {
+  const COMMA_ROW = "In a comma-separated list, write decimals with a dot, or separate the columns with a semicolon or a tab.";
+
+  it("refuses it outright, whatever the parser itself would call it — a clean decimal or ambiguous", () => {
+    for (const amount of ["1,5", "1,500", "100,1", "0,5"]) {
+      const { rows, issues } = parseDropList(`${A},${amount}`, 6);
+      expect(rows, amount).toEqual([]);
+      expect(issues, amount).toEqual([{ line: 1, message: COMMA_ROW, ambiguous: true }]);
+    }
   });
 
-  it("surfaces the ambiguous-comma message through a comma-separated row too", () => {
-    const { rows, issues } = parseDropList(`${A},1,500`, 6);
+  it("marks the row ambiguous for hasAmbiguousIssue, same as the parser's own ambiguous code — an ordinary issue doesn't count", () => {
+    const { issues } = parseDropList(`${A},100,1\n${B},1`, 6);
+    expect(hasAmbiguousIssue(issues)).toBe(true);
+    expect(hasAmbiguousIssue([])).toBe(false);
+    expect(hasAmbiguousIssue([{ line: 1, message: "Not an address" }])).toBe(false);
+  });
+
+  it("keeps the parser's own decimal-comma rule for a semicolon, a tab or a space separator", () => {
+    expect(parseDropList(`${A};1,5`, 6).rows).toEqual([{ line: 1, address: A, amount: 1_500_000n }]);
+    expect(parseDropList(`${A}\t1,5`, 6).rows).toEqual([{ line: 1, address: A, amount: 1_500_000n }]);
+    expect(parseDropList(`${A} 1,5`, 6).rows).toEqual([{ line: 1, address: A, amount: 1_500_000n }]);
+    expect(parseDropList(`${A};100,1`, 6).rows).toEqual([{ line: 1, address: A, amount: 100_100_000n }]);
+  });
+
+  it("keeps the parser's own ambiguous message — and hasAmbiguousIssue — for a semicolon-separated row", () => {
+    const { rows, issues } = parseDropList(`${A};2,500`, 6);
     expect(rows).toEqual([]);
-    expect(issues).toEqual([{ line: 1, message: '"1,500" could mean 1500 or 1.5. Write 1500, or 1.5 with a dot.' }]);
+    expect(issues).toEqual([{ line: 1, message: '"2,500" could mean 2500 or 2.5. Write 2500, or 2.5 with a dot.', ambiguous: true }]);
+    expect(hasAmbiguousIssue(issues)).toBe(true);
+  });
+
+  it("keeps reading a two-or-more-group amount as thousands after a comma-separated address", () => {
+    expect(parseDropList(`${A},1,000,000`, 0).rows).toEqual([{ line: 1, address: A, amount: 1_000_000n }]);
   });
 });
 

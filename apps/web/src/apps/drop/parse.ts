@@ -1,8 +1,12 @@
 import { formatUnits, getAddress, isAddress } from "viem";
-import { AmountError, formatUsdc, parseTokenAmount, unitsToNative, type Address } from "@arcos/chain";
+import { AmountError, formatUsdc, hasLoneComma, parseTokenAmount, unitsToNative, type Address } from "@arcos/chain";
 
 export type DropRow = { line: number; address: Address; amount: bigint };
-export type DropIssue = { line: number; message: string };
+/** `ambiguous` is true for the two row-level reasons the list's own number-writing convention is in
+ * doubt — the parser's own "ambiguous" code, or `COMMA_ROW_MESSAGE` below — and left unset for every
+ * other kind of bad row (a bad address, a duplicate, zero, too much precision, ...). See
+ * `hasAmbiguousIssue`. */
+export type DropIssue = { line: number; message: string; ambiguous?: boolean };
 
 /**
  * Recipients per transaction. Measured in Foundry against Arc's 30,000,000 block gas limit:
@@ -28,19 +32,29 @@ const ZERO = "0x0000000000000000000000000000000000000000";
  * on line 1 always surfaces as an issue instead of silently vanishing as a "header". */
 const HEADER_CELL = /^[A-Za-z_ ]+$/;
 
+/** I4/m5: a lone comma (one comma, no dot) right after a COMMA-separated address is refused
+ * outright, rather than read as a decimal point — it could just as easily be a third CSV column,
+ * and the row can't tell which. A semicolon, a tab or a space separator carries no such ambiguity,
+ * so those rows keep `parseTokenAmount`'s own comma rules (decimal, thousands or ambiguous). */
+const COMMA_ROW_MESSAGE = "In a comma-separated list, write decimals with a dot, or separate the columns with a semicolon or a tab.";
+
 /**
  * Splits a trimmed, non-empty line into its address token — everything up to the first run of whitespace,
  * comma or semicolon — and the amount text that follows that run, trimmed. The amount text is otherwise
  * untouched (its own internal commas survive) so `parseTokenAmount` sees exactly what the user typed and
- * can apply its own thousands-separator rules. `amountText` is `undefined` when nothing follows the
- * address (or only more separators do), meaning the line has no amount at all.
+ * can apply its own comma rules: thousands, a decimal point, or ambiguous. `amountText` is `undefined`
+ * when nothing follows the address (or only more separators do), meaning the line has no amount at all.
+ * `commaSeparated` is true when that run's FIRST character was a comma — Drop's own signal (not the
+ * parser's) that a lone comma in the amount could just as easily be a third column; see
+ * `COMMA_ROW_MESSAGE`.
  */
-function splitRow(trimmed: string): { address: string; amountText: string | undefined } {
+function splitRow(trimmed: string): { address: string; amountText: string | undefined; commaSeparated: boolean } {
   const sepIndex = trimmed.search(/[\s,;]/);
-  if (sepIndex === -1) return { address: trimmed, amountText: undefined };
+  if (sepIndex === -1) return { address: trimmed, amountText: undefined, commaSeparated: false };
   const address = trimmed.slice(0, sepIndex);
+  const commaSeparated = trimmed[sepIndex] === ",";
   const rest = trimmed.slice(sepIndex).replace(/^[\s,;]+/, "").trim();
-  return { address, amountText: rest === "" ? undefined : rest };
+  return { address, amountText: rest === "" ? undefined : rest, commaSeparated };
 }
 
 export function parseDropList(text: string, decimals: number): { rows: DropRow[]; issues: DropIssue[]; total: bigint } {
@@ -59,7 +73,7 @@ export function parseDropList(text: string, decimals: number): { rows: DropRow[]
     const line = i + 1;
     const trimmed = raw.trim();
     if (trimmed === "") return;
-    const { address: addr, amountText: amt } = splitRow(trimmed);
+    const { address: addr, amountText: amt, commaSeparated } = splitRow(trimmed);
     if (line === 1 && HEADER_CELL.test(addr)) return; // header
     if (amt === undefined) return void issues.push({ line, message: "Expected an address and an amount" });
     if (!isAddress(addr, { strict: false })) return void issues.push({ line, message: "Not an address" });
@@ -67,10 +81,21 @@ export function parseDropList(text: string, decimals: number): { rows: DropRow[]
     const first = seen.get(addr.toLowerCase());
     if (first !== undefined) return void issues.push({ line, message: `Duplicate of line ${first}` });
 
+    // I4/m5: checked before the parser ever sees the text — a lone comma right after a
+    // comma-separated address is refused regardless of what the parser itself would call it
+    // (a clean decimal, or ambiguous), because Drop's own reason for refusing it (a possible third
+    // column) is different from the parser's.
+    if (commaSeparated && hasLoneComma(amt)) {
+      return void issues.push({ line, message: COMMA_ROW_MESSAGE, ambiguous: true });
+    }
+
     let amount: bigint;
     try {
       amount = parseTokenAmount(amt, decimals);
     } catch (e) {
+      if (e instanceof AmountError && e.code === "ambiguous") {
+        return void issues.push({ line, message: e.message, ambiguous: true });
+      }
       return void issues.push({ line, message: e instanceof AmountError ? e.message : "Bad amount" });
     }
     if (amount === 0n) return void issues.push({ line, message: "Amount is zero" });
@@ -81,6 +106,16 @@ export function parseDropList(text: string, decimals: number): { rows: DropRow[]
   });
 
   return { rows, issues, total };
+}
+
+/** m5: true when any of `issues` is one the list's own number-writing convention might be read
+ * wrong for (the parser's "ambiguous" code, or Drop's comma-column rule above) — as opposed to an
+ * ordinarily bad row (a bad address, a duplicate, zero, too much precision, ...), which stays
+ * "excluded, not fatal" (`canSend.ts`). Drop's Window blocks Send while this is true, and shows the
+ * one-sentence banner above the issues list: a partial send under the wrong reading is worse than
+ * asking for one row to be retyped. */
+export function hasAmbiguousIssue(issues: readonly DropIssue[]): boolean {
+  return issues.some((i) => i.ambiguous === true);
 }
 
 export function chunk<T>(items: T[], size: number): T[][] {

@@ -24,6 +24,12 @@ export type CanSendInput = {
   /** Accepted for documentation and tests, not used to disable: a bad row is excluded, not fatal — see the
    * "issues present" test in canSend.test.ts for the decision this encodes. */
   issueCount: number;
+  /** True when `parseDropList` flagged at least one row's amount as ambiguous — the parser's own
+   * "ambiguous" code, or Drop's own comma-column rule (`hasAmbiguousIssue` in parse.ts; m5, I4).
+   * Unlike an ordinarily bad row (excluded, not fatal — see `issueCount` above), this blocks Send
+   * outright: the list's own number-writing convention is in doubt, so the rows that DID parse
+   * could easily be under the wrong reading too. */
+  hasAmbiguousRow: boolean;
   /** A send is in progress — in this window, another Drop window, or one this window doesn't remember
    * because it was closed and reopened mid-send. */
   sessionActive: boolean;
@@ -47,7 +53,8 @@ export type CanSendResult = { ok: boolean; label: string };
  * never disagree. Checked in order; the first false condition wins and sets the label.
  */
 export function canSend(input: CanSendInput): CanSendResult {
-  const { busy, ready, asset, tokenAddressEntered, textIsCurrent, rowCount, sessionActive, unconfirmedPending, quoteCount } = input;
+  const { busy, ready, asset, tokenAddressEntered, textIsCurrent, rowCount, hasAmbiguousRow, sessionActive, unconfirmedPending, quoteCount } =
+    input;
   if (busy || sessionActive) return { ok: false, label: "Sending…" };
   if (unconfirmedPending) return { ok: false, label: "Resolve the unconfirmed batch first." };
   if (!textIsCurrent) return { ok: false, label: "Checking the list…" };
@@ -55,6 +62,7 @@ export function canSend(input: CanSendInput): CanSendResult {
     return { ok: false, label: tokenAddressEntered ? "Reading the token…" : "Enter the token's address first." };
   }
   if (!ready) return { ok: false, label: `Send to ${rowCount} wallets` };
+  if (hasAmbiguousRow) return { ok: false, label: "Fix the ambiguous amounts first." };
   if (rowCount === 0) return { ok: false, label: "Send to 0 wallets" };
   if (quoteCount !== rowCount) return { ok: false, label: "Reading the fee…" };
   return { ok: true, label: `Send to ${rowCount} wallets` };
