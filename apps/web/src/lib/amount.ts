@@ -3,8 +3,9 @@ import { AmountError, parseTokenAmount, USDC_DECIMALS } from "@arcos/chain";
 /** Validation message for an amount box, or null when there's nothing to complain about (including
  * an empty box — no error before the user has typed anything). `decimals` defaults to USDC/EURC's 6
  * places; pass a token's own decimals (cirBTC is 8) so the message reports the right count instead
- * of always assuming 6. Uses parseTokenAmount's own rules: a comma is only ever a thousands
- * separator, never a decimal point. */
+ * of always assuming 6. Uses parseTokenAmount's own rules for a comma: a thousands separator before
+ * a dot or in two or more groups, otherwise a decimal point — unless that reads as ambiguous (e.g.
+ * "1,500"), which is refused with a message naming both readings. */
 export function amountIssue(text: string, decimals: number = USDC_DECIMALS): string | null {
   if (text.trim() === "") return null;
   try {

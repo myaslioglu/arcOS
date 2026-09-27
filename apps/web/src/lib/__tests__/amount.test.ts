@@ -20,9 +20,12 @@ describe("amountIssue", () => {
     expect(amountIssue("1.1234567")).toMatch(/6 decimal/);
   });
 
-  it("a comma is never read as a decimal point", () => {
-    // "1,5" isn't a thousands-grouped number (that needs groups of exactly 3 digits), so it's a format error.
-    expect(amountIssue("1,5")).toMatch(/isn't a number/);
+  it("reads a lone decimal comma the same as a dot", () => {
+    expect(amountIssue("1,5")).toBeNull();
+  });
+
+  it("refuses a lone comma with exactly three digits after it as ambiguous, naming both readings", () => {
+    expect(amountIssue("1,500")).toBe('"1,500" could mean 1500 or 1.5. Write 1500, or 1.5 with a dot.');
   });
 
   it("flags a negative amount", () => {
@@ -36,11 +39,15 @@ describe("normalizedAmount", () => {
     expect(normalizedAmount("10")).toBe("10");
   });
 
-  it("returns null for empty, zero or invalid input", () => {
+  it("reads a lone decimal comma the same as a dot", () => {
+    expect(normalizedAmount("1,5")).toBe("1.5");
+  });
+
+  it("returns null for empty, zero, invalid or ambiguous input", () => {
     expect(normalizedAmount("")).toBeNull();
     expect(normalizedAmount("0")).toBeNull();
     expect(normalizedAmount("abc")).toBeNull();
-    expect(normalizedAmount("1,5")).toBeNull();
+    expect(normalizedAmount("1,500")).toBeNull(); // ambiguous, refused rather than guessed at
   });
 });
 

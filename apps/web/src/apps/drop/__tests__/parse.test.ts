@@ -53,9 +53,9 @@ describe("thousands separators", () => {
   });
 
   it("keeps a comma-grouped amount intact after a semicolon separator", () => {
-    const { rows, issues } = parseDropList(`${A};2,500`, 0);
+    const { rows, issues } = parseDropList(`${A};2,500,000`, 0);
     expect(issues).toEqual([]);
-    expect(rows[0]?.amount).toBe(2500n);
+    expect(rows[0]?.amount).toBe(2_500_000n);
   });
 
   it("keeps a comma-grouped amount intact after a tab separator", () => {
@@ -64,10 +64,10 @@ describe("thousands separators", () => {
     expect(rows[0]?.amount).toBe(1_000_000n);
   });
 
-  it("rejects a malformed grouping with the amount parser's own message", () => {
-    const { rows, issues } = parseDropList(`${A},1,5`, 6);
+  it("still rejects a genuinely malformed grouping, with the amount parser's own message", () => {
+    const { rows, issues } = parseDropList(`${A},1,,5`, 6);
     expect(rows).toEqual([]);
-    expect(issues).toEqual([{ line: 1, message: '"1,5" isn\'t a number' }]);
+    expect(issues).toEqual([{ line: 1, message: '"1,,5" isn\'t a number' }]);
   });
 
   it("trims whitespace around the amount left after the separator run", () => {
@@ -80,6 +80,20 @@ describe("thousands separators", () => {
     const { rows, issues } = parseDropList(`${A},1 000`, 6);
     expect(rows).toEqual([]);
     expect(issues).toEqual([{ line: 1, message: '"1 000" isn\'t a number' }]);
+  });
+});
+
+describe("decimal and ambiguous commas", () => {
+  it("reads a lone decimal comma right after a comma-separated address, same as a dot", () => {
+    const { rows, issues } = parseDropList(`${A},1,5`, 6);
+    expect(issues).toEqual([]);
+    expect(rows).toEqual([{ line: 1, address: A, amount: 1_500_000n }]);
+  });
+
+  it("surfaces the ambiguous-comma message through a comma-separated row too", () => {
+    const { rows, issues } = parseDropList(`${A},1,500`, 6);
+    expect(rows).toEqual([]);
+    expect(issues).toEqual([{ line: 1, message: '"1,500" could mean 1500 or 1.5. Write 1500, or 1.5 with a dot.' }]);
   });
 });
 

@@ -40,11 +40,38 @@ describe("parseUsdc", () => {
     expect(code("0.1234567")).toBe("precision");
   });
 
-  it("treats a comma as a thousands separator only, never as a decimal point", () => {
+  it("reads a comma as thousands when there's a dot, or two or more groups — exactly as before", () => {
     expect(parseUsdc("1,234.5")).toBe(12345n * 10n ** 17n);
     expect(parseUsdc("1,000,000")).toBe(10n ** 24n);
-    expect(parseUsdc("12,345")).toBe(12345n * 10n ** 18n);
-    for (const bad of ["1,5", "1,50", "1,,2.5", ",5", "5,", "1000,000", "1,2345", "1.5,000"]) {
+  });
+
+  it("reads a lone comma with no dot as a decimal point, for 1, 2 or 4+ digits after it", () => {
+    expect(parseUsdc("1,5")).toBe(15n * 10n ** 17n);
+    expect(parseUsdc("0,25")).toBe(25n * 10n ** 16n);
+    expect(parseUsdc("1000,5")).toBe(10005n * 10n ** 17n);
+    expect(parseTokenAmount("12,3456", 6)).toBe(12_345_600n);
+  });
+
+  it("reads exactly 3 digits after a lone comma as a decimal point once 4+ digits lead it — no thousands group starts with 4+ digits", () => {
+    expect(parseUsdc("1000,000")).toBe(1000n * 10n ** 18n);
+  });
+
+  it("refuses exactly 3 digits after a lone comma, with only 1-3 digits before it, as ambiguous — naming both readings", () => {
+    const attempt = (s: string) => {
+      try {
+        parseUsdc(s);
+        return "no-throw";
+      } catch (e) {
+        return { code: (e as AmountError).code, message: (e as AmountError).message };
+      }
+    };
+    expect(attempt("1,500")).toEqual({ code: "ambiguous", message: `"1,500" could mean 1500 or 1.5. Write 1500, or 1.5 with a dot.` });
+    expect(attempt("0,250")).toEqual({ code: "ambiguous", message: `"0,250" could mean 250 or 0.25. Write 250, or 0.25 with a dot.` });
+    expect(attempt("12,345")).toEqual({ code: "ambiguous", message: `"12,345" could mean 12345 or 12.345. Write 12345, or 12.345 with a dot.` });
+  });
+
+  it("still refuses a shape that was never valid: a stray comma, a double comma, or a comma after a dot", () => {
+    for (const bad of [",5", "5,", "1,,2.5", "1.5,000"]) {
       expect(() => parseUsdc(bad), bad).toThrowError(AmountError);
       try {
         parseUsdc(bad);
@@ -116,5 +143,23 @@ describe("parseTokenAmount", () => {
     // AFTER scaling, not just on the raw digits typed.
     const huge = "1" + "0".repeat(60); // 10^60 * 10^18 = 10^78 > 2^256-1 (~1.158e77)
     expect(() => parseTokenAmount(huge, 18)).toThrowError(AmountError);
+  });
+
+  it("counts a decimal comma toward the decimal places exactly like a dot does", () => {
+    expect(() => parseTokenAmount("0,1234567", 6)).toThrowError(AmountError);
+    try {
+      parseTokenAmount("0,1234567", 6);
+    } catch (e) {
+      expect((e as AmountError).code).toBe("precision");
+    }
+  });
+
+  it("reads a lone decimal comma exactly like a dot, for any whole number and 1, 2 or 4-6 fractional digits", () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 1_000_000 }), fc.constantFrom(1, 2, 4, 5, 6), fc.nat(), (w, len, dRaw) => {
+        const d = (dRaw % 10 ** len).toString().padStart(len, "0");
+        expect(parseTokenAmount(`${w},${d}`, 6)).toBe(parseTokenAmount(`${w}.${d}`, 6));
+      }),
+    );
   });
 });
