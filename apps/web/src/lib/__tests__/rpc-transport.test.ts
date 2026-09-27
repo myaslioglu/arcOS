@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, createTransport, type EIP1193RequestFn, type Transport } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { inspect, viemReader } from "@arcos/inspector";
-import { rpcTransport } from "../rpc-transport";
+import { endpointHealth, rpcTransport } from "../rpc-transport";
 
 type Built = ReturnType<ReturnType<typeof rpcTransport>>;
 const blockNumber = (transport: Built) => transport.request({ method: "eth_blockNumber" });
@@ -162,6 +162,25 @@ describe("rpcTransport's cooldown", () => {
     expect(a.settled).toBeInstanceOf(Error);
     expect(tried).toEqual([u0]);
     await expect(blockNumber(transport)).resolves.toBe("0xaa"); // u0 wasn't put on cooldown
+  });
+
+  it("9. shares its cooldowns with every transport built on the same health, as each copy of a module is", async () => {
+    const health = endpointHealth();
+    const tried: string[] = [];
+    const connect = (url: string): Transport => () =>
+      createTransport({
+        key: "fake", name: "Fake endpoint", type: "fake", retryCount: 0,
+        request: (async () => {
+          tried.push(url);
+          if (url === u0) throw new HttpRequestError({ body: {}, status: 503, url });
+          return "0x10";
+        }) as EIP1193RequestFn,
+      });
+    const copyA = rpcTransport(chain, { connect, now: () => Date.now(), health })({ chain });
+    const copyB = rpcTransport(chain, { connect, now: () => Date.now(), health })({ chain });
+    await expect(blockNumber(copyA)).resolves.toBe("0x10"); // u0 fails here, and cools down
+    await expect(blockNumber(copyB)).resolves.toBe("0x10"); // the other copy skips it
+    expect(tried).toEqual([u0, u1, u1]);
   });
 
   it("4. tries them all in list order when every endpoint is cooling down, and uses the one that answered again at once", async () => {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAddress } from "viem";
-import { NotAContract } from "@arcos/inspector";
-import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
+import { cachedInspection } from "@/lib/inspect-server";
+import { isBusy, isNotAContract } from "@/lib/inspection-outcome";
 import { clientKey, rateLimiter } from "@/lib/rate-limit";
 import { reportCacheControl } from "@/lib/report-cache";
 
@@ -28,8 +28,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ address: string
     const report = await cachedInspection(address);
     return NextResponse.json(report, { headers: { "cache-control": reportCacheControl(report) } });
   } catch (e) {
-    if (e instanceof NotAContract) return NextResponse.json({ error: "No contract at that address." }, { status: 404 });
-    if (e instanceof InspectorBusy || e instanceof InspectionTimeout) {
+    if (isNotAContract(e)) return NextResponse.json({ error: "No contract at that address." }, { status: 404 });
+    if (isBusy(e)) {
       return NextResponse.json(
         { error: "Inspector is busy. Try again in a few seconds." },
         { status: 503, headers: { "retry-after": "5", "cache-control": "no-store" } },

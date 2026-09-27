@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { isAddress } from "viem";
 import { explorerUrl, type Address } from "@arcos/chain";
-import { NotAContract, type Report } from "@arcos/inspector";
+import type { Report } from "@arcos/inspector";
 import { formatAppHash } from "@arcos/shell/core";
-import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
+import { cachedInspection } from "@/lib/inspect-server";
+import { isBusy, isNotAContract } from "@/lib/inspection-outcome";
 import { NAME_DISCLOSURE, passLine, readAtLine, summaryLine, tokenLabel } from "@/lib/proof";
 
 // Rendered on every request: an inspection is live chain data, and the explorer key is a runtime-only secret.
@@ -19,8 +20,8 @@ async function load(address: string): Promise<LoadResult> {
   try {
     return await cachedInspection(address as Address);
   } catch (e) {
-    if (e instanceof NotAContract) return null;
-    if (e instanceof InspectorBusy || e instanceof InspectionTimeout) return "busy";
+    if (isNotAContract(e)) return null;
+    if (isBusy(e)) return "busy";
     console.error("proof page inspect failed", address, e);
     return "error";
   }

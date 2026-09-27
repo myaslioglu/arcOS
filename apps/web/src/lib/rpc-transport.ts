@@ -8,11 +8,20 @@ const COOLDOWN_MS = 60_000;
 
 type Endpoint = ReturnType<Transport>;
 
+/**
+ * What the transports sharing it know about the endpoints: until when each one is skipped, and when it last failed,
+ * as a position in `seq`, the one counter that orders every attempt and failure.
+ */
+export type EndpointHealth = { coolingUntil: Map<string, number>; failedAt: Map<string, number>; seq: number };
+export const endpointHealth = (): EndpointHealth => ({ coolingUntil: new Map(), failedAt: new Map(), seq: 0 });
+
 export type RpcTransportOptions = {
   /** One endpoint's transport. Default: viem's HTTP transport, one attempt of at most 3 s, no retry of its own. */
   connect?: (url: string) => Transport;
   /** The clock the cooldowns are kept against. */
   now?: () => number;
+  /** The cooldowns, shared by every transport given the same one. Default: this transport's own. */
+  health?: EndpointHealth;
 };
 
 /**
@@ -29,20 +38,22 @@ export type RpcTransportOptions = {
  * viem's per-request options (a caller's `signal`) go on to the endpoint, and a call the caller aborted cools nothing.
  *
  * The cooldowns are one timestamp per URL, compared against `now()` when a call starts; nothing runs in the background.
- * They live as long as the transport, and inspect-server.ts builds its one when it loads, so they are per instance.
+ * They live in `health`, which inspect-server.ts keeps once per server process (see process-global.ts), so every
+ * bundled copy of it skips the same endpoints.
  *
  * One call's worst case, every URL hanging, is (number of URLs) × 3 s: 12 s over mainnet's four, 9 s over testnet's
  * three.
  */
 export function rpcTransport(
   chain: Chain,
-  { connect = (url) => http(url, { timeout: ATTEMPT_MS, retryCount: 0 }), now = () => Date.now() }: RpcTransportOptions = {},
+  {
+    connect = (url) => http(url, { timeout: ATTEMPT_MS, retryCount: 0 }),
+    now = () => Date.now(),
+    health = endpointHealth(),
+  }: RpcTransportOptions = {},
 ): Transport<"cooldown", { transports: Endpoint[] }> {
   const urls = chain.rpcUrls.default.http;
-  const coolingUntil = new Map<string, number>();
-  /** When each endpoint last failed, as a position in `seq`, the one counter that orders attempts and failures. */
-  const failedAt = new Map<string, number>();
-  let seq = 0;
+  const { coolingUntil, failedAt } = health;
   return (({ chain: forChain }) => {
     const endpoints = urls.map((url) => ({ url, transport: connect(url)({ chain: forChain, retryCount: 0 }) }));
     const request = (async (args: Parameters<EIP1193RequestFn>[0], options?: Parameters<EIP1193RequestFn>[1]) => {
@@ -50,7 +61,7 @@ export function rpcTransport(
       const ready = endpoints.filter(({ url }) => (coolingUntil.get(url) ?? 0) <= start);
       let failure: unknown;
       for (const { url, transport } of ready.length > 0 ? ready : endpoints) {
-        const attempt = ++seq;
+        const attempt = ++health.seq;
         try {
           const answer: unknown = await transport.request(args, options);
           if ((failedAt.get(url) ?? 0) < attempt) {
@@ -62,7 +73,7 @@ export function rpcTransport(
           // The caller gave up, or the node answered: neither says the endpoint failed.
           if (options?.signal?.aborted || isNodeAnswer(e)) throw e;
           coolingUntil.set(url, now() + COOLDOWN_MS);
-          failedAt.set(url, ++seq);
+          failedAt.set(url, ++health.seq);
           failure = e;
         }
       }

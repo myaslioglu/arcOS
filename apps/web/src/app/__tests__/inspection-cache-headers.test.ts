@@ -3,10 +3,12 @@ import type { Report } from "@arcos/inspector";
 
 // The real module is server-only and opens an RPC client when it loads; these routes only need its answer.
 const { cachedInspection } = vi.hoisted(() => ({ cachedInspection: vi.fn<(address: string) => Promise<Report>>() }));
-vi.mock("@/lib/inspect-server", async () => {
-  const { InspectionTimeout } = await import("@/lib/deadline");
-  return { cachedInspection, InspectionTimeout, InspectorBusy: class InspectorBusy extends Error {} };
-});
+vi.mock("@/lib/inspect-server", () => ({
+  cachedInspection,
+  InspectorBusy: class InspectorBusy extends Error {
+    override name = "InspectorBusy";
+  },
+}));
 
 import { InspectorBusy } from "@/lib/inspect-server";
 import { GET as inspectRoute } from "@/app/api/inspect/[address]/route";
@@ -59,5 +61,28 @@ describe("how long a CDN may keep what an inspection rendered", () => {
   it.each(surfaces.slice(1))("%s: a failed inspection for 5 seconds", async (_, get) => {
     cachedInspection.mockRejectedValue(new InspectorBusy());
     expect(await cacheControl(get)).toBe("public, s-maxage=5");
+  });
+});
+
+// The report cache and the in-flight gate are one per process, shared by every bundled copy of inspect-server.ts, so
+// the error an inspection ends with may come from another copy's class. The routes tell outcomes apart by name.
+describe("an inspection that ended without a report, whichever bundled copy threw the error", () => {
+  const fromAnotherCopy = (name: string) => Object.assign(new Error("from another copy"), { name });
+  const inspect = () => inspectRoute(new Request(`https://4rcos.test/api/inspect/${ADDRESS}`), params());
+
+  beforeEach(() => {
+    cachedInspection.mockReset();
+  });
+
+  it("answers 503 to backpressure, not 502", async () => {
+    cachedInspection.mockRejectedValue(fromAnotherCopy("InspectorBusy"));
+    expect((await inspect()).status).toBe(503);
+    cachedInspection.mockRejectedValue(fromAnotherCopy("InspectionTimeout"));
+    expect((await inspect()).status).toBe(503);
+  });
+
+  it("answers 404 when there's no contract, not 502", async () => {
+    cachedInspection.mockRejectedValue(fromAnotherCopy("NotAContract"));
+    expect((await inspect()).status).toBe(404);
   });
 });

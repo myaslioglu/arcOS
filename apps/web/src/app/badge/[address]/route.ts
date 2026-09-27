@@ -1,7 +1,7 @@
 import { isAddress } from "viem";
 import type { Address } from "@arcos/chain";
-import { NotAContract } from "@arcos/inspector";
-import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
+import { cachedInspection } from "@/lib/inspect-server";
+import { isBusy, isNotAContract } from "@/lib/inspection-outcome";
 import { badgeSvg } from "@/lib/proof";
 import { FAILED_INSPECTION_CACHE_CONTROL, reportCacheControl } from "@/lib/report-cache";
 
@@ -19,7 +19,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ address: strin
       inspectionFailed = true;
       // NotAContract (no token there), InspectorBusy and InspectionTimeout (both backpressure)
       // are expected outcomes, not failures worth an operator's attention.
-      if (!(e instanceof NotAContract) && !(e instanceof InspectorBusy) && !(e instanceof InspectionTimeout)) {
+      if (!isNotAContract(e) && !isBusy(e)) {
         console.error("badge inspect failed", address, e);
       }
     }

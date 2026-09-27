@@ -1,8 +1,9 @@
 import { ImageResponse } from "next/og";
 import { isAddress } from "viem";
 import type { Address } from "@arcos/chain";
-import { NotAContract, type Report } from "@arcos/inspector";
-import { InspectionTimeout, InspectorBusy, cachedInspection } from "@/lib/inspect-server";
+import type { Report } from "@arcos/inspector";
+import { cachedInspection } from "@/lib/inspect-server";
+import { isBusy, isNotAContract } from "@/lib/inspection-outcome";
 import { ogCard } from "@/lib/og-card";
 import { FAILED_INSPECTION_CACHE_CONTROL, reportCacheControl } from "@/lib/report-cache";
 
@@ -24,7 +25,7 @@ export default async function Image({ params }: { params: Promise<{ address: str
       inspectionFailed = true;
       // NotAContract (no token there), InspectorBusy and InspectionTimeout (both backpressure)
       // are expected outcomes, not failures worth an operator's attention.
-      if (!(e instanceof NotAContract) && !(e instanceof InspectorBusy) && !(e instanceof InspectionTimeout)) {
+      if (!isNotAContract(e) && !isBusy(e)) {
         console.error("og inspect failed", address, e);
       }
     }
