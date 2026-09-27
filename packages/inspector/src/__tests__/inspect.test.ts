@@ -1209,6 +1209,27 @@ describe("ZeppelinOS-style proxies", () => {
     expect(find(r, "privileges")).toMatchObject({ status: "fail", title: "Owner can mint new supply" });
   });
 
+  // Both kinds of slot naming the same implementation: which admin slot the proxy's bytecode honours can't be told, so
+  // an admin is only named when the two agree (or the ZeppelinOS one is empty, as above).
+  it.each<[string, Fake["storage"], Fake["storageErrors"], string]>([
+    ["agree", { [`${TOKEN}:${ZOS_ADMIN}`]: slotWith(OWNER) }, undefined, "Upgradeable — admin 0x3333…3333"],
+    ["name different accounts", { [`${TOKEN}:${ZOS_ADMIN}`]: slotWith(GRAND) }, undefined, "Upgradeable proxy"],
+    ["can't all be read", {}, { [`${TOKEN}:${ZOS_ADMIN}`]: new Error("ETIMEDOUT") }, "Upgradeable proxy"],
+  ])("names the admin only when the EIP-1967 and ZeppelinOS admin slots %s", async (_, zosAdmin, storageErrors, title) => {
+    const r = await run({
+      code: { [TOKEN]: FORWARDER, [IMPL]: MINTABLE },
+      storage: {
+        [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL), [`${TOKEN}:${ZOS_IMPL}`]: slotWith(IMPL), [`${TOKEN}:${ADMIN_SLOT}`]: slotWith(OWNER),
+        ...zosAdmin,
+      },
+      storageErrors,
+      reads: { [`${TOKEN}.owner()`]: ZERO }, // renounced, so the R1 gate names whoever it names too
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title });
+    const named = title.includes("admin");
+    expect(find(r, "privileges").detail).toContain(named ? "The proxy admin 0x3333…3333" : "Whoever controls upgrades");
+  });
+
   it.each([
     ["an EIP-1967 implementation", { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) }],
     ["an EIP-1967 beacon", { [`${TOKEN}:${BEACON_SLOT}`]: slotWith(BEACON) }],

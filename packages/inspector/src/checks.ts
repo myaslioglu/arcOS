@@ -519,9 +519,10 @@ export type ProxyResolution = {
    * isn't upgradeable. */
   slotKind: ProxySlotKind | null;
   /** The admin slot (EIP-1967's, or ZeppelinOS's for a ZeppelinOS-style proxy) of whichever address
-   * makes this upgradeable, when it holds one. `null` covers all three of: not upgradeable, slot
-   * empty (UUPS or beacon), slot unreadable — they produce the same finding text ("whoever controls
-   * upgrades"), because the one thing that must never be said is a name that wasn't read. */
+   * makes this upgradeable, when it holds one. `null` covers: not upgradeable, slot empty (UUPS or
+   * beacon), slot unreadable, and both kinds of admin slot set to different accounts (or the
+   * ZeppelinOS one unreadable) — they produce the same finding text ("whoever controls upgrades"),
+   * because the one thing that must never be said is a name that wasn't read, or might not count. */
   admin: Address | null;
 };
 

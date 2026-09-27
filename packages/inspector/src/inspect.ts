@@ -1,6 +1,6 @@
 import { getAddress } from "viem";
 import { tokenFactoryAbi, type Address } from "@arcos/chain";
-import { extractSelectors, minimalProxyTarget, usesOpcode } from "./bytecode";
+import { extractSelectors, minimalProxyTarget, usesOpcode, type Hex } from "./bytecode";
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, abiDeclaresTransfer, addressFromSlot,
   beaconImplementation, checkHolders, checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges,
@@ -62,6 +62,9 @@ const slotsFrom = (values: readonly (string | null)[]): ProxySlots => {
 
 /** Whose layout the set slots follow: EIP-1967's first, then ZeppelinOS's. `null` when none is set. */
 const kindOf = (s: ProxySlots): ProxySlotKind | null => (s.impl || s.beacon ? "eip1967" : s.zeppelinos ? "zeppelinos" : null);
+
+/** Both kinds of slot are set, so both kinds of admin slot may name someone. */
+const bothKinds = (s: ProxySlots): boolean => s.zeppelinos !== null && (s.impl !== null || s.beacon !== null);
 
 /** The ZeppelinOS slot names something other than what the EIP-1967 slots name: a beacon, or a different
  * implementation. Only the proxy's own bytecode decides which it reads, so neither is "the logic". */
@@ -155,6 +158,8 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   /** Whose layout the slots that make this upgradeable follow — this address's own, or the clone
    * target's. Picks the admin slot below and the proxy finding's wording. */
   let slotKind: ProxySlotKind | null = null;
+  /** ...and whether those slots are of both kinds, so the ZeppelinOS admin slot has a say as well. */
+  let slotsOfBothKinds = false;
   let logicCode: string | null;
   let logicGap: LogicGap | null = null;
   /** Where the code that runs lives, when that isn't this token's own code. `null` covers both
@@ -215,6 +220,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       // report "no privileged functions" about a token whose implementation can mint.
       const slots = slotsFrom(values!);
       slotKind = kindOf(slots);
+      slotsOfBothKinds = bothKinds(slots);
       if ((slots.impl && slots.beacon) || zeppelinosConflicts(slots)) {
         // Nothing in the EVM resolves this: the proxy's OWN BYTECODE decides which slot it reads,
         // and a BeaconProxy with a stale or decoy implementation slot would be scored on code that
@@ -246,6 +252,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     const targetSlots = await readProxySlots(cloneOf);
     targetSlotsRead = targetSlots.read;
     slotKind = kindOf(targetSlots);
+    slotsOfBothKinds = bothKinds(targetSlots);
     cloneTargetIsProxy = slotKind !== null;
     if (!cloneTargetIsProxy) {
       // The target's slots have just been read, so `vet` only has the clone-of-a-clone shape (and
@@ -284,12 +291,20 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   // "someone can replace this".
   const upgradeableAt: Address | null = !upgradeable ? null : cloneOf === null ? address : cloneOf;
   // A failed admin read is not evidence of an empty slot, but it makes no difference to what can
-  // be said: without an address, both are "whoever controls upgrades".
-  const admin: Address | null = upgradeableAt
-    ? await reader
-        .getStorageAt(upgradeableAt, slotKind === "zeppelinos" ? ZEPPELINOS_ADMIN_SLOT : ADMIN_SLOT)
-        .then(addressFromSlot, () => null)
-    : null;
+  // be said: without an address, both are "whoever controls upgrades". With both kinds of slot set,
+  // the ZeppelinOS admin slot has to agree with the EIP-1967 one, or be empty: if it names someone
+  // else, or couldn't be read, which admin the proxy's bytecode honours can't be told, so nobody is
+  // named (as `logic-ambiguous` scores no logic).
+  const readAdmin = (slot: Hex): Promise<Address | null | undefined> =>
+    reader.getStorageAt(upgradeableAt!, slot).then((v) => (slotReadable(v) ? addressFromSlot(v) : undefined), () => undefined);
+  let admin: Address | null = null;
+  if (upgradeableAt) {
+    const [own, other] = await Promise.all([
+      readAdmin(slotKind === "zeppelinos" ? ZEPPELINOS_ADMIN_SLOT : ADMIN_SLOT),
+      slotsOfBothKinds ? readAdmin(ZEPPELINOS_ADMIN_SLOT) : Promise.resolve(null),
+    ]);
+    admin = own && (other === null || other?.toLowerCase() === own.toLowerCase()) ? own : null;
+  }
 
   // Code that delegates calls but resolves to no known clone target or proxy slot. `checkProxy`
   // reports this shape on its own; what it must NOT do is discard the contract's own dispatcher,
