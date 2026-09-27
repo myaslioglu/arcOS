@@ -23,7 +23,8 @@ export type RpcTransportOptions = {
  * -32603 or a rate limit's -32005 or -32007, whatever HTTP status carried it; see rpc-errors.ts in @arcos/inspector):
  * the next URL is asked, and this one is skipped by every call for the next 60 s. So a hung endpoint costs one 3 s
  * timeout per minute instead of one per call. If every endpoint is cooling down, all of them are tried in list order
- * again, and one that answers is back in use at once.
+ * again, and one that answers is back in use at once. Only an attempt sent after an endpoint's last failure can end its
+ * cooldown that way: an answer that was already on its way when the endpoint failed says nothing about it since.
  *
  * The cooldowns are one timestamp per URL, compared against `now()` when a call starts; nothing runs in the background.
  * They live as long as the transport, and inspect-server.ts builds its one when it loads, so they are per instance.
@@ -37,6 +38,9 @@ export function rpcTransport(
 ): Transport<"cooldown", { transports: Endpoint[] }> {
   const urls = chain.rpcUrls.default.http;
   const coolingUntil = new Map<string, number>();
+  /** When each endpoint last failed, as a position in `seq`, the one counter that orders attempts and failures. */
+  const failedAt = new Map<string, number>();
+  let seq = 0;
   return (({ chain: forChain }) => {
     const endpoints = urls.map((url) => ({ url, transport: connect(url)({ chain: forChain, retryCount: 0 }) }));
     const request = (async (args: Parameters<EIP1193RequestFn>[0]) => {
@@ -44,13 +48,18 @@ export function rpcTransport(
       const ready = endpoints.filter(({ url }) => (coolingUntil.get(url) ?? 0) <= start);
       let failure: unknown;
       for (const { url, transport } of ready.length > 0 ? ready : endpoints) {
+        const attempt = ++seq;
         try {
           const answer: unknown = await transport.request(args);
-          coolingUntil.delete(url);
+          if ((failedAt.get(url) ?? 0) < attempt) {
+            coolingUntil.delete(url);
+            failedAt.delete(url);
+          }
           return answer;
         } catch (e) {
           if (isNodeAnswer(e)) throw e;
           coolingUntil.set(url, now() + COOLDOWN_MS);
+          failedAt.set(url, ++seq);
           failure = e;
         }
       }

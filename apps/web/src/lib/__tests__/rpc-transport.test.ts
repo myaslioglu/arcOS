@@ -109,6 +109,38 @@ describe("rpcTransport's cooldown", () => {
     expect(tried).toEqual([u0, u0]);
   });
 
+  /** Answers `value` after `ms`: a slow endpoint, or one whose answer is still on its way. */
+  const slow = (ms: number, value: unknown): Behaviour => () => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+  it("5. keeps a cooldown that an answer already on its way can't clear (a slow primary, review probe D1)", async () => {
+    const { tried, transport } = endpoints({ [u0]: [hangs(u0), slow(2_900, "0xslow"), answers("0xaa")], [u1]: [answers("0x10")] });
+    const a = outcome(blockNumber(transport)); // 0 s: to u0, which hangs
+    await vi.advanceTimersByTimeAsync(500);
+    const b = outcome(blockNumber(transport)); // 0.5 s: to u0, which answers at 3.4 s
+    await vi.advanceTimersByTimeAsync(2_500); // 3 s: a times out, u0 cools down, a goes to u1
+    expect(a.settled).toBe("0x10");
+    await vi.advanceTimersByTimeAsync(400); // 3.4 s: b's answer, sent before u0 failed, arrives
+    expect(b.settled).toBe("0xslow");
+    const c = outcome(blockNumber(transport));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.settled).toBe("0x10");
+    expect(tried).toEqual([u0, u0, u1, u1]);
+  });
+
+  it("6. keeps the cooldown a fast failure set while an earlier request to the same endpoint was in flight (review probe D2)", async () => {
+    const { tried, transport } = endpoints({ [u0]: [slow(200, "0xslow"), httpStatus(u0, 503), answers("0xaa")], [u1]: [answers("0x10")] });
+    const a = outcome(blockNumber(transport)); // to u0, answering in 200 ms
+    const b = outcome(blockNumber(transport)); // to u0, which fails at once: u0 cools down, b goes to u1
+    await vi.advanceTimersByTimeAsync(0);
+    expect(b.settled).toBe("0x10");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(a.settled).toBe("0xslow");
+    const c = outcome(blockNumber(transport));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(c.settled).toBe("0x10");
+    expect(tried).toEqual([u0, u0, u1, u1]);
+  });
+
   it("4. tries them all in list order when every endpoint is cooling down, and uses the one that answered again at once", async () => {
     const down = (url: string) => httpStatus(url, 503);
     const { tried, transport } = endpoints({ [u0]: [down(u0)], [u1]: [down(u1)], [u2]: [down(u2), answers("0x10")], [u3]: [down(u3)] });
