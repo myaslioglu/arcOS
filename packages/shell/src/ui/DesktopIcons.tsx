@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef } from "react";
-import { CATEGORY_LABEL, CATEGORY_ORDER, type AppManifest, type DragItem } from "../core";
+import { CATEGORY_HUE, CATEGORY_LABEL, CATEGORY_ORDER, appHue, type AppManifest, type DragItem } from "../core";
 import { useRegistry } from "./registry";
 import { useDropTarget } from "./dnd";
 
@@ -34,7 +34,13 @@ export function DesktopIcons({ onOpen, onDropItem }: Props) {
   return (
     <div className="os-icons">
       {trays.map((t) => (
-        <section key={t.key} className="os-tray" data-group={t.key} aria-labelledby={`os-tray-${t.key}`}>
+        <section
+          key={t.key}
+          className="os-tray"
+          data-group={t.key}
+          aria-labelledby={`os-tray-${t.key}`}
+          style={{ "--os-group": CATEGORY_HUE[t.key] } as React.CSSProperties}
+        >
           <header className="os-tray-plate">
             <span className="os-tray-led" aria-hidden />
             <h2 id={`os-tray-${t.key}`} className="os-tray-label">
@@ -76,11 +82,11 @@ function AppIcon({
       data-drop={over ? "over" : undefined}
       aria-label={m.name}
       className="os-icon"
-      style={m.hue ? ({ "--os-hue": m.hue } as React.CSSProperties) : undefined}
+      style={{ "--os-hue": appHue(m) } as React.CSSProperties}
       {...props}
     >
       <span className="os-icon-tile">
-        <m.icon size={26} strokeWidth={1.6} aria-hidden />
+        <m.icon size={20} aria-hidden />
       </span>
       <span className="os-icon-name">{m.name}</span>
     </button>

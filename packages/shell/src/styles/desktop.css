@@ -126,11 +126,10 @@
 .os-tray[data-group="create"] { grid-area: create; }
 .os-tray[data-group="trade"]  { grid-area: trade; }
 
-/* One hue per tray, from the shell's signal colours. */
-:is(.os-tray, .os-touch-group)[data-group="system"] { --os-group: var(--muted); }
-:is(.os-tray, .os-touch-group)[data-group="trust"]  { --os-group: var(--accent-2); }
-:is(.os-tray, .os-touch-group)[data-group="create"] { --os-group: var(--accent-3); }
-:is(.os-tray, .os-touch-group)[data-group="trade"]  { --os-group: var(--accent); }
+/* One hue per tray, from the shell's signal colours. Trays and touch groups
+   get --os-group, and every app's icon, dock tile, launcher row, touch row and
+   window --os-hue or --os-win, inline from CATEGORY_HUE (core/manifest.ts),
+   so one table decides an app's colour everywhere. */
 
 .os-icon {
   --os-hue: var(--os-group, var(--accent));
@@ -165,6 +164,7 @@
    with an LED that lights on the focused window, and an inset screen for the
    body. Background windows keep their frame but dim their screen. */
 .os-window {
+  /* WindowFrame sets the app's hue here; this is only the fallback. */
   --os-win: var(--accent);
   display: flex; flex-direction: column; overflow: hidden;
   border-radius: 14px; padding: 6px;
@@ -330,6 +330,8 @@
   .os-dock-wins { max-width: none; overflow: visible; }
 }
 .os-dock-btn--win { gap: 6px; padding: 0 0.6rem; border-color: var(--border); background: var(--surface-2); }
+/* A window chip's glyph keeps its app's hue, so it matches the app's tile. */
+.os-dock-btn--win svg { color: var(--os-hue, currentColor); }
 .os-dock-title {
   max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--font-mono); font-size: 10px;
@@ -408,6 +410,8 @@
 .os-touch-title { font-family: var(--font-mono); font-size: 13px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-touch-blurb { font-family: var(--font-mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-icon-tile--sm { width: 34px; height: 34px; border-radius: 10px; }
+/* The launcher's rows: the same tile, small enough for a list. */
+.os-icon-tile--xs { width: 24px; height: 24px; border-radius: 7px; }
 
 
 

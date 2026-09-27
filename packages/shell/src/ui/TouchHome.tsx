@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CATEGORY_LABEL, CATEGORY_ORDER, type AppManifest } from "../core";
+import { CATEGORY_HUE, CATEGORY_LABEL, CATEGORY_ORDER, type AppManifest } from "../core";
 import { useRegistry } from "./registry";
 import { TouchRow } from "./TouchRow";
 
@@ -63,7 +63,12 @@ export function TouchHome({ activeId, onOpen, onBack }: Props) {
         </ul>
       ) : (
         groups.map((g) => (
-          <section key={g.key} className="os-touch-group" data-group={g.key}>
+          <section
+            key={g.key}
+            className="os-touch-group"
+            data-group={g.key}
+            style={{ "--os-group": CATEGORY_HUE[g.key] } as React.CSSProperties}
+          >
             <h2 className="os-touch-plate">
               <span className="os-tray-led" aria-hidden />
               {g.label}

@@ -1,6 +1,6 @@
 "use client";
 
-import type { AppManifest } from "../core";
+import { appHue, type AppManifest } from "../core";
 
 /**
  * One row of a touch list: the app's glyph, its name and one line of what it
@@ -20,10 +20,10 @@ export function TouchRow({
         type="button"
         onClick={(e) => onOpen(m.id, e.currentTarget)}
         className="os-touch-row"
-        style={m.hue ? ({ "--os-hue": m.hue } as React.CSSProperties) : undefined}
+        style={{ "--os-hue": appHue(m) } as React.CSSProperties}
       >
         <span className="os-icon-tile os-icon-tile--sm">
-          <m.icon size={16} strokeWidth={1.6} aria-hidden />
+          <m.icon size={16} aria-hidden />
         </span>
         <span className="os-touch-text">
           <span className="os-touch-title">{m.name}</span>

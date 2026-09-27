@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRegistry, openActionFor, type AppManifest } from "../manifest";
+import { CATEGORY_HUE, CATEGORY_ORDER, appHue, buildRegistry, openActionFor, type AppManifest } from "../manifest";
 
 const stub = (over: Partial<AppManifest>): AppManifest => ({
   id: "x",
@@ -57,5 +57,18 @@ describe("openActionFor", () => {
     const a = openActionFor(registry, "inspector", { token: "0xABC" });
     expect(a?.instanceKey).toBe("0xabc");
     expect(a?.flush).toBe(true);
+  });
+});
+
+describe("appHue", () => {
+  it("gives an app its group's colour, the one the rack's tray uses", () => {
+    expect(appHue(stub({ category: "system" }))).toBe("var(--muted)");
+    expect(appHue(stub({ category: "trust" }))).toBe("var(--accent-2)");
+    expect(appHue(stub({ category: "create" }))).toBe("var(--accent-3)");
+    expect(appHue(stub({ category: "trade" }))).toBe("var(--accent)");
+  });
+
+  it("has a colour for every group", () => {
+    for (const c of CATEGORY_ORDER) expect(CATEGORY_HUE[c]).toMatch(/^var\(--[\w-]+\)$/);
   });
 });

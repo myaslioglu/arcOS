@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Square, X, Copy } from "lucide-react";
 import {
+  appHue,
   shouldEscapeCloseWindow,
   snapRect,
   snapZone,
@@ -11,6 +12,7 @@ import {
   type Rect,
   type SnapZone,
 } from "../core";
+import { useRegistry } from "./registry";
 
 type Props = {
   win: DesktopWindow;
@@ -69,6 +71,7 @@ export function WindowFrame({
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const app = useRegistry().byId.get(win.appId);
   const [snap, setSnap] = useState<SnapZone | null>(null);
 
   // ESC closes the active window only; background windows stay put. An overlay above the window
@@ -201,9 +204,11 @@ export function WindowFrame({
         aria-label={win.title}
         onPointerDown={onFocus}
         style={
-          pinned
-            ? undefined
-            : { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+          {
+            // The title-bar LED and the focused frame's border, in the app's hue.
+            ...(app ? { "--os-win": appHue(app) } : {}),
+            ...(pinned ? {} : { left: rect.left, top: rect.top, width: rect.width, height: rect.height }),
+          } as React.CSSProperties
         }
         className={[
           "os-window absolute",

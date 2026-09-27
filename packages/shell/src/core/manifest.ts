@@ -17,6 +17,22 @@ export const CATEGORY_LABEL: Record<AppCategory, string> = {
   trade: "Trade",
 };
 
+/**
+ * Each group's colour, the one place an app's hue comes from: its tray and tiles in the rack, its
+ * dock tile, launcher row and touch row, and its window's title-bar LED all use it, so an app looks
+ * the same everywhere. Token names, so both themes resolve them.
+ */
+export const CATEGORY_HUE: Record<AppCategory, string> = {
+  system: "var(--muted)",
+  trust: "var(--accent-2)",
+  create: "var(--accent-3)",
+  trade: "var(--accent)",
+};
+
+export function appHue(m: Pick<AppManifest, "category">): string {
+  return CATEGORY_HUE[m.category];
+}
+
 export type AppProps = { winId: string; params: Record<string, string> };
 
 export type AppManifest = {
@@ -25,8 +41,7 @@ export type AppManifest = {
   /** One line under the name in the launcher and touch list. */
   blurb: string;
   icon: LucideIcon;
-  /** CSS color for the icon tile; falls back to the accent. */
-  hue?: string;
+  /** Also picks the app's hue: see `CATEGORY_HUE`. */
   category: AppCategory;
   window: WindowSize & { flush?: boolean };
   load: () => Promise<{ default: ComponentType<AppProps> }>;

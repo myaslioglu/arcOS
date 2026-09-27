@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LayoutGrid, X } from "lucide-react";
-import type { AppManifest, DesktopWindow, DragItem } from "../core";
+import { appHue, type AppManifest, type DesktopWindow, type DragItem } from "../core";
 import { useRegistry } from "./registry";
 import { useDropTarget } from "./dnd";
 
@@ -181,7 +181,8 @@ export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onC
         {windows.length > 0 && (
           <span className="os-dock-wins">
             {windows.map((w) => {
-              const Icon = registry.byId.get(w.appId)?.icon;
+              const app = registry.byId.get(w.appId);
+              const Icon = app?.icon;
               const state = w.minimized ? " (minimized)" : "";
               return (
                 <span key={w.winId} className="os-dock-win">
@@ -198,6 +199,7 @@ export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onC
                     className={`os-dock-btn os-dock-btn--win ${w.winId === activeId ? "os-dock-btn--active" : ""} ${
                       w.minimized ? "os-dock-btn--min" : ""
                     }`}
+                    style={app ? ({ "--os-hue": appHue(app) } as React.CSSProperties) : undefined}
                   >
                     {Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}
                     <span className="os-dock-title">{w.title}</span>
@@ -269,7 +271,7 @@ function DockTile({
       data-mag
       data-drop={over ? "over" : undefined}
       className={`os-dock-btn os-dock-tile ${open ? "os-dock-btn--open" : ""}`}
-      style={{ "--os-hue": m.hue ?? "var(--accent)" } as React.CSSProperties}
+      style={{ "--os-hue": appHue(m) } as React.CSSProperties}
       {...labelled(m.name)}
       {...props}
     >

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, CornerDownLeft } from "lucide-react";
-import { searchLauncher, type LauncherHit, type QuickAction } from "../core";
+import { appHue, searchLauncher, type LauncherHit, type QuickAction } from "../core";
 import { useRegistry } from "./registry";
 import { Portal } from "./Portal";
 
@@ -134,7 +134,12 @@ export function Launcher({ open, onClose, quickActions, onPickApp, onPickAction 
                     >
                       {hit.kind === "app" ? (
                         <span className="flex min-w-0 items-center gap-2">
-                          <hit.app.icon className="h-4 w-4 shrink-0" aria-hidden />
+                          <span
+                            className="os-icon-tile os-icon-tile--xs"
+                            style={{ "--os-hue": appHue(hit.app) } as React.CSSProperties}
+                          >
+                            <hit.app.icon size={14} aria-hidden />
+                          </span>
                           <span className="truncate font-mono text-xs">{hit.app.name}</span>
                         </span>
                       ) : (
