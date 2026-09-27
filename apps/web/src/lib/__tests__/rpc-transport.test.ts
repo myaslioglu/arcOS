@@ -219,6 +219,7 @@ describe("rpcTransport over viem's HTTP transport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    vi.restoreAllMocks(); // the M-12 test's AbortSignal.timeout spy, even if the test failed partway
   });
 
   /** Stubs `fetch`, recording which URL each request went to; `answer` gets the URL and the request's options. */
@@ -292,7 +293,6 @@ describe("rpcTransport over viem's HTTP transport", () => {
     expect(first.settled).toBe("0x10");
     await expect(blockNumber(transport)).resolves.toBe("0x10");
     expect(tried).toEqual([urls[0], urls[1], urls[1]]); // the timed-out primary was skipped the next time
-    vi.restoreAllMocks();
   });
 
   it("hands a JSON-RPC error straight back from the first URL, which stays in use", async () => {
