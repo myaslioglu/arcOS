@@ -107,6 +107,8 @@
 .os-tray-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.18em; color: var(--muted); }
 [data-theme="light"] .os-tray-label { color: #4a4f5c; }
 .os-tray-count { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* The light plate is darker than the page: --faint sits at 3.9-4.3:1 on it, --muted at 5.3-6.0. */
+[data-theme="light"] .os-tray-plate .os-tray-count { color: var(--muted); }
 .os-tray-screen {
   /* Icon cells share the tray's width evenly instead of leaving a ragged gap
      on the right. 6rem is the narrowest cell that keeps a 13-letter app name

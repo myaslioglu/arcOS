@@ -6,7 +6,7 @@ import type { Finding } from "@arcos/inspector";
 const ICON = {
   pass: <Check size={16} className="text-accent-2-text" aria-label="Pass" />,
   warn: <TriangleAlert size={16} className="text-accent-3-text" aria-label="Warning" />,
-  fail: <X size={16} className="text-red-600" aria-label="Fail" />,
+  fail: <X size={16} className="text-danger-text" aria-label="Fail" />,
   unknown: <CircleHelp size={16} className="text-faint" aria-label="Unknown" />,
 } as const;
 

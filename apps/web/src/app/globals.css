@@ -18,6 +18,8 @@
   --color-accent-text: var(--accent-text);
   --color-accent-2-text: var(--accent-2-text);
   --color-accent-3-text: var(--accent-3-text);
+  --color-danger: var(--danger);
+  --color-danger-text: var(--danger-text);
 
   --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;

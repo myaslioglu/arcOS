@@ -9,7 +9,10 @@
   --border-2: #2b2b39;
   --fg: #e9e9f0;
   --muted: #8b8b9c;
-  --faint: #5a5a6b;
+  /* 4.6:1 on --surface-2, 4.8 on --surface, 5.1 on --bg: AA for the small
+     print it carries (hints, the clock, "not investment advice"). The previous
+     #5a5a6b sat at 2.7-3.0, the same problem the light pair below once had. */
+  --faint: #7e7e8f;
   --accent: #34e1ff;
   --accent-2: #45e08a;
   --accent-3: #f6b73c;
@@ -20,6 +23,10 @@
   --accent-text: var(--accent);
   --accent-2-text: var(--accent-2);
   --accent-3-text: var(--accent-3);
+  /* A failed check. Already 5.3:1 as text on --surface-2 here, so text uses
+     the same red. */
+  --danger: #f0544f;
+  --danger-text: var(--danger);
   --grad-a: rgba(52, 225, 255, 0.10);
   --grad-b: rgba(69, 224, 138, 0.08);
   --grad-c: rgba(246, 183, 60, 0.05);
@@ -55,6 +62,9 @@
   --accent-text: #006e85;
   --accent-2-text: #0b8048;
   --accent-3-text: #9d6208;
+  /* The badge's fail red: 6.6:1 on white, 5.9 on --surface-2. */
+  --danger: #b42318;
+  --danger-text: #b42318;
   --grad-a: rgba(0, 121, 154, 0.10);
   --grad-b: rgba(12, 138, 78, 0.08);
   --grad-c: rgba(185, 115, 9, 0.06);
