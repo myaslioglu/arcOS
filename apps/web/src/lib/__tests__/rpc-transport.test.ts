@@ -56,7 +56,7 @@ describe("rpcTransport's cooldown", () => {
    * One fake endpoint per URL, each going through viem's own request pipeline (`createTransport`), as a real one does.
    * `script[url]` lists what its successive calls do, the last one repeating. `tried` records every call, in order.
    */
-  function endpoints(script: Record<string, Behaviour[]>) {
+  function endpoints(script: Record<string, Behaviour[]>, health = endpointHealth()) {
     const tried: string[] = [];
     const calls = new Map<string, number>();
     const connect = (url: string): Transport => () => {
@@ -69,7 +69,7 @@ describe("rpcTransport's cooldown", () => {
       }) as EIP1193RequestFn;
       return createTransport({ key: "fake", name: "Fake endpoint", type: "fake", retryCount: 0, request });
     };
-    return { tried, transport: rpcTransport(chain, { connect, now: () => Date.now() })({ chain }) };
+    return { tried, health, transport: rpcTransport(chain, { connect, now: () => Date.now(), health })({ chain }) };
   }
 
   it("1. pays one 3 s timeout for a hung primary, then the next call skips it without waiting", async () => {
@@ -142,18 +142,20 @@ describe("rpcTransport's cooldown", () => {
     expect(tried).toEqual([u0, u0, u1, u1]);
   });
 
-  it("7. hands the caller's per-request options (its signal) on to the endpoint", async () => {
-    const received: unknown[] = [];
+  it("7. hands the endpoint a signal that ends when the caller's does", async () => {
+    const received: (AbortSignal | undefined)[] = [];
     const { transport } = endpoints({ [u0]: [async (options) => (received.push(options?.signal), "0x10")] });
-    const signal = new AbortController().signal;
-    await expect(transport.request({ method: "eth_blockNumber" }, { signal })).resolves.toBe("0x10");
-    expect(received).toEqual([signal]);
+    const caller = new AbortController();
+    await expect(transport.request({ method: "eth_blockNumber" }, { signal: caller.signal })).resolves.toBe("0x10");
+    expect(received[0]?.aborted).toBe(false);
+    caller.abort();
+    expect(received[0]?.aborted).toBe(true);
   });
 
   it("8. neither cools an endpoint down nor asks another when the caller gave up", async () => {
     const waitsForAbort: Behaviour = (options) =>
       new Promise((_, reject) => options?.signal?.addEventListener("abort", () => reject(options.signal?.reason)));
-    const { tried, transport } = endpoints({ [u0]: [waitsForAbort, answers("0xaa")], [u1]: [answers("0x10")] });
+    const { tried, health, transport } = endpoints({ [u0]: [waitsForAbort, answers("0xaa")], [u1]: [answers("0x10")] });
     const caller = new AbortController();
     const a = outcome(transport.request({ method: "eth_blockNumber" }, { signal: caller.signal }));
     await vi.advanceTimersByTimeAsync(0);
@@ -161,7 +163,15 @@ describe("rpcTransport's cooldown", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(a.settled).toBeInstanceOf(Error);
     expect(tried).toEqual([u0]);
-    await expect(blockNumber(transport)).resolves.toBe("0xaa"); // u0 wasn't put on cooldown
+    expect(health.coolingUntil.size).toBe(0); // no endpoint cooled down (review M9b)
+    await expect(blockNumber(transport)).resolves.toBe("0xaa");
+  });
+
+  it("8b. asks no endpoint, and cools none, when the caller's signal had aborted before the call", async () => {
+    const { tried, health, transport } = endpoints({});
+    await expect(transport.request({ method: "eth_blockNumber" }, { signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(tried).toEqual([]);
+    expect(health.coolingUntil.size).toBe(0);
   });
 
   it("9. shares its cooldowns with every transport built on the same health, as each copy of a module is", async () => {
@@ -263,6 +273,26 @@ describe("rpcTransport over viem's HTTP transport", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(second.settled).toBe("0x10");
     expect(tried).toEqual([urls[0], urls[1], urls[1]]);
+  });
+
+  it("still cuts a hung endpoint off at 3 s when the caller passes a signal, and cools it (review M-12)", async () => {
+    vi.useFakeTimers();
+    // Node's AbortSignal.timeout runs on an internal timer that fake timers can't reach; this stand-in runs on setTimeout.
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const timer = new AbortController();
+      setTimeout(() => timer.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), ms);
+      return timer.signal;
+    });
+    const tried = stubFetch((url, init) => (url === urls[0] ? hang(init) : Promise.resolve(result("0x10"))));
+    const transport = connectTo();
+    const first = outcome(transport.request({ method: "eth_blockNumber" }, { signal: new AbortController().signal }));
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(first.settled).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first.settled).toBe("0x10");
+    await expect(blockNumber(transport)).resolves.toBe("0x10");
+    expect(tried).toEqual([urls[0], urls[1], urls[1]]); // the timed-out primary was skipped the next time
+    vi.restoreAllMocks();
   });
 
   it("hands a JSON-RPC error straight back from the first URL, which stays in use", async () => {
