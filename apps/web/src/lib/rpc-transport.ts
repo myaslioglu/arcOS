@@ -26,6 +26,8 @@ export type RpcTransportOptions = {
  * again, and one that answers is back in use at once. Only an attempt sent after an endpoint's last failure can end its
  * cooldown that way: an answer that was already on its way when the endpoint failed says nothing about it since.
  *
+ * viem's per-request options (a caller's `signal`) go on to the endpoint, and a call the caller aborted cools nothing.
+ *
  * The cooldowns are one timestamp per URL, compared against `now()` when a call starts; nothing runs in the background.
  * They live as long as the transport, and inspect-server.ts builds its one when it loads, so they are per instance.
  *
@@ -43,21 +45,22 @@ export function rpcTransport(
   let seq = 0;
   return (({ chain: forChain }) => {
     const endpoints = urls.map((url) => ({ url, transport: connect(url)({ chain: forChain, retryCount: 0 }) }));
-    const request = (async (args: Parameters<EIP1193RequestFn>[0]) => {
+    const request = (async (args: Parameters<EIP1193RequestFn>[0], options?: Parameters<EIP1193RequestFn>[1]) => {
       const start = now();
       const ready = endpoints.filter(({ url }) => (coolingUntil.get(url) ?? 0) <= start);
       let failure: unknown;
       for (const { url, transport } of ready.length > 0 ? ready : endpoints) {
         const attempt = ++seq;
         try {
-          const answer: unknown = await transport.request(args);
+          const answer: unknown = await transport.request(args, options);
           if ((failedAt.get(url) ?? 0) < attempt) {
             coolingUntil.delete(url);
             failedAt.delete(url);
           }
           return answer;
         } catch (e) {
-          if (isNodeAnswer(e)) throw e;
+          // The caller gave up, or the node answered: neither says the endpoint failed.
+          if (options?.signal?.aborted || isNodeAnswer(e)) throw e;
           coolingUntil.set(url, now() + COOLDOWN_MS);
           failedAt.set(url, ++seq);
           failure = e;

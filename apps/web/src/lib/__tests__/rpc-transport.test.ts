@@ -39,7 +39,8 @@ describe("rpcTransport's cooldown", () => {
     vi.useRealTimers();
   });
 
-  type Behaviour = () => Promise<unknown>;
+  /** One call's outcome; `options` are the per-request options the endpoint received (a caller's `signal`). */
+  type Behaviour = (options?: { signal?: AbortSignal }) => Promise<unknown>;
   const answers = (value: unknown): Behaviour => async () => value;
   /** What viem's HTTP transport throws when an endpoint doesn't answer within its 3 s timeout. */
   const hangs = (url: string): Behaviour => () =>
@@ -59,12 +60,12 @@ describe("rpcTransport's cooldown", () => {
     const tried: string[] = [];
     const calls = new Map<string, number>();
     const connect = (url: string): Transport => () => {
-      const request = (async () => {
+      const request = (async (_: unknown, options?: { signal?: AbortSignal }) => {
         tried.push(url);
         const n = (calls.get(url) ?? 0) + 1;
         calls.set(url, n);
         const steps = script[url] ?? [answers("0x1")];
-        return steps[Math.min(n, steps.length) - 1]!();
+        return steps[Math.min(n, steps.length) - 1]!(options);
       }) as EIP1193RequestFn;
       return createTransport({ key: "fake", name: "Fake endpoint", type: "fake", retryCount: 0, request });
     };
@@ -139,6 +140,28 @@ describe("rpcTransport's cooldown", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(c.settled).toBe("0x10");
     expect(tried).toEqual([u0, u0, u1, u1]);
+  });
+
+  it("7. hands the caller's per-request options (its signal) on to the endpoint", async () => {
+    const received: unknown[] = [];
+    const { transport } = endpoints({ [u0]: [async (options) => (received.push(options?.signal), "0x10")] });
+    const signal = new AbortController().signal;
+    await expect(transport.request({ method: "eth_blockNumber" }, { signal })).resolves.toBe("0x10");
+    expect(received).toEqual([signal]);
+  });
+
+  it("8. neither cools an endpoint down nor asks another when the caller gave up", async () => {
+    const waitsForAbort: Behaviour = (options) =>
+      new Promise((_, reject) => options?.signal?.addEventListener("abort", () => reject(options.signal?.reason)));
+    const { tried, transport } = endpoints({ [u0]: [waitsForAbort, answers("0xaa")], [u1]: [answers("0x10")] });
+    const caller = new AbortController();
+    const a = outcome(transport.request({ method: "eth_blockNumber" }, { signal: caller.signal }));
+    await vi.advanceTimersByTimeAsync(0);
+    caller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.settled).toBeInstanceOf(Error);
+    expect(tried).toEqual([u0]);
+    await expect(blockNumber(transport)).resolves.toBe("0xaa"); // u0 wasn't put on cooldown
   });
 
   it("4. tries them all in list order when every endpoint is cooling down, and uses the one that answered again at once", async () => {
