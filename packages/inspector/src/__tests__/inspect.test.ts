@@ -1226,6 +1226,20 @@ describe("ZeppelinOS-style proxies", () => {
     expect(find(r, "privileges").detail).toMatch(/ZeppelinOS/);
   });
 
+  it("scores nothing behind a clone whose target's EIP-1967 and ZeppelinOS slots point at different code", async () => {
+    const OTHER = "0x7777777777777777777777777777777777777777";
+    const r = await run({
+      code: { [TOKEN]: cloneOf(IMPL), [IMPL]: FORWARDER, [GRAND]: MINTABLE, [OTHER]: PLAIN },
+      storage: { [`${IMPL}:${IMPL_SLOT}`]: slotWith(GRAND), [`${IMPL}:${ZOS_IMPL}`]: slotWith(OTHER) },
+    });
+    expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Clone of an upgradeable proxy" });
+    for (const id of ["ownership", "privileges", "prevrandao"] as const) {
+      expect([id, find(r, id).status]).toEqual([id, "unknown"]);
+    }
+    expect(find(r, "privileges")).toMatchObject({ title: "Couldn't read the contract's logic" });
+    expect(find(r, "privileges").detail).toMatch(/ZeppelinOS/);
+  });
+
   it("won't score an implementation that is itself a ZeppelinOS-style proxy", async () => {
     const r = await run({
       code: { [TOKEN]: FORWARDER, [IMPL]: FORWARDER, [GRAND]: MINTABLE },
