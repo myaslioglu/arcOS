@@ -191,7 +191,7 @@ text matches this if it happens to come up while running the rest of this sectio
     fee is charged — confirm both states by toggling the env var and restarting `npm run dev`. A
     fee entry whose amount comes back `null` reads "unknown", never silently disappears.
 38. Type "1,5" into the amount box: no message appears, and within about 400ms the estimate is for
-    1.5 (not 1,500 times that). Clear it and type "1,500": `"1,500" could mean 1500 or 1.5. Write
+    1.5 (on live, "1,5" was refused). Clear it and type "1,500": `"1,500" could mean 1500 or 1.5. Write
     1500, or 1.5 with a dot.` appears and Swap is disabled. Clear it and type "1,500.25": no
     message, and the estimate is for 1500.25. Clear it and type a valid amount to confirm the
     message clears and Swap re-enables. Switch "You send" to cirBTC and type "0.12345678" (8
@@ -305,18 +305,25 @@ text matches this if it happens to come up while running the rest of this sectio
     ```
     (the second row's amount, "100,1", is a lone comma right after a comma-separated address — it
     could be a decimal comma or a third column, and the row can't tell which). Expect: "Some
-    amounts could be read two ways. Fix those rows before sending." appears above the issues list,
-    the second row shows excluded with `In a comma-separated list, write decimals with a dot, or
-    separate the columns with a semicolon or a tab.`, and Send is disabled even though the first row
-    is fine on its own. Retype the second row's amount as "100.1" (or move it after a semicolon,
-    e.g. "0x2222…;100,1"): the sentence and the disabled Send both clear. Separately, a row like
+    amounts could be read two ways (line 2). Fix those rows before sending." appears above the
+    issues list, naming that row's own line number, the second row shows excluded with `In a
+    comma-separated list, write amounts without a comma (1500, or 1.5), or separate the columns
+    with a semicolon or a tab.`, and Send is disabled even though the first row is fine on its own.
+    Retype the second row's amount as "100.1" (or move it after a semicolon, e.g.
+    "0x2222…;100,1"): the banner and the disabled Send both clear. Separately, a row like
     "0x3333…;1,500" (a semicolon separator, three digits after the comma, no leading zero) blocks
     Send the same way, through the parser's own ambiguous message rather than the comma-column one.
+    Also try "0x4444… , 1,5" (a space then a comma — the textarea's own placeholder style, "0x… ,
+    12.5"): refused the same as a plain comma row, not read as 1.5.
 53. Mint, the supply/cap echo: type "100.000" into the Initial supply field — "= 100 DUKE" (or
     whatever symbol is set) appears under the field, confirming what will actually be minted is 100,
     not a hundred thousand. Type "1,5" instead: the echo reads "= 1.5 DUKE". Clear the field, or
     type something that doesn't parse (e.g. "abc" or "100,000", which is ambiguous): the echo
-    disappears. With "I can mint more later" checked, repeat for the Maximum supply field.
+    disappears. With "I can mint more later" checked, repeat for the Maximum supply field. Then
+    click Create with the supply empty: an error appears under the field. Without clicking Create
+    again, type "100.000" into the supply field: the error clears immediately and "= 100 DUKE"
+    shows right away, not just after another click (RI2 — a stale error used to hide the echo until
+    the next submit).
 
 ## Before mainnet — gate list
 

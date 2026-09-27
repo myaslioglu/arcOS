@@ -135,6 +135,20 @@ describe("parseUsdc", () => {
     expect(attemptUsdc(` ${long} `)).toEqual({ code: "format", message: `"${"1".repeat(24)}…" isn't a number` });
   });
 
+  // Rm4: the cap counts Unicode CODE POINTS, not UTF-16 units, so it never lands inside a surrogate
+  // pair. "1" then 30 emoji is parity-shifted on purpose: a naive `.slice(0, 24)` on UTF-16 units
+  // would land one unit into the 12th emoji (1 + 11*2 = 23, then +1 more unit), leaving a lone
+  // surrogate — which is what LONE_SURROGATE below would catch.
+  it("caps the message by code point, never splitting an emoji into a lone surrogate", () => {
+    const LONE_SURROGATE = /\p{Surrogate}/u;
+    const long = "1" + "🎉".repeat(30);
+    const result = attemptUsdc(long);
+    if (result === "no-throw") throw new Error("expected a format error");
+    expect(result.code).toBe("format");
+    expect(LONE_SURROGATE.test(result.message)).toBe(false);
+    expect(result.message).toBe(`"1${"🎉".repeat(23)}…" isn't a number`);
+  });
+
   it("still refuses a shape that was never valid: a stray comma, a double comma, or a comma after a dot", () => {
     for (const bad of [",5", "5,", "1,,2.5", "1.5,000"]) {
       expect(() => parseUsdc(bad), bad).toThrowError(AmountError);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BATCH, MAX_BATCH, batchSizes, chunk, formatDropList, hasAmbiguousIssue, parseDropList } from "../parse";
+import { BATCH, MAX_BATCH, ambiguousBannerText, batchSizes, chunk, formatDropList, hasAmbiguousIssue, parseDropList } from "../parse";
 
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
@@ -84,7 +84,8 @@ describe("thousands separators", () => {
 });
 
 describe("a lone comma right after a comma-separated address (I4, m5)", () => {
-  const COMMA_ROW = "In a comma-separated list, write decimals with a dot, or separate the columns with a semicolon or a tab.";
+  const COMMA_ROW =
+    "In a comma-separated list, write amounts without a comma (1500, or 1.5), or separate the columns with a semicolon or a tab.";
 
   it("refuses it outright, whatever the parser itself would call it — a clean decimal or ambiguous", () => {
     for (const amount of ["1,5", "1,500", "100,1", "0,5"]) {
@@ -92,6 +93,22 @@ describe("a lone comma right after a comma-separated address (I4, m5)", () => {
       expect(rows, amount).toEqual([]);
       expect(issues, amount).toEqual([{ line: 1, message: COMMA_ROW, ambiguous: true }]);
     }
+  });
+
+  // RI1: a row is comma-separated when the RUN of separators after the address contains a comma
+  // anywhere in it, not just as its first character — " , " is the textarea's own placeholder style.
+  it("refuses it when the comma is anywhere in the separator run, not just its first character", () => {
+    for (const row of [`${A} , 1,5`, `${A}\t,1,5`, `${A} ,100,1`]) {
+      const { rows, issues } = parseDropList(row, 6);
+      expect(rows, row).toEqual([]);
+      expect(issues, row).toEqual([{ line: 1, message: COMMA_ROW, ambiguous: true }]);
+    }
+  });
+
+  it("still reads a comma-plus-dot thousands amount after a padded comma separator", () => {
+    const { rows, issues } = parseDropList(`${A} , 1,000.50`, 6);
+    expect(issues).toEqual([]);
+    expect(rows).toEqual([{ line: 1, address: A, amount: 1_000_500_000n }]);
   });
 
   it("marks the row ambiguous for hasAmbiguousIssue, same as the parser's own ambiguous code — an ordinary issue doesn't count", () => {
@@ -117,6 +134,41 @@ describe("a lone comma right after a comma-separated address (I4, m5)", () => {
 
   it("keeps reading a two-or-more-group amount as thousands after a comma-separated address", () => {
     expect(parseDropList(`${A},1,000,000`, 0).rows).toEqual([{ line: 1, address: A, amount: 1_000_000n }]);
+  });
+});
+
+// Rm2: the banner names the ambiguous rows' own line numbers, up to 3, so it stays useful even
+// when the issue list itself is capped at 50 (IssuesList's SHOWN).
+describe("ambiguousBannerText", () => {
+  const issue = (line: number, ambiguous = true) => ({ line, message: "x", ambiguous });
+
+  it("is null when nothing is ambiguous", () => {
+    expect(ambiguousBannerText([])).toBeNull();
+    expect(ambiguousBannerText([issue(1, false), issue(2, false)])).toBeNull();
+  });
+
+  it("names a single line, singular", () => {
+    expect(ambiguousBannerText([issue(12)])).toBe("Some amounts could be read two ways (line 12). Fix those rows before sending.");
+  });
+
+  it("names up to 3 lines in full", () => {
+    expect(ambiguousBannerText([issue(3), issue(12)])).toBe(
+      "Some amounts could be read two ways (lines 3 and 12). Fix those rows before sending.",
+    );
+    expect(ambiguousBannerText([issue(3), issue(12), issue(57)])).toBe(
+      "Some amounts could be read two ways (lines 3, 12 and 57). Fix those rows before sending.",
+    );
+  });
+
+  it("names the first 2 and collapses the rest into 'and N more' past 3", () => {
+    expect(ambiguousBannerText([issue(12), issue(57), issue(90), issue(104), issue(200)])).toBe(
+      "Some amounts could be read two ways (lines 12, 57 and 3 more). Fix those rows before sending.",
+    );
+  });
+
+  it("only counts ambiguous issues, and reads their own line numbers, not their position in the array", () => {
+    const issues = [issue(4, false), issue(12), issue(9, false), issue(57)];
+    expect(ambiguousBannerText(issues)).toBe("Some amounts could be read two ways (lines 12 and 57). Fix those rows before sending.");
   });
 });
 

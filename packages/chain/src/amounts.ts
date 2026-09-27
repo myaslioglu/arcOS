@@ -40,10 +40,13 @@ function isAmbiguousGrouping(before: string, after: string): boolean {
 }
 
 /** The text as it appears inside an error message: the TRIMMED input (never the raw text, so
- * surrounding whitespace, an NBSP or a BOM never shows up inside the quotes), capped at 24
- * characters plus "…" so pasting a megabyte into the box doesn't echo a megabyte back. */
+ * surrounding whitespace, an NBSP or a BOM never shows up inside the quotes), capped at 24 Unicode
+ * CODE POINTS plus "…" so pasting a megabyte into the box doesn't echo a megabyte back. `Array.from`
+ * splits by code point, not UTF-16 unit, so the cut never lands inside a surrogate pair — a plain
+ * `.slice(0, 24)` on a run of emoji can leave a lone surrogate, which renders as "�" (Rm4). */
 function quoted(trimmedText: string): string {
-  return trimmedText.length > 24 ? `${trimmedText.slice(0, 24)}…` : trimmedText;
+  const codePoints = Array.from(trimmedText);
+  return codePoints.length > 24 ? `${codePoints.slice(0, 24).join("")}…` : trimmedText;
 }
 
 /** Builds the ambiguous-comma message from the same digits both readings come from: the thousands

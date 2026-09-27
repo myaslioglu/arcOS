@@ -40,7 +40,14 @@ function Form() {
 
   if (!contracts) return <p className="p-5 text-sm text-muted">{"Mint isn't deployed on this network yet."}</p>;
 
-  const set = <K extends keyof MintForm>(key: K, value: MintForm[K]) => setForm((f) => ({ ...f, [key]: value }));
+  // RI2: clears the field's own stale error the moment it changes, so a retype after a refused
+  // submit shows the echo again instead of the old error sitting there until the next submit
+  // re-validates — the exact case (I3) the echo exists for: someone corrects "100,000" to
+  // "100.000" and the echo, not a leftover error, is what's on screen before they click Create.
+  const set = <K extends keyof MintForm>(key: K, value: MintForm[K]) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setErrors((e) => ({ ...e, [key]: undefined }));
+  };
 
   // I3/m3: read the same way validateMint reads them, but live, on every keystroke — see the echo
   // rendered under the supply/cap fields below and amountEcho's own doc comment for why.

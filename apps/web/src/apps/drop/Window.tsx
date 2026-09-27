@@ -16,7 +16,7 @@ import { failedRowsText } from "./clipboard";
 import { dropFeeText } from "./dropFee";
 import { IssuesList } from "./IssuesList";
 import { drop } from "./manifest";
-import { BATCH, formatDropList, hasAmbiguousIssue, parseDropList } from "./parse";
+import { BATCH, ambiguousBannerText, formatDropList, hasAmbiguousIssue, parseDropList } from "./parse";
 import { canDismissResult, remainingBannerText } from "./result";
 import { ResultPanel } from "./ResultPanel";
 import { session } from "./session";
@@ -145,6 +145,9 @@ function Form({ params }: Pick<AppProps, "params">) {
   );
   const totalDisplay = decimals === null ? "" : asset.kind === "token" ? formatUnits(total, asset.decimals) : formatUsdc(unitsToNative(total));
   const batches = Math.ceil(rows.length / BATCH) || 0;
+  // null when no row is ambiguous (mirrors hasAmbiguousIssue, used for canSend below); otherwise the
+  // banner text itself, naming the ambiguous rows' own line numbers (Rm2).
+  const ambiguousBanner = ambiguousBannerText(issues);
   // Derived, not reset from inside the effect below (which would mean calling setState synchronously
   // during an effect, on every row-count change): a stale quote from a previous, longer list must
   // never be shown — or offered a Retry — once the list is empty.
@@ -202,6 +205,12 @@ function Form({ params }: Pick<AppProps, "params">) {
     // in the box right now. Otherwise a stale render could hand `send` rows that were already delivered a
     // moment ago (see canSend.ts / the "stale text" guard on the button itself).
     const fresh = parseDropList(text, decimals);
+    // Rm1: re-checked here for the same reason the quote count is below — canSend() already
+    // disables the button for this, but there's no reachable path today where it's stale by the
+    // time submit runs. Kept for parity with that guard, and in case a future change adds one.
+    if (hasAmbiguousIssue(fresh.issues)) {
+      return notify("Some amounts could be read two ways. Fix those rows before sending.", "warn");
+    }
     if (fresh.rows.length === 0) return;
     // Mirrors Mint's own fresh-fee guard: refuse to start a paid send without a known fee to compare
     // against, rather than silently skipping the per-batch staleness check below.
@@ -293,7 +302,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     textIsCurrent,
     rowCount: rows.length,
     issueCount: issues.length,
-    hasAmbiguousRow: hasAmbiguousIssue(issues),
+    hasAmbiguousRow: ambiguousBanner !== null,
     sessionActive,
     unconfirmedPending: !canDismiss,
     quoteCount: quote && quote !== "error" ? quote.count : null,
@@ -377,9 +386,7 @@ function Form({ params }: Pick<AppProps, "params">) {
             <p className="mt-3">
               {rows.length} recipients{issues.length > 0 ? ` · ${issues.length} excluded` : ""} · total {totalDisplay} {symbol}
             </p>
-            {hasAmbiguousIssue(issues) && (
-              <p className="mt-2 text-accent-3-text">Some amounts could be read two ways. Fix those rows before sending.</p>
-            )}
+            {ambiguousBanner && <p className="mt-2 text-accent-3-text">{ambiguousBanner}</p>}
             <IssuesList issues={issues} />
             {quote === "error" ? (
               <p className="mt-3 text-xs text-accent-3-text">
