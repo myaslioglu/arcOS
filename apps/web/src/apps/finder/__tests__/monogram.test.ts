@@ -15,6 +15,7 @@ describe("tokenMonogram", () => {
     expect(tokenMonogram("w.E-T_H")).toBe("WET");
     expect(tokenMonogram("U​SDC")).toBe("USD");
     expect(tokenMonogram("&lt;script&gt;")).toBe("LTS");
+    expect(tokenMonogram("_AB")).toBe("AB");
   });
 
   it("drops a non-ASCII letter instead of turning it into the ASCII one it looks like", () => {
@@ -59,9 +60,16 @@ describe("tokenHue", () => {
   });
 
   it("gives an address the same hue whatever its letter case", () => {
-    const a = "0x89205A3A3b2A69De6Dbf7f01ED13B2108B2c43e7";
-    expect(tokenHue(a)).toEqual(tokenHue(a.toLowerCase()));
-    expect(tokenHue(a)).toEqual(tokenHue(a));
+    // Checksummed addresses whose hash, taken without lower-casing, lands in another bucket.
+    for (const a of [
+      "0x000000000000000000000000000000000000dEaD",
+      "0x113f3864C94ff6a14310a789bD671de5b78D6CBf",
+      "0x41FaFc54ED3be1545695B82af4aA490607447884",
+      "0xa68edD822048C00dC816d93005B72F8a50234a24",
+    ]) {
+      expect(tokenHue(a), a).toEqual(tokenHue(a.toLowerCase()));
+      expect(tokenHue(a), a).toEqual(tokenHue(a.toUpperCase().replace("0X", "0x")));
+    }
   });
 
   it("spreads addresses over all three accents", () => {
