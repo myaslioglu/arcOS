@@ -173,8 +173,9 @@ Bridge" section below for what to check, including the fee split).
 Swap and Bridge call Circle's App Kit SDK without an API key (keyless mode), so both share one
 public rate limit with the rest of the internet rather than a limit scoped to this app. A "busy"
 response from the service is a real possibility, not a bug: Swap shows "The swap service is busy.
-Try again in a minute." (as the amount-box estimate error, or as the result after clicking Swap),
-and Bridge shows the equivalent "The bridge service is busy. Try again in a minute." This can't be
+Try again in a minute." as the amount-box estimate error, and after clicking Swap it shows "The swap
+service is busy, and the swap may still have gone through. Check your wallet's activity before trying
+again in a minute." (the SDK also calls the service after the wallet sends), and Bridge shows the equivalent "The bridge service is busy. Try again in a minute." This can't be
 reliably provoked on demand — it depends on the service's own load — so just confirm the message
 text matches this if it happens to come up while running the rest of this section.
 

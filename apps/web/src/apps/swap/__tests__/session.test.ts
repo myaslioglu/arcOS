@@ -100,9 +100,9 @@ describe("classifySwapFailure", () => {
     expect(classifySwapFailure(err)).toBe("Cancelled.");
   });
 
-  it("reads a rate limit (a real KitError, Circle's own pre-flight API throttle) and keeps its own sentence — the request never reached the chain", () => {
+  it("reads a rate limit (a real KitError) as busy, and still hedges: kit.swap() also calls the API after the wallet sends", () => {
     const err = new KitError({ ...RateLimitError.RATE_LIMIT_EXCEEDED, recoverability: "RETRYABLE", message: "Rate limit exceeded, please retry later" });
-    expect(classifySwapFailure(err)).toBe("The swap service is busy. Try again in a minute.");
+    expect(classifySwapFailure(err)).toBe("The swap service is busy, and the swap may still have gone through. Check your wallet's activity before trying again in a minute.");
   });
 
   // The defect this follow-up fixes: kit.swap() is one opaque promise with no signal for whether a

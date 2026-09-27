@@ -62,10 +62,10 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
  * Decides what Swap's submit catch-all should show — pulled out as a pure function (mirrors Mint's
  * `classifyMintFailure`, apps/mint/session.ts) so it's unit-tested without a live wallet/RPC/SDK.
  *
- * A cancellation and a rate limit are both definite, pre-broadcast failures: `isUserCancellationError`
- * fires before any signature is even requested, and `isRateLimitError` is Circle's own API throttling
- * gate (its doc: "RATE_LIMIT errors indicate API throttling or request frequency limits") — neither
- * can follow a broadcast, so both keep their own plain sentence.
+ * A cancellation is a definite, pre-broadcast failure: `isUserCancellationError` fires before any
+ * signature is sent, so it keeps its own plain sentence. A rate limit is Circle's API throttling, but
+ * `kit.swap()` also talks to that API after the wallet sends (it follows the swap's progress), so a
+ * rate limit can come after a broadcast: it says the service is busy and hedges like the unknown case.
  *
  * Anything else is a genuine unknown: `kit.swap()` is one opaque promise with no `onProgress`/hash
  * signal before it settles (unlike Mint's `writeContractAsync`, which hands back a hash synchronously
@@ -79,7 +79,7 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
  */
 export function classifySwapFailure(err: unknown): string {
   if (isUserCancellationError(err)) return "Cancelled.";
-  if (isRateLimitError(err)) return "The swap service is busy. Try again in a minute.";
+  if (isRateLimitError(err)) return "The swap service is busy, and the swap may still have gone through. Check your wallet's activity before trying again in a minute.";
   return "The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.";
 }
 
