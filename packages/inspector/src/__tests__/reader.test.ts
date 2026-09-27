@@ -4,7 +4,7 @@ import {
   parseAbi, type PublicClient,
 } from "viem";
 import { viemReader } from "../reader";
-import { isNodeAnswer } from "../rpc-errors";
+import { isDecodeFailure, isNodeAnswer } from "../rpc-errors";
 import { CallReverted } from "../types";
 
 const abi = parseAbi(["function foo() view returns (uint256)"]);
@@ -65,6 +65,9 @@ describe("viemReader().read: which node answers are reverts", () => {
     ["-32003 revert: OutOfFunds (Arc)", rpcError(-32003, "revert: OutOfFunds")],
     ["-32603 whose message and data say it reverted", rpcError(-32603, "VM Exception while processing transaction: reverted with reason string", REVERT_DATA)],
     ["a revert carried by an HTTP 500", rpcError(3, "execution reverted", "0x", 500)],
+    // Reverts shown only by their data (review RE3): the message says nothing, the JSON-RPC error's data does.
+    ["Nethermind's VM execution error with Reverted data", rpcError(-32015, "VM execution error.", `Reverted ${REVERT_DATA}`)],
+    ["a JSON-RPC error whose only sign is its revert data", rpcError(-32000, "VM execution error", REVERT_DATA)],
     ["an empty answer (no such function)", result("0x")],
   ])("%s is a revert", async (_, respond) => {
     await expect(read(respond)).rejects.toBeInstanceOf(CallReverted);
@@ -83,6 +86,17 @@ describe("viemReader().read: which node answers are reverts", () => {
     const e: unknown = await read(respond).catch((x: unknown) => x);
     expect(e).not.toBeInstanceOf(CallReverted);
     expect(isNodeAnswer(e)).toBe(false);
+  });
+
+  // The node answered, but too few bytes to decode (review I-4). viem keeps those bytes in its decode error's `data`,
+  // which is not revert data: only a JSON-RPC error's data can say the call reverted.
+  it.each([
+    ["4 bytes", "0x12345678"],
+    ["20 bytes (a packed address)", "0x3333333333333333333333333333333333333333"],
+  ])("an answer of %s is not a revert: the node answered, and viem couldn't decode it", async (_, answer) => {
+    const e: unknown = await read(result(answer)).catch((x: unknown) => x);
+    expect(e).not.toBeInstanceOf(CallReverted);
+    expect(isDecodeFailure(e)).toBe(true);
   });
 
   it("-32602 invalid params is the node's answer, but not a revert", async () => {

@@ -58,7 +58,8 @@ export function isRevert(e: unknown): boolean {
     (l) =>
       l.code === EXECUTION_REVERTED ||
       REVERT_TEXT.test(nodeText(l)) ||
-      revertData(l.data) ||
+      // Only a JSON-RPC error's data is the node's: viem's decode errors keep the bytes they couldn't decode in `data`.
+      (typeof l.code === "number" && revertData(l.data)) ||
       revertData(l.raw) ||
       (named(l, "ContractFunctionRevertedError") && (typeof l.data === "object" || typeof l.signature === "string")),
   );

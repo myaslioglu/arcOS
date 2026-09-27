@@ -365,6 +365,15 @@ describe("an inspection over rpcTransport when owner() gets a gateway error", ()
     expect(r.findings.find((f) => f.id === "ownership")).toMatchObject({ status: "warn", title: "Owned by a wallet" });
   });
 
+  it.each([
+    ["4 bytes", "0x12345678"],
+    ["20 bytes (a packed address)", `0x${OWNER.slice(2)}`],
+  ])("says the owner is unknown, not 'No owner function', when owner() answers %s (review I-4)", async (_, answer) => {
+    const r = await node(() => reply({ result: answer }));
+    expect(r.findings.find((f) => f.id === "ownership")).toMatchObject({ status: "unknown", title: "Couldn't read the owner" });
+    expect(r.degraded).toBe(false); // the node answered; asking again returns the same bytes
+  });
+
   it("says the owner is unknown, and the report is degraded, when no URL answers", async () => {
     const r = await node(() => gatewayError());
     expect(r.findings.find((f) => f.id === "ownership")).toMatchObject({ status: "unknown", title: "Couldn't read the owner" });
