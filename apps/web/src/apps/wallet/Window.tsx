@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { useAccount, useBalance, useConnect, useDisconnect } from "wagmi";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
-import { useArcNetwork } from "@/lib/network";
+import { connectErrorMessage, useArcNetwork } from "@/lib/network";
 import { visibleConnectors } from "@/providers/wagmi";
 
 const noSubscription = () => () => {};
@@ -58,7 +58,7 @@ export default function WalletWindow() {
           <p className="mt-4 text-muted">No wallet found in this browser. Install a browser wallet that supports Arc, then reload.</p>
         )}
         {isPending && <p className="mt-3 text-muted">Waiting for your wallet…</p>}
-        {error && <p className="mt-3 text-accent-3-text">{error.message}</p>}
+        {error && <p className="mt-3 text-accent-3-text">{connectErrorMessage(error)}</p>}
       </div>
     );
   }

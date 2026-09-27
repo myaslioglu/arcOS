@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { BaseError, SwitchChainError, UserRejectedRequestError } from "viem";
-import { switchNetworkErrorMessage } from "../network";
+import { BaseError, ResourceUnavailableRpcError, SwitchChainError, UserRejectedRequestError } from "viem";
+import { connectErrorMessage, switchNetworkErrorMessage } from "../network";
 
 const CHAIN_NAME = "Arc";
 const REJECTED = "Your wallet didn't switch networks. Try again, or add Arc in your wallet.";
 const GENERIC = "Something went wrong switching networks.";
+const ALREADY_OPEN = "Your wallet already has a request open. Check your wallet and try again.";
 
 describe("switchNetworkErrorMessage", () => {
   it("reads as a rejection for a viem UserRejectedRequestError", () => {
@@ -32,10 +33,9 @@ describe("switchNetworkErrorMessage", () => {
   // free of raw RPC/provider/transport detail. Known EIP-1193 codes now map to a specific sentence;
   // everything else gets one generic sentence, never the error's own text.
 
-  it("maps code 4902 (chain not added to the wallet) to a specific, actionable sentence", () => {
-    // viem's own SwitchChainError carries code 4902 by construction — exactly what a wallet without
-    // the chain added throws.
-    const err = new SwitchChainError(new Error("Unrecognized chain."));
+  it("maps a bare, unwrapped code 4902 (chain not added to the wallet) to a specific, actionable sentence", () => {
+    // A wallet that hasn't been taught the chain can send this raw, before viem ever wraps it.
+    const err = { code: 4902, message: "Unrecognized chain." };
     const message = switchNetworkErrorMessage(err, CHAIN_NAME);
     expect(message).toMatch(/isn't added/i);
     expect(message).toMatch(/Arc/);
@@ -43,10 +43,31 @@ describe("switchNetworkErrorMessage", () => {
     expect(message).not.toMatch(/Unrecognized chain/);
   });
 
+  // The defect this wave fixes: wagmi wraps EVERY non-rejection switchChain failure in viem's own
+  // SwitchChainError, whose `.code` is 4902 BY CONSTRUCTION (see node_modules/viem/errors/rpc.ts —
+  // RpcError's constructor hardcodes the class's static code unless the immediate cause is itself a
+  // raw RpcRequestError). Reading that outer code, as errorCode used to, means almost any switch
+  // failure — a request already open, a transport hiccup, anything — reads as "chain not added". The
+  // fix skips a SwitchChainError node and reads the code from what's underneath it instead.
+
+  it("does NOT read a SwitchChainError's own 4902 code — an unrecognized cause underneath gets the generic sentence", () => {
+    const err = new SwitchChainError(new Error("x"));
+    const message = switchNetworkErrorMessage(err, CHAIN_NAME);
+    expect(message).toBe(GENERIC);
+    expect(message).not.toMatch(/isn't added/i);
+  });
+
+  it("finds the real code underneath a SwitchChainError: a wrapped ResourceUnavailableRpcError (-32002) reads as already-open, not isn't-added", () => {
+    const err = new SwitchChainError(new ResourceUnavailableRpcError(new Error("x")));
+    const message = switchNetworkErrorMessage(err, CHAIN_NAME);
+    expect(message).toBe(ALREADY_OPEN);
+    expect(message).not.toMatch(/isn't added/i);
+  });
+
   it("maps code -32002 (a request is already pending in the wallet) to a specific sentence", () => {
     const err = { code: -32002, message: "Request of type 'wallet_switchEthereumChain' already pending" };
     const message = switchNetworkErrorMessage(err, CHAIN_NAME);
-    expect(message).toMatch(/already/i);
+    expect(message).toBe(ALREADY_OPEN);
     expect(message).not.toMatch(/wallet_switchEthereumChain/);
   });
 
@@ -69,5 +90,36 @@ describe("switchNetworkErrorMessage", () => {
   it("falls back to the generic sentence for a thrown non-Error value", () => {
     expect(switchNetworkErrorMessage("nope", CHAIN_NAME)).toBe(GENERIC);
     expect(switchNetworkErrorMessage(null, CHAIN_NAME)).toBe(GENERIC);
+  });
+});
+
+// The other defect this wave fixes: the Wallet window rendered a connect error's raw `.message`
+// straight from useConnect() — wallet/transport text that can carry internal detail or a URL. Never
+// the wallet's own text; one plain sentence per condition instead, same rule as switchNetworkErrorMessage.
+describe("connectErrorMessage", () => {
+  it("reads as a rejection for a viem UserRejectedRequestError", () => {
+    const err = new UserRejectedRequestError(new Error("user rejected"));
+    expect(connectErrorMessage(err)).toBe("You cancelled the request in your wallet.");
+  });
+
+  it("reads as a rejection for a raw provider error carrying code 4001, unwrapped by viem", () => {
+    expect(connectErrorMessage({ code: 4001, message: "User rejected" })).toBe("You cancelled the request in your wallet.");
+  });
+
+  it("maps code -32002 (a request is already pending in the wallet) to the same already-open sentence switching uses", () => {
+    const err = new ResourceUnavailableRpcError(new Error("x"));
+    expect(connectErrorMessage(err)).toBe(ALREADY_OPEN);
+  });
+
+  it("never returns the error's own text — an unknown error's message is not shown, even in part", () => {
+    const err = new Error("visit evil.example");
+    const message = connectErrorMessage(err);
+    expect(message).toBe("Your wallet couldn't connect. Try again.");
+    expect(message).not.toMatch(/evil\.example/);
+  });
+
+  it("falls back to the generic connect sentence for a thrown non-Error value", () => {
+    expect(connectErrorMessage("nope")).toBe("Your wallet couldn't connect. Try again.");
+    expect(connectErrorMessage(null)).toBe("Your wallet couldn't connect. Try again.");
   });
 });
