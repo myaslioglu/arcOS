@@ -11,9 +11,13 @@ import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { shortAddress } from "@/lib/format";
 import { duplicateSymbols, isDuplicateSymbol, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "./tokens";
+import { tokenHue, tokenMonogram } from "./monogram";
 
 /** Page size for `tokensOfSlice`: Finder only ever shows the creator's most recent tokens. */
 const CREATED_PAGE_SIZE = 100;
+
+/** A monogram's size by its length, so one letter fills the tile about as much as three. */
+const MONOGRAM_SIZE: Record<number, string> = { 1: "text-[15px]", 2: "text-[13px]", 3: "text-[11px]" };
 
 function Files() {
   const { address } = useAccount();
@@ -104,6 +108,8 @@ function Files() {
             {files.map((f) => {
               const official = officialSymbol(f.address, network);
               const collides = isDuplicateSymbol(dupes, f.symbol);
+              const monogram = tokenMonogram(f.symbol);
+              const hue = tokenHue(f.address);
               return (
                 <li key={f.address}>
                   <button
@@ -112,12 +118,23 @@ function Files() {
                     aria-pressed={selected?.address === f.address}
                     onClick={() => setSelected(f)}
                     onDoubleClick={() => open("inspector", { token: f.address })}
+                    style={{ "--os-hue": hue.hue } as React.CSSProperties}
                     {...(f.decimals !== null
                       ? dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })
                       : {})}
                   >
                     <span className="os-icon-tile os-icon-tile--sm">
-                      <Coins size={18} strokeWidth={1.6} aria-hidden />
+                      {monogram ? (
+                        <span
+                          aria-hidden
+                          className={`font-mono font-semibold leading-none ${MONOGRAM_SIZE[monogram.length]}`}
+                          style={{ color: hue.text }}
+                        >
+                          {monogram}
+                        </span>
+                      ) : (
+                        <Coins size={16} aria-hidden />
+                      )}
                     </span>
                     <span className="os-icon-name">{f.symbol}</span>
                     <span className="block font-mono text-[10px] text-muted">{shortAddress(f.address)}</span>
