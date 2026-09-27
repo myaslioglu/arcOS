@@ -17,7 +17,7 @@ const REVERT_TEXT = /revert/i;
 /** Revert data: at least a 4-byte error selector. */
 const REVERT_DATA = /^0x[0-9a-f]{8}/i;
 
-type Link = { name?: unknown; code?: unknown; details?: unknown; message?: unknown; shortMessage?: unknown; data?: unknown; raw?: unknown; signature?: unknown };
+type Link = { name?: unknown; code?: unknown; details?: unknown; message?: unknown; shortMessage?: unknown; data?: unknown; signature?: unknown };
 
 /** Every error in a cause chain, outermost first. */
 function chain(e: unknown): Link[] {
@@ -60,7 +60,7 @@ export function isRevert(e: unknown): boolean {
       REVERT_TEXT.test(nodeText(l)) ||
       // Only a JSON-RPC error's data is the node's: viem's decode errors keep the bytes they couldn't decode in `data`.
       (typeof l.code === "number" && revertData(l.data)) ||
-      revertData(l.raw) ||
+      // viem decoded revert data (an Error, a Panic, a custom error) or found an error selector it doesn't know.
       (named(l, "ContractFunctionRevertedError") && (typeof l.data === "object" || typeof l.signature === "string")),
   );
 }
