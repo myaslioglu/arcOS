@@ -61,6 +61,10 @@ export default async function ProofPage({ params }: Props) {
   if (report === "error") {
     return <DegradedPage address={address} message="Couldn't read the chain for this token right now. Try again in a minute." />;
   }
+  // Thrown while the page renders, so Next answers 404 with its error document, which has no <head>:
+  // no theme boot script and no stylesheet until the client has rendered it, so a dark-theme visitor
+  // can see a white frame first. Accepted for this rare dead end: an in-page "not found" view or a
+  // loading.tsx would keep the <head>, but both answer 200 instead of 404.
   if (!report) notFound();
   return (
     <main className="mx-auto max-w-2xl p-6 text-sm">
