@@ -9,13 +9,18 @@ export function tokenMonogram(symbol: string): string | null {
   return kept === "" ? null : kept;
 }
 
+/**
+ * Each accent for the tile, and for the letters its text twin mixed 15% toward the foreground: on
+ * the 13% tint of the tile the twins alone sit at 4.3-4.9:1 in light, the mix at 5.3-6.0:1 (and
+ * 9.5-10.5:1 in dark), with the hue kept.
+ */
 const ACCENTS = [
-  { hue: "var(--accent)", text: "var(--accent-text)" },
-  { hue: "var(--accent-2)", text: "var(--accent-2-text)" },
-  { hue: "var(--accent-3)", text: "var(--accent-3-text)" },
+  { hue: "var(--accent)", text: "color-mix(in oklab, var(--accent-text) 85%, var(--fg))" },
+  { hue: "var(--accent-2)", text: "color-mix(in oklab, var(--accent-2-text) 85%, var(--fg))" },
+  { hue: "var(--accent-3)", text: "color-mix(in oklab, var(--accent-3-text) 85%, var(--fg))" },
 ] as const;
 
-/** A tile's colour for a graphic, and its text-safe twin for the monogram's letters. */
+/** A tile's colour, and the colour of the monogram's letters on it. */
 export type TokenHue = (typeof ACCENTS)[number];
 
 /** One of the accent tokens, picked from the address, so a token keeps its colour and letter case doesn't matter. */

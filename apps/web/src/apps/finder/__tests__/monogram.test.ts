@@ -39,10 +39,23 @@ describe("tokenMonogram", () => {
 describe("tokenHue", () => {
   const ACCENTS = ["var(--accent)", "var(--accent-2)", "var(--accent-3)"];
 
-  it("picks one of the accent tokens, with its text-safe twin", () => {
-    const { hue, text } = tokenHue("0x3600000000000000000000000000000000000000");
-    expect(ACCENTS).toContain(hue);
-    expect(text).toBe(hue.replace(")", "-text)"));
+  // One address in each of the three buckets.
+  const ONE_PER_ACCENT = [
+    "0x000000000000000000000000000000000000dEaD",
+    "0x3600000000000000000000000000000000000000",
+    "0x113f3864C94ff6a14310a789bD671de5b78D6CBf",
+  ];
+
+  it("sets the letters in each accent's text twin, mixed toward the foreground to clear AA on the tile", () => {
+    const seen = new Set<string>();
+    for (const a of ONE_PER_ACCENT) {
+      const { hue, text } = tokenHue(a);
+      const accent = hue.match(/^var\((--accent(?:-[23])?)\)$/)?.[1];
+      expect(accent, a).toBeDefined();
+      expect(text, a).toBe(`color-mix(in oklab, var(${accent}-text) 85%, var(--fg))`);
+      seen.add(hue);
+    }
+    expect([...seen].sort()).toEqual([...ACCENTS].sort());
   });
 
   it("gives an address the same hue whatever its letter case", () => {
