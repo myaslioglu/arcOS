@@ -1,9 +1,10 @@
 type Entry<V> = { at: number; value: Promise<V>; ttlMs: number | null };
 
 /**
- * Per-instance memo with a TTL. Stores the promise, so concurrent callers share one load. `ttl` is a number of ms, or a
- * function that picks one from the loaded value. Either way it counts from when the load started, and a load still in
- * flight (its TTL isn't known yet) is shared until it settles. A load that rejects is dropped, never cached.
+ * An in-memory memo with a TTL (inspect-server.ts keeps one per server process). Stores the promise, so concurrent
+ * callers share one load. `ttl` is a number of ms, or a function that picks one from the loaded value. Either way it
+ * counts from when the load started, and a load still in flight (its TTL isn't known yet) is shared until it settles.
+ * A load that rejects is dropped, never cached.
  */
 export function ttlCache<V>(ttl: number | ((value: V) => number), max = 500, now: () => number = Date.now) {
   const entries = new Map<string, Entry<V>>();
