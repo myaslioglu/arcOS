@@ -211,9 +211,12 @@ function Files() {
 }
 
 export default function FinderWindow() {
+  // Another account has other tokens: keying the list by it starts it over, so a page expanded with
+  // Show more and the selected token don't carry over (switching keeps the wallet connected).
+  const { address } = useAccount();
   return (
     <ConnectGate>
-      <Files />
+      <Files key={address} />
     </ConnectGate>
   );
 }

@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
@@ -39,5 +39,17 @@ describe("Finder, with more tokens than it draws at once", () => {
     expect(html.match(/<li>/g)).toHaveLength(200);
     expect(html).toMatch(/<span[^>]*role="status"[^>]*>Showing 200 of 1,002 tokens<\/span>/);
     expect(html).toMatch(/<button[^>]*>Show more<\/button>/);
+  });
+});
+
+// Switching accounts keeps the wallet connected, so without a key the list would stay mounted: an
+// expanded page would draw that many tiles for the next account, and the last selection would stay.
+describe("Finder, when the account changes", () => {
+  const filesElement = () => (FinderWindow() as ReactElement<{ children: ReactElement }>).props.children;
+
+  it("keys the file list by the account, so another account starts over", () => {
+    expect(filesElement().key).toBe(ACCOUNT);
+    state.address = "0x113f3864C94ff6a14310a789bD671de5b78D6CBf";
+    expect(filesElement().key).toBe("0x113f3864C94ff6a14310a789bD671de5b78D6CBf");
   });
 });
