@@ -30,15 +30,20 @@ describe("ttlCache", () => {
   it("chooses each entry's TTL from the value it loaded, counted from when its load started", async () => {
     let t = 0;
     const cache = ttlCache<{ degraded: boolean }>((v) => (v.degraded ? 30 : 300), 10, () => t);
-    const degraded = vi.fn(async () => ({ degraded: true }));
+    let settle: (v: { degraded: boolean }) => void = () => {};
+    const degraded = vi.fn(() => new Promise<{ degraded: boolean }>((r) => (settle = r)));
     const clean = vi.fn(async () => ({ degraded: false }));
-    await cache.get("d", degraded);
+    const pending = cache.get("d", degraded); // starts at 0...
     await cache.get("c", clean);
+    t = 20;
+    settle({ degraded: true }); // ...and settles at 20
+    await pending;
     t = 30;
     await cache.get("d", degraded);
     await cache.get("c", clean);
     expect([degraded.mock.calls.length, clean.mock.calls.length]).toEqual([1, 1]);
-    t = 31;
+    t = 31; // 31 after the degraded load started, only 11 after it settled: it expires by the start
+    degraded.mockImplementation(async () => ({ degraded: true }));
     await cache.get("d", degraded);
     await cache.get("c", clean);
     expect([degraded.mock.calls.length, clean.mock.calls.length]).toEqual([2, 1]);
