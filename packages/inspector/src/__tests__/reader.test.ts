@@ -9,6 +9,9 @@ import { CallReverted } from "../types";
 
 const abi = parseAbi(["function foo() view returns (uint256)"]);
 const ADDRESS = "0x1111111111111111111111111111111111111111" as const;
+/** The selectors of Solidity's Error(string) and Panic(uint256) reverts. */
+const ERROR_SELECTOR = "0x08c379a0";
+const PANIC_SELECTOR = "0x4e487b71";
 /** Solidity's Error(string) revert payload. */
 const REVERT_DATA = encodeErrorResult({ abi: parseAbi(["error Error(string)"]), errorName: "Error", args: ["Ownable: caller is not the owner"] });
 
@@ -68,6 +71,12 @@ describe("viemReader().read: which node answers are reverts", () => {
     // Reverts shown only by their data (review RE3): the message says nothing, the JSON-RPC error's data does.
     ["Nethermind's VM execution error with Reverted data", rpcError(-32015, "VM execution error.", `Reverted ${REVERT_DATA}`)],
     ["a JSON-RPC error whose only sign is its revert data", rpcError(-32000, "VM execution error", REVERT_DATA)],
+    // A payload that names a known error but won't decode (review M-14). viem's ContractFunctionRevertedError then keeps
+    // the decode error as its cause, so the node's code and data drop out of the chain: only its `raw` still has them.
+    ["code 3 with an Error selector whose arguments don't decode (R7)", rpcError(3, "execution reverted", `${ERROR_SELECTOR}ffffffff`)],
+    ["code 3 with a bare Error selector (R8)", rpcError(3, "execution reverted", ERROR_SELECTOR)],
+    ["code 3 with a Panic selector whose arguments don't decode (R9)", rpcError(3, "execution reverted", `${PANIC_SELECTOR}ffff`)],
+    ["-32603 with malformed Error data (R5)", rpcError(-32603, "internal error", `${ERROR_SELECTOR}ffffffff`)],
     ["an empty answer (no such function)", result("0x")],
   ])("%s is a revert", async (_, respond) => {
     await expect(read(respond)).rejects.toBeInstanceOf(CallReverted);

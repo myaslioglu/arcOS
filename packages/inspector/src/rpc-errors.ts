@@ -17,7 +17,7 @@ const REVERT_TEXT = /revert/i;
 /** Revert data: at least a 4-byte error selector. */
 const REVERT_DATA = /^0x[0-9a-f]{8}/i;
 
-type Link = { name?: unknown; code?: unknown; details?: unknown; message?: unknown; shortMessage?: unknown; data?: unknown; signature?: unknown };
+type Link = { name?: unknown; code?: unknown; details?: unknown; message?: unknown; shortMessage?: unknown; data?: unknown; raw?: unknown; signature?: unknown };
 
 /** Every error in a cause chain, outermost first. */
 function chain(e: unknown): Link[] {
@@ -49,7 +49,12 @@ const endpointFailed = (links: Link[]): boolean => links.some((l) => named(l, "H
 
 /**
  * The node said the call reverted. viem's `ContractFunctionRevertedError` alone isn't enough: viem builds one for any
- * -32603 as well, including a gateway's "upstream unavailable", so it only counts with decoded revert data.
+ * -32603 as well, including a gateway's "upstream unavailable", so it only counts with revert data. Its `raw` is safe
+ * to read as that: viem only builds this error from a node's error (code 3, -32603, -32000 "execution reverted", or a
+ * multicall's failed call), so `raw` is always the node's revert data, never bytes an answer left undecoded (a decode
+ * error's `data`, which is why `data` only counts on a JSON-RPC error). And it's needed: when a payload names a known
+ * error (Error, Panic) but its arguments won't decode, viem keeps the decode error as this error's cause, so the
+ * node's code and data drop out of the chain and only `raw` still holds them.
  */
 export function isRevert(e: unknown): boolean {
   const links = chain(e);
@@ -60,8 +65,9 @@ export function isRevert(e: unknown): boolean {
       REVERT_TEXT.test(nodeText(l)) ||
       // Only a JSON-RPC error's data is the node's: viem's decode errors keep the bytes they couldn't decode in `data`.
       (typeof l.code === "number" && revertData(l.data)) ||
-      // viem decoded revert data (an Error, a Panic, a custom error) or found an error selector it doesn't know.
-      (named(l, "ContractFunctionRevertedError") && (typeof l.data === "object" || typeof l.signature === "string")),
+      // viem decoded revert data (an Error, a Panic, a custom error), found an error selector it doesn't know, or kept
+      // revert data it couldn't decode in `raw`.
+      (named(l, "ContractFunctionRevertedError") && (typeof l.data === "object" || typeof l.signature === "string" || revertData(l.raw))),
   );
 }
 
