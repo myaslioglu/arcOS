@@ -13,7 +13,7 @@ vi.mock("@/lib/inspect-server", () => ({
 import { InspectorBusy } from "@/lib/inspect-server";
 import { GET as inspectRoute } from "@/app/api/inspect/[address]/route";
 import { GET as badgeRoute } from "@/app/badge/[address]/route";
-import OgImage from "@/app/t/[address]/opengraph-image";
+import OgImage, * as ogRoute from "@/app/t/[address]/opengraph-image";
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 
@@ -84,5 +84,12 @@ describe("an inspection that ended without a report, whichever bundled copy thre
   it("answers 404 when there's no contract, not 502", async () => {
     cachedInspection.mockRejectedValue(fromAnotherCopy("NotAContract"));
     expect((await inspect()).status).toBe(404);
+  });
+});
+
+describe("the OG image route's config", () => {
+  it("renders on every request, with no revalidate that would bring back Next's own 5-minute cache", () => {
+    expect(ogRoute.dynamic).toBe("force-dynamic");
+    expect("revalidate" in ogRoute).toBe(false);
   });
 });
