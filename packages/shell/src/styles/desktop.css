@@ -53,6 +53,19 @@
 }
 .os-clock { color: var(--faint); white-space: nowrap; }
 @media (max-width: 419px) { .os-clock { display: none; } }
+/* The theme switch beside the clock. It shows the theme on screen: the sun in
+   light, the moon in dark, picked by <html data-theme>. */
+.os-theme-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 1.75rem; height: 1.75rem; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.os-theme-btn:hover { color: var(--fg); border-color: var(--border-2); }
+.os-theme-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.os-theme-btn svg { width: 14px; height: 14px; }
+.os-theme-moon, [data-theme="dark"] .os-theme-sun { display: none; }
+[data-theme="dark"] .os-theme-moon { display: block; }
 
 .os-icons {
   position: relative; z-index: 10;
@@ -436,6 +449,11 @@
 .os-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-menu-hint { font-size: 11px; color: var(--faint); }
 .os-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.os-menu-heading {
+  padding: 6px 0.6rem 3px 1.55rem;
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.16em; color: var(--faint);
+}
 
 /* Right-click menu on the desktop. */
 .os-ctx { position: fixed; z-index: 90; width: 236px; }

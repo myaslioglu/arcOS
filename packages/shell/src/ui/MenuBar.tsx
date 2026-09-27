@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check } from "lucide-react";
-import type { DesktopWindow } from "../core";
+import { Check, Moon, Sun } from "lucide-react";
+import type { DesktopWindow, ThemePreference } from "../core";
 import { useRegistry } from "./registry";
+import { setThemePreference, toggleTheme, useTheme } from "./theme";
 
 type Item = {
   type: "item";
@@ -14,7 +15,9 @@ type Item = {
   checked?: boolean;
   role?: "menuitem" | "menuitemradio";
 };
-type Entry = Item | { type: "sep" };
+/** Items that belong together under a heading, like the theme choices. */
+type Group = { type: "group"; label: string; items: Item[] };
+type Entry = Item | Group | { type: "sep" };
 type Menu = { id: string; label: React.ReactNode; name: string; entries: Entry[]; brand?: boolean };
 
 const SEP: Entry = { type: "sep" };
@@ -24,6 +27,12 @@ const item = (label: string, onSelect: () => void, extra: Partial<Item> = {}): I
   onSelect,
   ...extra,
 });
+
+const THEME_CHOICES: { preference: ThemePreference; label: string }[] = [
+  { preference: "light", label: "Light" },
+  { preference: "dark", label: "Dark" },
+  { preference: "system", label: "Match system" },
+];
 
 type Props = {
   brand: string;
@@ -63,7 +72,12 @@ function useClock(): string | null {
 
 /**
  * The menu bar of a real computer: the brand menu, then File and Window,
- * each doing something real. On the right, the status slot then the clock.
+ * each doing something real. On the right, the status slot, the theme switch
+ * and the clock.
+ *
+ * The theme choices sit in the brand menu, the system menu, because it's the
+ * one menu a phone still shows: File and Window hide below 768px, and "Match
+ * system" can't be reached from the switch.
  *
  * Menus open on click and, while one is open, follow the pointer to the next
  * title. The keyboard gets the same: Enter or ↓ opens a menu on its first
@@ -77,6 +91,8 @@ export function MenuBar(props: Props) {
   const titles = useRef<Record<string, HTMLButtonElement | null>>({});
   const focusFirst = useRef(false);
   const clock = useClock();
+  const theme = useTheme();
+  const switchLabel = theme.resolved === "dark" ? "Switch to light theme" : "Switch to dark theme";
 
   const active = windows.find((w) => w.winId === activeId) ?? null;
   const visible = windows.filter((w) => !w.minimized);
@@ -92,7 +108,21 @@ export function MenuBar(props: Props) {
           {brand}
         </>
       ),
-      entries: [item(`About ${brand}`, props.onAbout), item("Keyboard shortcuts", props.onShortcuts)],
+      entries: [
+        item(`About ${brand}`, props.onAbout),
+        item("Keyboard shortcuts", props.onShortcuts),
+        SEP,
+        {
+          type: "group",
+          label: "Theme",
+          items: THEME_CHOICES.map((c) =>
+            item(c.label, () => setThemePreference(c.preference), {
+              role: "menuitemradio",
+              checked: theme.preference === c.preference,
+            }),
+          ),
+        },
+      ],
     },
     {
       id: "file",
@@ -191,6 +221,16 @@ export function MenuBar(props: Props) {
 
   const renderEntry = (entry: Entry, key: number) => {
     if (entry.type === "sep") return <div key={key} role="separator" className="os-menu-sep" />;
+    if (entry.type === "group") {
+      return (
+        <div key={key} role="group" aria-label={entry.label}>
+          <div className="os-menu-heading" aria-hidden>
+            {entry.label}
+          </div>
+          {entry.items.map(renderEntry)}
+        </div>
+      );
+    }
     const role = entry.role ?? "menuitem";
     return (
       <button
@@ -257,6 +297,19 @@ export function MenuBar(props: Props) {
       </nav>
       <div className="os-topbar-right">
         {props.statusSlot}
+        {/* Both glyphs render; CSS shows the one for <html data-theme>, which the boot script sets
+            before the first paint, so the icon is right even before this component hydrates. */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={switchLabel}
+          title={switchLabel}
+          data-cursor="hover"
+          className="os-theme-btn"
+        >
+          <Sun className="os-theme-sun" aria-hidden />
+          <Moon className="os-theme-moon" aria-hidden />
+        </button>
         <span className="os-clock tabular-nums" suppressHydrationWarning>
           {clock ?? "--:--"}
         </span>
