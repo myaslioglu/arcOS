@@ -1,18 +1,16 @@
-import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
+import { BaseError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
+import { isRevert } from "./rpc-errors";
 import { CallReverted, type ChainReader } from "./types";
 
 /**
- * viem wraps a revert deep in a `cause` chain (typically inside a `ContractFunctionExecutionError`).
- * Walk it looking for the two shapes that mean "the call reached the chain and reverted, or
- * returned no data" — everything else (timeouts, 5xx, bad JSON) is a transport failure and is
- * rethrown unchanged, because it means nothing about the contract.
+ * viem wraps a failed call deep in a `cause` chain (typically inside a `ContractFunctionExecutionError`). Two shapes
+ * mean the call reached the contract and got its answer: it reverted, by the node's own account (see `isRevert`), or
+ * it returned no data at all. Everything else (a timeout, an HTTP error, any JSON-RPC error that isn't a revert, a
+ * gateway's -32603 included) is rethrown unchanged, because it means nothing about the contract.
  */
 function mapReadError(e: unknown): never {
-  if (e instanceof BaseError) {
-    const cause = e.walk((err) => err instanceof ContractFunctionRevertedError || err instanceof ContractFunctionZeroDataError);
-    if (cause instanceof ContractFunctionRevertedError || cause instanceof ContractFunctionZeroDataError) {
-      throw new CallReverted(cause.shortMessage);
-    }
+  if ((e instanceof BaseError && e.walk((err) => err instanceof ContractFunctionZeroDataError)) || isRevert(e)) {
+    throw new CallReverted(e instanceof BaseError ? e.shortMessage : undefined);
   }
   throw e;
 }
