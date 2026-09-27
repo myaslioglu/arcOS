@@ -14,6 +14,7 @@ import { InspectorBusy } from "@/lib/inspect-server";
 import { GET as inspectRoute } from "@/app/api/inspect/[address]/route";
 import { GET as badgeRoute } from "@/app/badge/[address]/route";
 import OgImage, * as ogRoute from "@/app/t/[address]/opengraph-image";
+import ProofPage, { generateMetadata } from "@/app/t/[address]/page";
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 
@@ -79,6 +80,15 @@ describe("an inspection that ended without a report, whichever bundled copy thre
     expect((await inspect()).status).toBe(503);
     cachedInspection.mockRejectedValue(fromAnotherCopy("InspectionTimeout"));
     expect((await inspect()).status).toBe(503);
+  });
+
+  it("the proof page reads backpressure from another copy as busy, not as an error (review PAGE1)", async () => {
+    for (const name of ["InspectorBusy", "InspectionTimeout"]) {
+      cachedInspection.mockRejectedValue(fromAnotherCopy(name));
+      expect((await generateMetadata(params())).title).toBe("4rc.OS is busy — try again shortly");
+      const page = (await ProofPage(params())) as { props: { message?: string } };
+      expect(page.props.message).toBe("4rc.OS is busy reading other tokens. Reload in a few seconds.");
+    }
   });
 
   it("answers 404 when there's no contract, not 502", async () => {
