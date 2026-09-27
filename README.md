@@ -115,8 +115,9 @@ but does have privileged functions, both the ownership and privileges findings r
 
 ## What Inspector can and can't see
 
-- It follows standard proxies one hop: EIP-1967 implementation and beacon slots, and EIP-1167
-  clones. A proxy behind a proxy, or one whose two slots disagree, reads "unknown", not "clean".
+- It follows standard proxies one hop: EIP-1967 implementation and beacon slots, the older
+  ZeppelinOS implementation and admin slots (Circle's FiatToken proxies, EURC among them), and
+  EIP-1167 clones. A proxy behind a proxy, or one whose slots disagree, reads "unknown", not "clean".
 - Anything upgradeable never earns a pass about control. With the code replaceable, "no privileged
   functions" and "ownership is renounced" describe only the logic running now, so they are shown as
   warnings naming whoever can replace it.
