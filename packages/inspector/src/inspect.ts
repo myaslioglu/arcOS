@@ -10,6 +10,7 @@ import {
 import { combinePrivileges, type Privilege } from "./privileges";
 import { ExplorerUnavailable, type ContractInfo, type ExplorerSource, type HolderPage, type TokenInfo } from "./explorer";
 import { cleanLabel } from "./label";
+import { isDecodeFailure, isNodeAnswer } from "./rpc-errors";
 import { CallReverted, type ChainReader, type CheckId, type Finding, type InspectInput, type Report } from "./types";
 
 export class NotAContract extends Error {
@@ -80,9 +81,11 @@ const watching =
     }
   };
 
-/** Reports every call that fails at the transport level: anything but `CallReverted`, which is the contract answering. */
+/** Reports every call that fails at the transport level. Not a failure: the contract answering (`CallReverted`), the
+ * node rejecting the params (-32602), and viem failing to decode what the node answered. Asking again returns the
+ * same in all three cases (see rpc-errors.ts). */
 function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
-  const watch = watching((e) => !(e instanceof CallReverted), onFailure);
+  const watch = watching((e) => !(e instanceof CallReverted) && !isNodeAnswer(e) && !isDecodeFailure(e), onFailure);
   return {
     getCode: (address) => watch(() => reader.getCode(address)),
     getStorageAt: (address, slot) => watch(() => reader.getStorageAt(address, slot)),

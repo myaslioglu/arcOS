@@ -35,9 +35,13 @@ export type Report = {
   counts: { pass: number; warn: number; fail: number; unknown: number };
   explorerReachable: boolean;
   /**
-   * Some read this report relies on failed at the transport level: a `ChainReader` call rejected with anything but
-   * `CallReverted`, or an explorer request ended in `ExplorerUnavailable`. The findings mean what they always do; this
-   * only says that some of its unknowns may be a network hiccup, so the report shouldn't be kept for long.
+   * Some read this report relies on failed at the transport level, so a second try might read more:
+   * - a `ChainReader` call failed: an HTTP error, a timeout, or a JSON-RPC error that isn't the node's answer (anything
+   *   but a revert or -32602 invalid params; see rpc-errors.ts), on every endpoint the transport tried; or
+   * - an explorer request ended in `ExplorerUnavailable`.
+   * Never degraded: a revert or an empty answer (`CallReverted`), -32602, a 404 from the explorer, and viem failing to
+   * decode what the node answered, since asking again returns the same. The findings mean what they always do; this
+   * only says that some of the unknowns may be a network hiccup, so the report shouldn't be kept for long.
    */
   degraded: boolean;
   blockNumber: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { keccak256, toBytes } from "viem";
+import { createPublicClient, custom, keccak256, parseAbi, toBytes } from "viem";
 import type { DexConfig } from "@arcos/chain";
 import { extractSelectors } from "../bytecode";
 import { ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT } from "../checks";
@@ -1311,6 +1311,31 @@ describe("degraded", () => {
 
   it("is false when no explorer is configured at all", async () => {
     expect((await run({ code: { [TOKEN]: PLAIN } }, null)).degraded).toBe(false);
+  });
+
+  /** The error viem's readContract throws when the node answers `answer` (returned, or thrown as a JSON-RPC error) —
+   * what the real reader passes on for anything that isn't a revert. */
+  const viemReadError = (answer: () => unknown): Promise<unknown> =>
+    createPublicClient({ transport: custom({ request: async () => answer() }, { retryCount: 0 }) })
+      .readContract({ address: TOKEN, abi: parseAbi(["function name() view returns (string)"]), functionName: "name" })
+      .then(() => new Error("expected the read to fail"), (e: unknown) => e);
+
+  it.each([
+    ["viem can't decode the answer (a bytes32 name())", () => `0x4d4b52${"0".repeat(58)}`],
+    ["the node rejects the params (-32602)", () => {
+      throw Object.assign(new Error("invalid argument 0: hex string has length 38"), { code: -32602 });
+    }],
+  ])("is false when %s: asking again returns the same", async (_, answer) => {
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.name()`]: await viemReadError(answer) } });
+    expect(r.degraded).toBe(false);
+  });
+
+  it("is still true for a JSON-RPC error that isn't the node's answer (-32603)", async () => {
+    const upstream = await viemReadError(() => {
+      throw Object.assign(new Error("upstream unavailable"), { code: -32603 });
+    });
+    const r = await run({ code: { [TOKEN]: PLAIN }, reads: { [`${TOKEN}.name()`]: upstream } });
+    expect(r.degraded).toBe(true);
   });
 
   it("is true when the explorer's /addresses fallback fails, even though the contract record came back", async () => {
