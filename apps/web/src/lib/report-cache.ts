@@ -10,6 +10,9 @@ const DEGRADED_S = 30;
  */
 export const reportMaxAge = (report: Pick<Report, "degraded">): number => (report.degraded ? DEGRADED_S : CLEAN_S);
 
+/** The same age in milliseconds: the TTL inspect-server.ts's report cache keeps each report for. */
+export const reportTtlMs = (report: Pick<Report, "degraded">): number => reportMaxAge(report) * 1000;
+
 /**
  * `cache-control` for a response rendered from a report. A degraded one gets no stale-while-revalidate: once its 30
  * seconds are up, the next visitor waits for a fresh reading instead of being served the degraded one again. `null` is

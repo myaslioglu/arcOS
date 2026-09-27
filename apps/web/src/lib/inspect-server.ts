@@ -7,7 +7,7 @@ import { explorerFetch } from "./explorer-fetch";
 import { inspectInput, proExplorerApi } from "./inspect-input";
 import { processGlobal } from "./process-global";
 import { inFlightGate, perSecond } from "./rate-limit";
-import { reportMaxAge } from "./report-cache";
+import { reportTtlMs } from "./report-cache";
 import { endpointHealth, rpcTransport } from "./rpc-transport";
 import { ttlCache } from "./ttl-cache";
 
@@ -29,7 +29,7 @@ import { ttlCache } from "./ttl-cache";
 const health = processGlobal("inspect.rpcHealth", endpointHealth);
 const client = createPublicClient({ chain: activeChain(), transport: rpcTransport(activeChain(), { health }) });
 // A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
-const cache = processGlobal("inspect.reportCache", () => ttlCache<Report>((report) => reportMaxAge(report) * 1000));
+const cache = processGlobal("inspect.reportCache", () => ttlCache<Report>(reportTtlMs));
 
 /** Thrown when 8 uncached inspections are already running in this server process — backpressure, not a hard failure. */
 export class InspectorBusy extends Error {
