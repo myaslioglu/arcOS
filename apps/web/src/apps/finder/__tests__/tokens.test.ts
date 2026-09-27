@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { EURC, USDC } from "@arcos/chain";
-import { duplicateSymbols, isDuplicateSymbol, latestSliceStart, mergeTokens, officialSymbol, symbolKey, type TokenFile } from "../tokens";
+import {
+  FILES_PAGE,
+  duplicateSymbols,
+  isDuplicateSymbol,
+  latestSliceStart,
+  mergeTokens,
+  officialSymbol,
+  showingLine,
+  symbolKey,
+  visibleFiles,
+  type TokenFile,
+} from "../tokens";
 
 const A = "0xAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaaAAAAaaaa";
 const B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -149,5 +160,58 @@ describe("latestSliceStart", () => {
 
   it("returns count - size for a count well past a full page", () => {
     expect(latestSliceStart(250n, 100)).toBe(150n);
+  });
+});
+
+// A wallet can hold tens of thousands of tokens (the explorer returns them all at once), so Finder
+// draws a page at a time.
+describe("visibleFiles", () => {
+  const at = (i: number) => `0x${i.toString(16).padStart(40, "0")}`;
+  const held = (n: number) => Array.from({ length: n }, (_, i) => file({ address: at(i + 1), symbol: `T${i + 1}` }));
+  const mine = (i: number) => file({ address: at(100_000 + i), symbol: `MINE${i}`, createdByYou: true });
+  const usdc = file({ address: USDC, symbol: "USDC" });
+  const eurc = file({ address: EURC.testnet, symbol: "EURC" });
+
+  it("draws 200 at first, and 200 more for each Show more", () => {
+    expect(FILES_PAGE).toBe(200);
+    const files = held(1000);
+    expect(visibleFiles(files, FILES_PAGE, "testnet")).toEqual(files.slice(0, 200));
+    expect(visibleFiles(files, 2 * FILES_PAGE, "testnet")).toEqual(files.slice(0, 400));
+  });
+
+  it("draws every file when there are fewer than the limit", () => {
+    const files = held(3);
+    expect(visibleFiles(files, FILES_PAGE, "testnet")).toEqual(files);
+  });
+
+  it("puts the tokens you created and the official USDC and EURC first, and never holds them back", () => {
+    const rest = held(500);
+    // mergeTokens' order: created first, then holdings by symbol, where the official two can land anywhere.
+    const files = [mine(1), mine(2), ...rest.slice(0, 300), eurc, ...rest.slice(300), usdc];
+    const shown = visibleFiles(files, FILES_PAGE, "testnet");
+    expect(shown).toHaveLength(200);
+    expect(shown.slice(0, 4)).toEqual([mine(1), mine(2), eurc, usdc]);
+    expect(shown.slice(4)).toEqual(rest.slice(0, 196));
+  });
+
+  it("holds back a look-alike USDC at another address, and the other network's EURC", () => {
+    const files = [...held(FILES_PAGE), file({ address: at(999_999), symbol: "USDC" }), file({ address: EURC.mainnet, symbol: "EURC" })];
+    expect(visibleFiles(files, FILES_PAGE, "testnet")).toEqual(held(FILES_PAGE));
+  });
+
+  it("draws everything pinned even when that alone passes the limit", () => {
+    const created = [mine(1), mine(2), mine(3), mine(4), mine(5)];
+    expect(visibleFiles([...created, ...held(10)], 3, "testnet")).toEqual(created);
+  });
+});
+
+describe("showingLine", () => {
+  it("counts what's drawn against every token, with thousands separators", () => {
+    expect(showingLine(200, 31837)).toBe("Showing 200 of 31,837 tokens");
+    expect(showingLine(1200, 31837)).toBe("Showing 1,200 of 31,837 tokens");
+  });
+
+  it("says nothing once every token is drawn", () => {
+    expect(showingLine(3, 3)).toBeNull();
   });
 });

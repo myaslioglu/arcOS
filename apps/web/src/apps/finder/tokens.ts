@@ -82,3 +82,26 @@ export function officialSymbol(address: string, network: NetworkId): "USDC" | "E
   if (a === EURC[network].toLowerCase()) return "EURC";
   return null;
 }
+
+/** How many tokens Finder draws at first, and how many more each "Show more" adds. */
+export const FILES_PAGE = 200;
+
+/**
+ * The files Finder draws once the visitor has asked for `limit`: the tokens they created and the
+ * official USDC and EURC first, never held back, then the rest in their order, up to `limit` in all.
+ * The explorer returns every token a wallet holds at once, tens of thousands for some wallets, and
+ * drawing them all makes the window crawl.
+ */
+export function visibleFiles(files: TokenFile[], limit: number, network: NetworkId): TokenFile[] {
+  const first = (f: TokenFile) => f.createdByYou || officialSymbol(f.address, network) !== null;
+  const pinned = files.filter(first);
+  const rest = files.filter((f) => !first(f));
+  return [...pinned, ...rest.slice(0, Math.max(0, limit - pinned.length))];
+}
+
+/** "Showing 200 of 31,837 tokens" while some are held back; null once every token is drawn. */
+export function showingLine(shown: number, total: number): string | null {
+  if (shown >= total) return null;
+  const count = (n: number) => n.toLocaleString("en-US");
+  return `Showing ${count(shown)} of ${count(total)} tokens`;
+}

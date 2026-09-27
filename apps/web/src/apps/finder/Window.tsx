@@ -10,7 +10,17 @@ import { blockscoutSource, cleanLabel } from "@arcos/inspector";
 import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { shortAddress } from "@/lib/format";
-import { duplicateSymbols, isDuplicateSymbol, latestSliceStart, mergeTokens, officialSymbol, type TokenFile } from "./tokens";
+import {
+  FILES_PAGE,
+  duplicateSymbols,
+  isDuplicateSymbol,
+  latestSliceStart,
+  mergeTokens,
+  officialSymbol,
+  showingLine,
+  visibleFiles,
+  type TokenFile,
+} from "./tokens";
 import { tokenHue, tokenMonogram } from "./monogram";
 
 /** Page size for `tokensOfSlice`: Finder only ever shows the creator's most recent tokens. */
@@ -27,6 +37,7 @@ function Files() {
   const factory = ARCOS[network]?.tokenFactory;
   const apiUrl = chain.blockExplorers?.default.apiUrl;
   const [selected, setSelected] = useState<TokenFile | null>(null);
+  const [limit, setLimit] = useState(FILES_PAGE);
 
   // The shell doesn't expose window-active state to apps (DesktopApi is notify/open/close/
   // setTitle only), so polling can't be paused while this window sits in the background; the
@@ -86,6 +97,8 @@ function Files() {
   }, [createdList, meta.data, holdings.data]);
 
   const dupes = useMemo(() => duplicateSymbols(files), [files]);
+  const shown = useMemo(() => visibleFiles(files, limit, network), [files, limit, network]);
+  const showing = showingLine(shown.length, files.length);
   const stillReading = holdings.isLoading || createdCount.isLoading || created.isLoading;
 
   return (
@@ -104,48 +117,58 @@ function Files() {
         {files.length === 0 ? (
           <p className="p-3 text-muted">{stillReading ? "Reading your tokens…" : "No tokens yet. Create one in Mint, or receive some."}</p>
         ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1">
-            {files.map((f) => {
-              const official = officialSymbol(f.address, network);
-              const collides = isDuplicateSymbol(dupes, f.symbol);
-              const monogram = tokenMonogram(f.symbol);
-              const hue = tokenHue(f.address);
-              return (
-                <li key={f.address}>
-                  <button
-                    type="button"
-                    className="os-icon w-full"
-                    aria-pressed={selected?.address === f.address}
-                    onClick={() => setSelected(f)}
-                    onDoubleClick={() => open("inspector", { token: f.address })}
-                    style={{ "--os-hue": hue.hue } as React.CSSProperties}
-                    {...(f.decimals !== null
-                      ? dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })
-                      : {})}
-                  >
-                    <span className="os-icon-tile os-icon-tile--sm">
-                      {monogram ? (
-                        <span
-                          aria-hidden
-                          className={`font-mono font-semibold leading-none ${MONOGRAM_SIZE[monogram.length]}`}
-                          style={{ color: hue.text }}
-                        >
-                          {monogram}
-                        </span>
-                      ) : (
-                        <Coins size={16} aria-hidden />
-                      )}
-                    </span>
-                    <span className="os-icon-name">{f.symbol}</span>
-                    <span className="block font-mono text-[10px] text-muted">{shortAddress(f.address)}</span>
-                    {f.createdByYou && <span className="block text-[11px] text-accent-2-text">created by you</span>}
-                    {official && <span className="block text-[11px] text-accent-2-text">Official {official}</span>}
-                    {collides && <span className="block text-[11px] text-accent-3-text">Same symbol as another token</span>}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <>
+            <ul className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-1">
+              {shown.map((f) => {
+                const official = officialSymbol(f.address, network);
+                const collides = isDuplicateSymbol(dupes, f.symbol);
+                const monogram = tokenMonogram(f.symbol);
+                const hue = tokenHue(f.address);
+                return (
+                  <li key={f.address}>
+                    <button
+                      type="button"
+                      className="os-icon w-full"
+                      aria-pressed={selected?.address === f.address}
+                      onClick={() => setSelected(f)}
+                      onDoubleClick={() => open("inspector", { token: f.address })}
+                      style={{ "--os-hue": hue.hue } as React.CSSProperties}
+                      {...(f.decimals !== null
+                        ? dragSourceProps({ kind: "token", address: f.address, symbol: f.symbol, decimals: f.decimals })
+                        : {})}
+                    >
+                      <span className="os-icon-tile os-icon-tile--sm">
+                        {monogram ? (
+                          <span
+                            aria-hidden
+                            className={`font-mono font-semibold leading-none ${MONOGRAM_SIZE[monogram.length]}`}
+                            style={{ color: hue.text }}
+                          >
+                            {monogram}
+                          </span>
+                        ) : (
+                          <Coins size={16} aria-hidden />
+                        )}
+                      </span>
+                      <span className="os-icon-name">{f.symbol}</span>
+                      <span className="block font-mono text-[10px] text-muted">{shortAddress(f.address)}</span>
+                      {f.createdByYou && <span className="block text-[11px] text-accent-2-text">created by you</span>}
+                      {official && <span className="block text-[11px] text-accent-2-text">Official {official}</span>}
+                      {collides && <span className="block text-[11px] text-accent-3-text">Same symbol as another token</span>}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {showing && (
+              <div className="flex items-center justify-between gap-2 px-1 pt-3 text-xs">
+                <span className="text-muted">{showing}</span>
+                <button type="button" className="rounded-md border border-border-2 px-2 py-1" onClick={() => setLimit((n) => n + FILES_PAGE)}>
+                  Show more
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
       <div className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs">
