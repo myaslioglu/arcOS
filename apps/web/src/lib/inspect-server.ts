@@ -1,14 +1,14 @@
 import "server-only";
-import { createPublicClient } from "viem";
 import { activeChain, type Address } from "@arcos/chain";
 import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
 import { explorerFetch } from "./explorer-fetch";
 import { inspectInput, proExplorerApi } from "./inspect-input";
+import { inspectionClient } from "./inspection-client";
 import { processGlobal } from "./process-global";
 import { inFlightGate, perSecond } from "./rate-limit";
 import { reportTtlMs } from "./report-cache";
-import { endpointHealth, rpcTransport } from "./rpc-transport";
+import { endpointHealth } from "./rpc-transport";
 import { ttlCache } from "./ttl-cache";
 
 // Next bundles this module into more than one chunk (the route handlers get one copy, the proof page another), so
@@ -27,7 +27,7 @@ import { ttlCache } from "./ttl-cache";
 // hanging is an outage: one call alone takes 12 s on mainnet (4 × 3 s), the deadline cuts the inspection off, and it
 // answers "busy" (503) without being cached.
 const health = processGlobal("inspect.rpcHealth", endpointHealth);
-const client = createPublicClient({ chain: activeChain(), transport: rpcTransport(activeChain(), { health }) });
+const client = inspectionClient(activeChain(), health);
 // A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
 const cache = processGlobal("inspect.reportCache", () => ttlCache<Report>(reportTtlMs));
 

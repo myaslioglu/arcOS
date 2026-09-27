@@ -13,6 +13,10 @@ export const wagmiConfig = createConfig({
   connectors: [injected()],
   transports: { [mainnet.id]: http(), [testnet.id]: http() },
   ssr: true,
+  // CCIP-Read off for every client this config builds. The Inspector (and Drop, for a token pasted in) reads contracts
+  // anyone can deploy, and with it on, a read that reverts with EIP-3668's OffchainLookup makes the visitor's browser
+  // fetch URLs the contract chose. Such a revert is read like any other.
+  ccipRead: false,
 });
 
 /**
