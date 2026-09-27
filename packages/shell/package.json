@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./core": "./src/core/index.ts",
+    "./theme": "./src/ui/theme.ts",
     "./styles/*": "./src/styles/*"
   },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },

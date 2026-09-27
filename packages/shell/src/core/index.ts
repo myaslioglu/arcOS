@@ -6,3 +6,4 @@ export * from "./deeplink";
 export * from "./launcher";
 export * from "./dnd";
 export * from "./escape";
+export * from "./theme";
