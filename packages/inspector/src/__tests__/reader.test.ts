@@ -82,6 +82,8 @@ describe("viemReader().read: which node answers are reverts", () => {
     ["-32601 method not found", rpcError(-32601, "the method eth_call does not exist/is not available")],
     ["-1 unknown error", rpcError(-1, "unknown error")],
     ["an HTTP 502 with no JSON-RPC body", () => new Response("bad gateway", { status: 502 })],
+    // An HTTP failure stays one, whatever its body says (review RE1).
+    ["an HTTP 502 whose body mentions a revert", () => new Response("upstream error: execution reverted", { status: 502 })],
   ])("%s is the endpoint failing, never a revert", async (_, respond) => {
     const e: unknown = await read(respond).catch((x: unknown) => x);
     expect(e).not.toBeInstanceOf(CallReverted);

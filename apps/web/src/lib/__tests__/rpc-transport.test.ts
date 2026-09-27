@@ -320,6 +320,7 @@ describe("rpcTransport: which errors skip an endpoint", () => {
     ["-32601 method not found", rpcError(-32601, "the method eth_call does not exist/is not available")],
     ["-1 unknown error", rpcError(-1, "unknown error")],
     ["an HTTP 502 with no JSON-RPC body", () => new Response("bad gateway", { status: 502 })],
+    ["an HTTP 502 whose body mentions a revert (review RE1)", () => new Response("upstream error: execution reverted", { status: 502 })],
   ])("%s is the endpoint failing: the next URL answers, and this one is skipped", async (_, respond) => {
     const { tried, transport } = primaryAnswers(respond);
     await expect(blockNumber(transport)).resolves.toBe("0x10");
