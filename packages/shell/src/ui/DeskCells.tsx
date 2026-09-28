@@ -1,6 +1,7 @@
 "use client";
 
-import { CATEGORY_HUE, CATEGORY_LABEL, itemCount, type AppCategory, type AppManifest } from "../core";
+import { CATEGORY_HUE, CATEGORY_LABEL, itemCount, type AppCategory, type AppManifest, type DeskItem } from "../core";
+import { DeskGlyph } from "./DeskGlyph";
 import { FolderArt } from "./FolderArt";
 
 /**
@@ -31,6 +32,55 @@ export function FolderCell({
     >
       <FolderArt apps={apps} hue={CATEGORY_HUE[category]} />
       <span className="os-desk-name">{name}</span>
+    </button>
+  );
+}
+
+/**
+ * A desktop item: its file or link art over its caption. A link is an `<a>` that opens in a new tab with no opener;
+ * a file is a button that hands itself to `onOpen`, so its window grows out of it. `loose` stands it in the desk's
+ * last column. Hookless, so a test can call it and press it.
+ */
+export function DeskItemCell({
+  item,
+  loose,
+  onOpen,
+}: {
+  item: DeskItem;
+  loose: boolean;
+  onOpen: (item: DeskItem, from: HTMLElement) => void;
+}) {
+  const className = loose ? "os-desk-cell os-desk-cell--loose" : "os-desk-cell";
+  const style = { "--os-hue": item.hue } as React.CSSProperties;
+  if (item.action.kind === "href") {
+    const label = `${item.label}: ${item.blurb} (opens in a new tab)`;
+    return (
+      <a
+        href={item.action.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={className}
+        style={style}
+        aria-label={label}
+        title={label}
+      >
+        <DeskGlyph item={item} />
+        <span className="os-desk-name">{item.label}</span>
+      </a>
+    );
+  }
+  const label = `${item.label}: ${item.blurb}`;
+  return (
+    <button
+      type="button"
+      onClick={(e) => onOpen(item, e.currentTarget)}
+      className={className}
+      style={style}
+      aria-label={label}
+      title={label}
+    >
+      <DeskGlyph item={item} />
+      <span className="os-desk-name">{item.label}</span>
     </button>
   );
 }

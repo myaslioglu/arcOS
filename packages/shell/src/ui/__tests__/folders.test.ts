@@ -58,7 +58,9 @@ describe("FolderCell", () => {
 
 describe("DeskFolders", () => {
   it("stands a folder for each category that has apps, in the rack's order", () => {
-    const html = renderToStaticMarkup(createElement(DeskFolders, { apps: APPS, onOpenFolder: () => {} }));
+    const html = renderToStaticMarkup(
+      createElement(DeskFolders, { apps: APPS, items: [], onOpenFolder: () => {}, onOpenItem: () => {} }),
+    );
     const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
     expect(labels).toEqual(["Desktop", "System: 4 items", "Trust: 2 items", "Create: 1 item"]);
   });

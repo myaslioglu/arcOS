@@ -6,6 +6,7 @@ import { DesktopShell } from "@arcos/shell";
 import { APPS } from "@/apps/registry";
 import { Web3Provider } from "@/providers/Web3Provider";
 import { StatusBar } from "@/components/StatusBar";
+import { DESK_ITEMS } from "@/lib/desk-items";
 import { quickActions } from "@/lib/quick-actions";
 import { REPO_URL } from "@/lib/site";
 
@@ -17,6 +18,7 @@ export default function Home() {
         brand="4rc.OS"
         aboutAppId="about"
         repoUrl={REPO_URL}
+        deskItems={DESK_ITEMS}
         statusSlot={<StatusBar />}
         quickActions={quickActions}
       />

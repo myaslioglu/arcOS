@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import type { AppCategory, AppManifest } from "./manifest";
 
 /**
@@ -26,3 +27,25 @@ export function folderContents(list: readonly AppManifest[], category: AppCatego
 export function itemCount(n: number): string {
   return `${n} ${n === 1 ? "item" : "items"}`;
 }
+
+/** What a desk item does when opened: open an app's window, or follow a link in a new tab. */
+export type DeskItemAction = { kind: "app"; appId: string } | { kind: "href"; href: string };
+
+/**
+ * A desktop item, down the desk's last column: a text file that opens a window, or a link out. The web app supplies
+ * them (DesktopShell's `deskItems`); the shell draws them with the file and tile art.
+ */
+export type DeskItem = {
+  id: string;
+  /** The caption under the art: "readme.txt", "GitHub". */
+  label: string;
+  /** One line on what it is, for its accessible name. */
+  blurb: string;
+  /** "file": a page with a folded corner and `ext` along its foot. "link": a desk-sized tile with the ↗ badge. */
+  art: "file" | "link";
+  ext?: string;
+  icon: LucideIcon;
+  /** A colour token, such as "var(--muted)". */
+  hue: string;
+  action: DeskItemAction;
+};

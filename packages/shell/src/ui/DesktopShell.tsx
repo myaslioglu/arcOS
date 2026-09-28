@@ -10,6 +10,7 @@ import {
   snapRect,
   type AppCategory,
   type AppManifest,
+  type DeskItem,
   type QuickAction,
 } from "../core";
 import { RegistryProvider } from "./registry";
@@ -39,7 +40,11 @@ type Props = {
   quickActions?: (query: string) => QuickAction[];
   /** The public repository, for "Follow progress on GitHub" in grey apps' windows. Empty or missing: the link is left off. */
   repoUrl?: string;
+  /** The desk's items, down its last column in the Folders view: files that open a window, links that open a tab. */
+  deskItems?: DeskItem[];
 };
+
+const NO_ITEMS: DeskItem[] = [];
 
 function stagePoint(from: HTMLElement): Origin | null {
   const stage = document.querySelector(".os-stage")?.getBoundingClientRect();
@@ -55,7 +60,15 @@ function stageSize(): { w: number; h: number } {
   return { w: box?.width ?? window.innerWidth, h: box?.height ?? window.innerHeight };
 }
 
-export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, quickActions, repoUrl }: Props) {
+export function DesktopShell({
+  apps,
+  brand,
+  aboutAppId = "about",
+  statusSlot,
+  quickActions,
+  repoUrl,
+  deskItems = NO_ITEMS,
+}: Props) {
   const registry = useMemo(() => buildRegistry(apps), [apps]);
   const { state, actions } = useWindowManager(registry);
   const touch = useIsTouch();
@@ -97,6 +110,14 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
   const openFolder = useCallback(
     (category: AppCategory, from: HTMLElement) => {
       open(FOLDER_APP_ID, { group: category }, from);
+    },
+    [open],
+  );
+
+  // A desk item that opens a window (readme.txt, roadmap.txt) comes here; a link is an <a> and opens its own tab.
+  const openDeskItem = useCallback(
+    (item: DeskItem, from: HTMLElement) => {
+      if (item.action.kind === "app") open(item.action.appId, {}, from);
     },
     [open],
   );
@@ -200,7 +221,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
               onBack={() => state.activeId && actions.minimize(state.activeId)}
             />
           ) : view === "folders" ? (
-            <DeskFolders apps={registry.list} onOpenFolder={openFolder} />
+            <DeskFolders apps={registry.list} items={deskItems} onOpenFolder={openFolder} onOpenItem={openDeskItem} />
           ) : (
             <DesktopIcons
               onOpen={(id, from) => open(id, {}, from)}

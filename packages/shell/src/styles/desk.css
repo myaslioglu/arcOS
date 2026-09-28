@@ -194,3 +194,41 @@
 .os-roadmap-name { font-family: var(--font-mono); font-size: 13px; color: var(--fg); }
 .os-roadmap-blurb { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-roadmap-stage { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--accent-3-text); }
+
+/* Desk items stand in the last column. */
+.os-desk-cell--loose { grid-column: -2 / -1; }
+
+/* A file: a page with a folded corner, its glyph and its extension. */
+.os-file {
+  position: relative; display: grid; place-items: center; flex: none;
+  width: 54px; height: 66px; margin: 3px 0; color: var(--os-hue);
+}
+.os-file-page { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.os-file-sheet {
+  fill: color-mix(in oklab, var(--os-hue) 9%, var(--surface));
+  stroke: color-mix(in oklab, var(--os-hue) 45%, var(--border));
+  stroke-width: 1.5;
+}
+.os-file-fold {
+  fill: color-mix(in oklab, var(--os-hue) 22%, var(--surface-2));
+  stroke: color-mix(in oklab, var(--os-hue) 45%, var(--border));
+  stroke-width: 1.5; stroke-linejoin: round;
+}
+.os-file-glyph { position: relative; width: 24px; height: 24px; margin-top: -4px; }
+.os-file-ext {
+  position: absolute; bottom: 7px; left: 0; right: 0; text-align: center;
+  font-family: var(--font-mono); font-size: 9px; font-weight: 600; letter-spacing: 0.08em;
+  color: color-mix(in oklab, var(--os-hue) 70%, var(--fg));
+}
+
+/* A link: the rack's tile at desk size, with the arrow every shortcut carries in its corner. */
+.os-icon-tile--lg { width: 64px; height: 64px; border-radius: 17px; margin: 4px 0; }
+.os-shortcut { position: relative; }
+.os-shortcut-glyph { width: 28px; height: 28px; }
+.os-shortcut-arrow {
+  position: absolute; left: -4px; bottom: -4px;
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px;
+  background: var(--surface); border: 1px solid var(--border-2); color: var(--fg);
+  box-shadow: 0 3px 8px -4px var(--shadow-nav);
+}
+.os-shortcut-arrow svg { width: 14px; height: 14px; }
