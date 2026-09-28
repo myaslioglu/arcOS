@@ -1,6 +1,7 @@
 "use client";
 
 import "@arcos/shell/styles/desktop.css";
+import "@arcos/shell/styles/desk.css";
 import { DesktopShell } from "@arcos/shell";
 import { APPS } from "@/apps/registry";
 import { Web3Provider } from "@/providers/Web3Provider";

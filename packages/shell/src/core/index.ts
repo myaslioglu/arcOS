@@ -7,3 +7,4 @@ export * from "./launcher";
 export * from "./dnd";
 export * from "./escape";
 export * from "./theme";
+export * from "./desk";

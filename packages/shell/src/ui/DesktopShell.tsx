@@ -1,13 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildRegistry, dropParams, parseAppHash, snapRect, type AppManifest, type QuickAction } from "../core";
+import {
+  FOLDER_APP_ID,
+  buildRegistry,
+  dropParams,
+  openActionFor,
+  parseAppHash,
+  snapRect,
+  type AppCategory,
+  type AppManifest,
+  type QuickAction,
+} from "../core";
 import { RegistryProvider } from "./registry";
 import { useWindowManager } from "./hooks/useWindowManager";
 import { useIsTouch } from "./hooks/useIsTouch";
 import { DesktopProvider, type DesktopApi, type Tone } from "./desktop-context";
 import { WindowManager, type Origin } from "./WindowManager";
 import { AppBody } from "./AppBody";
+import { DeskFolders } from "./DeskFolders";
 import { DesktopIcons } from "./DesktopIcons";
 import { Dock } from "./Dock";
 import { MenuBar } from "./MenuBar";
@@ -15,6 +26,7 @@ import { Launcher } from "./Launcher";
 import { ContextMenu } from "./ContextMenu";
 import { TouchHome } from "./TouchHome";
 import { Toasts, type Toast } from "./Toasts";
+import { useDesktopView } from "./view";
 
 type Props = {
   apps: AppManifest[];
@@ -30,7 +42,8 @@ type Props = {
 function stagePoint(from: HTMLElement): Origin | null {
   const stage = document.querySelector(".os-stage")?.getBoundingClientRect();
   if (!stage) return null;
-  const art = from.querySelector(".os-icon-tile, .os-dock-face") ?? from;
+  // The art inside what was clicked (a folder, a file's page, an icon or dock tile): the window grows out of its centre.
+  const art = from.querySelector(".os-folder, .os-file, .os-icon-tile, .os-dock-face") ?? from;
   const r = art.getBoundingClientRect();
   return { x: Math.round(r.left + r.width / 2 - stage.left), y: Math.round(r.top + r.height / 2 - stage.top) };
 }
@@ -44,6 +57,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
   const registry = useMemo(() => buildRegistry(apps), [apps]);
   const { state, actions } = useWindowManager(registry);
   const touch = useIsTouch();
+  const view = useDesktopView();
   const [launcher, setLauncher] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -61,12 +75,14 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
   const open = useCallback(
     (appId: string, params: Record<string, string> = {}, from?: HTMLElement) => {
       const m = registry.byId.get(appId);
-      if (!m) return false;
-      if (m.comingSoon) {
+      if (m?.comingSoon) {
         notify(`${m.name} isn't available yet.`, "info");
         return false;
       }
-      const key = `${appId}:${m.instanceKey ? m.instanceKey(params) : ""}`;
+      const action = openActionFor(registry, appId, params);
+      if (!action) return false;
+      // Keyed like the window itself (see WindowManager's `origins`), so a folder's window grows out of that folder.
+      const key = `${action.appId}:${action.instanceKey}`;
       const point = from ? stagePoint(from) : null;
       setOrigins((all) => {
         if (point) return { ...all, [key]: point };
@@ -78,6 +94,13 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
       return actions.open(appId, params);
     },
     [actions, notify, registry],
+  );
+
+  const openFolder = useCallback(
+    (category: AppCategory, from: HTMLElement) => {
+      open(FOLDER_APP_ID, { group: category }, from);
+    },
+    [open],
   );
 
   const api = useMemo<DesktopApi>(
@@ -178,6 +201,8 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
               onOpen={(id, from) => open(id, {}, from)}
               onBack={() => state.activeId && actions.minimize(state.activeId)}
             />
+          ) : view === "folders" ? (
+            <DeskFolders apps={registry.list} onOpenFolder={openFolder} />
           ) : (
             <DesktopIcons
               onOpen={(id, from) => open(id, {}, from)}

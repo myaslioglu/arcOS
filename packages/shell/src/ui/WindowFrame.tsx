@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Square, X, Copy } from "lucide-react";
 import {
-  appHue,
+  KIND_LABEL,
   shouldEscapeCloseWindow,
   snapRect,
   snapZone,
+  windowLook,
   MIN_WINDOW,
   type DesktopWindow,
   type Rect,
@@ -71,7 +72,7 @@ export function WindowFrame({
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
-  const app = useRegistry().byId.get(win.appId);
+  const look = windowLook(useRegistry(), win);
   const [snap, setSnap] = useState<SnapZone | null>(null);
 
   // ESC closes the active window only; background windows stay put. An overlay above the window
@@ -205,8 +206,8 @@ export function WindowFrame({
         onPointerDown={onFocus}
         style={
           {
-            // The title-bar LED and the focused frame's border, in the app's hue.
-            ...(app ? { "--os-win": appHue(app) } : {}),
+            // The title-bar LED and the focused frame's border, in the app's hue (a folder's, for a folder window).
+            ...(look.hue ? { "--os-win": look.hue } : {}),
             ...(pinned ? {} : { left: rect.left, top: rect.top, width: rect.width, height: rect.height }),
           } as React.CSSProperties
         }
@@ -227,6 +228,11 @@ export function WindowFrame({
           }}
         >
           <span className="os-led" aria-hidden />
+          {look.kind && (
+            <span className="os-kind" data-kind={look.kind}>
+              {KIND_LABEL[look.kind]}
+            </span>
+          )}
           <span className="os-title">{win.title}</span>
           <span className="os-controls">
             <button

@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, lazy, type ComponentType, type LazyExoticComponent } from "react";
-import type { AppManifest, AppProps, DesktopWindow } from "../core";
+import { FOLDER_APP_ID, isCategory, type AppManifest, type AppProps, type DesktopWindow } from "../core";
+import { FolderBody } from "./FolderWindow";
 import { useRegistry } from "./registry";
 import { WindowErrorBoundary } from "./WindowErrorBoundary";
 
@@ -22,8 +23,11 @@ function dropCached(id: string): void {
   delete cache[id];
 }
 
+/** A window's body: the desktop's own folder window, or the app the window belongs to, loaded on first open. */
 export function AppBody({ win }: { win: DesktopWindow }) {
-  const m = useRegistry().byId.get(win.appId);
+  const registry = useRegistry();
+  if (win.appId === FOLDER_APP_ID && isCategory(win.instanceKey)) return <FolderBody category={win.instanceKey} />;
+  const m = registry.byId.get(win.appId);
   if (!m) return <div className="os-empty">Unknown app: {win.appId}</div>;
   ensureCached(m);
   const App = cache[m.id];

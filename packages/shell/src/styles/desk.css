@@ -1,0 +1,158 @@
+/*
+ * 4rc.OS: the desk. The Folders view's grid, its folders and desk items, the windows the desktop opens itself
+ * (folders, the Roadmap, grey apps' "work in progress" windows), the wallpaper's layers and live chart, the search
+ * pill and the touch home's folder view. Imported by the desktop page next to desktop.css and namespaced `.os-*` the
+ * same way.
+ *
+ * Two rules, both checked by styles/__tests__/desk-css.test.ts: every colour is a token from tokens.css (shadows use
+ * --shadow-nav, highlights --selection-fg, masks any opaque token), and everything that moves does so only inside
+ * `@media (prefers-reduced-motion: no-preference)`.
+ */
+
+/* The desk: folders down the first column, desk items down the last, the wallpaper open between them. The columns are
+   spread edge to edge, so the last one stands against the right side; four rows keep every icon clear of the dock,
+   three when the screen is short. */
+.os-desk {
+  --desk-cell: 7.5rem;
+  position: relative; z-index: 10;
+  flex: 1; min-height: 0; overflow: auto;
+  display: grid; grid-auto-flow: column;
+  grid-template-columns: repeat(auto-fill, var(--desk-cell));
+  grid-template-rows: repeat(4, var(--desk-cell));
+  grid-auto-columns: var(--desk-cell); grid-auto-rows: var(--desk-cell);
+  align-content: start; justify-content: space-between;
+  gap: 4px 8px; padding: 18px 14px 7rem;
+  user-select: none;
+}
+@media (max-height: 640px) { .os-desk { grid-template-rows: repeat(3, var(--desk-cell)); } }
+
+.os-desk-cell {
+  --os-hue: var(--os-group, var(--accent));
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  width: 7.5rem; padding: 12px 2px 9px; border-radius: 14px;
+  border: 1px solid transparent; text-align: center; color: inherit; text-decoration: none;
+}
+.os-desk-cell:hover {
+  background: color-mix(in oklab, var(--os-hue) 10%, transparent);
+  border-color: color-mix(in oklab, var(--os-hue) 26%, transparent);
+}
+.os-desk-cell:focus-visible { outline: 2px solid var(--os-hue); outline-offset: 1px; }
+/* Labels sit on the wallpaper, not on a tray, so they carry a halo in the page's own colour. */
+.os-desk-name {
+  max-width: 100%; padding: 1px 4px; border-radius: 6px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.4; color: var(--fg);
+  text-shadow: 0 1px 3px color-mix(in oklab, var(--bg) 90%, transparent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* A folder drawn from its contents: the back panel and its tab, a card for each of the first three apps carrying its
+   glyph, and a front flap with the folder's LED and count. Hover or focus tips the flap toward the reader and lifts
+   the cards. Only transforms move. */
+.os-folder {
+  --os-group: var(--accent);
+  --fw: 88px; --fh: 72px; --card-w: 30px; --card-h: 36px; --card-gap: 19px; --glyph: 15px;
+  position: relative; display: block; flex: none;
+  width: var(--fw); height: var(--fh);
+  perspective: 360px;
+}
+.os-folder-back {
+  position: absolute; inset: 9% 0 0 0;
+  border-radius: 5px 10px 10px 10px;
+  background: color-mix(in oklab, var(--os-group) 26%, var(--surface-2));
+  border: 1px solid color-mix(in oklab, var(--os-group) 42%, var(--border));
+}
+.os-folder-back::before {
+  content: ""; position: absolute; left: -1px; bottom: 100%;
+  width: 44%; height: calc(var(--fh) * 0.12);
+  border-radius: 6px 9px 0 0;
+  background: inherit; border: inherit; border-bottom: 0;
+}
+.os-folder-cards { position: absolute; inset: 0; }
+.os-folder-card {
+  --os-hue: var(--os-group);
+  position: absolute; top: 15%;
+  left: calc(50% - var(--card-w) / 2 + (var(--i) - (var(--n) - 1) / 2) * var(--card-gap));
+  width: var(--card-w); height: var(--card-h);
+  display: grid; justify-items: center; align-items: start;
+  padding-top: calc(var(--card-h) * 0.1);
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklab, var(--os-hue) 40%, var(--border));
+  box-shadow: 0 2px 6px -2px var(--shadow-nav);
+  color: var(--os-hue);
+  transform: rotate(calc((var(--i) - (var(--n) - 1) / 2) * 5deg));
+}
+.os-folder-glyph { width: var(--glyph); height: var(--glyph); }
+.os-folder-front {
+  position: absolute; left: 0; right: 0; bottom: 0; top: 42%;
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 0 7px 6px;
+  border-radius: 7px 7px 10px 10px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--os-group) 40%, var(--surface-2)),
+    color-mix(in oklab, var(--os-group) 22%, var(--surface))
+  );
+  border: 1px solid color-mix(in oklab, var(--os-group) 52%, var(--border));
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--selection-fg) 14%, transparent),
+    0 8px 18px -10px var(--shadow-nav);
+  transform-origin: 50% 100%;
+}
+.os-folder-led {
+  align-self: flex-start; margin-top: 6px; width: 5px; height: 5px; border-radius: 999px;
+  background: var(--os-group);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--os-group) 60%, transparent);
+}
+.os-folder-count {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1; font-variant-numeric: tabular-nums;
+  color: color-mix(in oklab, var(--os-group) 60%, var(--fg));
+}
+.os-desk-cell:is(:hover, :focus-visible) .os-folder-led {
+  box-shadow: 0 0 10px color-mix(in oklab, var(--os-group) 85%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .os-desk-cell { transition: background-color 0.18s ease, border-color 0.18s ease; }
+  .os-folder-card, .os-folder-front { transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1); }
+  .os-folder-led { transition: box-shadow 0.2s ease; }
+  .os-desk-cell:is(:hover, :focus-visible) .os-folder-front { transform: rotateX(-38deg); }
+  .os-desk-cell:is(:hover, :focus-visible) .os-folder-card {
+    transform: translateY(calc(var(--fh) * -0.11)) rotate(calc((var(--i) - (var(--n) - 1) / 2) * 11deg));
+  }
+}
+
+/* The folder window: the folder's apps in a grid over a status line that reads out the pointed-at app. */
+.os-group { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.os-group-grid {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  align-content: start; gap: 4px; padding: 14px;
+}
+.os-group-status {
+  flex: none; margin: 0; padding: 7px 14px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface) 70%, transparent);
+  font-family: var(--font-mono); font-size: 11px; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* A grey app in a folder: its tile and name dimmed, its "Soon" tag at full strength so it stays readable. */
+.os-group-grid .os-icon[data-soon="true"] { opacity: 1; }
+.os-group-grid .os-icon[data-soon="true"] :is(.os-icon-tile, .os-icon-name) { opacity: 0.45; }
+.os-soon {
+  display: inline-block; flex: none; padding: 0 5px; border-radius: 5px;
+  border: 1px solid color-mix(in oklab, var(--accent-3) 40%, transparent);
+  background: color-mix(in oklab, var(--accent-3) 10%, transparent);
+  font-family: var(--font-mono); font-size: 9px; line-height: 14px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent-3-text);
+}
+
+/* A window's kind, beside its title: "folder", "work in progress". */
+.os-kind {
+  flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em;
+  border: 1px solid; border-radius: 6px; padding: 1px 6px;
+}
+.os-kind[data-kind="folder"] {
+  color: var(--accent-2-text);
+  border-color: color-mix(in oklab, var(--accent-2) 40%, transparent);
+  background: color-mix(in oklab, var(--accent-2) 10%, transparent);
+}

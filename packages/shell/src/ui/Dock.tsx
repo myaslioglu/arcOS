@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LayoutGrid, X } from "lucide-react";
-import { appHue, type AppManifest, type DesktopWindow, type DragItem } from "../core";
+import { Folder, LayoutGrid, X } from "lucide-react";
+import { FOLDER_APP_ID, appHue, windowLook, type AppManifest, type DesktopWindow, type DragItem } from "../core";
 import { useRegistry } from "./registry";
 import { useDropTarget } from "./dnd";
 
@@ -181,8 +181,9 @@ export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onC
         {windows.length > 0 && (
           <span className="os-dock-wins">
             {windows.map((w) => {
-              const app = registry.byId.get(w.appId);
-              const Icon = app?.icon;
+              const look = windowLook(registry, w);
+              // A folder window's chip carries a folder, in its category's hue.
+              const Icon = look.app?.icon ?? (w.appId === FOLDER_APP_ID ? Folder : undefined);
               const state = w.minimized ? " (minimized)" : "";
               return (
                 <span key={w.winId} className="os-dock-win">
@@ -199,7 +200,7 @@ export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onC
                     className={`os-dock-btn os-dock-btn--win ${w.winId === activeId ? "os-dock-btn--active" : ""} ${
                       w.minimized ? "os-dock-btn--min" : ""
                     }`}
-                    style={app ? ({ "--os-hue": appHue(app) } as React.CSSProperties) : undefined}
+                    style={look.hue ? ({ "--os-hue": look.hue } as React.CSSProperties) : undefined}
                   >
                     {Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}
                     <span className="os-dock-title">{w.title}</span>
