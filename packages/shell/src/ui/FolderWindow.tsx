@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { CATEGORY_HUE, appHue, folderContents, itemCount, type AppCategory, type AppManifest } from "../core";
 import { useDesktop } from "./desktop-context";
+import { useIsTouch } from "./hooks/useIsTouch";
 import { useRegistry } from "./registry";
+import { TouchRow } from "./TouchRow";
 
 type Open = (appId: string, from: HTMLElement) => void;
 
@@ -37,11 +39,31 @@ export function FolderItem({ m, onOpen, onHint }: { m: AppManifest; onOpen: Open
 }
 
 /**
- * A folder opened as a window: its apps in a grid over a status line that reads "N items", or the name and blurb of
- * the app under the pointer or the keyboard focus.
+ * A folder opened as a window. With a pointer: its apps in a grid over a status line that reads "N items", or the name
+ * and blurb of the app under the pointer or the keyboard focus. On touch, where nothing is pointed at: its apps as
+ * rows that carry their blurbs, grey ones tagged "Soon".
  */
-export function FolderWindow({ category, apps, onOpen }: { category: AppCategory; apps: readonly AppManifest[]; onOpen: Open }) {
+export function FolderWindow({
+  category,
+  apps,
+  touch = false,
+  onOpen,
+}: {
+  category: AppCategory;
+  apps: readonly AppManifest[];
+  touch?: boolean;
+  onOpen: Open;
+}) {
   const [hint, setHint] = useState<string | null>(null);
+  if (touch) {
+    return (
+      <ul className="os-touch-list os-group-rows" style={{ "--os-group": CATEGORY_HUE[category] } as React.CSSProperties}>
+        {apps.map((m) => (
+          <TouchRow key={m.id} m={m} onOpen={onOpen} />
+        ))}
+      </ul>
+    );
+  }
   return (
     <div className="os-group" style={{ "--os-group": CATEGORY_HUE[category] } as React.CSSProperties}>
       <div className="os-group-grid">
@@ -58,5 +80,13 @@ export function FolderWindow({ category, apps, onOpen }: { category: AppCategory
 export function FolderBody({ category }: { category: AppCategory }) {
   const { list } = useRegistry();
   const { open } = useDesktop();
-  return <FolderWindow category={category} apps={folderContents(list, category)} onOpen={(id, from) => open(id, {}, from)} />;
+  const touch = useIsTouch();
+  return (
+    <FolderWindow
+      category={category}
+      apps={folderContents(list, category)}
+      touch={touch}
+      onOpen={(id, from) => open(id, {}, from)}
+    />
+  );
 }

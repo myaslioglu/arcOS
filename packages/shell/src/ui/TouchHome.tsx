@@ -1,47 +1,58 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { CATEGORY_HUE, CATEGORY_LABEL, CATEGORY_ORDER, type AppManifest } from "../core";
+import { useState } from "react";
+import { Folder, List } from "lucide-react";
+import {
+  CATEGORY_HUE,
+  CATEGORY_LABEL,
+  CATEGORY_ORDER,
+  DESKTOP_VIEWS,
+  folderContents,
+  type AppCategory,
+  type AppManifest,
+  type DeskItem,
+  type DesktopView,
+} from "../core";
+import { DeskItemCell, FolderCell } from "./DeskCells";
 import { useRegistry } from "./registry";
 import { TouchRow } from "./TouchRow";
+import { setDesktopView, useDesktopView } from "./view";
 
-type Props = {
-  activeId: string | null;
+/** The touch switch's names for the two views: on a phone, the rack's trays read as a list. */
+export const TOUCH_VIEW_LABEL: Record<DesktopView, string> = { folders: "Folders", trays: "List" };
+
+export type TouchHomeViewProps = {
+  apps: readonly AppManifest[];
+  view: DesktopView;
+  filter: string;
+  deskItems: readonly DeskItem[];
+  onFilter: (text: string) => void;
+  onView: (view: DesktopView) => void;
   onOpen: (appId: string, from: HTMLElement) => void;
-  onBack: () => void;
+  onOpenFolder: (category: AppCategory, from: HTMLElement) => void;
+  onOpenDeskItem: (item: DeskItem, from: HTMLElement) => void;
 };
 
 /**
- * Touch home: a search box over one row list per category. Typing flattens
- * every app into a single filtered list; with a window open behind it, the
- * home collapses to a "back" button so it never fights the pinned window
- * for the screen.
+ * The touch home, drawn from its props (hookless, so a test can call it): a search box beside the Folders / List
+ * switch, then either a three-column grid of the folders and the desk items, or today's category lists. Typing
+ * flattens every app into one filtered list. Grey apps are tagged "Soon" in every list.
  */
-export function TouchHome({ activeId, onOpen, onBack }: Props) {
-  const { list } = useRegistry();
-  const [filter, setFilter] = useState("");
+export function TouchHomeView({
+  apps,
+  view,
+  filter,
+  deskItems,
+  onFilter,
+  onView,
+  onOpen,
+  onOpenFolder,
+  onOpenDeskItem,
+}: TouchHomeViewProps) {
   const needle = filter.trim().toLowerCase();
-
-  const groups = useMemo(
-    () =>
-      CATEGORY_ORDER.map((c) => ({
-        key: c,
-        label: CATEGORY_LABEL[c],
-        apps: list.filter((m) => m.category === c),
-      })).filter((g) => g.apps.length > 0),
-    [list],
+  const groups = CATEGORY_ORDER.map((category) => ({ category, apps: folderContents(apps, category) })).filter(
+    (g) => g.apps.length > 0,
   );
-
-  if (activeId) {
-    return (
-      <div className="os-touch-home os-touch-home--behind">
-        <button type="button" onClick={onBack} className="os-back">
-          {"< all apps"}
-        </button>
-      </div>
-    );
-  }
-
   const matches = (m: AppManifest) => `${m.name} ${m.blurb}`.toLowerCase().includes(needle);
 
   return (
@@ -49,29 +60,52 @@ export function TouchHome({ activeId, onOpen, onBack }: Props) {
       <div className="os-touch-top">
         <input
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => onFilter(e.target.value)}
           placeholder="Search apps"
           aria-label="search"
           className="os-touch-search"
         />
+        <div role="group" aria-label="View" className="os-touch-views">
+          {DESKTOP_VIEWS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={view === v}
+              aria-label={TOUCH_VIEW_LABEL[v]}
+              onClick={() => onView(v)}
+              className="os-touch-view"
+            >
+              {v === "folders" ? <Folder aria-hidden /> : <List aria-hidden />}
+            </button>
+          ))}
+        </div>
       </div>
       {needle ? (
         <ul className="os-touch-list">
-          {list.filter(matches).map((m) => (
+          {apps.filter(matches).map((m) => (
             <TouchRow key={m.id} m={m} onOpen={onOpen} />
           ))}
         </ul>
+      ) : view === "folders" ? (
+        <div className="os-touch-folders">
+          {groups.map((g) => (
+            <FolderCell key={g.category} category={g.category} apps={g.apps} onOpen={onOpenFolder} />
+          ))}
+          {deskItems.map((item) => (
+            <DeskItemCell key={item.id} item={item} loose={false} onOpen={onOpenDeskItem} />
+          ))}
+        </div>
       ) : (
         groups.map((g) => (
           <section
-            key={g.key}
+            key={g.category}
             className="os-touch-group"
-            data-group={g.key}
-            style={{ "--os-group": CATEGORY_HUE[g.key] } as React.CSSProperties}
+            data-group={g.category}
+            style={{ "--os-group": CATEGORY_HUE[g.category] } as React.CSSProperties}
           >
             <h2 className="os-touch-plate">
               <span className="os-tray-led" aria-hidden />
-              {g.label}
+              {CATEGORY_LABEL[g.category]}
               <span className="os-tray-count">{g.apps.length}</span>
             </h2>
             <ul className="os-touch-list">
@@ -83,5 +117,49 @@ export function TouchHome({ activeId, onOpen, onBack }: Props) {
         ))
       )}
     </div>
+  );
+}
+
+type Props = {
+  activeId: string | null;
+  deskItems: readonly DeskItem[];
+  onOpen: (appId: string, from: HTMLElement) => void;
+  onOpenFolder: (category: AppCategory, from: HTMLElement) => void;
+  onOpenDeskItem: (item: DeskItem, from: HTMLElement) => void;
+  onBack: () => void;
+};
+
+/**
+ * Touch home. The Folders / List switch shares the desktop's `arcos-view` preference (Folders is Folders, List is
+ * Trays). With a window open, windows being full screen one at a time on touch, the home collapses to a "back" button
+ * so it never fights that window for the screen.
+ */
+export function TouchHome({ activeId, deskItems, onOpen, onOpenFolder, onOpenDeskItem, onBack }: Props) {
+  const { list } = useRegistry();
+  const view = useDesktopView();
+  const [filter, setFilter] = useState("");
+
+  if (activeId) {
+    return (
+      <div className="os-touch-home os-touch-home--behind">
+        <button type="button" onClick={onBack} className="os-back">
+          {"< all apps"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <TouchHomeView
+      apps={list}
+      view={view}
+      filter={filter}
+      deskItems={deskItems}
+      onFilter={setFilter}
+      onView={setDesktopView}
+      onOpen={onOpen}
+      onOpenFolder={onOpenFolder}
+      onOpenDeskItem={onOpenDeskItem}
+    />
   );
 }

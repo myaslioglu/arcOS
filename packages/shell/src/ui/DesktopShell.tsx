@@ -224,7 +224,10 @@ export function DesktopShell({
           {touch ? (
             <TouchHome
               activeId={state.activeId}
+              deskItems={deskItems}
               onOpen={(id, from) => open(id, {}, from)}
+              onOpenFolder={openFolder}
+              onOpenDeskItem={openDeskItem}
               onBack={() => state.activeId && actions.minimize(state.activeId)}
             />
           ) : view === "folders" ? (

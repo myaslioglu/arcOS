@@ -302,3 +302,27 @@
   .os-menus .os-menu-title { height: 2.5rem; }
   .os-menu-panel .os-menu-item, .os-ctx .os-menu-item { min-height: 2.75rem; }
 }
+
+/* Touch home: the Folders / List switch beside the search box, the three-column folder grid, and the rows a folder
+   opens as. Touch targets are 44px. */
+.os-touch-views {
+  display: flex; flex: none; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+}
+.os-touch-view { display: grid; place-items: center; width: 44px; min-height: 44px; color: var(--faint); }
+.os-touch-view + .os-touch-view { border-left: 1px solid var(--border); }
+.os-touch-view svg { width: 16px; height: 16px; }
+.os-touch-view[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.os-touch-view:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.os-touch-folders {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem 0.25rem; margin-top: 1rem; justify-items: center;
+}
+.os-touch-folders .os-desk-cell { width: 100%; }
+.os-group-rows { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 12px; }
+.os-touch-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.os-touch-row:focus-visible { outline: 2px solid var(--os-hue); outline-offset: 1px; }
+.os-touch-row[data-soon="true"] .os-icon-tile { opacity: 0.55; }
