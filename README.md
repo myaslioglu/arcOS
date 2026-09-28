@@ -17,12 +17,12 @@ Automated analysis, not investment advice.
 | Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
 | About | What 4rc.OS is, read from inside the app | Live |
+| Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
 | Radar | New tokens and locks, scored | Coming soon |
 | Revoke | Remove token approvals | Coming soon |
-| Terminal | Do all of this by typing | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
 (addresses in `packages/contracts/DEPLOY.md`). Swap and

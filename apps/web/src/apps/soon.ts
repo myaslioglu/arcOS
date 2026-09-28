@@ -1,4 +1,4 @@
-import { Hourglass, Lock, Radar, ShieldCheck, SquareTerminal, Trash2 } from "lucide-react";
+import { Hourglass, Lock, Radar, ShieldCheck, Trash2 } from "lucide-react";
 import type { AppManifest } from "@arcos/shell";
 
 type Soon = Pick<AppManifest, "id" | "name" | "blurb" | "icon" | "category" | "release"> & {
@@ -82,18 +82,6 @@ export const SOON: AppManifest[] = [
     details: [
       "Will list the token approvals your wallet has given.",
       "Will revoke one with a transaction your wallet confirms.",
-    ],
-  }),
-  soon({
-    id: "terminal",
-    name: "Terminal",
-    blurb: "Do all of this by typing",
-    icon: SquareTerminal,
-    category: "system",
-    release: "phase2",
-    details: [
-      "Will open apps and read the chain from typed commands.",
-      "Will never sign or send anything.",
     ],
   }),
 ];
