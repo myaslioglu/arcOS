@@ -3,6 +3,7 @@ import {
   CATEGORY_HUE,
   CATEGORY_ORDER,
   FOLDER_APP_ID,
+  ROADMAP_APP_ID,
   appHue,
   buildRegistry,
   folderWindowSize,
@@ -37,7 +38,9 @@ describe("buildRegistry", () => {
   });
 
   it("rejects an id the desktop keeps for its own windows", () => {
-    expect(() => buildRegistry([stub({ id: FOLDER_APP_ID })])).toThrow(/"folder" is kept for the desktop's own windows/);
+    for (const id of [FOLDER_APP_ID, ROADMAP_APP_ID]) {
+      expect(() => buildRegistry([stub({ id })])).toThrow(`"${id}" is kept for the desktop's own windows`);
+    }
   });
 });
 
@@ -50,6 +53,7 @@ describe("openActionFor", () => {
       window: { w: 520, h: 640, flush: true },
       instanceKey: (p) => (p.token ?? "").toLowerCase(),
     }),
+    stub({ id: "vault", name: "Vault", comingSoon: true, release: "r2", window: { w: 480, h: 420 } }),
   ]);
 
   it("returns null for an unknown app", () => {
@@ -72,6 +76,30 @@ describe("openActionFor", () => {
     const a = openActionFor(registry, "inspector", { token: "0xABC" });
     expect(a?.instanceKey).toBe("0xabc");
     expect(a?.flush).toBe(true);
+  });
+
+  it("opens a grey app as its small work in progress window, whatever the params", () => {
+    expect(openActionFor(registry, "vault", { token: "0xabc" })).toEqual({
+      type: "open",
+      appId: "vault",
+      instanceKey: "",
+      params: {},
+      title: "Vault",
+      size: { w: 380, h: 300 },
+      flush: false,
+    });
+  });
+
+  it("opens the Roadmap as the desktop's own window", () => {
+    expect(openActionFor(registry, ROADMAP_APP_ID, { x: "1" })).toEqual({
+      type: "open",
+      appId: "roadmap",
+      instanceKey: "",
+      params: {},
+      title: "Roadmap",
+      size: { w: 460, h: 420 },
+      flush: false,
+    });
   });
 });
 
@@ -121,7 +149,10 @@ describe("isCategory", () => {
 });
 
 describe("windowLook", () => {
-  const registry = buildRegistry([stub({ id: "inspector", category: "trust" })]);
+  const registry = buildRegistry([
+    stub({ id: "inspector", category: "trust" }),
+    stub({ id: "vault", category: "trust", comingSoon: true }),
+  ]);
 
   it("gives a folder window its category's hue and the folder kind", () => {
     expect(windowLook(registry, { appId: FOLDER_APP_ID, instanceKey: "create" })).toEqual({
@@ -140,6 +171,21 @@ describe("windowLook", () => {
 
   it("knows nothing of an app that isn't registered", () => {
     expect(windowLook(registry, { appId: "nope", instanceKey: "" })).toEqual({ hue: null, kind: null, app: null });
+  });
+
+  it("marks a grey app's window as work in progress, in its app's hue", () => {
+    const look = windowLook(registry, { appId: "vault", instanceKey: "" });
+    expect(look.kind).toBe("wip");
+    expect(look.hue).toBe("var(--accent-2)");
+    expect(look.app?.id).toBe("vault");
+  });
+
+  it("draws the Roadmap in the system hue, with no kind", () => {
+    expect(windowLook(registry, { appId: ROADMAP_APP_ID, instanceKey: "" })).toEqual({
+      hue: "var(--muted)",
+      kind: null,
+      app: null,
+    });
   });
 });
 

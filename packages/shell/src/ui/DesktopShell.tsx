@@ -37,6 +37,8 @@ type Props = {
   statusSlot?: React.ReactNode;
   /** Extra launcher rows computed from the query, e.g. "Inspect 0x…". */
   quickActions?: (query: string) => QuickAction[];
+  /** The public repository, for "Follow progress on GitHub" in grey apps' windows. Empty or missing: the link is left off. */
+  repoUrl?: string;
 };
 
 function stagePoint(from: HTMLElement): Origin | null {
@@ -53,7 +55,7 @@ function stageSize(): { w: number; h: number } {
   return { w: box?.width ?? window.innerWidth, h: box?.height ?? window.innerHeight };
 }
 
-export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, quickActions }: Props) {
+export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, quickActions, repoUrl }: Props) {
   const registry = useMemo(() => buildRegistry(apps), [apps]);
   const { state, actions } = useWindowManager(registry);
   const touch = useIsTouch();
@@ -74,11 +76,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
 
   const open = useCallback(
     (appId: string, params: Record<string, string> = {}, from?: HTMLElement) => {
-      const m = registry.byId.get(appId);
-      if (m?.comingSoon) {
-        notify(`${m.name} isn't available yet.`, "info");
-        return false;
-      }
+      // A grey app opens its "work in progress" window like any other (see openActionFor).
       const action = openActionFor(registry, appId, params);
       if (!action) return false;
       // Keyed like the window itself (see WindowManager's `origins`), so a folder's window grows out of that folder.
@@ -93,7 +91,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
       });
       return actions.open(appId, params);
     },
-    [actions, notify, registry],
+    [actions, registry],
   );
 
   const openFolder = useCallback(
@@ -138,7 +136,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
   }, []);
 
   // Deep links: /#app:inspector?token=0x… opens that window, on load and on change. The hash is
-  // cleared with replaceState right after handling it — for an unknown or coming-soon app id too,
+  // cleared with replaceState right after handling it — for an unknown app id too,
   // not just a successful open — so the same link can be clicked again later: leaving the hash in
   // place means a second click on an identical link never fires `hashchange` at all. replaceState
   // never fires `hashchange` itself, so this can't loop.
@@ -215,7 +213,7 @@ export function DesktopShell({ apps, brand, aboutAppId = "about", statusSlot, qu
             actions={actions}
             touch={touch}
             origins={origins}
-            renderBody={(w) => <AppBody win={w} />}
+            renderBody={(w) => <AppBody win={w} repoUrl={repoUrl} />}
           />
           <Dock
             windows={state.windows}

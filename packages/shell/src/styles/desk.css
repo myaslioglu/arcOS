@@ -156,3 +156,41 @@
   border-color: color-mix(in oklab, var(--accent-2) 40%, transparent);
   background: color-mix(in oklab, var(--accent-2) 10%, transparent);
 }
+
+/* A grey app's window: its kind badge in the title bar, and in the body what it is, what it will do, its stage and a
+   link to follow it. */
+.os-kind[data-kind="wip"] {
+  color: var(--accent-3-text);
+  border-color: color-mix(in oklab, var(--accent-3) 40%, transparent);
+  background: color-mix(in oklab, var(--accent-3) 10%, transparent);
+}
+.os-wip { display: grid; gap: 10px; font-size: 13px; line-height: 1.55; color: var(--fg); }
+.os-wip-head { display: flex; align-items: center; gap: 10px; }
+.os-wip-name { margin: 0; font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--fg); }
+.os-wip-blurb { margin: 0; color: var(--muted); }
+.os-wip-list { margin: 0; padding-left: 1.1rem; display: grid; gap: 4px; list-style: disc; }
+.os-wip-stage { margin: 0; font-family: var(--font-mono); font-size: 12px; color: var(--fg); }
+.os-wip-label {
+  margin-right: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--faint);
+}
+.os-wip-link {
+  display: inline-flex; align-items: center; gap: 6px; justify-self: start; min-height: 2rem;
+  font-family: var(--font-mono); font-size: 12px; color: var(--accent-text);
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.os-wip-link svg { width: 14px; height: 14px; }
+.os-wip-link:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+@media (pointer: coarse) { .os-wip-link { min-height: 44px; } }
+
+/* The Roadmap: every grey app, its stage and its blurb. */
+.os-roadmap { display: grid; gap: 10px; }
+.os-roadmap-intro { margin: 0; font-size: 13px; color: var(--muted); }
+.os-roadmap-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.os-roadmap-row {
+  display: flex; align-items: center; gap: 10px; min-height: 3rem;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+}
+.os-roadmap-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.os-roadmap-name { font-family: var(--font-mono); font-size: 13px; color: var(--fg); }
+.os-roadmap-blurb { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.os-roadmap-stage { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--accent-3-text); }

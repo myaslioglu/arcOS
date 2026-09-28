@@ -51,12 +51,14 @@ export type AppManifest = {
   instanceKey?: (params: Record<string, string>) => string;
   /** Descriptive metadata only — not read by the shell today. */
   requiresWallet: boolean;
-  /** Descriptive metadata only — not read by the shell today. */
+  /** Which release ships the app. For a grey app it also names its stage (see `stageLabel` in roadmap.ts). */
   release: "r0" | "r1" | "r2" | "phase2";
   /** Shown in the dock even when closed. */
   pinned?: boolean;
-  /** Listed but not openable yet (greyed icon). */
+  /** Listed but not live yet: greyed, and it opens a small "work in progress" window instead of the app. */
   comingSoon?: boolean;
+  /** A grey app's two or three sentences on what it will do, shown in its "work in progress" window. */
+  details?: string[];
 };
 
 export type Registry = { list: AppManifest[]; byId: Map<string, AppManifest> };
@@ -64,8 +66,16 @@ export type Registry = { list: AppManifest[]; byId: Map<string, AppManifest> };
 /** The app id of a folder window. Its instance key, and its `group` param, is the category it shows. */
 export const FOLDER_APP_ID = "folder";
 
+/** The app id of the Roadmap window, which lists the grey apps and their stages. */
+export const ROADMAP_APP_ID = "roadmap";
+
 /** Ids the desktop keeps for its own windows. No app may register one. */
-export const RESERVED_APP_IDS: readonly string[] = [FOLDER_APP_ID];
+export const RESERVED_APP_IDS: readonly string[] = [FOLDER_APP_ID, ROADMAP_APP_ID];
+
+/** A grey app's "work in progress" window. */
+export const WIP_WINDOW: WindowSize = { w: 380, h: 300 };
+
+export const ROADMAP_WINDOW: WindowSize = { w: 460, h: 420 };
 
 export function isCategory(value: unknown): value is AppCategory {
   return typeof value === "string" && (CATEGORY_ORDER as readonly string[]).includes(value);
@@ -94,9 +104,10 @@ export function buildRegistry(list: AppManifest[]): Registry {
 type OpenAction = Extract<WindowAction, { type: "open" }>;
 
 /**
- * What opening `appId` means. A registered app opens its own window, one per instance key. `FOLDER_APP_ID` opens the
- * folder window of the category in `params.group`, keyed by that category, so a second click focuses the same window.
- * An unknown id, and a folder of an unknown or empty category, open nothing.
+ * What opening `appId` means. A registered app opens its own window, one per instance key; a grey app opens a small
+ * "work in progress" window instead, whatever params it was given. `FOLDER_APP_ID` opens the folder window of the
+ * category in `params.group`, keyed by that category, so a second click focuses the same window, and
+ * `ROADMAP_APP_ID` opens the Roadmap. An unknown id, and a folder of an unknown or empty category, open nothing.
  */
 export function openActionFor(
   registry: Registry,
@@ -118,8 +129,22 @@ export function openActionFor(
       flush: true,
     };
   }
+  if (appId === ROADMAP_APP_ID) {
+    return {
+      type: "open",
+      appId: ROADMAP_APP_ID,
+      instanceKey: "",
+      params: {},
+      title: "Roadmap",
+      size: { ...ROADMAP_WINDOW },
+      flush: false,
+    };
+  }
   const m = registry.byId.get(appId);
-  if (!m || m.comingSoon) return null;
+  if (!m) return null;
+  if (m.comingSoon) {
+    return { type: "open", appId: m.id, instanceKey: "", params: {}, title: m.name, size: { ...WIP_WINDOW }, flush: false };
+  }
   return {
     type: "open",
     appId: m.id,
@@ -132,8 +157,8 @@ export function openActionFor(
 }
 
 /** The badge beside a window's title. */
-export type WindowKind = "folder";
-export const KIND_LABEL: Record<WindowKind, string> = { folder: "folder" };
+export type WindowKind = "folder" | "wip";
+export const KIND_LABEL: Record<WindowKind, string> = { folder: "folder", wip: "work in progress" };
 
 /** How a window's frame looks: the hue of its LED and border, its kind badge, and the app behind it (none for the desktop's own windows). */
 export type WindowLook = { hue: string | null; kind: WindowKind | null; app: AppManifest | null };
@@ -142,6 +167,7 @@ export function windowLook(registry: Registry, win: Pick<DesktopWindow, "appId" 
   if (win.appId === FOLDER_APP_ID) {
     return { hue: isCategory(win.instanceKey) ? CATEGORY_HUE[win.instanceKey] : null, kind: "folder", app: null };
   }
+  if (win.appId === ROADMAP_APP_ID) return { hue: CATEGORY_HUE.system, kind: null, app: null };
   const app = registry.byId.get(win.appId) ?? null;
-  return { hue: app ? appHue(app) : null, kind: null, app };
+  return { hue: app ? appHue(app) : null, kind: app?.comingSoon ? "wip" : null, app };
 }

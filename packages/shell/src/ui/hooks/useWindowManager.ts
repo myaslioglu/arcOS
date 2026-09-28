@@ -10,7 +10,7 @@ import {
 } from "../../core";
 
 export type WindowActions = {
-  /** Returns false when the app is unknown or not openable yet. */
+  /** Returns false when there is nothing to open: an unknown app, or a folder with no apps. */
   open: (appId: string, params?: Record<string, string>) => boolean;
   setTitle: (winId: string, title: string) => void;
   focus: (winId: string) => void;

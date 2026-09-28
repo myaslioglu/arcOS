@@ -1,8 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Folder, LayoutGrid, X } from "lucide-react";
-import { FOLDER_APP_ID, appHue, windowLook, type AppManifest, type DesktopWindow, type DragItem } from "../core";
+import { FileText, Folder, LayoutGrid, X } from "lucide-react";
+import {
+  FOLDER_APP_ID,
+  ROADMAP_APP_ID,
+  appHue,
+  windowLook,
+  type AppManifest,
+  type DesktopWindow,
+  type DragItem,
+} from "../core";
 import { useRegistry } from "./registry";
 import { useDropTarget } from "./dnd";
 
@@ -182,8 +190,9 @@ export function Dock({ windows, activeId, onOpenPinned, onDropItem, onFocus, onC
           <span className="os-dock-wins">
             {windows.map((w) => {
               const look = windowLook(registry, w);
-              // A folder window's chip carries a folder, in its category's hue.
-              const Icon = look.app?.icon ?? (w.appId === FOLDER_APP_ID ? Folder : undefined);
+              // The desktop's own windows carry their own glyphs: a folder, or the Roadmap's page.
+              const Icon =
+                look.app?.icon ?? (w.appId === FOLDER_APP_ID ? Folder : w.appId === ROADMAP_APP_ID ? FileText : undefined);
               const state = w.minimized ? " (minimized)" : "";
               return (
                 <span key={w.winId} className="os-dock-win">
