@@ -1,6 +1,7 @@
 import type { AppManifest } from "./manifest";
 
-/** A grey app's stage, from its manifest's `release`. Live apps ("r0") have none. */
+/** A grey app's stage, from its manifest's `release`. A live app (no `comingSoon`) has none — its release needn't be
+ * "r0"; Terminal is live on "r1". */
 export type Stage = Exclude<AppManifest["release"], "r0">;
 
 /** The stages in the order they come. */
@@ -13,7 +14,8 @@ export const STAGE_LABEL: Record<Stage, string> = {
   phase2: "Later",
 };
 
-/** The label for a release, or null for "r0", the release that is live. */
+/** The label for a release, or null for "r0". A live app (no `comingSoon`) never reaches here — a grey app's release
+ * is always "r1", "r2" or "phase2". */
 export function stageLabel(release: AppManifest["release"]): string | null {
   return release === "r0" ? null : STAGE_LABEL[release];
 }

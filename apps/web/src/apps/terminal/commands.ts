@@ -39,10 +39,29 @@ const out = (...text: string[]): Outcome => ({ lines: text.map((t) => ({ kind: "
 const err = (text: string): Outcome => ({ lines: [{ kind: "err", text }] });
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** Typed text as an answer may quote it: at most 32 characters, so a pasted essay isn't echoed back whole. */
+/**
+ * C0/C1 control characters and the bidi control characters (ALM; LRM/RLM; the LRE/RLE/PDF/LRO/RLO
+ * block; the LRI/RLI/FSI/PDI block). Stripped from anything shown back to the visitor, so a typed or
+ * pasted control character can never reorder, hide part of, or inject a control sequence into a
+ * displayed line.
+ */
+const UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
+/** Strips C0/C1 and bidi control characters. Used for the scrollback's "in" line and by `echo()`. */
+export function sanitize(text: string): string {
+  return text.replace(UNSAFE_CHARS, "");
+}
+
+/**
+ * Typed text as an answer may quote it: at most 32 characters, control and bidi characters stripped
+ * first, so a pasted essay isn't echoed back whole and can't carry a hidden or reordering character.
+ * The cheap slice before the code-point split keeps a huge paste from making this function itself
+ * slow.
+ */
 export function echo(text: string): string {
-  const chars = Array.from(text);
-  return chars.length > 32 ? `${chars.slice(0, 32).join("")}…` : text;
+  const clean = sanitize(text.length > 256 ? text.slice(0, 256) : text);
+  const chars = Array.from(clean);
+  return chars.length > 32 ? `${chars.slice(0, 32).join("")}…` : clean;
 }
 
 function address(text: string | undefined): Address | null {

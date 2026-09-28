@@ -129,6 +129,12 @@ describe("open", () => {
     }
     expect(s.opened).toEqual([]);
   });
+
+  it("strips a bidi override from the name it echoes back", async () => {
+    const s = setup();
+    expect(await texts("open \u202Efoo", s.env)).toEqual(["No app called foo. Type open to list them."]);
+    expect(s.opened).toEqual([]);
+  });
 });
 
 describe("inspect", () => {
@@ -282,5 +288,14 @@ describe("echo", () => {
     expect(echo("short")).toBe("short");
     expect(echo("a".repeat(33))).toBe(`${"a".repeat(32)}…`);
     expect(echo("😀".repeat(40))).toBe(`${"😀".repeat(32)}…`);
+  });
+
+  it("strips control and bidi characters before counting or displaying", () => {
+    expect(echo("a\u202Eb\u200Ec")).toBe("abc");
+    expect(echo("\u0007bell\u009F")).toBe("bell");
+  });
+
+  it("stays correct on a huge paste", () => {
+    expect(echo("x".repeat(1_000_000))).toBe(`${"x".repeat(32)}…`);
   });
 });

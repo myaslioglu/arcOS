@@ -5,18 +5,25 @@ import { useAccount, usePublicClient } from "wagmi";
 import type { Address } from "viem";
 import { activeChain } from "@arcos/chain";
 import { setThemePreference, useDesktop, useRegistry } from "@arcos/shell";
-import { complete, runCommand, type Line, type TermEnv } from "./commands";
+import { complete, runCommand, type TermEnv } from "./commands";
+import { shouldFocusOnClick, shouldInterceptTab } from "./keyboard";
+import * as log from "./log";
 import styles from "./terminal.module.css";
 
-/** The scrollback keeps this many lines; older ones fall off the top. */
-const MAX_LINES = 400;
 const PROMPT = "4rc:~$";
+/** This window's command history is kept only while it's open, capped so a very long session can't
+ * grow it without bound. */
+const MAX_HISTORY = 100;
+/** A single typed line's cap. The browser enforces this on paste too. */
+const MAX_INPUT = 512;
 
 /**
- * The Terminal: typed commands that read the chain, open apps and set the theme (see commands.ts). It never signs or
- * sends anything. ↑ ↓ walk this window's history (kept only while the window is open), Tab completes a command or an
- * app id, → takes the ghosted completion, Ctrl L clears. Output is plain text; the only links are explorer links a
- * command built itself.
+ * The Terminal: typed commands that read the chain, open apps and set the theme (see commands.ts). It
+ * never signs or sends anything. ↑ ↓ walk this window's history, Tab completes a command or an app
+ * id (Shift+Tab, and Tab with nothing to complete, move focus instead — so the explorer link a
+ * command printed stays reachable by keyboard), Ctrl L clears. Every answer sits under its own
+ * command, in an id-keyed, clear-aware log (see log.ts); output is plain text, and the only links
+ * are explorer links a command built itself.
  */
 export default function TerminalWindow() {
   const chain = activeChain();
@@ -24,17 +31,20 @@ export default function TerminalWindow() {
   const { open } = useDesktop();
   const { address, chainId } = useAccount();
   const client = usePublicClient({ chainId: chain.id });
-  const [lines, setLines] = useState<Line[]>([]);
+  const [state, setState] = useState<log.LogState>(log.emptyLog());
   const [input, setInput] = useState("");
+  const [atEnd, setAtEnd] = useState(true);
   const [history, setHistory] = useState<string[]>([]);
   const [recall, setRecall] = useState<number | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const appIds = useMemo(() => list.map((m) => m.id), [list]);
-  const ghost = useMemo(() => {
-    const [first] = complete(input, appIds);
-    return first && first.length > input.length && first.startsWith(input) ? first.slice(input.length) : "";
-  }, [input, appIds]);
+  const matches = useMemo(() => complete(input, appIds), [input, appIds]);
+  const completionWord = useMemo(() => {
+    const [first] = matches;
+    if (!first || !(first.length > input.length && first.startsWith(input))) return null;
+    return first.split(" ").at(-1) ?? null;
+  }, [matches, input]);
 
   // A terminal is for typing, so it takes focus when it opens.
   useEffect(() => {
@@ -43,17 +53,20 @@ export default function TerminalWindow() {
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [lines]);
+  }, [state.lines]);
 
-  const push = (more: Line[]) => setLines((prev) => [...prev, ...more].slice(-MAX_LINES));
+  const syncCaret = (el: HTMLInputElement) => {
+    setAtEnd(el.selectionStart === el.value.length && el.selectionEnd === el.value.length);
+  };
 
   const run = (raw: string) => {
     const typed = raw.trim();
     if (!typed) return;
-    const nextHistory = [...history, typed];
+    const nextHistory = [...history, typed].slice(-MAX_HISTORY);
     setHistory(nextHistory);
     setRecall(null);
-    push([{ kind: "in", text: typed }]);
+    const { state: submitted, id, epoch } = log.submit(state, typed);
+    setState(submitted);
     const env: TermEnv = {
       apps: list,
       open: (appId, params) => open(appId, params),
@@ -80,8 +93,7 @@ export default function TerminalWindow() {
       now: () => Date.now(),
     };
     void runCommand(typed, env).then((outcome) => {
-      if (outcome.clear) setLines([]);
-      else push(outcome.lines);
+      setState((prev) => (outcome.clear ? log.clear(prev) : log.answer(prev, id, epoch, outcome)));
     });
   };
 
@@ -93,15 +105,10 @@ export default function TerminalWindow() {
       return;
     }
     if (e.key === "Tab") {
+      if (!shouldInterceptTab(e.shiftKey, matches)) return;
       e.preventDefault();
-      const matches = complete(input, appIds);
       if (matches.length === 1) setInput(`${matches[0]} `);
-      else if (matches.length > 1) push([{ kind: "out", text: matches.map((m) => m.split(" ").at(-1)).join("   ") }]);
-      return;
-    }
-    if (e.key === "ArrowRight" && ghost && e.currentTarget.selectionStart === input.length) {
-      e.preventDefault();
-      setInput(input + ghost);
+      else setState((prev) => log.note(prev, matches.map((m) => m.split(" ").at(-1)).join("   ")));
       return;
     }
     if (e.key === "ArrowUp") {
@@ -127,20 +134,25 @@ export default function TerminalWindow() {
     }
     if (e.ctrlKey && e.key.toLowerCase() === "l") {
       e.preventDefault();
-      setLines([]);
+      setState((prev) => log.clear(prev));
     }
   };
 
   return (
-    <div className={styles.screen} onClick={() => inputRef.current?.focus()}>
+    <div
+      className={styles.screen}
+      onClick={() => {
+        if (shouldFocusOnClick(window.getSelection())) inputRef.current?.focus();
+      }}
+    >
       <div className={styles.scanlines} aria-hidden />
       <div className={styles.vignette} aria-hidden />
       <div className={styles.content}>
         <div ref={logRef} className={styles.log} role="log" aria-live="polite" aria-label="Terminal output">
-          {lines.length === 0 && (
+          {state.lines.length === 0 && (
             <p className={`${styles.line} ${styles.dim}`}>4rc.OS terminal. Type help for the commands.</p>
           )}
-          {lines.map((line, i) => (
+          {state.lines.map((line, i) => (
             <p
               key={i}
               className={`${styles.line} ${line.kind === "in" ? styles.typed : line.kind === "err" ? styles.error : styles.answer}`}
@@ -167,25 +179,25 @@ export default function TerminalWindow() {
               onChange={(e) => {
                 setInput(e.target.value);
                 setRecall(null);
+                syncCaret(e.target);
               }}
               onKeyDown={onKeyDown}
+              onKeyUp={(e) => syncCaret(e.currentTarget)}
+              onClick={(e) => syncCaret(e.currentTarget)}
+              onSelect={(e) => syncCaret(e.currentTarget)}
               spellCheck={false}
               autoComplete="off"
               autoCapitalize="off"
               autoCorrect="off"
               enterKeyHint="go"
+              maxLength={MAX_INPUT}
+              placeholder="help"
               aria-label="Command"
               className={styles.input}
             />
-            <span aria-hidden className={styles.mirror}>
-              {input}
-              <span className={styles.caret} />
-              <span className={styles.dim}>{ghost}</span>
-              {!input && !ghost && <span className={styles.placeholder}>help</span>}
-            </span>
           </span>
           <span className={styles.hint} aria-hidden>
-            Tab completes · ↑ history · Ctrl L clears
+            {atEnd && completionWord ? `Tab: ${completionWord}` : "Tab completes · ↑ history · Ctrl L clears"}
           </span>
         </div>
       </div>
