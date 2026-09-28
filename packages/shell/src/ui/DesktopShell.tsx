@@ -28,6 +28,7 @@ import { ContextMenu } from "./ContextMenu";
 import { TouchHome } from "./TouchHome";
 import { Toasts, type Toast } from "./Toasts";
 import { useDesktopView } from "./view";
+import { Wallpaper } from "./Wallpaper";
 
 type Props = {
   apps: AppManifest[];
@@ -42,6 +43,8 @@ type Props = {
   repoUrl?: string;
   /** The desk's items, down its last column in the Folders view: files that open a window, links that open a tab. */
   deskItems?: DeskItem[];
+  /** Drawn into the wallpaper over its grid, glow and noise: the live chart. */
+  wallpaperSlot?: React.ReactNode;
 };
 
 const NO_ITEMS: DeskItem[] = [];
@@ -68,6 +71,7 @@ export function DesktopShell({
   quickActions,
   repoUrl,
   deskItems = NO_ITEMS,
+  wallpaperSlot,
 }: Props) {
   const registry = useMemo(() => buildRegistry(apps), [apps]);
   const { state, actions } = useWindowManager(registry);
@@ -195,7 +199,7 @@ export function DesktopShell({
       <DesktopProvider value={api}>
         <main className="os-root" onContextMenu={onContextMenu}>
           <h1 className="sr-only">{brand}</h1>
-          <div className="os-wallpaper" aria-hidden />
+          <Wallpaper>{wallpaperSlot}</Wallpaper>
           <MenuBar
             brand={brand}
             windows={state.windows}

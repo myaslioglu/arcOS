@@ -9,3 +9,4 @@ export * from "./escape";
 export * from "./theme";
 export * from "./desk";
 export * from "./roadmap";
+export * from "./trace";

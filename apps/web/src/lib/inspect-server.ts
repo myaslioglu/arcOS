@@ -4,11 +4,10 @@ import { inspect, type Report } from "@arcos/inspector";
 import { withDeadline } from "./deadline";
 import { explorerFetch } from "./explorer-fetch";
 import { inspectInput, proExplorerApi } from "./inspect-input";
-import { inspectionClient } from "./inspection-client";
 import { processGlobal } from "./process-global";
-import { inFlightGate, perSecond } from "./rate-limit";
+import { inFlightGate } from "./rate-limit";
 import { reportTtlMs } from "./report-cache";
-import { endpointHealth } from "./rpc-transport";
+import { explorerPacer, serverRpcClient } from "./server-rpc";
 import { ttlCache } from "./ttl-cache";
 
 // Next bundles this module into more than one chunk (the route handlers get one copy, the proof page another), so
@@ -26,8 +25,7 @@ import { ttlCache } from "./ttl-cache";
 // the deepest path takes 3 s plus one round trip per step, under 7 s for 13 steps at 0.3 s each. Every endpoint
 // hanging is an outage: one call alone takes 12 s on mainnet (4 × 3 s), the deadline cuts the inspection off, and it
 // answers "busy" (503) without being cached.
-const health = processGlobal("inspect.rpcHealth", endpointHealth);
-const client = inspectionClient(activeChain(), health);
+const client = serverRpcClient();
 // A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
 const cache = processGlobal("inspect.reportCache", () => ttlCache<Report>(reportTtlMs));
 
@@ -49,7 +47,7 @@ const gate = processGlobal("inspect.gate", () => inFlightGate(8, () => new Inspe
 // server process, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the 15 s deadline;
 // each request then gets at most 8 s, and none is still sent once its inspection's deadline has
 // passed (see explorer-fetch.ts).
-const explorerTurn = processGlobal("inspect.explorerPacer", () => perSecond(4));
+const explorerTurn = explorerPacer();
 
 export function cachedInspection(address: Address): Promise<Report> {
   // Arc mainnet's public explorer refuses server requests (a Cloudflare bot check), so with a key the server
