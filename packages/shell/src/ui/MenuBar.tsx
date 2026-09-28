@@ -1,46 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Check, Moon, Sun } from "lucide-react";
-import type { DesktopWindow, ThemePreference } from "../core";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Check, Moon, Search, Sun } from "lucide-react";
+import { shortcutLabel, type DesktopWindow } from "../core";
+import { menuModel, type MenuEntry } from "./menu-model";
 import { useRegistry } from "./registry";
 import { setThemePreference, toggleTheme, useTheme } from "./theme";
-
-type Item = {
-  type: "item";
-  label: string;
-  onSelect: () => void;
-  hint?: string;
-  disabled?: boolean;
-  checked?: boolean;
-  role?: "menuitem" | "menuitemradio";
-};
-/** Items that belong together under a heading, like the theme choices. */
-type Group = { type: "group"; label: string; items: Item[] };
-type Entry = Item | Group | { type: "sep" };
-type Menu = { id: string; label: React.ReactNode; name: string; entries: Entry[]; brand?: boolean };
-
-const SEP: Entry = { type: "sep" };
-const item = (label: string, onSelect: () => void, extra: Partial<Item> = {}): Item => ({
-  type: "item",
-  label,
-  onSelect,
-  ...extra,
-});
-
-const THEME_CHOICES: { preference: ThemePreference; label: string }[] = [
-  { preference: "light", label: "Light" },
-  { preference: "dark", label: "Dark" },
-  { preference: "system", label: "Match system" },
-];
+import { setDesktopView, useDesktopView } from "./view";
 
 type Props = {
   brand: string;
   windows: DesktopWindow[];
   activeId: string | null;
+  /** Help's GitHub item opens this in a new tab; empty or missing leaves the item off. */
+  repoUrl?: string;
   onSearch: () => void;
   onOpenApp: (appId: string) => void;
   onAbout: () => void;
+  onRoadmap: () => void;
   onFocus: (winId: string) => void;
   onCloseActive: () => void;
   onMinimizeActive: () => void;
@@ -70,21 +47,24 @@ function useClock(): string | null {
   return now;
 }
 
+const noSubscribe = () => () => {};
+const serverShortcut = () => "⌘K";
+
+/** "⌘K" on Apple devices, "Ctrl K" elsewhere; "⌘K" through prerender, so markup matches. */
+function useShortcut(): string {
+  return useSyncExternalStore(noSubscribe, () => shortcutLabel(navigator.userAgent), serverShortcut);
+}
+
 /**
- * The menu bar of a real computer: the brand menu, then File and Window,
- * each doing something real. On the right, the status slot, the theme switch
- * and the clock.
+ * The menu bar of a real computer: the brand menu and the focused window's title ("Desktop" with none), then File,
+ * Window, View and Help, each doing something real (see menu-model.ts). On the right, the status slot, the theme
+ * switch, the search pill and the clock.
  *
- * The theme choices sit in the brand menu, the system menu, because it's the
- * one menu a phone still shows: File and Window hide below 768px, and "Match
- * system" can't be reached from the switch.
- *
- * Menus open on click and, while one is open, follow the pointer to the next
- * title. The keyboard gets the same: Enter or ↓ opens a menu on its first
- * item, ↑ ↓ walk it, ← → step to the neighbouring menu, Esc closes.
+ * Menus open on click and, while one is open, follow the pointer to the next title. The keyboard gets the same: Enter
+ * or ↓ opens a menu on its first item, ↑ ↓ walk it, ← → step to the neighbouring menu, Esc closes.
  */
 export function MenuBar(props: Props) {
-  const { brand, windows, activeId } = props;
+  const { brand, windows, activeId, repoUrl } = props;
   const { list } = useRegistry();
   const [open, setOpen] = useState<string | null>(null);
   const barRef = useRef<HTMLElement>(null);
@@ -92,77 +72,40 @@ export function MenuBar(props: Props) {
   const focusFirst = useRef(false);
   const clock = useClock();
   const theme = useTheme();
+  const view = useDesktopView();
+  const shortcut = useShortcut();
   const switchLabel = theme.resolved === "dark" ? "Switch to light theme" : "Switch to dark theme";
-
   const active = windows.find((w) => w.winId === activeId) ?? null;
-  const visible = windows.filter((w) => !w.minimized);
 
-  const menus: Menu[] = [
-    {
-      id: "brand",
-      brand: true,
-      name: `${brand} menu`,
-      label: (
-        <>
-          <span className="os-brand-dot" aria-hidden />
-          {brand}
-        </>
-      ),
-      entries: [
-        item(`About ${brand}`, props.onAbout),
-        item("Keyboard shortcuts", props.onShortcuts),
-        SEP,
-        {
-          type: "group",
-          label: "Theme",
-          items: THEME_CHOICES.map((c) =>
-            item(c.label, () => setThemePreference(c.preference), {
-              role: "menuitemradio",
-              checked: theme.preference === c.preference,
-            }),
-          ),
-        },
-      ],
+  const menus = menuModel({
+    brand,
+    apps: list,
+    windows,
+    activeId,
+    view,
+    theme: theme.preference,
+    repoUrl,
+    on: {
+      search: props.onSearch,
+      openApp: props.onOpenApp,
+      about: props.onAbout,
+      shortcuts: props.onShortcuts,
+      roadmap: props.onRoadmap,
+      github: () => {
+        if (repoUrl) window.open(repoUrl, "_blank", "noopener,noreferrer");
+      },
+      focus: props.onFocus,
+      closeActive: props.onCloseActive,
+      minimizeActive: props.onMinimizeActive,
+      zoomActive: props.onZoomActive,
+      snapActive: props.onSnapActive,
+      tile: props.onTile,
+      minimizeAll: props.onMinimizeAll,
+      closeAll: props.onCloseAll,
+      view: setDesktopView,
+      theme: setThemePreference,
     },
-    {
-      id: "file",
-      name: "File",
-      label: "File",
-      entries: [
-        item("Search…", props.onSearch, { hint: "⌘K / Ctrl+K" }),
-        SEP,
-        ...list.filter((m) => !m.comingSoon).map((m) => item(`Open ${m.name}`, () => props.onOpenApp(m.id))),
-        SEP,
-        item("Close window", props.onCloseActive, { hint: "Esc", disabled: !active }),
-      ],
-    },
-    {
-      id: "window",
-      name: "Window",
-      label: "Window",
-      entries: [
-        item("Minimize", props.onMinimizeActive, { disabled: !active }),
-        item(active?.maximized ? "Restore" : "Zoom", props.onZoomActive, { disabled: !active }),
-        item("Snap left", () => props.onSnapActive("left"), { disabled: !active }),
-        item("Snap right", () => props.onSnapActive("right"), { disabled: !active }),
-        SEP,
-        item("Tile windows", props.onTile, { disabled: visible.length === 0 }),
-        item("Minimize all", props.onMinimizeAll, { disabled: visible.length === 0 }),
-        item("Close all", props.onCloseAll, { disabled: windows.length === 0 }),
-        ...(windows.length > 0
-          ? [
-              SEP,
-              ...windows.map((w) =>
-                item(w.title, () => props.onFocus(w.winId), {
-                  role: "menuitemradio" as const,
-                  checked: w.winId === activeId,
-                }),
-              ),
-            ]
-          : []),
-      ],
-    },
-  ];
+  });
 
   // Any click outside the bar closes the menu; Esc closes it and hands focus
   // back to its title, before a window below can read Esc as "close".
@@ -219,7 +162,7 @@ export function MenuBar(props: Props) {
     }
   };
 
-  const renderEntry = (entry: Entry, key: number) => {
+  const renderEntry = (entry: MenuEntry, key: number) => {
     if (entry.type === "sep") return <div key={key} role="separator" className="os-menu-sep" />;
     if (entry.type === "group") {
       return (
@@ -258,41 +201,45 @@ export function MenuBar(props: Props) {
     <header className="os-topbar os-menubar">
       <nav ref={barRef} aria-label="menu bar" className="os-menus">
         {menus.map((m) => (
-          <div key={m.id} className={m.brand ? "os-menu" : "os-menu os-menu--text"}>
-            <button
-              ref={(el) => {
-                titles.current[m.id] = el;
-              }}
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={open === m.id}
-              aria-label={m.brand ? m.name : undefined}
-              onClick={(e) => {
-                // A keyboard "click" carries no pointer detail.
-                if (e.detail === 0) focusFirst.current = true;
-                setOpen(open === m.id ? null : m.id);
-              }}
-              onPointerEnter={() => {
-                if (open && open !== m.id) setOpen(m.id);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowDown") {
-                  e.preventDefault();
-                  focusFirst.current = true;
-                  setOpen(m.id);
-                }
-              }}
-              data-cursor="hover"
-              className={m.brand ? "os-menu-title os-menu-title--brand" : "os-menu-title"}
-            >
-              {m.label}
-            </button>
-            {open === m.id && (
-              <div role="menu" aria-label={m.name} className="os-menu-panel" onKeyDown={onPanelKey}>
-                {m.entries.map(renderEntry)}
-              </div>
-            )}
-          </div>
+          <Fragment key={m.id}>
+            <div className={m.narrow ? "os-menu" : "os-menu os-menu--text"}>
+              <button
+                ref={(el) => {
+                  titles.current[m.id] = el;
+                }}
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={open === m.id}
+                aria-label={m.brand ? m.name : undefined}
+                onClick={(e) => {
+                  // A keyboard "click" carries no pointer detail.
+                  if (e.detail === 0) focusFirst.current = true;
+                  setOpen(open === m.id ? null : m.id);
+                }}
+                onPointerEnter={() => {
+                  if (open && open !== m.id) setOpen(m.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    focusFirst.current = true;
+                    setOpen(m.id);
+                  }
+                }}
+                data-cursor="hover"
+                className={m.brand ? "os-menu-title os-menu-title--brand" : "os-menu-title"}
+              >
+                {m.brand && <span className="os-brand-dot" aria-hidden />}
+                {m.label}
+              </button>
+              {open === m.id && (
+                <div role="menu" aria-label={m.name} className="os-menu-panel" onKeyDown={onPanelKey}>
+                  {m.entries.map(renderEntry)}
+                </div>
+              )}
+            </div>
+            {m.brand && <span className="os-app-name">{active?.title ?? "Desktop"}</span>}
+          </Fragment>
         ))}
       </nav>
       <div className="os-topbar-right">
@@ -309,6 +256,17 @@ export function MenuBar(props: Props) {
         >
           <Sun className="os-theme-sun" aria-hidden />
           <Moon className="os-theme-moon" aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={props.onSearch}
+          aria-label={`Search (${shortcut})`}
+          title={`Search (${shortcut})`}
+          data-cursor="hover"
+          className="os-search-pill"
+        >
+          <Search aria-hidden />
+          <kbd>{shortcut}</kbd>
         </button>
         <span className="os-clock tabular-nums" suppressHydrationWarning>
           {clock ?? "--:--"}

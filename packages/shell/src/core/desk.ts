@@ -49,3 +49,6 @@ export type DeskItem = {
   hue: string;
   action: DeskItemAction;
 };
+
+/** The View menu's names for the desktop's views. */
+export const VIEW_LABEL: Record<DesktopView, string> = { folders: "Folders", trays: "Trays" };

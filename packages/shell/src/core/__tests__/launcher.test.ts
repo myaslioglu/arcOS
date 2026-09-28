@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { searchLauncher, type QuickAction } from "../launcher";
+import { searchLauncher, shortcutLabel, type QuickAction } from "../launcher";
 import type { AppManifest } from "../manifest";
 
 const app = (id: string, name: string, blurb = ""): AppManifest => ({
@@ -36,5 +36,15 @@ describe("searchLauncher", () => {
   it("puts quick actions first", () => {
     const action: QuickAction = { id: "inspect:0x1", title: "Inspect", hint: "", appId: "inspector", params: {} };
     expect(names("zzz", [action])).toEqual(["inspect:0x1"]);
+  });
+});
+
+describe("shortcutLabel", () => {
+  it("shows ⌘K on Apple devices and Ctrl K elsewhere", () => {
+    expect(shortcutLabel("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15")).toBe("⌘K");
+    expect(shortcutLabel("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)")).toBe("⌘K");
+    expect(shortcutLabel("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe("Ctrl K");
+    expect(shortcutLabel("Mozilla/5.0 (X11; Linux x86_64)")).toBe("Ctrl K");
+    expect(shortcutLabel("")).toBe("Ctrl K");
   });
 });

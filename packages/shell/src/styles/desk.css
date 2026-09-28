@@ -274,3 +274,31 @@
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.18em; color: var(--faint);
 }
+
+/* The focused window's title beside the brand menu ("Desktop" with none), hidden where the bar is too narrow. */
+.os-app-name {
+  max-width: 12rem; padding: 0 0.55rem 0 0.3rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--fg);
+}
+@media (max-width: 479px) { .os-app-name { display: none; } }
+
+/* The search pill: a glyph and the shortcut, opening the launcher. Touch has the home's search box instead, and a
+   44px control wouldn't fit the 40px bar. */
+.os-search-pill {
+  display: inline-flex; align-items: center; gap: 0.35rem; flex: none;
+  min-height: 2rem; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.os-search-pill:hover { color: var(--fg); border-color: var(--border-2); }
+.os-search-pill:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.os-search-pill svg { width: 14px; height: 14px; }
+.os-search-pill kbd { font-family: inherit; }
+@media (hover: none) { .os-search-pill { display: none; } }
+
+/* Touch: menu rows get a 44px target; menu titles take the bar's full 40px height, the most the bar allows. */
+@media (pointer: coarse) {
+  .os-menus .os-menu-title { height: 2.5rem; }
+  .os-menu-panel .os-menu-item, .os-ctx .os-menu-item { min-height: 2.75rem; }
+}

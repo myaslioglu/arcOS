@@ -31,3 +31,8 @@ export function searchLauncher(list: AppManifest[], query: string, actions: Quic
     ...ranked.map(({ app }) => ({ kind: "app" as const, app })),
   ];
 }
+
+/** The launcher's shortcut as the visitor's keyboard shows it: ⌘K on Apple devices, Ctrl K elsewhere. */
+export function shortcutLabel(userAgent: string): string {
+  return /Mac|iPhone|iPad|iPod/.test(userAgent) ? "⌘K" : "Ctrl K";
+}

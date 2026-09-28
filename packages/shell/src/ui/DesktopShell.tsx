@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FOLDER_APP_ID,
+  ROADMAP_APP_ID,
   buildRegistry,
   dropParams,
   openActionFor,
@@ -207,6 +208,8 @@ export function DesktopShell({
             onSearch={() => setLauncher(true)}
             onOpenApp={(id) => open(id)}
             onAbout={() => open(aboutAppId)}
+            onRoadmap={() => open(ROADMAP_APP_ID)}
+            repoUrl={repoUrl}
             onFocus={actions.focus}
             onCloseActive={() => active && actions.close(active.winId)}
             onMinimizeActive={() => active && actions.minimize(active.winId)}
