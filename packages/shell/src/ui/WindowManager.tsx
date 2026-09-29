@@ -67,7 +67,10 @@ export function WindowManager({ windows, activeId, actions, touch, renderBody, o
           if (win.minimized) return null;
           // This layer spans the whole stage, so scaling it about the icon's
           // point draws the window out of that icon. Only transform and
-          // opacity move; a reduced-motion setting drops the scale.
+          // opacity move. A reduced-motion setting is followed by the
+          // MotionConfig in DesktopShell: the scale and the shift then apply
+          // at once (a window opens at full size, and closing jumps it to its
+          // exit pose), and only the opacity still animates.
           const origin = origins[`${win.appId}:${win.instanceKey}`];
           return (
             <div

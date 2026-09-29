@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MotionConfig } from "framer-motion";
 import {
   FOLDER_APP_ID,
   ROADMAP_APP_ID,
@@ -196,89 +197,94 @@ export function DesktopShell({
   };
 
   return (
-    <RegistryProvider value={registry}>
-      <DesktopProvider value={api}>
-        <main className="os-root" onContextMenu={onContextMenu}>
-          <h1 className="sr-only">{brand}</h1>
-          <Wallpaper>{wallpaperSlot}</Wallpaper>
-          <MenuBar
-            brand={brand}
-            windows={state.windows}
-            activeId={state.activeId}
-            touch={touch}
-            onSearch={() => setLauncher(true)}
-            onOpenApp={(id) => open(id)}
-            onAbout={() => open(aboutAppId)}
-            onRoadmap={() => open(ROADMAP_APP_ID)}
-            repoUrl={repoUrl}
-            onFocus={actions.focus}
-            onCloseActive={() => active && actions.close(active.winId)}
-            onMinimizeActive={() => active && actions.minimize(active.winId)}
-            onZoomActive={() => active && actions.toggleMax(active.winId)}
-            onSnapActive={snapActive}
-            onTile={tile}
-            onMinimizeAll={actions.minimizeAll}
-            onCloseAll={actions.closeAll}
-            onShortcuts={shortcuts}
-            statusSlot={statusSlot}
-          />
-          {touch ? (
-            <TouchHome
+    // framer-motion moves the windows, the launcher and the toasts, and out of the box it ignores a reduced-motion
+    // setting. "user" makes it follow the device's: a transform (the window's zoom, a slide) then applies at once
+    // instead of animating, and opacity still fades. The stylesheets' own motion is gated in CSS (see desktop.css).
+    <MotionConfig reducedMotion="user">
+      <RegistryProvider value={registry}>
+        <DesktopProvider value={api}>
+          <main className="os-root" onContextMenu={onContextMenu}>
+            <h1 className="sr-only">{brand}</h1>
+            <Wallpaper>{wallpaperSlot}</Wallpaper>
+            <MenuBar
+              brand={brand}
+              windows={state.windows}
               activeId={state.activeId}
-              deskItems={deskItems}
-              onOpen={(id, from) => open(id, {}, from)}
-              onOpenFolder={openFolder}
-              onOpenDeskItem={openDeskItem}
-              onBack={() => state.activeId && actions.minimize(state.activeId)}
-            />
-          ) : view === "folders" ? (
-            <DeskFolders apps={registry.list} items={deskItems} onOpenFolder={openFolder} onOpenItem={openDeskItem} />
-          ) : (
-            <DesktopIcons
-              onOpen={(id, from) => open(id, {}, from)}
-              onDropItem={(id, item, from) => open(id, dropParams(item), from)}
-            />
-          )}
-          <WindowManager
-            windows={state.windows}
-            activeId={state.activeId}
-            actions={actions}
-            touch={touch}
-            origins={origins}
-            renderBody={(w) => <AppBody win={w} repoUrl={repoUrl} />}
-          />
-          <Dock
-            windows={state.windows}
-            activeId={state.activeId}
-            onOpenPinned={(id, from) => open(id, {}, from)}
-            onDropItem={(id, item, from) => open(id, dropParams(item), from)}
-            onFocus={actions.focus}
-            onClose={actions.close}
-            onCloseAll={actions.closeAll}
-            onLauncher={() => setLauncher(true)}
-          />
-          <Launcher
-            open={launcher}
-            onClose={() => setLauncher(false)}
-            quickActions={quickActions}
-            onPickApp={(id) => open(id)}
-            onPickAction={(a) => open(a.appId, a.params)}
-          />
-          {menuAt && (
-            <ContextMenu
-              x={menuAt.x}
-              y={menuAt.y}
-              hasWindows={state.windows.length > 0}
-              onClose={() => setMenuAt(null)}
+              touch={touch}
+              onSearch={() => setLauncher(true)}
+              onOpenApp={(id) => open(id)}
+              onAbout={() => open(aboutAppId)}
+              onRoadmap={() => open(ROADMAP_APP_ID)}
+              repoUrl={repoUrl}
+              onFocus={actions.focus}
+              onCloseActive={() => active && actions.close(active.winId)}
+              onMinimizeActive={() => active && actions.minimize(active.winId)}
+              onZoomActive={() => active && actions.toggleMax(active.winId)}
+              onSnapActive={snapActive}
               onTile={tile}
               onMinimizeAll={actions.minimizeAll}
               onCloseAll={actions.closeAll}
-              onAbout={() => open(aboutAppId)}
+              onShortcuts={shortcuts}
+              statusSlot={statusSlot}
             />
-          )}
-          <Toasts toasts={toasts} />
-        </main>
-      </DesktopProvider>
-    </RegistryProvider>
+            {touch ? (
+              <TouchHome
+                activeId={state.activeId}
+                deskItems={deskItems}
+                onOpen={(id, from) => open(id, {}, from)}
+                onOpenFolder={openFolder}
+                onOpenDeskItem={openDeskItem}
+                onBack={() => state.activeId && actions.minimize(state.activeId)}
+              />
+            ) : view === "folders" ? (
+              <DeskFolders apps={registry.list} items={deskItems} onOpenFolder={openFolder} onOpenItem={openDeskItem} />
+            ) : (
+              <DesktopIcons
+                onOpen={(id, from) => open(id, {}, from)}
+                onDropItem={(id, item, from) => open(id, dropParams(item), from)}
+              />
+            )}
+            <WindowManager
+              windows={state.windows}
+              activeId={state.activeId}
+              actions={actions}
+              touch={touch}
+              origins={origins}
+              renderBody={(w) => <AppBody win={w} repoUrl={repoUrl} />}
+            />
+            <Dock
+              windows={state.windows}
+              activeId={state.activeId}
+              onOpenPinned={(id, from) => open(id, {}, from)}
+              onDropItem={(id, item, from) => open(id, dropParams(item), from)}
+              onFocus={actions.focus}
+              onClose={actions.close}
+              onCloseAll={actions.closeAll}
+              onLauncher={() => setLauncher(true)}
+            />
+            <Launcher
+              open={launcher}
+              onClose={() => setLauncher(false)}
+              quickActions={quickActions}
+              onPickApp={(id) => open(id)}
+              onPickAction={(a) => open(a.appId, a.params)}
+            />
+            {menuAt && (
+              <ContextMenu
+                x={menuAt.x}
+                y={menuAt.y}
+                hasWindows={state.windows.length > 0}
+                onClose={() => setMenuAt(null)}
+                onTile={tile}
+                onMinimizeAll={actions.minimizeAll}
+                onCloseAll={actions.closeAll}
+                onAbout={() => open(aboutAppId)}
+              />
+            )}
+            <Toasts toasts={toasts} />
+          </main>
+        </DesktopProvider>
+      </RegistryProvider>
+    </MotionConfig>
   );
 }
