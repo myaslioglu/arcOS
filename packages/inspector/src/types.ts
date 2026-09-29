@@ -60,6 +60,9 @@ export interface ChainReader {
   blockNumber(): Promise<bigint>;
 }
 
+/** A Uniswap v4 pool's identity. Its id is keccak256(abi.encode(key)). `currency0 < currency1`, and address(0) is native USDC. */
+export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+
 export type InspectInput = {
   address: Address;
   network: NetworkId;
