@@ -5,10 +5,11 @@ import { drop } from "./drop/manifest";
 import { finder } from "./finder/manifest";
 import { inspector } from "./inspector/manifest";
 import { mint } from "./mint/manifest";
+import { revoke } from "./revoke/manifest";
 import { swap } from "./swap/manifest";
 import { terminal } from "./terminal/manifest";
 import { wallet } from "./wallet/manifest";
 import { SOON } from "./soon";
 
 /** Desktop order. Every app in the product is listed here and nowhere else. */
-export const APPS: AppManifest[] = [finder, inspector, mint, drop, swap, bridge, wallet, about, terminal, ...SOON];
+export const APPS: AppManifest[] = [finder, inspector, mint, drop, swap, bridge, wallet, about, revoke, terminal, ...SOON];

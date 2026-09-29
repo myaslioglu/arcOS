@@ -1,0 +1,268 @@
+"use client";
+
+import { useId, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { erc20Abi, getAddress, isAddress, type Address } from "viem";
+import { activeChain, explorerUrl } from "@arcos/chain";
+import { useDesktop, type AppProps } from "@arcos/shell";
+import { ConnectGate } from "@/components/ConnectGate";
+import type { Approval } from "@/lib/approvals";
+import { UserFacingError } from "@/lib/contract-error";
+import { shortAddress } from "@/lib/format";
+import { assertWalletOnChain, withChain } from "@/lib/paid-write";
+import {
+  allowanceText,
+  fetchApprovals,
+  markRevoked,
+  revokeFailure,
+  revokeView,
+  rowKey,
+  stillLive,
+  type RevokeStage,
+} from "./rows";
+
+/** Every control is at least 32px high, 44px on touch. */
+const BUTTON = "min-h-8 rounded-md border border-border-2 px-3 text-xs pointer-coarse:min-h-11 disabled:opacity-50";
+
+/**
+ * Revoke: the live ERC-20 approvals of the connected wallet, or of any address pasted in (read-only), each revocable
+ * by its own wallet with `approve(spender, 0)`, which the wallet confirms. The window's `owner` param names the address
+ * to show, as the Terminal's `approvals` command and the form below set it.
+ */
+export default function RevokeWindow({ params }: AppProps) {
+  const { address } = useAccount();
+  const { open } = useDesktop();
+  const view = revokeView(params.owner, address);
+  return (
+    <div className="grid gap-4 p-5 text-sm">
+      <LookupForm mine={address} onLook={(owner) => open("revoke", { owner })} />
+      {view.kind === "ask" && (
+        <div className="grid justify-items-start gap-2">
+          <p className="text-muted">Connect a wallet, or paste an address to look.</p>
+          <button type="button" className={BUTTON} onClick={() => open("wallet")}>
+            Open Wallet
+          </button>
+        </div>
+      )}
+      {view.kind === "invalid" && <p className="text-danger-text">{"That isn't an address."}</p>}
+      {view.kind === "list" &&
+        (view.canRevoke ? (
+          <ConnectGate>
+            <ApprovalList owner={view.owner} canRevoke />
+          </ConnectGate>
+        ) : (
+          <ApprovalList owner={view.owner} canRevoke={false} />
+        ))}
+      <p className="text-xs text-faint">Token approvals only. NFT and Permit2 approvals come later.</p>
+    </div>
+  );
+}
+
+function LookupForm({ mine, onLook }: { mine?: string; onLook: (owner: Address) => void }) {
+  const id = useId();
+  const [text, setText] = useState("");
+  const [bad, setBad] = useState(false);
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = text.trim();
+    if (!isAddress(value, { strict: false })) {
+      setBad(true);
+      return;
+    }
+    setBad(false);
+    onLook(getAddress(value));
+  };
+  return (
+    <form onSubmit={submit} className="grid gap-2">
+      <label htmlFor={id} className="text-xs text-muted">
+        Address to look up
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <input
+          id={id}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setBad(false);
+          }}
+          placeholder="0x…"
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={bad}
+          className="min-h-8 min-w-0 flex-1 rounded-md border border-border-2 bg-surface px-2 font-mono text-xs pointer-coarse:min-h-11 pointer-coarse:text-base"
+        />
+        <button type="submit" className={BUTTON}>
+          Look
+        </button>
+        {mine && isAddress(mine, { strict: false }) && (
+          <button
+            type="button"
+            className={BUTTON}
+            onClick={() => {
+              setText("");
+              setBad(false);
+              onLook(getAddress(mine));
+            }}
+          >
+            My wallet
+          </button>
+        )}
+      </div>
+      {bad && <p className="text-xs text-danger-text">{"That isn't an address."}</p>}
+    </form>
+  );
+}
+
+function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean }) {
+  const chain = activeChain();
+  const { address, chainId: walletChainId } = useAccount();
+  const client = usePublicClient({ chainId: chain.id });
+  const { writeContractAsync } = useWriteContract();
+  const { open } = useDesktop();
+  const query = useQuery({
+    queryKey: ["approvals", owner.toLowerCase()],
+    queryFn: () => fetchApprovals(owner),
+    retry: false,
+  });
+  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
+  const [left, setLeft] = useState<Readonly<Record<string, string>>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failures, setFailures] = useState<Readonly<Record<string, { text: string; hash?: string }>>>({});
+
+  if (query.isPending) return <p className="text-muted">Loading approvals…</p>;
+  if (query.isError) {
+    return (
+      <div className="grid justify-items-start gap-2">
+        <p className="text-danger-text">{"Couldn't load approvals. Try again in a minute."}</p>
+        <button type="button" className={BUTTON} onClick={() => void query.refetch()}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  const rows = stillLive(owner, query.data.approvals).filter((row) => !gone.has(rowKey(row)));
+
+  // One revoke at a time: approve(spender, 0), simulated first, confirmed in the wallet, then the pair is read again.
+  const revoke = async (row: Approval) => {
+    const key = rowKey(row);
+    if (busy !== null || !client || !address) return;
+    setBusy(key);
+    setFailures((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    let stage: RevokeStage = "signing";
+    let hash: `0x${string}` | undefined;
+    try {
+      // Defence in depth; the real guard is the chainId withChain sets, which viem enforces when signing.
+      assertWalletOnChain(walletChainId, chain.id);
+      const { request } = await client.simulateContract({
+        account: address,
+        address: row.token,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [row.spender, 0n],
+      });
+      hash = await writeContractAsync(withChain(request, chain.id));
+      stage = "sent";
+      const receipt = await client.waitForTransactionReceipt({ hash });
+      if (receipt.status === "reverted") throw new UserFacingError("The revoke reverted. The approval is unchanged.");
+      stage = "confirmed";
+      const now = await client.readContract({
+        address: row.token,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [owner, row.spender],
+      });
+      if (now === 0n) {
+        markRevoked(owner, row, Number(receipt.blockNumber));
+        setGone((prev) => new Set(prev).add(key));
+      } else {
+        setLeft((prev) => ({ ...prev, [key]: now.toString() }));
+      }
+    } catch (err) {
+      setFailures((prev) => ({ ...prev, [key]: { text: revokeFailure(stage, err), ...(hash ? { hash } : {}) } }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="grid gap-3">
+      {!canRevoke && <p className="text-xs text-muted">{`Viewing ${shortAddress(owner)}. Only its own wallet can revoke.`}</p>}
+      {query.data.truncated && (
+        <p className="text-xs text-accent-3-text">
+          {"This list may be incomplete: some approvals couldn't be read."}
+        </p>
+      )}
+      {rows.length === 0 ? (
+        !query.data.truncated && <p className="text-muted">No active token approvals.</p>
+      ) : (
+        <ul className="grid gap-2">
+          {rows.map((row) => {
+            const key = rowKey(row);
+            const failure = failures[key];
+            return (
+              <li key={key} className="grid gap-2 rounded-lg border border-border bg-surface p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm">
+                      {row.symbol ? `${row.symbol} · ${shortAddress(row.token)}` : shortAddress(row.token)}
+                    </p>
+                    <p className="truncate text-xs text-muted">{row.name ?? "Unnamed token"}</p>
+                  </div>
+                  <p className="font-mono text-sm">{allowanceText(left[key] ?? row.allowance, row.decimals)}</p>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted">
+                    {"Spender: "}
+                    {row.spenderLabel ?? "Unknown contract"}{" "}
+                    <span className="font-mono">{shortAddress(row.spender)}</span>
+                    {!row.spenderLabel && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="min-h-8 text-accent-text underline pointer-coarse:min-h-11"
+                          onClick={() => open("inspector", { token: row.spender })}
+                        >
+                          Inspect
+                        </button>
+                      </>
+                    )}
+                  </p>
+                  {canRevoke && (
+                    <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => void revoke(row)}>
+                      {busy === key ? "Waiting for your wallet…" : "Revoke"}
+                    </button>
+                  )}
+                </div>
+                {failure && (
+                  <p className="text-xs text-danger-text">
+                    {failure.text}
+                    {failure.hash && (
+                      <>
+                        {" "}
+                        <a
+                          className="text-accent-text underline"
+                          href={explorerUrl("tx", failure.hash)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          View on the explorer
+                        </a>
+                      </>
+                    )}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}

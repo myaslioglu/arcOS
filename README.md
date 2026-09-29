@@ -18,11 +18,11 @@ Automated analysis, not investment advice.
 | Wallet | Connect, switch network, disconnect | Live |
 | About | What 4rc.OS is, read from inside the app | Live |
 | Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
+| Revoke | Lists a wallet's live token approvals and revokes one with a transaction the wallet confirms | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
 | Radar | New tokens and locks, scored | Coming soon |
-| Revoke | Remove token approvals | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
 (addresses in `packages/contracts/DEPLOY.md`). Swap and
@@ -151,8 +151,10 @@ but does have privileged functions, both the ownership and privileges findings r
 - Liquidity and lock checks cover Uniswap v2 and v3 pools against USDC and EURC only. Uniswap v4
   and Aerodrome aren't scanned yet.
 - Drop approves exactly the total a run needs, but a run that stops early (a refused signature, an
-  unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until it
-  is used by a later run or revoked by hand. A Revoke app arrives in R1.
+  unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until a
+  later run uses it or you revoke it in Revoke.
+- Revoke lists ERC-20 approvals only: NFT approvals and Permit2's own allowances come later, and it
+  revokes one approval at a time.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
   indexer, which arrives with Radar.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;

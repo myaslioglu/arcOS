@@ -1,0 +1,136 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Approval, ApprovalsAnswer } from "@/lib/approvals";
+
+// The window reads the account from wagmi and the list from React Query; these tests only need their answers.
+// Nothing here reaches the network, and nothing is signed.
+const state = vi.hoisted(() => ({
+  address: undefined as string | undefined,
+  query: {
+    isPending: false,
+    isError: false,
+    data: undefined as ApprovalsAnswer | undefined,
+    refetch: async () => undefined,
+  },
+}));
+vi.mock("wagmi", () => ({
+  useAccount: () => ({ address: state.address, chainId: 5042002 }),
+  usePublicClient: () => undefined,
+  useWriteContract: () => ({ writeContractAsync: async () => "0x" }),
+}));
+vi.mock("@tanstack/react-query", () => ({ useQuery: () => state.query }));
+vi.mock("@arcos/shell", () => ({ useDesktop: () => ({ open: () => true }) }));
+vi.mock("@/components/ConnectGate", () => ({ ConnectGate: ({ children }: { children: unknown }) => children }));
+
+import { shortAddress } from "@/lib/format";
+import RevokeWindow from "../Window";
+
+const OWNER = "0x1111111111111111111111111111111111111111";
+const OTHER = "0x2222222222222222222222222222222222222222";
+const TOKEN = "0x3333333333333333333333333333333333333333";
+const UNKNOWN = "0x5555555555555555555555555555555555555555";
+const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+const NOTE = "Token approvals only. NFT and Permit2 approvals come later.";
+
+const row = (over: Partial<Approval> = {}): Approval => ({
+  token: TOKEN,
+  symbol: "AAA",
+  name: "Token A",
+  decimals: 18,
+  spender: PERMIT2,
+  spenderLabel: "Permit2",
+  allowance: (2n ** 256n - 1n).toString(),
+  lastApprovalBlock: 10,
+  ...over,
+});
+/** React escapes an apostrophe in static markup; read it back as typed. */
+const render = (params: Record<string, string> = {}) =>
+  renderToStaticMarkup(createElement(RevokeWindow, { winId: "w-1", params })).replaceAll("&#x27;", "'");
+const listing = (approvals: Approval[], truncated = false) => {
+  state.query = { ...state.query, data: { approvals, truncated } };
+};
+
+beforeEach(() => {
+  state.address = undefined;
+  state.query = { isPending: false, isError: false, data: { approvals: [], truncated: false }, refetch: async () => undefined };
+});
+
+describe("Revoke", () => {
+  it("asks for a wallet or an address when it has neither", () => {
+    const html = render();
+    expect(html).toContain("Connect a wallet, or paste an address to look.");
+    expect(html).toContain(NOTE);
+  });
+
+  it("says when the address it was opened for isn't one", () => {
+    expect(render({ owner: "0x12" })).toContain("That isn't an address.");
+  });
+
+  it("shows a pasted address's approvals read-only, with no Revoke buttons", () => {
+    state.address = OWNER;
+    listing([row()]);
+    const html = render({ owner: OTHER });
+    expect(html).toContain("AAA");
+    expect(html).toContain("Token A");
+    expect(html).toContain("Unlimited");
+    expect(html).toContain("Permit2");
+    expect(html).toContain("Only its own wallet can revoke.");
+    expect(html).not.toContain(">Revoke</button>");
+  });
+
+  it("lets the connected wallet revoke its own approvals", () => {
+    state.address = OWNER;
+    listing([row()]);
+    expect(render()).toContain(">Revoke</button>");
+  });
+
+  it("names an unknown spender by its short address, and offers to inspect it", () => {
+    state.address = OWNER;
+    listing([row({ spender: UNKNOWN, spenderLabel: null })]);
+    const html = render();
+    expect(html).toContain("Unknown contract");
+    expect(html).toContain("0x5555…5555");
+    expect(html).toContain(">Inspect</button>");
+  });
+
+  it("says when there are no active approvals", () => {
+    state.address = OWNER;
+    expect(render()).toContain("No active token approvals.");
+  });
+
+  it("says when the list is still loading, or couldn't load", () => {
+    state.address = OWNER;
+    state.query = { ...state.query, isPending: true, data: undefined };
+    expect(render()).toContain("Loading approvals…");
+    state.query = { ...state.query, isPending: false, isError: true };
+    expect(render()).toContain("Couldn't load approvals. Try again in a minute.");
+  });
+
+  it("says when the list was cut short", () => {
+    state.address = OWNER;
+    listing([row()], true);
+    expect(render()).toContain("This list may be incomplete: some approvals couldn't be read.");
+  });
+
+  it("never says there are no approvals when the list may be incomplete", () => {
+    state.address = OWNER;
+    listing([], true);
+    const html = render();
+    expect(html).toContain("This list may be incomplete: some approvals couldn't be read.");
+    expect(html).not.toContain("No active token approvals.");
+  });
+
+  it("shows each token's address next to its symbol, so a look-alike can be told apart", () => {
+    state.address = OWNER;
+    listing([row()]);
+    expect(render()).toContain(`${row().symbol} · ${shortAddress(row().token)}`);
+  });
+
+  it("keeps the note under every state", () => {
+    state.address = OWNER;
+    listing([row()]);
+    expect(render()).toContain(NOTE);
+    expect(render({ owner: "0x12" })).toContain(NOTE);
+  });
+});

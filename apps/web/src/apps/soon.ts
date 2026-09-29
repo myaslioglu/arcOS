@@ -1,4 +1,4 @@
-import { Hourglass, Lock, Radar, ShieldCheck, Trash2 } from "lucide-react";
+import { Hourglass, Lock, Radar, ShieldCheck } from "lucide-react";
 import type { AppManifest } from "@arcos/shell";
 
 type Soon = Pick<AppManifest, "id" | "name" | "blurb" | "icon" | "category" | "release"> & {
@@ -70,18 +70,6 @@ export const SOON: AppManifest[] = [
       "Will list new tokens and locks on Arc as they appear.",
       "Will score each new token with Inspector's checks.",
       "Needs an index of new tokens first.",
-    ],
-  }),
-  soon({
-    id: "revoke",
-    name: "Revoke",
-    blurb: "Remove token approvals",
-    icon: Trash2,
-    category: "system",
-    release: "r1",
-    details: [
-      "Will list the token approvals your wallet has given.",
-      "Will revoke one with a transaction your wallet confirms.",
     ],
   }),
 ];
