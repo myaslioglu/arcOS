@@ -5,7 +5,8 @@ import { useAccount, usePublicClient } from "wagmi";
 import type { Address } from "viem";
 import { activeChain } from "@arcos/chain";
 import { setThemePreference, useDesktop, useRegistry } from "@arcos/shell";
-import { complete, runCommand, type TermEnv } from "./commands";
+import { trackEvent } from "@/lib/analytics";
+import { complete, countedCommand, runCommand, type TermEnv } from "./commands";
 import { shouldFocusOnClick, shouldInterceptTab } from "./keyboard";
 import * as log from "./log";
 import styles from "./terminal.module.css";
@@ -73,6 +74,8 @@ export default function TerminalWindow() {
   const run = (raw: string) => {
     const typed = raw.trim();
     if (!typed) return;
+    // The command's name, or "unknown": never what was typed after it, which could be an address.
+    trackEvent("terminal_run", { command: countedCommand(typed) });
     const nextHistory = [...history, typed].slice(-MAX_HISTORY);
     setHistory(nextHistory);
     setRecall(null);

@@ -1,7 +1,9 @@
 # 4rc.OS
 
 4rc.OS is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
-contract, mint one without writing code, and send a token to many wallets in one flow.
+contract, mint one without writing code, send a token to many wallets in one flow, swap and
+bridge, and revoke token approvals. A Terminal reads the chain and opens apps from typed
+commands, and a Roadmap window lists the apps still on the way.
 
 Automated analysis, not investment advice.
 
@@ -22,7 +24,7 @@ Automated analysis, not investment advice.
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
-| Radar | New tokens and locks, scored | Coming soon |
+| Radar | New tokens, each with Inspector's checks | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
 (addresses in `packages/contracts/DEPLOY.md`). Swap and
@@ -35,7 +37,7 @@ why, and the condition for removing it.
 
 ## Run it
 
-Needs Node 22.16 or newer and **npm 11 or newer** (`npm -v`). npm 10 installs Foundry but leaves out the
+Needs Node 22 (22.16 or later) and **npm 11 or newer** (`npm -v`). npm 10 installs Foundry but leaves out the
 `forge`, `cast` and `anvil` commands, so the `npx forge` / `npx cast` commands in
 [DEPLOY.md](packages/contracts/DEPLOY.md) would offer to download unrelated npm packages with those
 names instead; `npm install -g npm@11` fixes it.
@@ -71,7 +73,8 @@ it needs Java 21 or newer and no credentials.
 
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
   proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
-  (the wallpaper's live chart) and `/api/approvals` (Revoke's list).
+  (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts)
+  and `/api/csp-report` (content security policy violation reports).
 - `packages/shell` — the desktop itself: windows, dock, folders and trays, launcher, drag and
   drop. `src/core` is pure TypeScript (no React beyond type imports), `src/ui` holds the React
   components and `src/styles` the CSS. No wagmi or viem imports.
@@ -186,6 +189,14 @@ but does have privileged functions, both the ownership and privileges findings r
   service is busy. Try again in a minute.") is possible, especially around a shared limit getting
   hit by unrelated traffic, and isn't a sign anything here is broken.
 - The contracts are unaudited.
+
+## Event counts
+
+The site counts a few of its own events (an inspection, a mint, a drop, a swap, a bridge, a revoke, the name of a Terminal
+command) so its maker can see what is used. The page sends each one's name and a few small values to `/api/event`, which
+writes one line to the host's logs. There are no cookies and no third-party script, and the line holds no address, IP
+address or user agent and nothing typed past a command's name. It says how often something happens, not who did it. The
+details are in [SECURITY.md](./SECURITY.md#event-counts).
 
 ## Security
 

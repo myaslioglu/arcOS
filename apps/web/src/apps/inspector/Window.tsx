@@ -63,7 +63,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
 
   const fix = (app: "vault" | "vesting") => {
     trackEvent("fix_click", { app });
-    open(app); // coming soon in R0: the shell answers with a toast
+    open(app); // both are grey apps: the shell opens their work-in-progress window
   };
 
   return (

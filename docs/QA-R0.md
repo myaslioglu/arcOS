@@ -4,7 +4,7 @@ For the project owner to run by hand: first on testnet, then again on mainnet on
 `ARCOS.mainnet` is filled in (see `packages/contracts/DEPLOY.md`). Items marked **(no wallet
 needed)** were already exercised against `npm run dev` while writing this script and behave as
 described below. Everything else needs a browser wallet (any EIP-6963 extension — MetaMask,
-Rabby, etc.; WalletConnect, for phones, isn't covered here) holding testnet USDC from
+Rabby, etc.; the WalletConnect section near the end covers phones) holding testnet USDC from
 https://faucet.circle.com, and the contracts deployed per `packages/contracts/DEPLOY.md`, so it
 is left for the owner to run once those two things exist.
 
@@ -326,7 +326,74 @@ text matches this if it happens to come up while running the rest of this sectio
     shows right away, not just after another click (RI2 — a stale error used to hide the echo until
     the next submit).
 
+## Revoke
+
+54. Open Revoke with no wallet connected. Expect an "Address to look up" field with a "Look" button, the sentence
+    "Connect a wallet, or paste an address to look." with an "Open Wallet" button under it, and at the bottom "Token
+    approvals only. NFT and Permit2 approvals come later." Type `nope` and click Look: `That isn't an address.` appears
+    under the field.
+55. Paste the address of a wallet that has approved a token and click Look. Expect "Loading approvals…", then
+    `Viewing 0x12…ab. Only its own wallet can revoke.` above one row for each live approval: the token as
+    `SYMBOL · 0x12…ab` over its name, the allowance ("Unlimited", or the amount at the token's decimals), and "Spender:"
+    with the spender's name (Permit2, for one) or "Unknown contract", plus its short address. A spender with no name has
+    an "Inspect" button that opens Inspector on it. There are no Revoke buttons. A wallet with none reads "No active token
+    approvals." A list that can't be read says "Couldn't load approvals. Try again in a minute." with a "Try again"
+    button, and one that was cut short says "This list may be incomplete: some approvals couldn't be read."
+56. Connect a wallet on Arc that has an approval to spare (for a test, the allowance a Drop leaves when its second batch
+    is rejected, item 27), and open Revoke, or click "My wallet". The list is the wallet's own, with no "Viewing" line and
+    a "Revoke" button on each row. Click one: the button reads "Waiting for your wallet…", every Revoke button is
+    disabled, and the wallet shows one transaction, `approve(spender, 0)` on that token, of no value. Confirm it. Expect
+    the row to disappear and, if focus was lost, keyboard focus on the next row's Revoke button (on the list itself when
+    none is left). A reload of the tab doesn't bring the row back.
+57. Refuse a revoke in the wallet: the row stays, `You cancelled the request in your wallet.` appears under it, and its
+    button works again. With the wallet on another network Revoke shows "Your wallet is on another network." and a
+    "Switch to Arc" button ("Switch to Arc Testnet" on testnet) in place of the list, and nothing is sent.
+
+## Terminal
+
+58. Open Terminal (in the System tray, or search for it with Ctrl K). Expect `4rc.OS terminal. Type help for the
+    commands.`, the prompt `4rc:~$` with a field showing `help` as its placeholder, and the hint "Tab completes · ↑
+    history · Ctrl L clears" (shown in capitals). Type `help`: one line for each of the 13 commands, with what it does: `help`, `open [app]`,
+    `inspect <address>`, `approvals [address]`, `balance [address]`, `block`, `gas`, `whoami`, `theme light|dark|system`,
+    `roadmap`, `clear`, `history` and `about`. Type `nosuchcommand`: `Unknown command: nosuchcommand. Type help.`
+59. It reads the chain, with no wallet needed. `block` answers `Block <number> · <n> s ago · <n> transactions`. `gas`
+    answers `Base fee: <n> gwei` and what a plain USDC transfer costs at it. `balance <address>` answers `0x12…ab: <n>
+    USDC` as a link to that address on the explorer. `balance` alone, with no wallet connected, answers `No wallet
+    connected. Try balance <address>.` `whoami` answers `No wallet connected`, or the connected address and `On Arc`
+    (`On Arc Testnet` on testnet).
+60. It opens apps. `open` lists every app id, with "(work in progress)" beside the grey ones. `open swap` opens Swap and
+    answers `Opened Swap.` `inspect <token address>` opens Inspector on it, `approvals` opens Revoke for the connected
+    wallet (`approvals <address>` for another), and `roadmap` lists the apps on the way with their stages. `theme dark`
+    answers `Theme set to dark.` and changes the theme (`theme system` follows the device again). Tab completes a command
+    or an app id, ↑ and ↓ walk this window's history, and Ctrl L clears the screen.
+61. It never signs or sends anything. Connect a wallet, run every command above once, and confirm the wallet opens no
+    prompt for any of them.
+
+## WalletConnect (phone wallets)
+
+Needs `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (set for https://4rcos.com in `apps/web/apphosting.yaml`) and a phone with
+a wallet that speaks WalletConnect (Trust Wallet, MetaMask or Binance Wallet). The domain allowlist in the Reown
+dashboard limits where that project ID works, so test on https://4rcos.com, not on localhost.
+
+62. On a phone, or in a desktop browser with no wallet extension, open Wallet. Expect one button, "WalletConnect (phone
+    wallets)"; with a browser wallet installed it is the last button, below that wallet's own. Reload the page and look
+    at the browser's network panel: nothing goes to walletconnect.org or web3modal.org until the button is clicked.
+63. Click it. Expect "Waiting for your wallet…" and WalletConnect's modal, with a QR code ("Scan this QR Code with your
+    phone"), "Copy link" and the wallet list. Choose your wallet and approve the connection in it. The modal closes and
+    the Wallet window shows "WalletConnect", the address, the network ("Arc") and the balance, with a "Disconnect"
+    button. Run one paid action (a Revoke costs the least): the request reaches the phone, is signed there, and the app
+    shows the result as it does for a browser wallet.
+64. Open the modal again and close it before a wallet answers, with its ✕ or with Escape: `You cancelled the request in
+    your wallet.` appears in the Wallet window, and the window itself stays open (Escape closed the modal first).
+65. While connected, reload the page: the session comes back with no click. Click "Disconnect" and reload: the network
+    panel shows no request to walletconnect.org, so a session that has ended costs nothing more. If the WalletConnect
+    code can't load (offline, or a page left open across a deploy) the Wallet window says `WalletConnect couldn't load.
+    Reload the page and try again.`
+
 ## Before mainnet — gate list
+
+This list is the pre-launch record: mainnet went live on 2026-09-25, and a box is ticked only where the repository
+shows it was done.
 
 - [ ] Every testnet item above passes.
 - [ ] `ARCOS_FEE_RECIPIENT` is a plain payable address — an EOA, or a multisig whose
@@ -334,7 +401,9 @@ text matches this if it happens to come up while running the rest of this sectio
 - [ ] `FeeController`'s owner is a wallet you can't lose. Renouncing is disabled by design (it's
       the only recovery lever if the fee recipient ever stops accepting value), so there is no
       way to recover a lost owner key.
-- [ ] `NEXT_PUBLIC_ARC_NETWORK=mainnet` is set only after `ARCOS.mainnet` in
-      `packages/chain/src/addresses.ts` is filled in with the real deployed addresses.
+- [x] `NEXT_PUBLIC_ARC_NETWORK=mainnet` is set only after `ARCOS.mainnet` in
+      `packages/chain/src/addresses.ts` is filled in with the real deployed addresses. (On 2026-09-25 the commit that
+      wired the addresses came four minutes before the one that set mainnet in `apps/web/apphosting.yaml`.)
 - [ ] GitHub private vulnerability reporting is enabled in the repository settings.
-- [ ] The About window and README state the contracts are unaudited.
+- [x] The About window and README state the contracts are unaudited. (The About window: "These contracts haven't been
+      audited by a third party." The README: "The contracts are unaudited.")

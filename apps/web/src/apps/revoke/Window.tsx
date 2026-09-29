@@ -7,6 +7,7 @@ import { erc20Abi, getAddress, isAddress, type Address } from "viem";
 import { activeChain, activeNetwork, explorerUrl } from "@arcos/chain";
 import { useDesktop, type AppProps } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
+import { trackEvent } from "@/lib/analytics";
 import { spenderLabel, type Approval } from "@/lib/approvals";
 import { UserFacingError } from "@/lib/contract-error";
 import { shortAddress } from "@/lib/format";
@@ -256,6 +257,7 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
       });
       if (now === 0n) {
         markRevoked(owner, row, Number(receipt.blockNumber));
+        trackEvent("revoke_success");
         pendingFocus.current = focusTargetAfterRemoval(keysBefore, key);
       } else {
         setLeft((prev) => ({ ...prev, [key]: now.toString() }));
