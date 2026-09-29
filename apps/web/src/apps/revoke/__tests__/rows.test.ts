@@ -439,6 +439,18 @@ describe("Window.tsx focuses the next row only once no revoke is running", () =>
     expect(revokeBody).not.toMatch(/\.focus\(/);
   });
 
+  // A revoke that throws before its first await (assertWalletOnChain can) sets busy and clears it in one batch, so busy
+  // never changes and Window.tsx's effect never runs to forget the target that revoke stored. Left there, it would steer
+  // the next revoke's focus, so every revoke forgets the last one's target itself, before it sets busy.
+  it("forgets a target an earlier revoke left, before it sets busy", () => {
+    // Whole statements on a line of their own, so a comment that names them can't be mistaken for them.
+    const forgets = revokeBody.search(/^\s*pendingFocus\.current = null;$/m);
+    const setsBusy = revokeBody.search(/^\s*setBusy\(key\);$/m);
+    expect(forgets, "revoke() forgets the target").toBeGreaterThan(-1);
+    expect(setsBusy, "revoke() sets busy").toBeGreaterThan(-1);
+    expect(setsBusy).toBeGreaterThan(forgets);
+  });
+
   it("focuses the stored target in an effect that waits for busy to be null, forgets it, and moves focus only if it was lost", () => {
     const effect = source.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[busy\]\);/)?.[1] ?? "";
     expect(effect, "an effect keyed on busy").not.toBe("");
@@ -447,6 +459,9 @@ describe("Window.tsx focuses the next row only once no revoke is running", () =>
     expect(at("busy !== null")).toBeGreaterThan(-1);
     expect(at("pendingFocus.current = null")).toBeGreaterThan(at("busy !== null"));
     expect(at("focusWasLost(document.activeElement, document.body)")).toBeGreaterThan(at("pendingFocus.current = null"));
+    // The guard's polarity: it returns unless focus was lost. Without the `!`, focus would move only for a visitor who
+    // had moved on, which is the theft the guard is there to prevent.
+    expect(effect).toMatch(/if \(!focusWasLost\(document\.activeElement, document\.body\)\) return;/);
     expect(at(".focus()")).toBeGreaterThan(at("focusWasLost("));
     // The list's own container stands in for the heading target, and for a row that is gone by then.
     expect(effect).toMatch(/\?\?\s*listRef\.current/);

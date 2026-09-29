@@ -22,7 +22,7 @@ async function load(address: string): Promise<LoadResult> {
   } catch (e) {
     if (isNotAContract(e)) return null;
     if (isBusy(e)) return "busy";
-    console.error("proof page inspect failed", address, e);
+    console.error("proof page inspect failed", e instanceof Error ? e.name : "unknown");
     return "error";
   }
 }

@@ -20,7 +20,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ address: strin
       // NotAContract (no token there), InspectorBusy and InspectionTimeout (both backpressure)
       // are expected outcomes, not failures worth an operator's attention.
       if (!isNotAContract(e) && !isBusy(e)) {
-        console.error("badge inspect failed", address, e);
+        console.error("badge inspect failed", e instanceof Error ? e.name : "unknown");
       }
     }
   }

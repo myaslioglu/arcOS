@@ -146,6 +146,58 @@ describe("what the Inspector route logs when an inspection fails", () => {
   });
 });
 
+// The badge, the social card and the proof page log the way the Inspector route does, and for the same reason: the
+// error's name only, under their own label. The proof page reads the chain from two places, its metadata and its body,
+// so both are pinned.
+describe("what the badge, the social card and the proof page log when an inspection fails", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  const drain = async (res: Response) => void (await res.arrayBuffer()); // the OG image renders as its body is read
+  const logging: [surface: string, label: string, run: () => Promise<unknown>][] = [
+    [
+      "the badge",
+      "badge inspect failed",
+      async () => drain(await badgeRoute(new Request(`https://4rcos.test/badge/${ADDRESS}`), params())),
+    ],
+    ["the OG image", "og inspect failed", async () => drain(await OgImage(params()))],
+    ["the proof page's metadata", "proof page inspect failed", () => generateMetadata(params())],
+    ["the proof page", "proof page inspect failed", () => ProofPage(params())],
+  ];
+
+  beforeEach(() => {
+    cachedInspection.mockReset();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(logging)("%s: logs one line naming the error", async (_, label, run) => {
+    cachedInspection.mockRejectedValue(new TypeError("fetch failed"));
+    await run();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(label, "TypeError");
+  });
+
+  it.each(logging)("%s: never logs the failure's message or the address, only its name", async (_, __, run) => {
+    cachedInspection.mockRejectedValue(new Error("https://secret-rpc.example/abc123 timed out"));
+    await run();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    for (const call of errorSpy.mock.calls) {
+      for (const arg of call) {
+        expect(String(arg)).not.toContain("secret-rpc");
+        expect(String(arg)).not.toContain(ADDRESS);
+      }
+    }
+  });
+
+  it.each(logging)("%s: logs 'unknown' for a failure that isn't an Error", async (_, label, run) => {
+    cachedInspection.mockRejectedValue("https://secret-rpc.example/abc123 timed out");
+    await run();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(label, "unknown");
+  });
+});
+
 describe("the OG image route's config", () => {
   it("renders on every request, with no revalidate that would bring back Next's own 5-minute cache", () => {
     expect(ogRoute.dynamic).toBe("force-dynamic");

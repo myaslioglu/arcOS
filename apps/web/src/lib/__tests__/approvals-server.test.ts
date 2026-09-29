@@ -155,7 +155,7 @@ describe("cachedApprovals", () => {
     expect(getBlockNumber).not.toHaveBeenCalled();
   });
 
-  it("answers 503 at once on a chain without Multicall3, never an empty list the canary would pass as truncated", async () => {
+  it("answers 503 at once on a chain without Multicall3, sending no explorer request and no RPC read: the multicall and the canary (itself a Multicall3 read) have nothing to call", async () => {
     const owner: Address = "0xcccccccccccccccccccccccccccccccccccccccc";
     activeChain.mockReturnValueOnce({ ...activeChain(), contracts: {} });
     fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));

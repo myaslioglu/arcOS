@@ -26,7 +26,7 @@ export default async function Image({ params }: { params: Promise<{ address: str
       // NotAContract (no token there), InspectorBusy and InspectionTimeout (both backpressure)
       // are expected outcomes, not failures worth an operator's attention.
       if (!isNotAContract(e) && !isBusy(e)) {
-        console.error("og inspect failed", address, e);
+        console.error("og inspect failed", e instanceof Error ? e.name : "unknown");
       }
     }
   }

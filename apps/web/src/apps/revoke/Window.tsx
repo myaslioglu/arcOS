@@ -197,6 +197,9 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     const key = rowKey(row);
     if (busy !== null || !client || !address) return;
     const keysBefore = rows.map(rowKey);
+    // A revoke that threw before its first await left its target behind: setBusy(key) and setBusy(null) batched into no
+    // change, so the effect above never ran to forget it. It mustn't steer this revoke's focus.
+    pendingFocus.current = null;
     setBusy(key);
     setFailures((prev) => {
       const next = { ...prev };
