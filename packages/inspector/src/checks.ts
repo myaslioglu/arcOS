@@ -326,14 +326,18 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
     return { address: pool as Address, version, quote: quote.symbol, depth };
   };
+  // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
+  // doesn't name, and v3 without fee tiers has no pool to look for.
+  const { v2Factory, v3Factory } = dex;
+  const v3Tiers = v3Factory ? (dex.v3FeeTiers ?? []).map((fee) => ({ factory: v3Factory, fee })) : [];
   const perQuote = dex.quoteTokens
     .filter((quote) => lower(quote.address) !== lower(address))
     .map(async (quote) => {
       const [v2Pool, v3Pools] = await Promise.all([
-        askFactory(dex.v2Factory, v2FactoryAbi, "getPair", [address, quote.address]).then((pair) => add(pair, "v2", quote)),
+        v2Factory ? askFactory(v2Factory, v2FactoryAbi, "getPair", [address, quote.address]).then((pair) => add(pair, "v2", quote)) : null,
         Promise.all(
-          dex.v3FeeTiers.map((fee) =>
-            askFactory(dex.v3Factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote)),
+          v3Tiers.map(({ factory, fee }) =>
+            askFactory(factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote)),
           ),
         ),
       ]);
