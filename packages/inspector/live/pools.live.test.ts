@@ -6,8 +6,8 @@
  * Existence is permanent, market state is not. A v4 pool, once initialised, stays initialised, so the checks that a pool is
  * found hold for good. Two established pools (the USDC/EURC v4 pool and the WETH/USDC Aerodrome pool) also assert that they
  * can pay out; if one is ever drained, pick another from PoolManager `Initialize` logs or the Aerodrome factory's `allPools`
- * and record its block here. Launch pools move within minutes (the native pool below had no liquidity 25 minutes after it was
- * recorded), so those only assert that they are found and read.
+ * and record its block here. Launch pools move within minutes (the native pool below had no liquidity about 12 minutes after its
+ * `Initialize`), so those only assert that they are found and read.
  */
 import { createPublicClient, http, parseAbi } from "viem";
 import { describe, expect, it } from "vitest";
