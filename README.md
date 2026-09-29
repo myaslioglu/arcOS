@@ -24,7 +24,7 @@ Automated analysis, not investment advice.
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
-| Radar | New tokens and locks, scored | Coming soon |
+| Radar | New tokens, each with Inspector's checks | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
 (addresses in `packages/contracts/DEPLOY.md`). Swap and

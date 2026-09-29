@@ -31,7 +31,7 @@ describe("roadmapEntries", () => {
       app("vault", "r2"),
       app("finder", "r0", false),
       app("watchdog", "r1"),
-      app("terminal", "phase2"),
+      app("someday", "phase2"),
       app("radar", "r1"),
       app("mint", "r1", false),
     ];
@@ -39,7 +39,7 @@ describe("roadmapEntries", () => {
       ["watchdog", "Next up"],
       ["radar", "Next up"],
       ["vault", "After the audit"],
-      ["terminal", "Later"],
+      ["someday", "Later"],
     ]);
   });
 
