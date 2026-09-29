@@ -37,6 +37,31 @@ function blocksInside(text: string, header: string): string[] {
   return found;
 }
 
+/**
+ * Each transition or animation declaration that isn't inside a no-preference block. Reduce blocks are left out: they may
+ * only switch motion off, and the test on desk.css's own says what it holds.
+ */
+function motionOutsideNoPreference(text: string): string[] {
+  const rest = withoutBlocks(withoutBlocks(text, MOTION), STILL);
+  return [...rest.matchAll(/(?:^|[\s;{])((?:transition|animation)(?:-[a-z-]+)?\s*:[^;}]*)/g)].map(([, declaration]) =>
+    declaration.trim(),
+  );
+}
+
+// Both of the desktop page's own sheets: desktop.css (the shell, its icons, windows, dock and menus) and desk.css (the
+// desk). A failure lists the declarations that sit outside a no-preference block.
+describe("desktop.css and desk.css", () => {
+  const sheets: [string, string][] = [
+    ["desk.css", css],
+    ["desktop.css", desktopCss],
+  ];
+
+  it.each(sheets)("%s moves only inside a no-preference motion block, so a reduced-motion setting stills it", (_name, sheet) => {
+    expect(sheet).toContain(MOTION);
+    expect(motionOutsideNoPreference(sheet)).toEqual([]);
+  });
+});
+
 describe("desk.css", () => {
   it("sets every colour from a token", () => {
     const literals =
@@ -44,14 +69,6 @@ describe("desk.css", () => {
         /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(|(?<![\w-])(?:white|black|red|green|blue|gray|grey|silver|orange|yellow|purple|pink)(?![\w-])/g,
       ) ?? [];
     expect(literals).toEqual([]);
-  });
-
-  it("moves only inside a no-preference motion block, so a reduced-motion setting stills it", () => {
-    expect(css).toContain(MOTION);
-    // A reduce block may only switch motion off; the test below checks what it holds.
-    expect(withoutBlocks(withoutBlocks(css, MOTION), STILL)).not.toMatch(
-      /(?:^|[\s;{])(?:transition|animation)(?:-[a-z-]+)?\s*:/,
-    );
   });
 
   it("stills the app icons under reduced motion: no transition, no hover lift, and no property that could move a box", () => {

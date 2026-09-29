@@ -124,9 +124,11 @@
     transform: translateY(calc(var(--fh) * -0.11)) rotate(calc((var(--i) - (var(--n) - 1) / 2) * 11deg));
   }
 }
-/* The app icons' own motion is set in desktop.css with no condition; a reduced-motion setting stills it here, and this
-   file loads after that one. Only transition and transform are touched, so no box changes size or place. The hover
-   lift is reset by the selector that sets it: `.os-icon-tile` alone would lose to `.os-icon:hover .os-icon-tile`. */
+/* The app icons' hover lift is a plain transform in desktop.css, set with no condition, so a reduced-motion setting
+   resets it here, and this file loads after that one. Their transition already sits in a no-preference block there;
+   the `none` below is a second line of defence. Only transition and transform are touched, so no box changes size or
+   place. The lift is reset by the selector that sets it: `.os-icon-tile` alone would lose to
+   `.os-icon:hover .os-icon-tile`. */
 @media (prefers-reduced-motion: reduce) {
   .os-icon, .os-icon-tile { transition: none; }
   .os-icon:hover .os-icon-tile { transform: none; }

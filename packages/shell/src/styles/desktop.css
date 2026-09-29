@@ -5,6 +5,11 @@
  * not download this stylesheet. Every selector here is namespaced `.os-*`:
  * Next keeps a route's global stylesheet after a client-side navigation,
  * and nothing here may leak onto another page.
+ *
+ * Everything that moves does so only inside a
+ * `@media (prefers-reduced-motion: no-preference)` block, so a reduced-motion
+ * setting stills it. styles/__tests__/desk-css.test.ts checks this file and
+ * desk.css alike.
  */
 
 /* ---------------------------------------------------------------
@@ -49,7 +54,6 @@
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 1.75rem; height: 1.75rem; border-radius: 999px;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
-  transition: color 0.12s ease, border-color 0.12s ease;
 }
 .os-theme-btn:hover { color: var(--fg); border-color: var(--border-2); }
 .os-theme-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
@@ -126,7 +130,6 @@
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   min-width: 0; padding: 8px 4px 6px; border-radius: 10px;
   border: 1px solid transparent; text-align: center;
-  transition: background-color 0.18s ease, border-color 0.18s ease;
 }
 .os-icon:hover {
   background: color-mix(in oklab, var(--os-hue) 9%, transparent);
@@ -140,7 +143,6 @@
   background: color-mix(in oklab, var(--os-hue) 13%, var(--surface));
   border: 1px solid color-mix(in oklab, var(--os-hue) 34%, var(--border));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .os-icon:hover .os-icon-tile { transform: translateY(-2px); }
 .os-icon-name {
@@ -183,7 +185,6 @@
 .os-led {
   width: 7px; height: 7px; flex: none; border-radius: 999px;
   background: color-mix(in oklab, var(--os-win) 30%, var(--border-2));
-  transition: background-color 0.2s ease, box-shadow 0.2s ease;
 }
 .os-window--active .os-led {
   background: var(--os-win);
@@ -206,7 +207,6 @@
   flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px;
   border-radius: 9px; background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--border);
-  transition: opacity 0.2s ease;
 }
 [data-theme="light"] .os-body { background: #fdfdfe; }
 .os-window--free:not(.os-window--active) .os-body { opacity: 0.6; }
@@ -217,6 +217,17 @@
    their content under it. */
 .os-body--flush { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .os-window--pinned .os-body--flush { padding-bottom: 0; margin-bottom: 4.75rem; }
+
+/* What eases when a state changes: the theme switch and an icon's hover, the focused window's LED, and the dimming of
+   the windows behind it. Each sits here, under no-preference, so a reduced-motion setting makes the change at once.
+   The icon's hover lift is a plain transform above; desk.css resets it under reduce. */
+@media (prefers-reduced-motion: no-preference) {
+  .os-theme-btn { transition: color 0.12s ease, border-color 0.12s ease; }
+  .os-icon { transition: background-color 0.18s ease, border-color 0.18s ease; }
+  .os-icon-tile { transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1); }
+  .os-led { transition: background-color 0.2s ease, box-shadow 0.2s ease; }
+  .os-body { transition: opacity 0.2s ease; }
+}
 
 /* The dock: search and the dock apps as tiles in their own colours, then a
    chip per open window. Under a mouse the tiles swell toward the pointer:
@@ -240,9 +251,8 @@
   backdrop-filter: blur(16px);
   box-shadow: 0 14px 44px -12px rgba(0, 0, 0, 0.6);
   transform: scaleX(var(--dock-s, 1));
-  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.os-dock > * { transform: translateX(var(--dx, 0px)); transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1); }
+.os-dock > * { transform: translateX(var(--dx, 0px)); }
 .os-dock-btn {
   position: relative;
   display: inline-flex; align-items: center; justify-content: center; align-self: center;
@@ -290,6 +300,8 @@
 .os-dock-wins::-webkit-scrollbar { display: none; }
 .os-dock-win { position: relative; display: inline-flex; flex: none; }
 @media (prefers-reduced-motion: no-preference) {
+  .os-dock::before { transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1); }
+  .os-dock > * { transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1); }
   .os-dock-face--bounce { animation: os-dock-bounce 0.72s cubic-bezier(0.28, 0.84, 0.42, 1); }
   .os-dock-win { animation: os-chip-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both; }
 }
@@ -415,7 +427,6 @@
   display: inline-flex; align-items: center; gap: 0.4rem;
   height: 2rem; padding: 0 0.55rem; border-radius: 7px;
   font-family: var(--font-mono); font-size: 12px; color: var(--muted);
-  transition: background-color 0.12s ease, color 0.12s ease;
 }
 .os-menu-title:hover, .os-menu-title[aria-expanded="true"] { color: var(--fg); background: var(--surface-2); }
 .os-menu-title:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
@@ -504,7 +515,11 @@
   position: absolute; pointer-events: none;
   border: 1.5px dashed color-mix(in oklab, var(--accent) 70%, transparent); border-radius: 14px;
   background: color-mix(in oklab, var(--accent) 10%, transparent);
-  animation: os-snap-in 0.14s ease-out;
+}
+/* The menu bar's hover fade, and the snap preview's arrival. */
+@media (prefers-reduced-motion: no-preference) {
+  .os-menu-title { transition: background-color 0.12s ease, color 0.12s ease; }
+  .os-snap { animation: os-snap-in 0.14s ease-out; }
 }
 @keyframes os-snap-in { from { opacity: 0; transform: scale(0.985); } }
 
