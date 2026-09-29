@@ -198,8 +198,9 @@ export function DesktopShell({
 
   return (
     // framer-motion moves the windows, the launcher and the toasts, and out of the box it ignores a reduced-motion
-    // setting. "user" makes it follow the device's: a transform (the window's zoom, a slide) then applies at once
-    // instead of animating, and opacity still fades. The stylesheets' own motion is gated in CSS (see desktop.css).
+    // setting. "user" makes it follow the device's: a transform (the launcher's rise, a toast's slide) then applies at
+    // once instead of animating, and opacity still fades. The windows go further: WindowManager leaves the transform
+    // out of their poses altogether (windowMotion). The stylesheets' own motion is gated in CSS (see desktop.css).
     <MotionConfig reducedMotion="user">
       <RegistryProvider value={registry}>
         <DesktopProvider value={api}>

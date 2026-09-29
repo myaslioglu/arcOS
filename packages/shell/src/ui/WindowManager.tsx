@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotionConfig } from "framer-motion";
 import { clampRect, windowRect, type DesktopWindow } from "../core";
 import { WindowFrame } from "./WindowFrame";
+import { windowMotion } from "./window-motion";
 import type { WindowActions } from "./hooks/useWindowManager";
 
 /** A point on the stage, in stage pixels. */
@@ -19,14 +20,11 @@ type Props = {
    * Where each window was opened from, keyed `appId:instanceKey`: the folder, icon or
    * dock tile that was clicked. A window with an origin grows out of it and
    * shrinks back into it on close; one opened from the launcher, a link or a
-   * command fades in where it lands.
+   * command fades in where it lands. Under a reduced-motion setting every
+   * window only fades, at full size (see windowMotion).
    */
   origins?: Record<string, Origin>;
 };
-
-const EASE = [0.22, 1, 0.36, 1] as const;
-/** Gentler at the start than EASE, so the growth out of the icon reads. */
-const ZOOM = [0.2, 0.75, 0.25, 1] as const;
 
 /**
  * Stacks open windows. A window the visitor has moved, resized, snapped or
@@ -44,6 +42,8 @@ const ZOOM = [0.2, 0.75, 0.25, 1] as const;
 export function WindowManager({ windows, activeId, actions, touch, renderBody, origins = {} }: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState({ w: 1280, h: 760 });
+  // framer-motion's own setting, which the MotionConfig in DesktopShell makes follow the device's.
+  const reduced = useReducedMotionConfig() === true;
 
   useEffect(() => {
     const el = stageRef.current;
@@ -67,10 +67,9 @@ export function WindowManager({ windows, activeId, actions, touch, renderBody, o
           if (win.minimized) return null;
           // This layer spans the whole stage, so scaling it about the icon's
           // point draws the window out of that icon. Only transform and
-          // opacity move. A reduced-motion setting is followed by the
-          // MotionConfig in DesktopShell: the scale and the shift then apply
-          // at once (a window opens at full size, and closing jumps it to its
-          // exit pose), and only the opacity still animates.
+          // opacity move, and under a reduced-motion setting only opacity:
+          // windowMotion leaves the scale and the shift out of every pose, so
+          // the window fades in and out at full size.
           const origin = origins[`${win.appId}:${win.instanceKey}`];
           return (
             <div
@@ -79,14 +78,7 @@ export function WindowManager({ windows, activeId, actions, touch, renderBody, o
               className="pointer-events-none absolute inset-0"
             >
               <motion.div
-                initial={origin ? { opacity: 0, scale: 0.14 } : { opacity: 0, scale: 0.97, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={origin ? { opacity: 0, scale: 0.14 } : { opacity: 0, scale: 0.97, y: 8 }}
-                transition={
-                  origin
-                    ? { duration: 0.34, ease: ZOOM, opacity: { duration: 0.2 } }
-                    : { duration: 0.16, ease: EASE }
-                }
+                {...windowMotion(origin, reduced)}
                 style={origin ? { transformOrigin: `${origin.x}px ${origin.y}px` } : undefined}
                 className="pointer-events-none absolute inset-0"
               >
