@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BaseError, ResourceUnavailableRpcError, SwitchChainError, UserRejectedRequestError } from "viem";
+import { WalletConnectLoadError } from "@/providers/lazyWalletConnect";
 import { ALREADY_OPEN_MESSAGE, connectErrorMessage, switchNetworkErrorMessage } from "../network";
 
 const CHAIN_NAME = "Arc";
@@ -150,5 +151,31 @@ describe("connectErrorMessage for a WalletConnect connection", () => {
       expect(message).toBe(GENERIC);
       expect(message).not.toContain("relay");
     }
+  });
+});
+
+// wagmi's WalletConnect connector keeps a provider load that failed, so the button fails again until the page reloads.
+// lazyWalletConnect raises a WalletConnectLoadError for that, and only for that: a wallet's own refusal isn't cured by a reload.
+describe("connectErrorMessage when WalletConnect can't load", () => {
+  const RELOAD = "WalletConnect couldn't load. Reload the page and try again.";
+  const failedLoad = new Error("Failed to fetch dynamically imported module: https://4rcos.com/_next/static/chunks/0a1b.js");
+
+  it("says to reload the page, and never shows the failure's own words", () => {
+    const message = connectErrorMessage(new WalletConnectLoadError(failedLoad));
+    expect(message).toBe(RELOAD);
+    expect(message).not.toMatch(/chunks|dynamically|fetch/i);
+  });
+
+  it("finds it wrapped in another error's cause chain", () => {
+    expect(connectErrorMessage(new Error("connect failed", { cause: new WalletConnectLoadError(failedLoad) }))).toBe(RELOAD);
+  });
+
+  it("does not read the load failure itself as one", () => {
+    expect(connectErrorMessage(failedLoad)).toBe("Your wallet couldn't connect. Try again.");
+  });
+
+  it("still reads a refusal first", () => {
+    const refusal = new UserRejectedRequestError(new Error("User rejected."));
+    expect(connectErrorMessage(refusal)).toBe("You cancelled the request in your wallet.");
   });
 });

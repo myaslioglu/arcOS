@@ -77,6 +77,19 @@ export function switchNetworkErrorMessage(error: unknown, chainName: string): st
   return "Something went wrong switching networks.";
 }
 
+/** True for a `cause`-chain node that IS `lazyWalletConnect`'s `WalletConnectLoadError`, matched by `.name` the way
+ * `isSwitchChainError` matches viem's, so this module needn't import the provider that raises it. */
+function isWalletConnectLoadError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ((current as { name?: unknown }).name === "WalletConnectLoadError") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /**
  * Maps a `connect` failure (wagmi's `useConnect`) to copy the user can act on — same
  * never-the-wallet's-own-text rule as `switchNetworkErrorMessage` above: `useConnect` surfaces
@@ -89,9 +102,15 @@ export function switchNetworkErrorMessage(error: unknown, chainName: string): st
  * provider's "Connection request reset" error, and a phone wallet's own "User rejected", into a
  * `UserRejectedRequestError`, so both are read by `isUserRejection` like a refused browser wallet. This never matches on
  * the message text, so the provider's own words are not shown.
+ *
+ * WalletConnect's provider can also fail to load (its chunk 404s after a deploy, the connection drops), and wagmi's connector
+ * keeps that failure, so the button fails again until the page reloads. `lazyWalletConnect` raises a
+ * `WalletConnectLoadError` for exactly that and nothing else: a wallet that refuses (an unsupported chain, say) gets the
+ * generic sentence, since a reload wouldn't change its answer.
  */
 export function connectErrorMessage(error: unknown): string {
   if (isUserRejection(error)) return "You cancelled the request in your wallet.";
+  if (isWalletConnectLoadError(error)) return "WalletConnect couldn't load. Reload the page and try again.";
   if (errorCode(error) === -32002) return ALREADY_OPEN_MESSAGE;
   return "Your wallet couldn't connect. Try again.";
 }

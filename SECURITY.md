@@ -63,10 +63,10 @@ configuration, sends usage events to WalletConnect and loads the Inter font from
 visitor's IP address. The Reown project ID (`NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) is a public client identifier that ships in
 the browser bundle; the domain allowlist in the Reown dashboard is what protects it.
 
-The WalletConnect code loads only when a visitor picks WalletConnect, or when a reload restores a WalletConnect session they
-connected earlier. It is a separate chunk, and `apps/web/src/providers/lazyWalletConnect.ts` stops wagmi from importing it on
-every page load, which its own connector would do. CCIP-Read stays off in the wagmi config
-(`apps/web/src/providers/wagmi.ts`), with WalletConnect in it too.
+The WalletConnect code loads only when a visitor picks WalletConnect, or when a reload restores a live WalletConnect session
+they connected earlier. A session that ended or expired costs at most one more load, after which the browser forgets it. It is
+a separate chunk, and `apps/web/src/providers/lazyWalletConnect.ts` stops wagmi from importing it on every page load, which its
+own connector would do. CCIP-Read stays off in the wagmi config (`apps/web/src/providers/wagmi.ts`), with WalletConnect in it too.
 
 ## Dependency exceptions
 

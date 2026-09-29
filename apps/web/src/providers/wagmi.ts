@@ -79,3 +79,12 @@ export function visibleConnectors<C extends { id: string }>(
 export function connectorLabel(connector: { id: string; name: string }): string {
   return connector.id === WALLETCONNECT_ID ? "WalletConnect (phone wallets)" : connector.name;
 }
+
+/**
+ * Whether a connector is WalletConnect's, the one connector that opens a modal of its own. Takes what
+ * `useConnect().variables.connector` holds: a connector, or a connector factory, which wagmi's connect also accepts and
+ * which can't be told by id.
+ */
+export function isWalletConnect(connector: unknown): boolean {
+  return typeof connector === "object" && connector !== null && (connector as { id?: unknown }).id === WALLETCONNECT_ID;
+}

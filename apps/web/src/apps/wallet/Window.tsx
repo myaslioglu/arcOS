@@ -1,10 +1,11 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useAccount, useBalance, useConnect, useDisconnect } from "wagmi";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
 import { connectErrorMessage, useArcNetwork } from "@/lib/network";
-import { connectorLabel, visibleConnectors } from "@/providers/wagmi";
+import { connectorLabel, isWalletConnect, visibleConnectors } from "@/providers/wagmi";
+import { holdEscape } from "./escape";
 
 const noSubscription = () => () => {};
 
@@ -22,11 +23,15 @@ function useHasInjectedProvider(): boolean {
 export default function WalletWindow() {
   const { address, isConnected, connector } = useAccount();
   const { chain, wrongNetwork, switching, switchError, switchToArc } = useArcNetwork();
-  const { connectors: allConnectors, connect, isPending, error } = useConnect();
+  const { connectors: allConnectors, connect, isPending, error, variables } = useConnect();
   const { disconnect } = useDisconnect();
   const { data: balance } = useBalance({ address, chainId: chain.id });
   const hasInjectedProvider = useHasInjectedProvider();
   const connectors = visibleConnectors(allConnectors, hasInjectedProvider);
+
+  // While WalletConnect's modal is up, Escape closes the modal and not this window (see holdEscape).
+  const walletConnectPending = isPending && isWalletConnect(variables?.connector);
+  useEffect(() => (walletConnectPending ? holdEscape(window) : undefined), [walletConnectPending]);
 
   if (!isConnected) {
     return (

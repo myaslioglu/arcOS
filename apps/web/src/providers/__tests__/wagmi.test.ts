@@ -5,7 +5,7 @@ import { getPublicClient } from "@wagmi/core";
 import { encodeErrorResult, encodeFunctionResult, multicall3Abi, parseAbi, type PublicClient } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { CallReverted, viemReader } from "@arcos/inspector";
-import { WALLETCONNECT_METADATA, connectorLabel, visibleConnectors, wagmiConfig } from "../wagmi";
+import { WALLETCONNECT_METADATA, connectorLabel, isWalletConnect, visibleConnectors, wagmiConfig } from "../wagmi";
 
 type FakeConnector = { id: string; name: string };
 
@@ -95,6 +95,21 @@ describe("connectorLabel", () => {
     expect(connectorLabel(generic)).toBe("Injected");
     expect(connectorLabel(metamask)).toBe("MetaMask");
     expect(connectorLabel(rabby)).toBe("Rabby Wallet");
+  });
+});
+
+// The Wallet window asks this of the connector it last tried, to know when WalletConnect's own modal is up.
+describe("isWalletConnect", () => {
+  it("is true for the WalletConnect connector only", () => {
+    expect(isWalletConnect(walletConnect)).toBe(true);
+    expect(isWalletConnect(generic)).toBe(false);
+    expect(isWalletConnect(metamask)).toBe(false);
+  });
+
+  it("is false for what isn't a connector object: nothing yet, or a connector factory, which wagmi's connect also takes", () => {
+    expect(isWalletConnect(undefined)).toBe(false);
+    expect(isWalletConnect(null)).toBe(false);
+    expect(isWalletConnect(() => walletConnect)).toBe(false);
   });
 });
 
