@@ -78,10 +78,20 @@ const revokedAt = new Map<string, number>();
 const STORAGE_PREFIX = "arcos-revoked:";
 const storageKey = (owner: Address) => `${STORAGE_PREFIX}${owner.toLowerCase()}`;
 
+// What comes back from storage is checked, not trusted: only a plain object's entries whose value is a non-negative
+// safe integer count. Any other shape (a JSON null, an array, a string) reads as no revokes, and a bad entry beside
+// good ones is dropped; left in, a null throws inside `stillLive`, and a non-numeric value hides its pair whatever
+// the block.
 function readStorage(owner: Address): Record<string, number> {
   try {
     const raw = sessionStorage.getItem(storageKey(owner));
-    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const revokes: Record<string, number> = {};
+    for (const [key, block] of Object.entries(parsed)) {
+      if (Number.isSafeInteger(block) && block >= 0) revokes[key] = block;
+    }
+    return revokes;
   } catch {
     return {};
   }

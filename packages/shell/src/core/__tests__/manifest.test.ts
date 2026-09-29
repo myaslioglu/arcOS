@@ -131,13 +131,15 @@ describe("folder windows", () => {
 });
 
 describe("folderWindowSize", () => {
-  it("fits every app without scrolling: up to four across, then rows, each row tall enough for a grey app's Soon tag", () => {
+  it("fits every app without scrolling: up to four across, then rows, each tall enough for a grey app's Soon tag, plus the 4px gap between rows", () => {
     expect(folderWindowSize(1)).toEqual({ w: 380, h: 212 });
     expect(folderWindowSize(2)).toEqual({ w: 380, h: 212 });
     expect(folderWindowSize(3)).toEqual({ w: 404, h: 212 });
     expect(folderWindowSize(4)).toEqual({ w: 520, h: 212 });
-    expect(folderWindowSize(5)).toEqual({ w: 404, h: 314 });
-    expect(folderWindowSize(7)).toEqual({ w: 520, h: 314 });
+    expect(folderWindowSize(5)).toEqual({ w: 404, h: 318 });
+    expect(folderWindowSize(7)).toEqual({ w: 520, h: 318 });
+    // One gap per pair of rows, not a flat 4px: three rows have two.
+    expect(folderWindowSize(9)).toEqual({ w: 520, h: 424 });
   });
 });
 

@@ -68,9 +68,9 @@ build`.
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
   proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
   (the wallpaper's live chart) and `/api/approvals` (Revoke's list).
-- `packages/shell` — the desktop itself: `core` (pure TypeScript — windows, dock, trays, drag and
-  drop, no React) and `ui` (the React components and styles that render it: windows, dock, trays,
-  launcher). No wagmi or viem imports.
+- `packages/shell` — the desktop itself: windows, dock, folders and trays, launcher, drag and
+  drop. `src/core` is pure TypeScript (no React beyond type imports), `src/ui` holds the React
+  components and `src/styles` the CSS. No wagmi or viem imports.
 - `packages/chain` — chain facts and USDC math: network config, contract addresses, unit
   conversions.
 - `packages/inspector` — the token inspection engine. No React or Next imports, so it can run on

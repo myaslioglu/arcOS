@@ -190,6 +190,58 @@ describe("markRevoked / stillLive persist to sessionStorage, under one key scope
   });
 });
 
+describe("stored revokes are checked when read back", () => {
+  // What sits in sessionStorage is not trusted: another version of the page, a script or a hand edit can leave any
+  // shape under the key. A bad shape reads as no revokes; it must never break the list or hide a pair for good.
+  const KEY = `arcos-revoked:${OWNER.toLowerCase()}`;
+  const pair = (n: number): Approval => row({ spender: `0x${n.toString(16).padStart(40, "0")}` });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads a stored JSON null as no revokes, and stillLive does not throw", () => {
+    const storage = fakeSessionStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    storage.setItem(KEY, "null");
+
+    expect(() => stillLive(OWNER, [row()])).not.toThrow();
+    expect(stillLive(OWNER, [row()])).toEqual([row()]);
+  });
+
+  it("ignores a stored array, and the next revoke is still saved as an object", () => {
+    const storage = fakeSessionStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    storage.setItem(KEY, "[50]");
+
+    expect(stillLive(OWNER, [row({ lastApprovalBlock: 10 })])).toHaveLength(1);
+    markRevoked(OWNER, row(), 60);
+    expect(JSON.parse(storage.getItem(KEY) as string)).toEqual({ [rowKey(row())]: 60 });
+  });
+
+  it("drops an entry that is not a non-negative safe integer, and keeps a valid one beside it", () => {
+    const storage = fakeSessionStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    const valid = pair(1);
+    const junk = ["x", -1, 1.5, "50", 2 ** 53].map((value, i) => ({ value, approval: pair(i + 2) }));
+    const stored: Record<string, unknown> = { [rowKey(valid)]: 50 };
+    for (const { value, approval } of junk) stored[rowKey(approval)] = value;
+    storage.setItem(KEY, JSON.stringify(stored));
+
+    // A dropped entry hides nothing. "x" used to hide its pair whatever the block, since a comparison with NaN is false.
+    for (const { value, approval } of junk) {
+      expect(stillLive(OWNER, [approval]), `stored ${JSON.stringify(value)}`).toHaveLength(1);
+    }
+    // The valid entry still hides its pair up to its block.
+    expect(stillLive(OWNER, [valid])).toEqual([]);
+    expect(stillLive(OWNER, [{ ...valid, lastApprovalBlock: 51 }])).toHaveLength(1);
+
+    // The next write keeps the valid entry and adds the new one, and nothing else.
+    markRevoked(OWNER, row(), 60);
+    expect(JSON.parse(storage.getItem(KEY) as string)).toEqual({ [rowKey(valid)]: 50, [rowKey(row())]: 60 });
+  });
+});
+
 describe("revokeFailure", () => {
   it("says how far a failed revoke got, and never reads a sent one as nothing happened", () => {
     expect(revokeFailure("signing", { code: 4001 })).toBe("You cancelled the request in your wallet.");
