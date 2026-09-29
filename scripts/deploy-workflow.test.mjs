@@ -9,6 +9,11 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const deploy = read(".github/workflows/deploy.yml");
 const ci = read(".github/workflows/ci.yml");
+/** deploy.yml without its comment lines, for checks on what runs (a comment may name what it explains away). */
+const deployCode = deploy
+  .split("\n")
+  .filter((line) => !/^\s*#/.test(line))
+  .join("\n");
 
 /** The text of one top-level job of deploy.yml, from its key to the next job's key. */
 function job(name) {
@@ -19,12 +24,26 @@ function job(name) {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+/** The steps of one job, each as its text from its "- " line to the next step's. */
+function steps(name) {
+  const text = job(name);
+  const start = text.search(/^ {4}steps:\s*$/m);
+  expect(start, `job ${name} has steps`).toBeGreaterThanOrEqual(0);
+  return text
+    .slice(start)
+    .split("\n")
+    .slice(1)
+    .join("\n")
+    .split(/^(?= {6}- )/m)
+    .filter((step) => step.trim() !== "");
+}
+
 describe("deploy.yml", () => {
   it("calls ci.yml as its checks, and ci.yml can be called", () => {
     expect(deploy).toMatch(/^  checks:\n    uses: \.\/\.github\/workflows\/ci\.yml$/m);
     expect(ci).toMatch(/^  workflow_call:\s*$/m);
-    expect(job("deploy")).toMatch(/^    needs: checks$/m);
-    expect(job("smoke")).toMatch(/^    needs: deploy$/m);
+    expect(job("deploy")).toMatch(/^ {4}needs: \[checks, bundle\]$/m);
+    expect(job("smoke")).toMatch(/^ {4}needs: deploy$/m);
   });
 
   it("starts only from a push to main or a manual run, never from a pull request", () => {
@@ -37,12 +56,15 @@ describe("deploy.yml", () => {
 
   it("waits in the production environment, which the Google Cloud condition and the approval rule both name", () => {
     expect(job("deploy")).toMatch(/^ {4}environment:\n {6}name: production\n {6}url: https:\/\/4rcos\.com$/m);
-    expect(deploy.match(/^ {4}environment:/gm)).toHaveLength(1); // the smoke job has none, so it can't be a second way in
+    expect(deploy.match(/^ {4}environment:/gm)).toHaveLength(1); // the bundle and smoke jobs have none, so neither is a second way in
+    expect(job("bundle")).not.toMatch(/environment/);
+    expect(job("deploy")).toMatch(/^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
   });
 
   it("gives only the deploy job a token to sign in with", () => {
     expect(deploy.match(/id-token:\s*write/g)).toHaveLength(1);
     expect(job("deploy")).toMatch(/id-token:\s*write/);
+    expect(job("bundle")).not.toMatch(/id-token/);
     expect(job("smoke")).not.toMatch(/id-token/);
     expect(deploy).toMatch(/^permissions:\n {2}contents: read$/m);
   });
@@ -54,32 +76,103 @@ describe("deploy.yml", () => {
     expect(deploy).not.toMatch(/secrets: inherit/);
   });
 
-  it("pins every third-party action to a commit, and keeps first-party ones on a tag", () => {
+  it("pins every third-party action to a commit, and keeps first-party ones on a major tag", () => {
     const uses = [...deploy.matchAll(/^\s*(?:- )?uses:\s*(\S+)/gm)].map((m) => m[1]);
     expect(uses.length).toBeGreaterThan(3);
     for (const ref of uses) {
-      if (ref.startsWith("./") || ref.startsWith("actions/")) continue;
+      if (ref.startsWith("./")) continue;
+      if (ref.startsWith("actions/")) {
+        expect(ref, `${ref} is on a major tag`).toMatch(/^actions\/[\w-]+@v\d+$/);
+        continue;
+      }
       expect(ref, `${ref} is pinned`).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
     }
     expect(deploy).toMatch(/google-github-actions\/auth@[0-9a-f]{40} # v\d+\.\d+\.\d+/);
   });
 
-  it("runs the Firebase CLI at an exact version, without prompts and without --force", () => {
-    expect(deploy).toMatch(/^ {2}FIREBASE_TOOLS_VERSION: "\d+\.\d+\.\d+"$/m);
-    expect(deploy).toMatch(/npx --yes "firebase-tools@\$\{FIREBASE_TOOLS_VERSION\}" deploy --only "apphosting:\$\{APPHOSTING_BACKEND\}" --project "\$FIREBASE_PROJECT" --non-interactive$/m);
-    expect(deploy).toMatch(/npx --yes "firebase-tools@\$\{FIREBASE_TOOLS_VERSION\}" apphosting:backends:list .*--non-interactive$/m);
+  it("never passes --force, which would skip a backend it can't find and still report success", () => {
     expect(deploy).not.toMatch(/(^|\s)--force\b(?!:)/m); // the comment that explains why not is allowed to name it
-    expect(deploy.split("\n").filter((l) => /^\s*run:.*firebase-tools/.test(l) && /--force/.test(l))).toEqual([]);
+    expect(deploy.split("\n").filter((l) => /^\s*run:.*firebase/.test(l) && /--force/.test(l))).toEqual([]);
   });
 
-  it("scans the bundle before signing in, from a secret, and deploys after the scan", () => {
+  describe("keeps third-party code away from the production credential", () => {
+    it("builds in a job of its own, beside the checks, with no credential of any kind", () => {
+      const text = job("bundle");
+      expect(text).not.toMatch(/^ {4}needs:/m);
+      expect(text).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:/m); // that permission alone
+      expect(text).not.toMatch(/secrets\.|vars\.|GITHUB_TOKEN|google-github-actions|GOOGLE_|firebase/);
+      expect(text).toMatch(/persist-credentials: false/);
+      expect(text).toMatch(/run: npm ci$/m);
+      expect(text).toMatch(/run: npm run build -w @arcos\/web$/m);
+    });
+
+    it("restores no cache in the deploy job, so no earlier job's files can land next to the credential", () => {
+      const text = job("deploy");
+      expect(text).not.toMatch(/^\s*cache:/m);
+      const setupNode = steps("deploy").filter((step) => /uses: actions\/setup-node@/.test(step));
+      expect(setupNode.length).toBeGreaterThan(0);
+      for (const step of setupNode) expect(step).toMatch(/package-manager-cache: false/);
+    });
+
+    it("runs no project code in the deploy job: no install of the repo, no build, no repo script but the scan", () => {
+      const text = job("deploy");
+      expect(text).not.toMatch(/npm run|next build|apphosting-env/);
+      for (const line of text.split("\n").filter((l) => /\bnpm (ci|install)\b/.test(l))) {
+        expect(line, "an install in the deploy job is of the CLI's own folder only").toMatch(/--prefix tools\/firebase/);
+      }
+      const commands = text.split("\n").filter((l) => /^\s*(?:- )?run:/.test(l));
+      const scripts = commands.flatMap((l) => [...l.matchAll(/\bnode (\S+)/g)].map((m) => m[1].replace(/"/g, "")));
+      expect(scripts).toEqual(["scripts/scan-bundle.mjs"]);
+    });
+
+    it("hands the bundle over as data, through an artifact that holds build output only", () => {
+      const up = steps("bundle").find((s) => /actions\/upload-artifact@/.test(s));
+      const down = steps("deploy").find((s) => /actions\/download-artifact@/.test(s));
+      expect(up, "the bundle job uploads").toBeDefined();
+      expect(down, "the deploy job downloads").toBeDefined();
+      expect(up).toMatch(/apps\/web\/\.next\/static\n/);
+      expect(up).toMatch(/apps\/web\/\.next\/server\n/);
+      expect(up).not.toMatch(/scripts|\.github/); // scripts/ always comes from the deploy job's own checkout
+      expect(up).toMatch(/retention-days: 1$/m);
+      expect(up).toMatch(/if-no-files-found: error/);
+      expect(up).toMatch(/include-hidden-files: true/); // the scan must see every file the build made
+      expect(up.match(/^ {10}name: (\S+)$/m)?.[1]).toBe("bundle"); // the artifact's name, not the step's
+      expect(down.match(/^ {10}name: (\S+)$/m)?.[1]).toBe("bundle");
+    });
+
+    it("downloads the bundle outside the workspace, which the CLI uploads as source", () => {
+      const down = steps("deploy").find((s) => /actions\/download-artifact@/.test(s));
+      expect(down).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle$/m);
+      expect(job("deploy")).toMatch(/node scripts\/scan-bundle\.mjs "\$RUNNER_TEMP\/bundle\/static" "\$RUNNER_TEMP\/bundle\/server"$/m);
+    });
+
+    it("gives the patterns to the scan step and to no other", () => {
+      expect(deploy.match(/\$\{\{\s*secrets\./g)).toHaveLength(1);
+      const holders = steps("deploy").filter((s) => /\$\{\{\s*secrets\./.test(s));
+      expect(holders).toHaveLength(1);
+      expect(holders[0]).toMatch(/BUNDLE_DENY_PATTERNS: \$\{\{ secrets\.BUNDLE_DENY_PATTERNS \}\}/);
+      expect(holders[0]).toMatch(/scripts\/scan-bundle\.mjs/);
+    });
+
+    it("needs nothing installed to scan: the scan script imports only what node ships", () => {
+      const source = read("scripts/scan-bundle.mjs");
+      const specifiers = [...source.matchAll(/(?:\bfrom\s+|\bimport\(\s*|\brequire\(\s*)["']([^"']+)["']/g)].map((m) => m[1]);
+      expect(specifiers.length).toBeGreaterThan(0);
+      for (const specifier of specifiers) expect(specifier, `${specifier} is a node built-in`).toMatch(/^node:/);
+    });
+  });
+
+  it("checks out, downloads and scans before signing in, and deploys last", () => {
     const text = job("deploy");
-    const at = (needle) => text.indexOf(needle);
-    expect(at("scripts/scan-bundle.mjs")).toBeGreaterThan(at("npm run build"));
-    expect(at("google-github-actions/auth@")).toBeGreaterThan(at("scripts/scan-bundle.mjs"));
-    expect(at("deploy --only")).toBeGreaterThan(at("google-github-actions/auth@"));
+    const at = (needle) => text.indexOf(needle); // needles are the lines that act, so a comment naming a step can't match
+    expect(at("uses: actions/checkout@")).toBeGreaterThanOrEqual(0);
+    expect(at("uses: actions/download-artifact@")).toBeGreaterThan(at("uses: actions/checkout@"));
+    expect(at("run: node scripts/scan-bundle.mjs")).toBeGreaterThan(at("uses: actions/download-artifact@"));
+    expect(at("run: npm ci --ignore-scripts --prefix tools/firebase")).toBeGreaterThan(at("run: node scripts/scan-bundle.mjs"));
+    expect(at("uses: google-github-actions/auth@")).toBeGreaterThan(at("run: npm ci --ignore-scripts --prefix tools/firebase"));
+    expect(at("run: git check-ignore")).toBeGreaterThan(at("uses: google-github-actions/auth@"));
+    expect(at("deploy --only")).toBeGreaterThan(at("run: git check-ignore"));
     expect(text).toMatch(/BUNDLE_DENY_PATTERNS: \$\{\{ secrets\.BUNDLE_DENY_PATTERNS \}\}/);
-    expect(deploy.match(/secrets\.BUNDLE_DENY_PATTERNS/g)).toHaveLength(1); // only the scan step gets the patterns
   });
 
   it("does one deploy at a time and never cancels one that has started", () => {
@@ -91,5 +184,51 @@ describe("deploy.yml", () => {
     const text = job("smoke");
     expect(text).toMatch(/if: \$\{\{ !inputs\.dry_run \}\}/);
     expect(text).not.toMatch(/google-github-actions|GOOGLE_|firebase-tools|secrets\./);
+  });
+});
+
+describe("the Firebase CLI the deploy runs", () => {
+  const tools = "tools/firebase";
+  const cli = `${tools}/node_modules/.bin/firebase`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // as a pattern
+  const pkg = () => JSON.parse(read(`${tools}/package.json`));
+  const lock = () => JSON.parse(read(`${tools}/package-lock.json`));
+
+  it("is a private package that names the CLI at one exact version, and nothing else", () => {
+    expect(pkg().private).toBe(true);
+    expect(Object.keys(pkg().dependencies)).toEqual(["firebase-tools"]);
+    expect(pkg().dependencies["firebase-tools"]).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg().devDependencies).toBeUndefined();
+  });
+
+  it("is locked: that version and every package under it, each with an integrity hash from the npm registry", () => {
+    const { lockfileVersion, packages } = lock();
+    expect(lockfileVersion).toBe(3);
+    expect(packages["node_modules/firebase-tools"].version).toBe(pkg().dependencies["firebase-tools"]);
+    const entries = Object.entries(packages).filter(([name]) => name !== "");
+    expect(entries.length).toBeGreaterThan(100);
+    for (const [name, entry] of entries) {
+      expect(entry.resolved, `${name} has a registry URL`).toMatch(/^https:\/\/registry\.npmjs\.org\//);
+      expect(entry.integrity, `${name} has a hash`).toMatch(/^sha512-/);
+      expect(entry.extraneous, `${name} is needed by something`).toBeUndefined(); // npm leaves these after a first pass
+    }
+  });
+
+  it("is installed from the lockfile without install scripts, and the deploy runs that binary, never npx", () => {
+    const text = job("deploy");
+    expect(text).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix tools\/firebase$/m);
+    expect(deployCode).not.toMatch(/\bnpx\b/); // npx would resolve the CLI's whole tree afresh on every run
+    expect(deployCode).not.toMatch(/FIREBASE_TOOLS_VERSION|firebase-tools@/);
+    expect(text).toMatch(new RegExp(`^ {8}run: ${cli} deploy --only "apphosting:\\$\\{APPHOSTING_BACKEND\\}" --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
+    expect(text).toMatch(new RegExp(`^ {8}run: ${cli} apphosting:backends:list --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
+  });
+
+  it("stays out of the source the CLI uploads, and is not an npm workspace of the root", () => {
+    const firebase = JSON.parse(read("firebase.json"));
+    expect(firebase.apphosting[0].ignore).toContain("node_modules"); // matched at any depth, so this folder's too
+    expect(read(".gitignore")).toMatch(/^node_modules$/m);
+    const { workspaces } = JSON.parse(read("package.json"));
+    for (const glob of workspaces) expect(glob, "a workspace glob").toMatch(/^(apps|packages)\/[^/]*$/);
+    const rootLock = JSON.parse(read("package-lock.json"));
+    expect(Object.keys(rootLock.packages).filter((name) => name === "tools" || name.startsWith("tools/"))).toEqual([]);
   });
 });
