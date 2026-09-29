@@ -1,4 +1,5 @@
 import type { Address, NetworkId } from "@arcos/chain";
+import type { DeliveryChannel } from "./docs";
 import { DataError } from "./errors";
 import { RADAR_FEED_FILTERS, isNetwork, type RadarFeedFilter } from "./names";
 
@@ -37,7 +38,7 @@ export const watchId = (user: string, network: NetworkId, token: string): string
   `${normalizeAddress(user)}:${assertNetwork(network)}:${normalizeAddress(token)}`;
 
 /** deliveries/{alert id}:{address}:telegram. The alert id is Firestore's own, so it must not carry a colon or a slash. */
-export function deliveryId(alertId: string, user: string, channel: "telegram" = "telegram"): string {
+export function deliveryId(alertId: string, user: string, channel: DeliveryChannel = "telegram"): string {
   if (typeof alertId !== "string" || !ALERT_ID.test(alertId)) {
     throw new DataError("alert-id", "Not an alert id: expected 1 to 128 letters, digits, - or _");
   }
