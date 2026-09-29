@@ -69,23 +69,63 @@ export const rowKey = (row: Pick<Approval, "token" | "spender">): string => `${r
 
 // Pairs revoked in this page, with the block each revoke landed in. The server keeps an owner's list for 60 s, so a
 // window reopened in that time could list a pair that is already revoked; `stillLive` hides it until a newer approval
-// of the same pair appears.
+// of the same pair appears (a strictly higher lastApprovalBlock). Kept in memory for this page load, and, best
+// effort, in sessionStorage under one key per owner (STORAGE_PREFIX + the lowercased owner) so a reload in the same
+// tab keeps a revoked pair hidden too — the in-memory map alone would start empty again. Every storage access is
+// wrapped in try/catch: a private window, storage the visitor blocked, or a server render with no `sessionStorage`
+// at all (a ReferenceError, caught the same way) all fall back to memory only for that access.
 const revokedAt = new Map<string, number>();
+const STORAGE_PREFIX = "arcos-revoked:";
+const storageKey = (owner: Address) => `${STORAGE_PREFIX}${owner.toLowerCase()}`;
+
+function readStorage(owner: Address): Record<string, number> {
+  try {
+    const raw = sessionStorage.getItem(storageKey(owner));
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStorage(owner: Address, pairKey: string, block: number): void {
+  try {
+    const all = readStorage(owner);
+    all[pairKey] = block;
+    sessionStorage.setItem(storageKey(owner), JSON.stringify(all));
+  } catch {
+    // The in-memory revokedAt entry (set by markRevoked below, unconditionally) already covers this
+    // page load; sessionStorage is a best-effort extra copy, never the only one.
+  }
+}
 
 export function markRevoked(owner: Address, row: Pick<Approval, "token" | "spender">, block: number): void {
   revokedAt.set(`${owner.toLowerCase()}:${rowKey(row)}`, block);
+  writeStorage(owner, rowKey(row), block);
 }
 
 export function stillLive(owner: Address, rows: readonly Approval[]): Approval[] {
+  const stored = readStorage(owner);
   return rows.filter((row) => {
-    const at = revokedAt.get(`${owner.toLowerCase()}:${rowKey(row)}`);
+    const key = rowKey(row);
+    const fromMemory = revokedAt.get(`${owner.toLowerCase()}:${key}`);
+    const fromStorage = stored[key];
+    const at =
+      fromMemory === undefined ? fromStorage : fromStorage === undefined ? fromMemory : Math.max(fromMemory, fromStorage);
     return at === undefined || row.lastApprovalBlock > at;
   });
 }
 
-/** Forgets every revoke this page made (for tests). */
+/** Forgets every revoke this page made, in memory and in sessionStorage (for tests). */
 export function forgetRevokes(): void {
   revokedAt.clear();
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const k = sessionStorage.key(i);
+      if (k?.startsWith(STORAGE_PREFIX)) sessionStorage.removeItem(k);
+    }
+  } catch {
+    // Nothing to clear if storage isn't accessible.
+  }
 }
 
 /** How far a revoke got before it failed: not sent yet, sent without a receipt, or confirmed. */

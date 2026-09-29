@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAddress } from "viem";
 import { UserFacingError } from "@/lib/contract-error";
@@ -5,7 +7,6 @@ import { shortAddress } from "@/lib/format";
 import type { Approval } from "@/lib/approvals";
 import {
   allowanceText,
-  ALLOWANCE_STILL_SET,
   APPROVE_ABI,
   fetchApprovals,
   focusTargetAfterRemoval,
@@ -113,6 +114,82 @@ describe("stillLive", () => {
   });
 });
 
+/** A minimal, synchronous Storage stand-in: enough of the interface markRevoked/stillLive use. */
+function fakeSessionStorage(): Storage {
+  const store = new Map<string, string>();
+  return {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+    clear: () => store.clear(),
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() {
+      return store.size;
+    },
+  } as Storage;
+}
+
+/** Every access throws, the way a private window or storage the visitor blocked behaves. */
+function throwingSessionStorage(): Storage {
+  const boom = () => {
+    throw new Error("storage blocked");
+  };
+  return {
+    getItem: boom,
+    setItem: boom,
+    removeItem: boom,
+    clear: boom,
+    key: boom,
+    get length(): number {
+      return boom();
+    },
+  } as Storage;
+}
+
+describe("markRevoked / stillLive persist to sessionStorage, under one key scoped by owner", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("writes through to sessionStorage under a key scoped by the lowercased owner", () => {
+    const storage = fakeSessionStorage();
+    vi.stubGlobal("sessionStorage", storage);
+
+    markRevoked(getAddress(OWNER), row(), 50);
+
+    expect(storage.getItem(`arcos-revoked:${OWNER.toLowerCase()}`)).not.toBeNull();
+    expect(storage.getItem(`arcos-revoked:${OTHER.toLowerCase()}`)).toBeNull();
+  });
+
+  it("survives a fresh module instance (a reload in the same tab) through sessionStorage, since the in-memory map alone would have reset", async () => {
+    const storage = fakeSessionStorage();
+    vi.stubGlobal("sessionStorage", storage);
+    markRevoked(OWNER, row(), 50);
+
+    vi.resetModules();
+    const fresh = await import("../rows");
+    try {
+      expect(fresh.stillLive(OWNER, [row({ lastApprovalBlock: 10 })])).toEqual([]);
+      expect(fresh.stillLive(OWNER, [row({ lastApprovalBlock: 51 })])).toHaveLength(1);
+    } finally {
+      fresh.forgetRevokes();
+    }
+  });
+
+  it("falls back to memory within this page load when sessionStorage throws on every access", () => {
+    vi.stubGlobal("sessionStorage", throwingSessionStorage());
+
+    markRevoked(OWNER, row(), 50);
+
+    expect(stillLive(OWNER, [row({ lastApprovalBlock: 10 })])).toEqual([]);
+    expect(stillLive(OWNER, [row({ lastApprovalBlock: 51 })])).toHaveLength(1);
+  });
+});
+
 describe("revokeFailure", () => {
   it("says how far a failed revoke got, and never reads a sent one as nothing happened", () => {
     expect(revokeFailure("signing", { code: 4001 })).toBe("You cancelled the request in your wallet.");
@@ -140,8 +217,15 @@ describe("APPROVE_ABI", () => {
 });
 
 describe("ALLOWANCE_STILL_SET", () => {
-  it("is the exact sentence shown when a confirmed revoke's re-read allowance isn't zero", () => {
-    expect(ALLOWANCE_STILL_SET).toBe("The revoke went through, but an allowance is still set.");
+  // A source scan, not a behavioural render test: the branch that shows this sentence only runs
+  // inside `revoke()`'s async handler, after a confirmed transaction and a live re-read — not
+  // reachable through renderToStaticMarkup (see window.test.ts's own scans for the same limitation).
+  // This checks the constant is actually wired into that branch's shown text, rather than asserting
+  // the constant equals its own literal.
+  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
+
+  it("is the failure text Window.tsx shows when a confirmed revoke's re-read allowance isn't zero", () => {
+    expect(source).toMatch(/text:\s*ALLOWANCE_STILL_SET/);
   });
 });
 
@@ -178,5 +262,42 @@ describe("revokeButtonLabel", () => {
 describe("inspectButtonLabel", () => {
   it("names the spender by its short address", () => {
     expect(inspectButtonLabel(SPENDER)).toBe(`Inspect spender ${shortAddress(SPENDER)}`);
+  });
+});
+
+/**
+ * A source scan, not a behavioural render test (see the ALLOWANCE_STILL_SET scan above for why:
+ * revoke()'s async handler isn't reachable through renderToStaticMarkup, and the window.test.ts mocks
+ * usePublicClient to return undefined, so revoke() always returns at its first guard there too).
+ *
+ * Review Important 1: a revoke could reappear after a reload within the server's 60 s cache, and
+ * clicking Revoke on an already-revoked pair would simulate and send a no-op approve(spender, 0),
+ * prompting the wallet and costing gas for nothing. The fix reads the allowance live, the same read
+ * used after the receipt, before ever asking the wallet to sign — and returns without simulating or
+ * writing when it's already zero.
+ */
+describe("Window.tsx reads the allowance live before ever asking the wallet (Important 1)", () => {
+  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
+  // liveAllowance: a marker unique to the new pre-check (unlike "already", which also appears in an
+  // unrelated, earlier comment about stillLive already carrying the owner in its own key). The paid-write
+  // scan (lib/__tests__/paid-write.test.ts) already pins simulateContract → writeContractAsync(withChain(
+  // …)); this only needs to place the new live read between assertWalletOnChain and simulateContract, so
+  // it doesn't repeat that literal call-site text here too (the scan's own file-selection net would
+  // otherwise sweep this test file up as a fourth "paid write" site to check).
+  const liveCheck = source.indexOf("liveAllowance");
+  const simulate = source.indexOf("simulateContract(");
+
+  it("checks the live allowance after assertWalletOnChain and before simulateContract", () => {
+    const assertCall = source.indexOf("assertWalletOnChain(");
+    expect(assertCall).toBeGreaterThan(-1);
+    expect(liveCheck).toBeGreaterThan(assertCall);
+    expect(simulate).toBeGreaterThan(liveCheck);
+  });
+
+  it("returns, without reaching simulateContract, when the live read is already zero — so an already-revoked pair never prompts the wallet", () => {
+    const zeroBranch = source.slice(liveCheck, simulate);
+    expect(zeroBranch).toMatch(/===\s*0n/);
+    expect(zeroBranch).toMatch(/\breturn\b/);
+    expect(zeroBranch).toContain("markRevoked(");
   });
 });

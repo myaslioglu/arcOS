@@ -153,7 +153,10 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
         Loading approvals…
       </p>
     );
-  if (query.isError) {
+  // A failed refetch that still has an earlier answer (query.isRefetchError) keeps showing the list,
+  // with a small notice below, instead of hiding it behind this full error state — which is shown
+  // only when there is no data at all (isLoadingError: the query has never once succeeded).
+  if (query.isLoadingError) {
     return (
       <div className="grid justify-items-start gap-2">
         <p className="text-danger-text" role="alert">
@@ -170,12 +173,17 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
   // there is no per-owner overlay to filter here beyond stillLive, which already carries the owner in its own key.
   const rows = stillLive(owner, query.data.approvals);
 
-  // One revoke at a time: approve(spender, 0), simulated first, confirmed in the wallet, then the pair is read again
-  // at the block the revoke landed in.
+  // One revoke at a time: a live allowance check first (below), then approve(spender, 0), simulated,
+  // confirmed in the wallet, then the pair is read again at the block the revoke landed in.
   const revoke = async (row: Approval) => {
     const key = rowKey(row);
     if (busy !== null || !client || !address) return;
     const keysBefore = rows.map(rowKey);
+    const focusAfterRemoval = () => {
+      const target = focusTargetAfterRemoval(keysBefore, key);
+      if (target.kind === "heading") listRef.current?.focus();
+      else rowRefs.current[target.key]?.focus();
+    };
     setBusy(key);
     setFailures((prev) => {
       const next = { ...prev };
@@ -187,6 +195,22 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     try {
       // Defence in depth; the real guard is the chainId withChain sets, which viem enforces when signing.
       assertWalletOnChain(walletChainId, chain.id);
+      // The server's approvals list is cached for 60 s (approvals-server.ts), so a window reopened in that
+      // time can still list a pair whose allowance is already 0 — revoked already, in another tab, or by a
+      // wallet that batched it. Read it live, the same read used after the receipt below, before ever
+      // asking the wallet to sign: simulating and sending approve(spender, 0) against an already-zero
+      // allowance would still succeed (a costly no-op) and prompt the wallet for nothing.
+      const liveAllowance = await client.readContract({
+        address: row.token,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [owner, row.spender],
+      });
+      if (liveAllowance === 0n) {
+        markRevoked(owner, row, row.lastApprovalBlock);
+        focusAfterRemoval();
+        return;
+      }
       // APPROVE_ABI (not erc20Abi) declares no return value: a USDT-style token whose approve sends back no data
       // would otherwise fail simulateContract's decode before the transaction is ever sent.
       const { request } = await client.simulateContract({
@@ -210,9 +234,7 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
       });
       if (now === 0n) {
         markRevoked(owner, row, Number(receipt.blockNumber));
-        const target = focusTargetAfterRemoval(keysBefore, key);
-        if (target.kind === "heading") listRef.current?.focus();
-        else rowRefs.current[target.key]?.focus();
+        focusAfterRemoval();
       } else {
         setLeft((prev) => ({ ...prev, [key]: now.toString() }));
         setFailures((prev) => ({ ...prev, [key]: { text: ALLOWANCE_STILL_SET, ...(hash ? { hash } : {}) } }));
@@ -225,8 +247,13 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
   };
 
   return (
-    <div ref={listRef} tabIndex={-1} aria-label="Approvals list" className="grid gap-3">
+    <div ref={listRef} tabIndex={-1} role="region" aria-label="Approvals list" className="grid gap-3">
       {!canRevoke && <p className="text-xs text-muted">{`Viewing ${shortAddress(owner)}. Only its own wallet can revoke.`}</p>}
+      {query.isRefetchError && (
+        <p className="text-xs text-muted" role="status">
+          {"Couldn't refresh approvals. Showing the last list."}
+        </p>
+      )}
       {query.data.truncated && (
         <p className="text-xs text-accent-3-text" role="alert">
           {"This list may be incomplete: some approvals couldn't be read."}

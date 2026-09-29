@@ -12,6 +12,12 @@ const state = vi.hoisted(() => ({
   query: {
     isPending: false,
     isError: false,
+    // TanStack Query tells the two error shapes apart: isLoadingError (data stays undefined — the
+    // query has never once succeeded) and isRefetchError (data stays the last successful answer — a
+    // background refetch failed on top of it). See QueryObserverLoadingErrorResult /
+    // QueryObserverRefetchErrorResult in @tanstack/query-core.
+    isLoadingError: false,
+    isRefetchError: false,
     data: undefined as ApprovalsAnswer | undefined,
     refetch: async () => undefined,
   },
@@ -56,7 +62,14 @@ const listing = (approvals: Approval[], truncated = false) => {
 
 beforeEach(() => {
   state.address = undefined;
-  state.query = { isPending: false, isError: false, data: { approvals: [], truncated: false }, refetch: async () => undefined };
+  state.query = {
+    isPending: false,
+    isError: false,
+    isLoadingError: false,
+    isRefetchError: false,
+    data: { approvals: [], truncated: false },
+    refetch: async () => undefined,
+  };
   forgetRevokes();
 });
 
@@ -107,8 +120,27 @@ describe("Revoke", () => {
     state.address = OWNER;
     state.query = { ...state.query, isPending: true, data: undefined };
     expect(render()).toContain("Loading approvals…");
-    state.query = { ...state.query, isPending: false, isError: true };
+    state.query = { ...state.query, isPending: false, isError: true, isLoadingError: true };
     expect(render()).toContain("Couldn't load approvals. Try again in a minute.");
+  });
+
+  it("keeps showing the list when a refetch fails but the last answer is still there, instead of hiding it behind the error state", () => {
+    state.address = OWNER;
+    listing([row()]);
+    state.query = { ...state.query, isError: true, isRefetchError: true };
+    const html = render();
+    expect(html).toContain("AAA");
+    expect(html).toContain(">Revoke</button>");
+    expect(html).toContain("Couldn't refresh approvals. Showing the last list.");
+    expect(html).not.toContain("Couldn't load approvals. Try again in a minute.");
+  });
+
+  it("shows the full error state, not the list, when a refetch fails and there was never any data", () => {
+    state.address = OWNER;
+    state.query = { ...state.query, isPending: false, isError: true, isLoadingError: true, data: undefined };
+    const html = render();
+    expect(html).toContain("Couldn't load approvals. Try again in a minute.");
+    expect(html).not.toContain("Couldn't refresh approvals. Showing the last list.");
   });
 
   it("says when the list was cut short", () => {
@@ -161,10 +193,16 @@ describe("Revoke", () => {
     state.address = OWNER;
     state.query = { ...state.query, isPending: true, data: undefined };
     expect(render()).toMatch(/<p[^>]*aria-live="polite"[^>]*>Loading approvals…<\/p>/);
-    state.query = { ...state.query, isPending: false, isError: true };
+    state.query = { ...state.query, isPending: false, isError: true, isLoadingError: true };
     expect(render()).toMatch(/<p[^>]*role="alert"[^>]*>Couldn't load approvals\. Try again in a minute\.<\/p>/);
-    state.query = { ...state.query, isError: false, data: { approvals: [row()], truncated: true } };
+    state.query = { ...state.query, isError: false, isLoadingError: false, data: { approvals: [row()], truncated: true } };
     expect(render()).toMatch(/<p[^>]*role="alert"[^>]*>This list may be incomplete: some approvals couldn't be read\.<\/p>/);
+  });
+
+  it("marks the approvals list as a region, the focus landmark that already has its aria-label", () => {
+    state.address = OWNER;
+    listing([row()]);
+    expect(render()).toMatch(/<div[^>]*role="region"[^>]*aria-label="Approvals list"/);
   });
 
   it("labels the Revoke and Inspect buttons with the token and the spender", () => {
