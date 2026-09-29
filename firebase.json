@@ -18,6 +18,13 @@
       ]
     }
   ],
+  "firestore": [
+    {
+      "database": "arcos",
+      "rules": "firestore/arcos.rules",
+      "indexes": "firestore/arcos.indexes.json"
+    }
+  ],
   "hosting": {
     "site": "arcos",
     "public": "firebase-hosting",
