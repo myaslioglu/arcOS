@@ -207,10 +207,15 @@ contract MockRebasingToken is IERC20 {
     uint256 public index = 1e18;
     uint256 public totalShares;
     mapping(address account => uint256) private _shares;
-    mapping(address account => mapping(address spender => uint256)) public override allowance;
+    mapping(address account => mapping(address spender => uint256)) private _allowances;
 
     function totalSupply() external view returns (uint256) {
         return (totalShares * index) / 1e18;
+    }
+
+    // An explicit function rather than a `public override` mapping, which forge fmt 1.7.1 mis-formats.
+    function allowance(address account, address spender) external view returns (uint256) {
+        return _allowances[account][spender];
     }
 
     function balanceOf(address account) public view returns (uint256) {
@@ -228,7 +233,7 @@ contract MockRebasingToken is IERC20 {
     }
 
     function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
+        _allowances[msg.sender][spender] = amount;
         emit Approval(msg.sender, spender, amount);
         return true;
     }
@@ -239,10 +244,10 @@ contract MockRebasingToken is IERC20 {
     }
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        uint256 allowed = allowance[from][msg.sender];
+        uint256 allowed = _allowances[from][msg.sender];
         if (allowed != type(uint256).max) {
             require(allowed >= amount, "allowance");
-            allowance[from][msg.sender] = allowed - amount;
+            _allowances[from][msg.sender] = allowed - amount;
         }
         _move(from, to, amount);
         return true;
@@ -256,83 +261,83 @@ contract MockRebasingToken is IERC20 {
     }
 }
 
-    /// transferFrom succeeds and returns true but moves nothing, like a token that takes 100% or is simply broken.
-    contract MockZeroTransferToken {
-        function balanceOf(address) external pure returns (uint256) {
-            return 0;
-        }
-
-        function transferFrom(address, address, uint256) external pure returns (bool) {
-            return true;
-        }
+/// transferFrom succeeds and returns true but moves nothing, like a token that takes 100% or is simply broken.
+contract MockZeroTransferToken {
+    function balanceOf(address) external pure returns (uint256) {
+        return 0;
     }
 
-    /// A token that never answers balanceOf, so nothing can tell how much a transfer delivered.
-    contract MockNoBalanceToken {
-        function transferFrom(address, address, uint256) external pure returns (bool) {
-            return true;
-        }
+    function transferFrom(address, address, uint256) external pure returns (bool) {
+        return true;
+    }
+}
+
+/// A token that never answers balanceOf, so nothing can tell how much a transfer delivered.
+contract MockNoBalanceToken {
+    function transferFrom(address, address, uint256) external pure returns (bool) {
+        return true;
+    }
+}
+
+/// Moves funds and returns nothing at all from transfer, transferFrom and approve, like USDT on Ethereum.
+contract MockNoReturnToken {
+    mapping(address account => uint256) public balanceOf;
+    mapping(address account => mapping(address spender => uint256)) public allowance;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
     }
 
-    /// Moves funds and returns nothing at all from transfer, transferFrom and approve, like USDT on Ethereum.
-    contract MockNoReturnToken {
-        mapping(address account => uint256) public balanceOf;
-        mapping(address account => mapping(address spender => uint256)) public allowance;
-
-        function mint(address to, uint256 amount) external {
-            balanceOf[to] += amount;
-        }
-
-        function approve(address spender, uint256 amount) external {
-            allowance[msg.sender][spender] = amount;
-        }
-
-        function transfer(address to, uint256 amount) external {
-            balanceOf[msg.sender] -= amount;
-            balanceOf[to] += amount;
-        }
-
-        function transferFrom(address from, address to, uint256 amount) external {
-            allowance[from][msg.sender] -= amount;
-            balanceOf[from] -= amount;
-            balanceOf[to] += amount;
-        }
+    function approve(address spender, uint256 amount) external {
+        allowance[msg.sender][spender] = amount;
     }
 
-    /// Returns false from transferFrom and moves nothing.
-    contract MockFalseReturnToken {
-        function balanceOf(address) external pure returns (uint256) {
-            return 0;
-        }
-
-        function transferFrom(address, address, uint256) external pure returns (bool) {
-            return false;
-        }
+    function transfer(address to, uint256 amount) external {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
     }
 
-    /// An ERC-20 whose answers to token0(), token1() and getReserves() can be set to any length, or to revert, to test
-    /// how the factory decides that a token is a v2 pair.
-    contract MockShapedToken is ERC20 {
-        mapping(bytes4 selector => uint256) public wordsFor;
-        mapping(bytes4 selector => bool) public revertsFor;
+    function transferFrom(address from, address to, uint256 amount) external {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+    }
+}
 
-        constructor() ERC20("Shaped", "SHP") {}
+/// Returns false from transferFrom and moves nothing.
+contract MockFalseReturnToken {
+    function balanceOf(address) external pure returns (uint256) {
+        return 0;
+    }
 
-        function mint(address to, uint256 amount) external {
-            _mint(to, amount);
-        }
+    function transferFrom(address, address, uint256) external pure returns (bool) {
+        return false;
+    }
+}
 
-        function shape(bytes4 selector, uint256 words, bool doRevert) external {
-            wordsFor[selector] = words;
-            revertsFor[selector] = doRevert;
-        }
+/// An ERC-20 whose answers to token0(), token1() and getReserves() can be set to any length, or to revert, to test
+/// how the factory decides that a token is a v2 pair.
+contract MockShapedToken is ERC20 {
+    mapping(bytes4 selector => uint256) public wordsFor;
+    mapping(bytes4 selector => bool) public revertsFor;
 
-        fallback() external {
-            if (revertsFor[msg.sig]) revert("shaped");
-            uint256 words = wordsFor[msg.sig];
-            assembly {
-                for { let i := 0 } lt(i, words) { i := add(i, 1) } { mstore(mul(i, 0x20), 0) }
-                return(0, mul(words, 0x20))
-            }
+    constructor() ERC20("Shaped", "SHP") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function shape(bytes4 selector, uint256 words, bool doRevert) external {
+        wordsFor[selector] = words;
+        revertsFor[selector] = doRevert;
+    }
+
+    fallback() external {
+        if (revertsFor[msg.sig]) revert("shaped");
+        uint256 words = wordsFor[msg.sig];
+        assembly {
+            for { let i := 0 } lt(i, words) { i := add(i, 1) } { mstore(mul(i, 0x20), 0) }
+            return(0, mul(words, 0x20))
         }
     }
+}
