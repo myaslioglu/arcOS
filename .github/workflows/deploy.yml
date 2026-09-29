@@ -102,8 +102,9 @@ jobs:
       - name: The credentials file must be git-ignored
         run: git check-ignore --quiet -- "$GOOGLE_GHA_CREDS_PATH"
 
-      # Two reads, nothing written: the sign-in, the App Hosting API and the deployer's rights are proven together.
-      # The table should list the backend `arcos`, with no repository (it deploys from source).
+      # Two reads, nothing written. They prove the sign-in and the deployer's Service Usage and App Hosting read rights;
+      # the Storage rights are first used by the deploy itself. The table should list the backend `arcos`, with no
+      # repository (it deploys from source).
       - name: Dry run, list the App Hosting backends
         if: ${{ inputs.dry_run }}
         env:

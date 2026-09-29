@@ -31,7 +31,8 @@ file, and starts only after the checks pass and the owner approves it.
 5. **A dry run, and rolling back.**
    - *Dry run:* Actions, Deploy, Run workflow, tick `dry_run`. It runs the checks, builds, scans and signs in, then
      lists the App Hosting backends and stops. Approval is still needed. Use it after changing anything in the setup
-     below.
+     below. It proves the sign-in and the read access to App Hosting; the upload to Cloud Storage is first exercised by a
+     real deploy.
    - *Rolling back:* in the Firebase console open App Hosting, the `arcos` backend, its Rollouts tab, and choose "Roll
      back to this build" on an earlier build. This is instant and does not rebuild. To go back in git as well, revert the
      commit and merge the revert; that goes through the same approval.
