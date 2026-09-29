@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AERODROME, EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
 import { findPools } from "../checks";
 import { inspect } from "../inspect";
+import type { ExplorerSource, Holder } from "../explorer";
 import type { ExtraPool, Finding, InspectInput, Report } from "../types";
 import { NATIVE, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
 import { fakeChain, readKey, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
@@ -205,10 +206,9 @@ describe("Uniswap v4 discovery", () => {
 
 // --- The findings ---
 
-const explorerNone = null;
-const run = (f: FakeChain, dex: DexConfig | null, token: `0x${string}` = TOKEN): Promise<Report> =>
+const run = (f: FakeChain, dex: DexConfig | null, token: `0x${string}` = TOKEN, explorer: ExplorerSource | null = null): Promise<Report> =>
   inspect({
-    address: token, network: "mainnet", reader: fakeChain({ code: { [token]: PLAIN }, ...f }), explorer: explorerNone, dex, knownLockers: [],
+    address: token, network: "mainnet", reader: fakeChain({ code: { [token]: PLAIN }, ...f }), explorer, dex, knownLockers: [],
     explorerBase: "https://explorer.test", now: () => new Date("2026-09-29T00:00:00Z"),
   });
 const find = (r: Report, id: Finding["id"]) => r.findings.find((x) => x.id === id)!;
@@ -417,5 +417,35 @@ describe("Aerodrome Slipstream pools", () => {
     const legacy = fakeChain({ reads: noPools(uniswapAll, TOKEN) });
     await findPools(inputFor(legacy, { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] }));
     expect(legacy.batches).toHaveLength(0);
+  });
+});
+
+describe("the holders finding", () => {
+  /** An explorer that lists these holders as the whole list, of a token with a supply of 1,000. */
+  const holdersOf = (holders: Holder[]): ExplorerSource => ({
+    contract: async () => ({ verified: true, name: "T", abi: null, proxyType: null, implementations: [] }),
+    token: async () => ({ name: "Token", symbol: "TKN", decimals: 18, totalSupply: "1000", holdersCount: holders.length }),
+    topHolders: async () => ({ holders, complete: true }),
+    tokenBalances: async () => [],
+  });
+  const wallet = (address: string, value: bigint): Holder => ({ address: address as `0x${string}`, isContract: false, name: null, value });
+
+  it("leaves out the v4 PoolManager: it holds the tokens of every v4 pool, and no wallet's", async () => {
+    const explorer = holdersOf([wallet(UNISWAP_V4.poolManager, 700n), wallet(OTHER, 300n)]);
+    const r = await run({}, v4Only, TOKEN, explorer);
+    expect(find(r, "holders")).toMatchObject({ status: "warn", title: "The only wallet holds 30%" });
+  });
+
+  it("leaves it out whether or not a v4 pool of this token was found", async () => {
+    const key = v4PoolKey(TOKEN, USDC, 500, 10);
+    const explorer = holdersOf([wallet(UNISWAP_V4.poolManager, 700n), wallet(OTHER, 300n)]);
+    const r = await run({ v4: listed([key, at1251()]) }, v4Only, TOKEN, explorer);
+    expect(find(r, "holders")).toMatchObject({ status: "warn", title: "The only wallet holds 30%" });
+  });
+
+  it("counts an address as a wallet where no PoolManager is configured for it", async () => {
+    const explorer = holdersOf([wallet(UNISWAP_V4.poolManager, 700n), wallet(OTHER, 300n)]);
+    const r = await run({ reads: noPools(uniswapAll, TOKEN) }, { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] }, TOKEN, explorer);
+    expect(find(r, "holders")).toMatchObject({ status: "fail", title: "All 2 wallets hold 100%" });
   });
 });

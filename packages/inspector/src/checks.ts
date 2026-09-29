@@ -694,7 +694,10 @@ export function checkHolders(
     return finding("holders", "unknown", "Couldn't check holder concentration", `The explorer returned ${holders.length} holder(s) but doesn't confirm that's all of them, so this would only be part of the concentration.`, { evidenceUrl: url });
   }
   const knownPools = scan?.pools ?? [];
-  const skip = new Set([lower(input.address), ...knownPools.map((p) => lower(p.address)), ...input.knownLockers.map(lower)]);
+  // Uniswap v4 keeps the tokens of every pool in one contract, the PoolManager: it is a pool whether or not discovery found
+  // a pool of this token there (a hooked pool nobody has listed yet holds tokens too), and never a wallet.
+  const poolManager = input.dex?.v4 ? [lower(input.dex.v4.poolManager)] : [];
+  const skip = new Set([lower(input.address), ...knownPools.map((p) => lower(p.address)), ...input.knownLockers.map(lower), ...poolManager]);
   const ranked = [...holders].sort((a, b) => (a.value < b.value ? 1 : a.value > b.value ? -1 : 0));
   const top = ranked.filter((h) => !isBurn(h.address) && !skip.has(lower(h.address))).slice(0, 10);
   const held = top.reduce((sum, h) => sum + h.value, 0n);
