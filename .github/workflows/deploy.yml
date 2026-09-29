@@ -1,0 +1,140 @@
+name: Deploy
+
+# Deploys https://4rcos.com to Firebase App Hosting (project arcos-c80cf, backend arcos) from GitHub Actions. No key
+# file exists anywhere: the job signs in through Workload Identity Federation and a service account (see
+# docs/DEPLOYING.md), and the deploy runs only after the checks pass and the owner approves it in the `production`
+# environment, which allows the main branch only.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Sign in to Google Cloud and list the App Hosting backends, but deploy nothing
+        type: boolean
+        default: false
+
+# One deploy at a time. A run that starts while another waits for approval or deploys queues behind it (a newer
+# waiting run replaces an older waiting one), and a deploy that has started is never cancelled halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# bash with pipefail, so a failing script at the head of a pipe fails its step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Pinned exactly: this CLI runs with the deploy credential. npx pins the package, not the packages it depends on, so
+  # bump it on purpose, read the release notes, and run the dry run before the next real deploy.
+  FIREBASE_TOOLS_VERSION: "15.32.0"
+  FIREBASE_PROJECT: arcos-c80cf
+  APPHOSTING_BACKEND: arcos
+
+jobs:
+  # The same checks a pull request runs (ci.yml, called as a reusable workflow): typecheck, lint, tests, build, audit.
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    name: Deploy to production
+    needs: checks
+    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Under the hour an access token lives: the Firebase CLI asks for one when it starts and never renews it.
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://4rcos.com
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # The same npm as ci.yml, for the same install.
+      - run: npm install -g npm@11.19.1
+
+      - run: npm ci
+
+      # The build settings come from the file App Hosting reads, so this bundle and the site's can't drift apart.
+      # Only NEXT_PUBLIC_ values pass; the script refuses anything else and never passes a secret.
+      - name: Read the build settings from apps/web/apphosting.yaml
+        run: node scripts/apphosting-env.mjs | tee -a "$GITHUB_ENV"
+
+      - name: Build the mainnet bundle
+        run: npm run build -w @arcos/web
+
+      # App Hosting builds the site again from the source this job uploads, so this scan looks at a build of the same
+      # commit, lockfile and settings, not at the very files that run. It fails on any match, and when the patterns are
+      # missing (see scripts/scan-bundle.mjs). The patterns are a secret, so they aren't in the repo.
+      - name: Scan the bundle for strings that must not ship
+        env:
+          BUNDLE_DENY_PATTERNS: ${{ secrets.BUNDLE_DENY_PATTERNS }}
+        run: node scripts/scan-bundle.mjs apps/web/.next/static apps/web/.next/server
+
+      # Nothing uses the access token asked for here: the Firebase CLI reads the credentials file this step leaves.
+      # Asking makes this step prove the whole sign-in, acting as the service account included, and name the stage
+      # that fails, where the CLI would only say "Failed to authenticate". The token is masked and lives five minutes.
+      - name: Sign in to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: access_token
+          access_token_lifetime: 300s
+
+      # The sign-in leaves a credentials file in the workspace, and the deploy uploads the workspace as source. The CLI
+      # leaves out what .gitignore lists, so fail here if that ever stops covering the file.
+      - name: The credentials file must be git-ignored
+        run: git check-ignore --quiet -- "$GOOGLE_GHA_CREDS_PATH"
+
+      # Two reads, nothing written. They prove the sign-in and the deployer's Service Usage and App Hosting read rights;
+      # the Storage rights are first used by the deploy itself. The table should list the backend `arcos`, with no
+      # repository (it deploys from source).
+      - name: Dry run, list the App Hosting backends
+        if: ${{ inputs.dry_run }}
+        env:
+          npm_config_ignore_scripts: "true"
+        run: npx --yes "firebase-tools@${FIREBASE_TOOLS_VERSION}" apphosting:backends:list --project "$FIREBASE_PROJECT" --non-interactive
+
+      # No --force: with it, a backend that can't be found is skipped and the CLI still reports success.
+      # npm_config_ignore_scripts keeps install scripts of the CLI's dependencies from running in this job.
+      - name: Deploy to App Hosting
+        if: ${{ !inputs.dry_run }}
+        env:
+          npm_config_ignore_scripts: "true"
+        run: npx --yes "firebase-tools@${FIREBASE_TOOLS_VERSION}" deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
+
+  # No credentials here: it only reads the public site.
+  smoke:
+    name: Smoke checks
+    needs: deploy
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - run: node scripts/smoke.mjs

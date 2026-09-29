@@ -25,12 +25,8 @@ needs to change.
 the batch, including rows that go on to fail (and get refunded, for native; left with the sender, for
 ERC-20) — it is not reduced or refunded for failed rows.
 
-**Known open question:** if a native-value *recipient* inside a `Multisend.sendNative` drop (not the fee
-recipient) is blocklisted on Arc, does only that row fail (skip and refund, the same as any other failed
-transfer) or does the whole transaction revert? This can't be verified locally — a blocklist is an Arc
-network policy, not something Anvil or a local fork can reproduce. Test it on testnet against a
-Circle-documented blocklisted test address, if one is published, before relying on the per-row failure
-behavior in the UI.
+One question about a blocklisted recipient in a native drop (`Multisend.sendNative`) is still open. It is the first
+entry under "Open questions", at the end of this file.
 
 ## Alternative: sign in a browser wallet (no key export)
 
@@ -120,8 +116,9 @@ Paste the key at the hidden prompt, then choose a password. Check the address:
          --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
          --constructor-args $(npx cast abi-encode "constructor(address)" <FeeController-address-from-step-2>)
 
-5. Tell the agent the three addresses (they're public), or let it read them from
-   `broadcast/DeployR0.s.sol/5042002/run-latest.json` (this path is relative to `packages/contracts`, where you're standing).
+5. Take the three addresses (they're public) from the script's output, or read them from
+   `broadcast/DeployR0.s.sol/5042002/run-latest.json` (this path is relative to `packages/contracts`, where you're standing),
+   and put them in `ARCOS.testnet` in `packages/chain/src/addresses.ts`.
    Do this only after step 4 has verified the TokenFactory: the Inspector counts every token that factory creates as
    source-verified through it, which is true only once the factory's own source is verified.
 
@@ -193,9 +190,14 @@ These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the a
 The testnet `TokenFactory` predates the current name rule (it checks each byte only for ASCII control characters, so malformed UTF-8 and bidi, line-break and invisible characters still pass there); the
 mainnet deployment uses the current source.
 
-## What the agent still needs from you
+## Open questions
 
-Every step that signs a transaction is yours: with a keystore key in your terminal, or with the browser-wallet
-path above, where the agent can run the command but only you can confirm each transaction in your wallet.
-After a deployment, give the agent the three addresses (they're public) so it can fill in `ARCOS.<network>`
-and run the checks under "After wiring the addresses".
+If a native-value *recipient* inside a `Multisend.sendNative` drop (not the fee recipient) is blocklisted on Arc, does
+only that row fail (skip and refund, the same as any other failed transfer) or does the whole transaction revert? This
+can't be verified locally — a blocklist is an Arc network policy, not something Anvil or a local fork can reproduce.
+Test it on testnet against a Circle-documented blocklisted test address, if one is published, before relying on the
+per-row failure behavior in the UI. (`docs/QA-R0.md` item 31 is the same check.)
+
+Every step that signs a transaction is the owner's: with a keystore key in a terminal, or with the browser-wallet path
+above, where the owner confirms each transaction in the wallet. After a deployment, the three addresses (they're
+public) go into `ARCOS.<network>`, and the checks under "After wiring the addresses" run.

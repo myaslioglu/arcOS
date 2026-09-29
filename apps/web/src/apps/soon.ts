@@ -62,13 +62,13 @@ export const SOON: AppManifest[] = [
   soon({
     id: "radar",
     name: "Radar",
-    blurb: "New tokens and locks, scored",
+    blurb: "New tokens, each with Inspector's checks",
     icon: Radar,
     category: "trade",
     release: "r1",
     details: [
       "Will list new tokens and locks on Arc as they appear.",
-      "Will score each new token with Inspector's checks.",
+      "Will run Inspector's checks on each new token: evidence, never a score.",
       "Needs an index of new tokens first.",
     ],
   }),

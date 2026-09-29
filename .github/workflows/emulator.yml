@@ -1,0 +1,46 @@
+name: Emulator
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only, no deploy step, no secrets. It checks out the repo, installs from the committed lockfile and runs the
+# @arcos/data suites: the unit tests, then the Firestore emulator suite. The emulator suite talks only to the local
+# emulator under the demo-arcos project id, so it needs no credential and none is available to it.
+permissions:
+  contents: read
+
+jobs:
+  firestore-emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Same Node as ci.yml: the newest 22.x, from .nvmrc.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # firebase-tools 15 needs Java 21 or newer to run the Firestore emulator.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # The version ci.yml installs, so `npm ci` reads the lockfile the way it was written.
+      - run: npm install -g npm@11.19.1
+
+      - run: npm ci
+
+      # ci.yml names its test workspaces one by one and does not list @arcos/data, so its unit tests run here.
+      - name: Unit tests
+        run: npm run test -w @arcos/data
+
+      # firebase emulators:exec starts the Firestore emulator, runs the suite against it and stops the emulator.
+      - name: Emulator suite
+        run: npm run test:emulator -w @arcos/data

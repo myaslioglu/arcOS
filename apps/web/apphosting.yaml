@@ -39,3 +39,23 @@ env:
     secret: BLOCKSCOUT_API_KEY@1
     availability:
       - RUNTIME
+  # ARCOS_TRUSTED_HOPS is deliberately unset. It is a server-only setting for the rate limits (lib/rate-limit.ts): how many
+  # entries, counted from the right of X-Forwarded-For, belong to the site's own proxies. Unset it is 0, and each client is
+  # keyed by the rightmost entry, the one the nearest proxy added. If a Google load balancer in front of App Hosting adds
+  # an entry of its own to the right of the client's, every visitor is keyed by that one entry and shares a single bucket:
+  # stricter, never looser. To find out, measure. From one network, send requests to
+  # /api/inspect/0x0000000000000000000000000000000000000001 until the limit answers 429 (30 a minute for each client, and per
+  # server instance, so a run that reaches both instances may need up to 60). Within that minute, send a few from a second
+  # network, such as a phone on mobile data.
+  #   - A normal answer (here 404, "No contract at that address.") means visitors have buckets of their own: leave it unset.
+  #   - A 429 means the two networks share a bucket: set it to 1 (uncomment the entry below) and measure again.
+  # The value is safe only if every address the backend answers on reaches the app through the same number of proxies:
+  # https://4rcos.com and the default address, https://arcos--arcos-c80cf.europe-west4.hosted.app. One number can't be right
+  # for two paths. Measure both, and if they differ leave it unset.
+  # Never set it higher than the measurement shows. A value above the real number of the site's own proxies makes the key
+  # an entry the client wrote as soon as the client adds entries of its own to X-Forwarded-For, and it can then choose its
+  # own bucket on every request.
+  # - variable: ARCOS_TRUSTED_HOPS
+  #   value: "1"
+  #   availability:
+  #     - RUNTIME

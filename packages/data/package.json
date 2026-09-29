@@ -1,0 +1,26 @@
+{
+  "name": "@arcos/data",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:emulator": "firebase emulators:exec --only firestore --project demo-arcos \"vitest run --config vitest.emulator.config.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@arcos/chain": "file:../chain",
+    "firebase-admin": "14.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "fast-check": "^4.10.2",
+    "firebase-tools": "15.32.0",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  }
+}

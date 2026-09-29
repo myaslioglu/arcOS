@@ -15,8 +15,10 @@ const eslintConfig = defineConfig([
     "**/node_modules/**",
     "**/next-env.d.ts",
     ".superpowers/**",
-    // A Solidity package arrives later; its JS helper scripts are not linted.
-    "packages/contracts/**",
+    // The Solidity package's build output is not linted; its JS helper scripts (packages/contracts/scripts) are.
+    "packages/contracts/out/**",
+    "packages/contracts/cache/**",
+    "packages/contracts/broadcast/**",
   ]),
 ]);
 

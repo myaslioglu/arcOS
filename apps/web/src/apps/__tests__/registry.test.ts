@@ -32,6 +32,37 @@ describe("APPS", () => {
   });
 });
 
+// Inspector reports evidence and "N of M checks pass", never a number that ranks a token, so no grey app may promise one.
+const SCORE = /\bscor/i;
+/** What a line may say about a score: that there is none. */
+const withoutTheDenial = (line: string) => line.replaceAll("never a score", "");
+
+describe("the no-score rule", () => {
+  it("keeps every grey app's blurb and details free of a score, except to say there is none", () => {
+    for (const m of grey) {
+      expect(m.blurb, m.id).not.toMatch(SCORE);
+      for (const line of m.details ?? []) expect(withoutTheDenial(line), m.id).not.toMatch(SCORE);
+    }
+  });
+
+  it("catches a score in any form, and lets the denial through", () => {
+    for (const line of ["Scored by Inspector.", "Will score each token.", "A trust score.", "Scores every token.", "Scoring is done."]) {
+      expect(withoutTheDenial(line), line).toMatch(SCORE);
+    }
+    expect(withoutTheDenial("Evidence, never a score.")).not.toMatch(SCORE);
+  });
+
+  it("gives Radar the words that say each new token comes with Inspector's checks", () => {
+    const radar = APPS.find((m) => m.id === "radar");
+    expect(radar?.blurb).toBe("New tokens, each with Inspector's checks");
+    expect(radar?.details).toEqual([
+      "Will list new tokens and locks on Arc as they appear.",
+      "Will run Inspector's checks on each new token: evidence, never a score.",
+      "Needs an index of new tokens first.",
+    ]);
+  });
+});
+
 describe("the no-dates rule", () => {
   it("catches a year, any month, and a quarter", () => {
     for (const line of ["Ships in 2027.", "Ships in January.", "Ships in May.", "Ships in December.", "Ships in Q3."]) {
