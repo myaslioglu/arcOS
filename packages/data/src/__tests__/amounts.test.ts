@@ -1,20 +1,9 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { amountFromString, amountToString } from "../amounts";
-import { DataError } from "../errors";
+import { refusal } from "./helpers/refusal";
 
 const UINT256_MAX = 2n ** 256n - 1n;
-
-/** The message and code of what a call refused with; fails the test when it throws anything but a DataError. */
-function refusal(run: () => unknown): { code: string; message: string } {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(DataError);
-    return { code: (error as DataError).code, message: (error as DataError).message };
-  }
-  throw new Error("expected the call to throw");
-}
 
 describe("amountToString", () => {
   it("writes a whole number as decimal digits", () => {
