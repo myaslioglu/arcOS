@@ -65,6 +65,7 @@ import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
+import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { NATIVE, readV4Pools, type V4Quote } from "./v4";
 
 export const erc20Abi = parseAbi([
@@ -78,6 +79,8 @@ const ownableAbi = parseAbi(["function owner() view returns (address)", "functio
 const beaconAbi = parseAbi(["function implementation() view returns (address)"]);
 const v2FactoryAbi = parseAbi(["function getPair(address,address) view returns (address)"]);
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
+/** Slipstream's factory keys a pool by tick spacing (an int24), where Uniswap v3's takes a fee. */
+const aeroFactoryAbi = parseAbi(["function getPool(address,address,int24) view returns (address)"]);
 
 const FORWARDS_TO_UNIDENTIFIED_TITLE = "Forwards calls to unidentified code";
 const FORWARDS_TO_UNIDENTIFIED_DETAIL =
@@ -353,34 +356,67 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
   };
   // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
   // doesn't name, and v3 without fee tiers has no pool to look for.
-  const { v2Factory, v3Factory } = dex;
+  const { v2Factory, v3Factory, aero: aeroConfig } = dex;
   const v3Tiers = v3Factory ? (dex.v3FeeTiers ?? []).map((fee) => ({ factory: v3Factory, fee })) : [];
-  const perQuote = dex.quoteTokens
-    .filter((quote) => lower(quote.address) !== lower(address))
-    .map(async (quote) => {
-      const [v2Pool, v3Pools] = await Promise.all([
-        v2Factory ? askFactory(v2Factory, v2FactoryAbi, "getPair", [address, quote.address]).then((pair) => add(pair, "v2", quote)) : null,
-        Promise.all(
-          v3Tiers.map(({ factory, fee }) =>
-            askFactory(factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote)),
-          ),
+  // A token is never its own quote: inspecting USDC or EURC skips that quote.
+  const quotes = dex.quoteTokens.filter((quote) => lower(quote.address) !== lower(address));
+  const perQuote = quotes.map(async (quote) => {
+    const [v2Pool, v3Pools] = await Promise.all([
+      v2Factory ? askFactory(v2Factory, v2FactoryAbi, "getPair", [address, quote.address]).then((pair) => add(pair, "v2", quote)) : null,
+      Promise.all(
+        v3Tiers.map(({ factory, fee }) =>
+          askFactory(factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote)),
         ),
-      ]);
-      return [v2Pool, ...v3Pools];
-    });
+      ),
+    ]);
+    return [v2Pool, ...v3Pools];
+  });
   const v4 = dex.v4
     ? readV4Pools({ reader, v4: dex.v4, token: address, quotes: v4Quotes(dex, address), extra: input.extraPools ?? [], quoteUnits: MIN_DEPTH / 1_000_000n })
     : null;
-  const [uniswapResults, v4Read] = await Promise.all([Promise.all(perQuote), v4]);
+
+  // Aerodrome Slipstream: the factory's `getPool` for every quote and every tick spacing the config lists, in one multicall
+  // (12 questions would otherwise be 12 parallel requests), then the quote balance of each pool that exists, as for v3.
+  const aeroAsks = aeroConfig
+    ? quotes.flatMap((quote) =>
+        aeroConfig.tickSpacings.map((spacing) => ({
+          quote,
+          call: { target: aeroConfig.clFactory, abi: aeroFactoryAbi, functionName: "getPool", args: [address, quote.address, spacing] } satisfies BatchCall,
+        })),
+      )
+    : [];
+  const aero = (async (): Promise<{ answered: boolean; pools: (Pool | null)[] }> => {
+    if (aeroAsks.length === 0) return { answered: false, pools: [] };
+    let answers: BatchResult[];
+    try {
+      answers = await multicall(reader, aeroAsks.map((ask) => ask.call));
+    } catch (e) {
+      if (e instanceof CallReverted) return { answered: false, pools: [] }; // the aggregate itself reverted: nothing was read
+      throw e;
+    }
+    const pools = await Promise.all(
+      aeroAsks.map((ask, i) => {
+        const answer = answers[i]!;
+        return answer.ok ? add(answer.value, "aero", ask.quote) : null;
+      }),
+    );
+    return { answered: answers.some((a) => a.ok), pools };
+  })();
+  const [uniswapResults, v4Read, aeroRead] = await Promise.all([Promise.all(perQuote), v4, aero]);
 
   // A family whose contracts never answered says nothing about its pools. The answer that matters to a finding is whether
   // one exists, so each configured family is accounted for on its own.
   const families = [
     { name: uniswapV2V3Name(dex), configured: Boolean(v2Factory || v3Factory), answered: uniswapAnswered },
     { name: VENUE.v4, configured: Boolean(dex.v4), answered: v4Read?.answered ?? false },
+    { name: VENUE.aero, configured: Boolean(aeroConfig), answered: aeroRead.answered },
   ];
   return {
-    pools: [...uniswapResults.flat().filter((p): p is Pool => p !== null), ...(v4Read?.pools ?? [])],
+    pools: [
+      ...uniswapResults.flat().filter((p): p is Pool => p !== null),
+      ...aeroRead.pools.filter((p): p is Pool => p !== null),
+      ...(v4Read?.pools ?? []),
+    ],
     factoriesAnswered: families.some((f) => f.configured && f.answered),
     silent: families.filter((f) => f.configured && !f.answered).map((f) => f.name),
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
+import { AERODROME, EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
 import { findPools } from "../checks";
 import { inspect } from "../inspect";
 import type { ExtraPool, Finding, InspectInput, Report } from "../types";
@@ -19,6 +19,8 @@ const EUR = { address: EURC.mainnet, symbol: "EURC" };
 
 const v4Only: DexConfig = { quoteTokens: [USD], v4: UNISWAP_V4 };
 const uniswapAll: DexConfig = { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4 };
+/** What mainnet reads: every family, against USDC and EURC. */
+const mainnetLike: DexConfig = { quoteTokens: [USD, EUR], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4, aero: AERODROME };
 
 const inputFor = (reader: FakeReader, dex: DexConfig, address: `0x${string}` = TOKEN, extraPools?: ExtraPool[]): InspectInput => ({
   address, network: "mainnet", reader, explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.test", extraPools,
@@ -211,11 +213,17 @@ const run = (f: FakeChain, dex: DexConfig | null, token: `0x${string}` = TOKEN):
   });
 const find = (r: Report, id: Finding["id"]) => r.findings.find((x) => x.id === id)!;
 
-/** Every factory question of `dex` answered "no pool", for `token` against USDC. */
-const noPools = (dex: DexConfig, token: string): Record<string, unknown> => ({
-  ...(dex.v2Factory ? { [readKey(dex.v2Factory, "getPair", [token, USDC])]: NATIVE } : {}),
-  ...Object.fromEntries((dex.v3FeeTiers ?? []).map((fee) => [readKey(dex.v3Factory!, "getPool", [token, USDC, fee]), NATIVE])),
-});
+/** Every factory question of `dex` for `token` answered "no pool": the zero address, which is what a factory says. */
+const noPools = (dex: DexConfig, token: string): Record<string, unknown> => {
+  const quotes = dex.quoteTokens.map((q) => q.address).filter((q) => q.toLowerCase() !== token.toLowerCase());
+  return Object.fromEntries(
+    quotes.flatMap((q) => [
+      ...(dex.v2Factory ? [[readKey(dex.v2Factory, "getPair", [token, q]), NATIVE]] : []),
+      ...(dex.v3Factory ? (dex.v3FeeTiers ?? []).map((fee) => [readKey(dex.v3Factory!, "getPool", [token, q, fee]), NATIVE]) : []),
+      ...(dex.aero ? dex.aero.tickSpacings.map((spacing) => [readKey(dex.aero!.clFactory, "getPool", [token, q, spacing]), NATIVE]) : []),
+    ]),
+  );
+};
 
 describe("the liquidity finding for v4 pools", () => {
   const key = v4PoolKey(TOKEN, USDC, 500, 10);
@@ -324,5 +332,90 @@ describe("the lp-lock finding when the pools aren't Uniswap v2", () => {
     expect(find(await run({}, v4Only), "lp-lock").detail).toBe("No pool was found.");
     const silent = await run({ silent: [UNISWAP_V4.stateView], reads: noPools(uniswapAll, TOKEN) }, uniswapAll);
     expect(find(silent, "lp-lock")).toMatchObject({ status: "unknown", detail: "Uniswap v4 didn't answer, so a pool there can't be ruled out." });
+  });
+});
+
+describe("Aerodrome Slipstream pools", () => {
+  const at = (quote: string, spacing: number) => readKey(AERODROME.clFactory, "getPool", [TOKEN, quote, spacing]);
+  const aeroCalls = (chain: FakeReader) => chain.batches.find((b) => b.calls[0]!.target === AERODROME.clFactory)!.calls;
+
+  it("asks the factory once for every quote and tick spacing, then reads the quote balance of each pool it found", async () => {
+    const chain = fakeChain({ reads: { ...noPools(mainnetLike, TOKEN), [at(USDC, 50)]: POOL, [readKey(USDC, "balanceOf", [POOL])]: 5_000_000_000n } });
+    const scan = await findPools(inputFor(chain, mainnetLike));
+
+    expect(aeroCalls(chain).map((c) => [c.fn, ...c.args.map((a) => String(a).toLowerCase())])).toEqual(
+      [USDC, EURC.mainnet].flatMap((q) => AERODROME.tickSpacings.map((spacing) => ["getPool", TOKEN, q.toLowerCase(), String(spacing)])),
+    );
+    expect(scan.pools).toEqual([{ address: POOL, version: "aero", quote: "USDC", depth: 5_000_000_000n, liquid: true }]);
+    expect(chain.asked.filter((r) => r.fn === "balanceOf").map((r) => r.address)).toEqual([USDC]);
+    expect(scan.silent).toEqual([]);
+  });
+
+  it("reads each pool's balance of its own quote token, and calls a pool under 1,000 units thin", async () => {
+    const POOL2 = "0x8888888888888888888888888888888888888888";
+    const reads = {
+      ...noPools(mainnetLike, TOKEN),
+      [at(USDC, 50)]: POOL,
+      [at(EURC.mainnet, 2000)]: POOL2,
+      [readKey(USDC, "balanceOf", [POOL])]: 5_000_000_000n,
+      [readKey(EURC.mainnet, "balanceOf", [POOL2])]: 300_000_000n,
+    };
+    const { pools } = await findPools(inputFor(fakeChain({ reads }), mainnetLike));
+    expect(pools).toEqual([
+      { address: POOL, version: "aero", quote: "USDC", depth: 5_000_000_000n, liquid: true },
+      { address: POOL2, version: "aero", quote: "EURC", depth: 300_000_000n, liquid: false },
+    ]);
+  });
+
+  it("names Aerodrome, not Uniswap, in the liquidity finding", async () => {
+    const reads = { ...noPools(mainnetLike, TOKEN), [at(USDC, 50)]: POOL, [readKey(USDC, "balanceOf", [POOL])]: 5_000_000_000n };
+    const r = await run({ reads }, mainnetLike);
+    expect(find(r, "liquidity")).toMatchObject({ status: "pass", title: "5,000 USDC of liquidity on Aerodrome", evidenceUrl: `https://explorer.test/address/${POOL}` });
+    expect(find(r, "lp-lock")).toMatchObject({ status: "unknown", fixAppId: null });
+    expect(find(r, "lp-lock").detail).toBe("Only Aerodrome pools were found, and liquidity positions in them can't be read without an index yet.");
+  });
+
+  it("says thin liquidity when the pool holds under 1,000 units", async () => {
+    const reads = { ...noPools(mainnetLike, TOKEN), [at(USDC, 50)]: POOL, [readKey(USDC, "balanceOf", [POOL])]: 900_000_000n };
+    expect(find(await run({ reads }, mainnetLike), "liquidity")).toMatchObject({ status: "warn", title: "Thin liquidity", detail: "Deepest pool holds 900 USDC." });
+  });
+
+  it("words 'no pool' for mainnet's whole registry, Aerodrome included", async () => {
+    const r = await run({ reads: noPools(mainnetLike, TOKEN) }, mainnetLike);
+    expect(find(r, "liquidity")).toMatchObject({ status: "warn", title: "No Uniswap or Aerodrome pool found" });
+    expect(find(r, "liquidity").detail).toContain("Looked at Uniswap v2, Uniswap v3, Uniswap v4 and Aerodrome pools against USDC and EURC.");
+  });
+
+  it("is unknown, not 'no pool', while the factory has no code, and still passes on a liquid pool from another family", async () => {
+    const silent = { silent: [AERODROME.clFactory] };
+    const none = await run({ ...silent, reads: noPools(mainnetLike, TOKEN) }, mainnetLike);
+    expect(find(none, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't read liquidity pools", detail: "Aerodrome didn't answer, so a pool there can't be ruled out." });
+
+    const reads = { ...noPools(mainnetLike, TOKEN), [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: POOL, [readKey(USDC, "balanceOf", [POOL])]: 5_000_000_000n };
+    expect(find(await run({ ...silent, reads }, mainnetLike), "liquidity")).toMatchObject({ status: "pass", title: "5,000 USDC of liquidity on Uniswap v3" });
+  });
+
+  it("names every family a reverting Multicall3 silences, in the order they were configured", async () => {
+    const scan = await findPools(inputFor(fakeChain({ multicallReverts: true, reads: noPools(mainnetLike, TOKEN) }), mainnetLike));
+    expect(scan.silent).toEqual(["Uniswap v4", "Aerodrome"]);
+    expect(scan.factoriesAnswered).toBe(true); // v2 and v3 answered
+  });
+
+  it("never treats a token as its own quote: inspecting EURC asks only about USDC", async () => {
+    const chain = fakeChain({ reads: noPools(mainnetLike, EURC.mainnet) });
+    await findPools(inputFor(chain, mainnetLike, EURC.mainnet));
+    expect(chain.asked.filter((r) => r.fn === "getPair").map((r) => r.args.map((a) => String(a).toLowerCase()))).toEqual([[EURC.mainnet.toLowerCase(), USDC]]);
+    const aero = chain.batches.find((b) => b.calls[0]!.target === AERODROME.clFactory)!.calls;
+    expect(aero).toHaveLength(AERODROME.tickSpacings.length);
+    expect(new Set(aero.map((c) => String(c.args[1]).toLowerCase()))).toEqual(new Set([USDC]));
+  });
+
+  it("reads no Aerodrome unless the config names it", async () => {
+    const chain = fakeChain({ reads: noPools(uniswapAll, TOKEN) });
+    await findPools(inputFor(chain, uniswapAll));
+    expect(chain.batches.some((b) => b.calls.some((c) => c.target === AERODROME.clFactory))).toBe(false);
+    const legacy = fakeChain({ reads: noPools(uniswapAll, TOKEN) });
+    await findPools(inputFor(legacy, { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] }));
+    expect(legacy.batches).toHaveLength(0);
   });
 });
