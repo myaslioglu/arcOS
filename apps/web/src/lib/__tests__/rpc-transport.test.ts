@@ -439,6 +439,7 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function primaryAnswers(respond: () => Response) {
@@ -457,10 +458,19 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
     expect(tried).toEqual([urls[0], urls[0]]);
   });
 
-  it("still fails intrinsic-gas-too-low over to the next endpoint, and cools the first, with the override in place", async () => {
-    const { tried, transport } = primaryAnswers(rpcError(-32000, "intrinsic gas too low"));
+  it("still fails intrinsic-gas-too-low over to the next endpoint, cooling the first, with the override in place", async () => {
+    const health = endpointHealth();
+    const tried: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      tried.push(String(input));
+      return String(input) === urls[0] ? rpcError(-32000, "intrinsic gas too low")() : result("0x10");
+    });
+    const transport = rpcTransport(chain, { isNodeAnswer: outOfGasIsNodeAnswer, health })({ chain });
     await expect(blockNumber(transport)).resolves.toBe("0x10");
     expect(tried).toEqual([urls[0], urls[1]]);
+    // The cooldown map is keyed by chain.rpcUrls.default.http's own (un-normalized) strings, not the trailing-slash
+    // form fetch sees (`urls`, above) — see the "As fetch sees them" note on this file's other describe block.
+    expect(health.coolingUntil.has(chain.rpcUrls.default.http[0]!)).toBe(true);
   });
 
   it("still fails a timeout over to the next endpoint, with the override in place", async () => {
@@ -477,6 +487,5 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await expect(call).resolves.toBe("0x10");
     expect(tried).toEqual([urls[0], urls[1]]);
-    vi.useRealTimers();
   });
 });

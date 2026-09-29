@@ -46,8 +46,8 @@ export type RpcTransportOptions = {
  * caller aborted cools nothing; an attempt that runs out of its 3 s is the endpoint failing, as always.
  *
  * The cooldowns are one timestamp per URL, compared against `now()` when a call starts; nothing runs in the background.
- * They live in `health`, which inspect-server.ts keeps once per server process (see process-global.ts), so every
- * bundled copy of it skips the same endpoints.
+ * They live in `health`, which server-rpc.ts keeps once per server process, one record per client it builds (see
+ * process-global.ts), so every bundled copy of a given client skips the same endpoints.
  *
  * One call's worst case, every URL hanging, is (number of URLs) × 3 s: 12 s over mainnet's four, 9 s over testnet's
  * three.

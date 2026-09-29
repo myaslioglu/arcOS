@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { decodeFunctionData, encodeAbiParameters, erc20Abi, pad, toEventSelector, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeAbiParameters, erc20Abi, getAddress, pad, toEventSelector, type Address, type Hex } from "viem";
 import { ARCOS } from "@arcos/chain";
 import {
   APPROVAL_TOPIC,
   ApprovalsUnavailable,
   LOGS_PAGE,
   MAX_PAGES,
+  EXPLORER_TIME_BUDGET_MS,
   MAX_PAIRS,
   MULTICALL_BUDGET,
   MULTICALL_TIME_BUDGET_MS,
@@ -389,6 +390,55 @@ describe("liveApprovals", () => {
     expect(truncated).toBe(true);
     expect(slowPoison.mock.calls.length).toBe(3);
   });
+
+  it("rethrows an abort at once instead of treating it as a poisoned batch: not even one more attempt follows it", async () => {
+    const abort = () => {
+      throw new DOMException("This operation was aborted", "AbortError");
+    };
+    const aborted = vi.fn<Aggregate>(async () => abort());
+    await expect(liveApprovals(OWNER, pairs, aborted, "mainnet")).rejects.toMatchObject({ name: "AbortError" });
+    expect(aborted).toHaveBeenCalledTimes(1);
+  });
+
+  it("groups by the lowercased token address, so a token's calls stay together (and share one row's worth of metadata) even spelled two ways (minor 5)", async () => {
+    const TOKEN_MIXED = getAddress(`0x${"c".repeat(40)}`);
+    expect(TOKEN_MIXED).not.toBe(TOKEN_MIXED.toLowerCase()); // otherwise this test proves nothing
+    const pairsMixed = [
+      { token: TOKEN_MIXED, spender: SPENDER_X, lastApprovalBlock: 40 },
+      { token: TOKEN_B, spender: SPENDER_X, lastApprovalBlock: 30 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 20 }, // poisoned
+      { token: TOKEN_MIXED.toLowerCase() as Address, spender: SPENDER_Y, lastApprovalBlock: 10 }, // same token, spelled lowercase
+    ];
+    const { aggregate: healthy } = stubChain({
+      allowance: (token, spender) => {
+        if (token.toLowerCase() === TOKEN_MIXED.toLowerCase()) return spender === SPENDER_X ? 4n : 7n;
+        return token === TOKEN_B ? 9n : 0n;
+      },
+      symbol: (token) => str(token.toLowerCase() === TOKEN_MIXED.toLowerCase() ? "MIX" : "BBB"),
+      name: () => "Token",
+      decimals: () => 8,
+    });
+    const poisoned = vi.fn<Aggregate>(async (calls) => {
+      if (calls.some((c) => c.target === TOKEN_A)) throw new Error("out of gas");
+      return healthy(calls);
+    });
+    const { approvals, truncated } = await liveApprovals(OWNER, pairsMixed, poisoned, "mainnet");
+    expect(approvals).toEqual([
+      { token: TOKEN_MIXED, symbol: "MIX", name: "Token", decimals: 8, spender: SPENDER_X, spenderLabel: null, allowance: "4", lastApprovalBlock: 40 },
+      { token: TOKEN_B, symbol: "BBB", name: "Token", decimals: 8, spender: SPENDER_X, spenderLabel: null, allowance: "9", lastApprovalBlock: 30 },
+      {
+        token: TOKEN_MIXED.toLowerCase() as Address,
+        symbol: "MIX",
+        name: "Token",
+        decimals: 8,
+        spender: SPENDER_Y,
+        spenderLabel: null,
+        allowance: "7",
+        lastApprovalBlock: 10,
+      },
+    ]);
+    expect(truncated).toBe(true);
+  });
 });
 
 describe("spenderLabel", () => {
@@ -436,5 +486,72 @@ describe("loadApprovals", () => {
     expect(answer.approvals).toHaveLength(MAX_PAIRS);
     expect(answer.approvals.at(-1)?.lastApprovalBlock).toBe(2);
     expect(answer.truncated).toBe(true);
+  });
+
+  // Fix round 3 (task-8-fix-3.md, ruling "one clock for the whole lookup"): loadApprovals now records the start
+  // once, before the explorer phase, and passes it to both budgets below — so a slow explorer phase eats into the
+  // multicall's own MULTICALL_TIME_BUDGET_MS, and both are measured against the same fake clock here.
+
+  it("finishes well before the route's 15 s deadline when a 3 s explorer phase is followed by one poisoned token among 200 pairs over 100 tokens, with truncated true and the healthy pairs present", async () => {
+    let elapsed = 0;
+    const now = () => elapsed;
+    const tokenAt = (i: number): Address => `0x${(0x1000 + i).toString(16).padStart(40, "0")}` as Address;
+    const spenderAt = (i: number): Address => `0x${(0x9000 + i).toString(16).padStart(40, "0")}` as Address;
+    const tokens100 = Array.from({ length: 100 }, (_, i) => tokenAt(i));
+    const poisonedToken = tokens100[42]!;
+    const pairs200 = tokens100.flatMap((token, i) => [
+      { token, spender: spenderAt(i * 2), lastApprovalBlock: i * 2 + 1 },
+      { token, spender: spenderAt(i * 2 + 1), lastApprovalBlock: i * 2 + 2 },
+    ]);
+    const readPage = vi.fn(async () => {
+      elapsed += 3_000; // the whole explorer phase: one page holds all 200 pairs' logs
+      return pairs200.map((p, i) => rawLog(p.token, p.spender, i + 1));
+    });
+    const { aggregate: healthy } = stubChain({ allowance: () => 1n });
+    const aggregate = vi.fn<Aggregate>(async (calls) => {
+      // approvalPairs checksums every address (readLog's getAddress), so the poisoned token no longer spells the
+      // way tokenAt(42) produced it by the time it reaches here: compare lowercased, as the real target does.
+      const poisoned = calls.some((c) => c.target.toLowerCase() === poisonedToken.toLowerCase());
+      elapsed += poisoned ? 650 : 200; // a poisoned attempt costs more than a healthy one, per the ruling's example
+      if (poisoned) throw new Error("out of gas");
+      return healthy(calls);
+    });
+    const answer = await loadApprovals(OWNER, { network: "testnet", readPage, aggregate, now });
+    expect(elapsed).toBeLessThan(15_000);
+    expect(answer.truncated).toBe(true);
+    expect(answer.approvals.length).toBeGreaterThan(0);
+    expect(answer.approvals.some((a) => a.token.toLowerCase() === poisonedToken.toLowerCase())).toBe(false);
+  });
+
+  it(`stops paging once ${EXPLORER_TIME_BUDGET_MS}ms have passed (a third page, of 5 available, never starts), with truncated true and the multicall still running on the pages already read`, async () => {
+    let elapsed = 0;
+    const now = () => elapsed;
+    let pagesRequested = 0;
+    const readPage = vi.fn(async (from: number) => {
+      pagesRequested += 1;
+      elapsed += 3_000; // two of these exhaust the 6 s explorer budget exactly, before a third can start
+      if (pagesRequested > 5) return [];
+      return Array.from({ length: LOGS_PAGE }, (_, i) => rawLog(TOKEN_A, SPENDER_X, from + i + 1));
+    });
+    const { aggregate, batches } = stubChain({ allowance: () => 1n });
+    const answer = await loadApprovals(OWNER, { network: "testnet", readPage, aggregate, now });
+    expect(pagesRequested).toBe(2);
+    expect(answer.truncated).toBe(true);
+    expect(batches).toHaveLength(1); // the multicall still ran, once, on the one pair the pages already read named
+  });
+
+  it("still makes exactly one aggregate call and returns the approvals when a clean lookup's explorer phase alone takes 9.5 s, past the multicall's own time budget", async () => {
+    let elapsed = 0;
+    const now = () => elapsed;
+    const readPage = vi.fn(async () => {
+      elapsed += 9_500;
+      return [rawLog(TOKEN_A, SPENDER_X, 5)];
+    });
+    const { aggregate, batches } = stubChain({ allowance: () => 7n });
+    const answer = await loadApprovals(OWNER, { network: "testnet", readPage, aggregate, now });
+    expect(batches).toEqual([1 + 3]);
+    expect(answer.approvals).toHaveLength(1);
+    expect(answer.approvals[0]?.allowance).toBe("7");
+    expect(answer.truncated).toBe(false);
   });
 });
