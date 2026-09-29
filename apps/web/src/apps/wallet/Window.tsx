@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import { useAccount, useBalance, useConnect, useDisconnect } from "wagmi";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
 import { connectErrorMessage, useArcNetwork } from "@/lib/network";
-import { visibleConnectors } from "@/providers/wagmi";
+import { connectorLabel, visibleConnectors } from "@/providers/wagmi";
 
 const noSubscription = () => () => {};
 
@@ -39,7 +39,7 @@ export default function WalletWindow() {
               <li key={c.uid}>
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-lg border border-border-2 px-3 py-2 text-left"
+                  className="flex min-h-8 w-full items-center gap-2 rounded-lg border border-border-2 px-3 py-2 text-left pointer-coarse:min-h-11"
                   onClick={() => connect({ connector: c, chainId: chain.id })}
                 >
                   {c.icon && (
@@ -49,7 +49,7 @@ export default function WalletWindow() {
                       style={{ backgroundImage: `url(${c.icon})` }}
                     />
                   )}
-                  {c.name}
+                  {connectorLabel(c)}
                 </button>
               </li>
             ))}

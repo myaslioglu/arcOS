@@ -4,7 +4,7 @@ For the project owner to run by hand: first on testnet, then again on mainnet on
 `ARCOS.mainnet` is filled in (see `packages/contracts/DEPLOY.md`). Items marked **(no wallet
 needed)** were already exercised against `npm run dev` while writing this script and behave as
 described below. Everything else needs a browser wallet (any EIP-6963 extension — MetaMask,
-Rabby, etc. — WalletConnect is not supported) holding testnet USDC from
+Rabby, etc.; WalletConnect, for phones, isn't covered here) holding testnet USDC from
 https://faucet.circle.com, and the contracts deployed per `packages/contracts/DEPLOY.md`, so it
 is left for the owner to run once those two things exist.
 

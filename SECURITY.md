@@ -54,6 +54,20 @@ With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the 
 a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
 Swap and Bridge only read Circle's own contracts.
 
+## Connecting a phone wallet
+
+On a phone, where the browser has no wallet extension, Wallet connects through WalletConnect. The page then talks to
+WalletConnect's relay, which carries an end-to-end encrypted session between the page and the wallet on the phone; every
+transaction is still signed in that wallet. Its modal also asks Reown's servers for the wallet list and the project's
+configuration, sends usage events to WalletConnect and loads the Inter font from Google Fonts, so those services see the
+visitor's IP address. The Reown project ID (`NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`) is a public client identifier that ships in
+the browser bundle; the domain allowlist in the Reown dashboard is what protects it.
+
+The WalletConnect code loads only when a visitor picks WalletConnect, or when a reload restores a WalletConnect session they
+connected earlier. It is a separate chunk, and `apps/web/src/providers/lazyWalletConnect.ts` stops wagmi from importing it on
+every page load, which its own connector would do. CCIP-Read stays off in the wagmi config
+(`apps/web/src/providers/wagmi.ts`), with WalletConnect in it too.
+
 ## Dependency exceptions
 
 Deliberate, documented exceptions to this project's "no high/critical `npm audit` findings" rule.

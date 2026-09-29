@@ -84,6 +84,11 @@ export function switchNetworkErrorMessage(error: unknown, chainName: string): st
  * refused connection reads as a rejection; code -32002 means the wallet already has a request open
  * (its own connect dialog from an earlier click). Anything else — an unrecognized code, a transport
  * error, no code at all — gets one generic sentence, never the underlying error's own message.
+ *
+ * Closing the WalletConnect modal before a wallet answers is a refusal too: wagmi's walletConnect connector turns the
+ * provider's "Connection request reset" error, and a phone wallet's own "User rejected", into a
+ * `UserRejectedRequestError`, so both are read by `isUserRejection` like a refused browser wallet. This never matches on
+ * the message text, so the provider's own words are not shown.
  */
 export function connectErrorMessage(error: unknown): string {
   if (isUserRejection(error)) return "You cancelled the request in your wallet.";

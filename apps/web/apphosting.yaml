@@ -2,6 +2,9 @@
 # address is https://arcos--arcos-c80cf.europe-west4.hosted.app). Public values only: nothing here is a secret.
 # NEXT_PUBLIC_FEE_RECIPIENT is the project's own fee wallet (also the mainnet FeeController's owner and recipient);
 # with it set, Swap and Bridge add the platform fee (SWAP_FEE_BPS in src/lib/appkit.ts), shown before confirming.
+# NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is the Reown project ID that lets phones connect a wallet through
+# WalletConnect. It is a public client identifier that ships in the browser bundle, not a secret; the domain
+# allowlist in the Reown dashboard is what limits its use. Without it the site offers browser wallets only.
 # BLOCKSCOUT_API_KEY is a Secret Manager secret (never a NEXT_PUBLIC_ value): the server-built Inspector pages read
 # explorer data through Blockscout's PRO API with it, because explorer.arc.io refuses server requests. Pinned to a
 # version so a stray new value can't change what the site uses.
@@ -24,6 +27,11 @@ env:
       - RUNTIME
   - variable: NEXT_PUBLIC_SITE_URL
     value: https://4rcos.com
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID
+    value: "51f278b6746e0617a482ba5d0565689f"
     availability:
       - BUILD
       - RUNTIME

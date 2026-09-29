@@ -50,6 +50,9 @@ Open http://localhost:3000. The app runs against Arc testnet by default.
 To point it at mainnet, set `NEXT_PUBLIC_ARC_NETWORK=mainnet` in `apps/web/.env.local` (copy from
 `apps/web/.env.example`). https://4rcos.com runs on mainnet.
 
+Phones with no browser wallet can connect through WalletConnect when `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (a public Reown
+project ID) is set; `apps/web/apphosting.yaml` sets it for https://4rcos.com.
+
 Arc mainnet's public explorer answers browsers but refuses requests from servers. The Inspector
 window runs in your browser, so it isn't affected. The pages the server builds (the
 `/t/<address>` report, its preview image, `/badge` and `/api/inspect`) read the same explorer data

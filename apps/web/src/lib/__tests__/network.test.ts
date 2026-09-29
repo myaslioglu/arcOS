@@ -122,3 +122,33 @@ describe("connectErrorMessage", () => {
     expect(connectErrorMessage(null)).toBe("Your wallet couldn't connect. Try again.");
   });
 });
+
+// Phones connect through WalletConnect, whose modal can be closed before any wallet answers. wagmi's walletConnect connector
+// turns the provider's "Connection request reset" error, and a wallet's own "User rejected", into viem's
+// UserRejectedRequestError, so both read like any other refused connection (lazyWalletConnect.test.ts checks that through
+// wagmi's real connect flow; these pin what the message does with the shapes that come out).
+describe("connectErrorMessage for a WalletConnect connection", () => {
+  const CANCELLED = "You cancelled the request in your wallet.";
+  const GENERIC = "Your wallet couldn't connect. Try again.";
+
+  it("reads a closed WalletConnect modal as a cancelled request", () => {
+    const err = new UserRejectedRequestError(new Error("Connection request reset. Please try again."));
+    expect(connectErrorMessage(err)).toBe(CANCELLED);
+  });
+
+  it("reads a phone wallet's refusal the same way", () => {
+    expect(connectErrorMessage(new UserRejectedRequestError(new Error("User rejected.")))).toBe(CANCELLED);
+  });
+
+  it("gives the generic sentence for a WalletConnect failure that isn't a refusal, never the provider's own words", () => {
+    for (const text of [
+      "Proposal expired",
+      "To use QR modal, please install @reown/appkit package",
+      "WebSocket connection failed for host: wss://relay.walletconnect.org",
+    ]) {
+      const message = connectErrorMessage(new Error(text));
+      expect(message).toBe(GENERIC);
+      expect(message).not.toContain("relay");
+    }
+  });
+});
