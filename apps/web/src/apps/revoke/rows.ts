@@ -125,6 +125,16 @@ export function stillLive(owner: Address, rows: readonly Approval[]): Approval[]
   });
 }
 
+/**
+ * Whether a node's answer of zero can be believed for a pair whose newest Approval event sits at `lastApprovalBlock`,
+ * the block the explorer reported. A node whose head is behind that block hasn't seen the approval yet, so it can say 0
+ * for an allowance that is live; only a node at or past the block can say the pair was revoked since. Window.tsx takes
+ * its "already zero" shortcut only then, and otherwise goes on to the simulate and the wallet.
+ */
+export function nodeHasSeenApproval(head: bigint, lastApprovalBlock: number): boolean {
+  return head >= BigInt(lastApprovalBlock);
+}
+
 /** Forgets every revoke this page made, in memory and in sessionStorage (for tests). */
 export function forgetRevokes(): void {
   revokedAt.clear();

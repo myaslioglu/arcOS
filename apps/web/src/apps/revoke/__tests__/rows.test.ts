@@ -13,6 +13,7 @@ import {
   forgetRevokes,
   inspectButtonLabel,
   markRevoked,
+  nodeHasSeenApproval,
   parseApprovalsAnswer,
   revokeButtonLabel,
   revokeFailure,
@@ -111,6 +112,34 @@ describe("stillLive", () => {
     expect(stillLive(OWNER, [row({ lastApprovalBlock: 51 })])).toHaveLength(1);
     expect(stillLive(OTHER, [row({ lastApprovalBlock: 10 })])).toHaveLength(1);
     expect(rowKey({ token: TOKEN, spender: SPENDER })).toBe(rowKey({ token: TOKEN.toLowerCase() as `0x${string}`, spender: SPENDER }));
+  });
+
+  // The zero shortcut in Window.tsx marks a pair revoked at its own lastApprovalBlock, so equality is the edge that
+  // matters: an approval at the very block of the revoke is the one just revoked, and stays hidden.
+  it("hides a pair whose newest approval is at the very block it was marked revoked at, and shows a later one", () => {
+    expect(row().lastApprovalBlock).toBe(10);
+    markRevoked(OWNER, row(), 10);
+    expect(stillLive(OWNER, [row()])).toEqual([]);
+    expect(stillLive(OWNER, [row({ lastApprovalBlock: 9 })])).toEqual([]);
+    expect(stillLive(OWNER, [row({ lastApprovalBlock: 11 })])).toHaveLength(1);
+  });
+});
+
+describe("nodeHasSeenApproval", () => {
+  // The explorer names the block of a pair's newest Approval. A node whose head is behind that block hasn't seen the
+  // approval yet, so it can answer 0 for an allowance that is live; only a node at or past the block can be believed.
+  it("believes a node at the approval's block or past it, and not one still behind it", () => {
+    expect(nodeHasSeenApproval(11n, 10)).toBe(true);
+    expect(nodeHasSeenApproval(10n, 10)).toBe(true);
+    expect(nodeHasSeenApproval(9n, 10)).toBe(false);
+    expect(nodeHasSeenApproval(0n, 10)).toBe(false);
+  });
+
+  it("reads the block numbers as the integers they are, however large", () => {
+    expect(nodeHasSeenApproval(0n, 0)).toBe(true);
+    expect(nodeHasSeenApproval(BigInt(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(nodeHasSeenApproval(BigInt(Number.MAX_SAFE_INTEGER) - 1n, Number.MAX_SAFE_INTEGER)).toBe(false);
+    expect(nodeHasSeenApproval(2n ** 64n, Number.MAX_SAFE_INTEGER)).toBe(true);
   });
 });
 
@@ -297,6 +326,24 @@ describe("focusTargetAfterRemoval", () => {
   it("targets the heading when the removed key isn't in the list (already gone, or never was)", () => {
     expect(focusTargetAfterRemoval(["a", "b"], "z")).toEqual({ kind: "heading" });
   });
+
+  it("targets the next row when the first was removed, which shifts up into its place", () => {
+    expect(focusTargetAfterRemoval(["a", "b", "c"], "a")).toEqual({ kind: "row", key: "b" });
+  });
+
+  // Window.tsx keeps the target while the revoke finishes and focuses it after the list has re-rendered without the
+  // removed row, so a target that named the removed row itself would point at nothing.
+  it("never names the removed row, wherever it stood", () => {
+    const keys = ["a", "b", "c", "d"];
+    for (const removed of keys) {
+      const target = focusTargetAfterRemoval(keys, removed);
+      expect(target.kind).toBe("row");
+      if (target.kind === "row") {
+        expect(target.key).not.toBe(removed);
+        expect(keys).toContain(target.key);
+      }
+    }
+  });
 });
 
 describe("revokeButtonLabel", () => {
@@ -351,5 +398,53 @@ describe("Window.tsx reads the allowance live before ever asking the wallet (Imp
     expect(zeroBranch).toMatch(/===\s*0n/);
     expect(zeroBranch).toMatch(/\breturn\b/);
     expect(zeroBranch).toContain("markRevoked(");
+  });
+});
+
+/**
+ * Source scans again, for the same reason (revoke()'s async handler isn't reachable through renderToStaticMarkup, and
+ * there is no DOM to mount the list in). What they pin is the order things happen in, which is where these two bugs were.
+ */
+describe("Window.tsx focuses the next row only once no revoke is running", () => {
+  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
+  const revokeBody = source.slice(source.indexOf("const revoke = async"), source.indexOf("return (\n    <div ref={listRef}"));
+
+  // revoke() sets busy first and clears it in its `finally`, and every Revoke button is disabled={busy !== null} in
+  // between, so a .focus() from inside revoke() lands on a disabled button and does nothing.
+  it("only stores the target from inside revoke(), where every Revoke button is still disabled", () => {
+    expect(revokeBody).toContain("focusTargetAfterRemoval(");
+    expect(revokeBody).not.toMatch(/\.focus\(/);
+  });
+
+  it("focuses the stored target in an effect that waits for busy to be null, then forgets it", () => {
+    const effect = source.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[busy\]\);/)?.[1] ?? "";
+    expect(effect, "an effect keyed on busy").not.toBe("");
+    expect(effect).toMatch(/busy !== null/);
+    expect(effect).toMatch(/listRef\.current\?\.focus\(\)/);
+    expect(effect).toMatch(/rowRefs\.current\[[^\]]+\]\?\.focus\(\)/);
+    expect(effect).toMatch(/=\s*null;/);
+  });
+});
+
+describe("Window.tsx doesn't believe a zero from a node that is behind the approval (lagging node)", () => {
+  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
+  const assertCall = source.indexOf("assertWalletOnChain(");
+  const headRead = source.indexOf("getBlockNumber(");
+  const liveCheck = source.indexOf("liveAllowance");
+  const simulate = source.indexOf("simulateContract(");
+
+  it("reads the head live first, after assertWalletOnChain and before the allowance and simulateContract", () => {
+    expect(assertCall).toBeGreaterThan(-1);
+    expect(headRead).toBeGreaterThan(assertCall);
+    expect(liveCheck).toBeGreaterThan(headRead);
+    expect(simulate).toBeGreaterThan(liveCheck);
+    expect(source).toMatch(/getBlockNumber\(\{\s*cacheTime:\s*0\s*\}\)/);
+  });
+
+  it("reads the allowance at that head, and takes the already-zero shortcut only when the node has reached the approval", () => {
+    const readAndShortcut = source.slice(liveCheck, simulate);
+    expect(readAndShortcut).toMatch(/blockNumber:\s*head\b/);
+    expect(readAndShortcut).toMatch(/===\s*0n\s*&&\s*nodeHasSeenApproval\(head,\s*row\.lastApprovalBlock\)/);
+    expect(readAndShortcut).toContain("markRevoked(");
   });
 });

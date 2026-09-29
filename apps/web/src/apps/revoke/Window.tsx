@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, getAddress, isAddress, type Address } from "viem";
@@ -19,11 +19,13 @@ import {
   focusTargetAfterRemoval,
   inspectButtonLabel,
   markRevoked,
+  nodeHasSeenApproval,
   revokeButtonLabel,
   revokeFailure,
   revokeView,
   rowKey,
   stillLive,
+  type FocusTarget,
   type RevokeStage,
 } from "./rows";
 
@@ -146,6 +148,18 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
   // stands in for one — see focusTargetAfterRemoval's "heading" case) and each row's Revoke button.
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // Where focus goes once a revoke has removed its row. revoke() only stores it: every Revoke button is disabled while
+  // busy is set, and a disabled button can't take focus, so the effect focuses it once busy is null again, after the
+  // list has re-rendered without the row.
+  const pendingFocus = useRef<FocusTarget | null>(null);
+  useEffect(() => {
+    if (busy !== null) return;
+    const target = pendingFocus.current;
+    if (target === null) return;
+    pendingFocus.current = null;
+    if (target.kind === "heading") listRef.current?.focus();
+    else rowRefs.current[target.key]?.focus();
+  }, [busy]);
 
   if (query.isPending)
     return (
@@ -179,11 +193,6 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     const key = rowKey(row);
     if (busy !== null || !client || !address) return;
     const keysBefore = rows.map(rowKey);
-    const focusAfterRemoval = () => {
-      const target = focusTargetAfterRemoval(keysBefore, key);
-      if (target.kind === "heading") listRef.current?.focus();
-      else rowRefs.current[target.key]?.focus();
-    };
     setBusy(key);
     setFailures((prev) => {
       const next = { ...prev };
@@ -200,15 +209,21 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
       // wallet that batched it. Read it live, the same read used after the receipt below, before ever
       // asking the wallet to sign: simulating and sending approve(spender, 0) against an already-zero
       // allowance would still succeed (a costly no-op) and prompt the wallet for nothing.
+      // The head comes first, live, and the allowance is read at it. A node that is behind the pair's newest approval
+      // (a lagging backend behind the RPC gateway) hasn't seen it yet and can answer 0 for an allowance that is still
+      // set, so a zero counts as "already revoked" only from a node at or past that block. From one that is behind,
+      // the revoke goes on to the simulate: a costly no-op at worst, never a live approval hidden as revoked.
+      const head = await client.getBlockNumber({ cacheTime: 0 });
       const liveAllowance = await client.readContract({
         address: row.token,
         abi: erc20Abi,
         functionName: "allowance",
         args: [owner, row.spender],
+        blockNumber: head,
       });
-      if (liveAllowance === 0n) {
+      if (liveAllowance === 0n && nodeHasSeenApproval(head, row.lastApprovalBlock)) {
         markRevoked(owner, row, row.lastApprovalBlock);
-        focusAfterRemoval();
+        pendingFocus.current = focusTargetAfterRemoval(keysBefore, key);
         return;
       }
       // APPROVE_ABI (not erc20Abi) declares no return value: a USDT-style token whose approve sends back no data
@@ -234,7 +249,7 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
       });
       if (now === 0n) {
         markRevoked(owner, row, Number(receipt.blockNumber));
-        focusAfterRemoval();
+        pendingFocus.current = focusTargetAfterRemoval(keysBefore, key);
       } else {
         setLeft((prev) => ({ ...prev, [key]: now.toString() }));
         setFailures((prev) => ({ ...prev, [key]: { text: ALLOWANCE_STILL_SET, ...(hash ? { hash } : {}) } }));
