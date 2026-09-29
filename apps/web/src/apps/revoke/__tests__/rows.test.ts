@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAddress } from "viem";
 import { UserFacingError } from "@/lib/contract-error";
+import { shortAddress } from "@/lib/format";
 import type { Approval } from "@/lib/approvals";
 import {
   allowanceText,
+  ALLOWANCE_STILL_SET,
+  APPROVE_ABI,
   fetchApprovals,
+  focusTargetAfterRemoval,
   forgetRevokes,
+  inspectButtonLabel,
   markRevoked,
   parseApprovalsAnswer,
+  revokeButtonLabel,
   revokeFailure,
   revokeView,
   rowKey,
@@ -122,5 +128,55 @@ describe("revokeFailure", () => {
     expect(revokeFailure("confirmed", new Error("rpc down"))).toBe(
       "The revoke went through, but the allowance couldn't be read again. Reopen Revoke to check it.",
     );
+  });
+});
+
+describe("APPROVE_ABI", () => {
+  it("declares approve with no outputs, so a token whose approve returns nothing still decodes", () => {
+    const approve = APPROVE_ABI.find((item) => item.type === "function" && item.name === "approve");
+    expect(approve).toBeDefined();
+    expect(approve?.outputs).toEqual([]);
+  });
+});
+
+describe("ALLOWANCE_STILL_SET", () => {
+  it("is the exact sentence shown when a confirmed revoke's re-read allowance isn't zero", () => {
+    expect(ALLOWANCE_STILL_SET).toBe("The revoke went through, but an allowance is still set.");
+  });
+});
+
+describe("focusTargetAfterRemoval", () => {
+  it("targets the row that now sits where the removed one was", () => {
+    expect(focusTargetAfterRemoval(["a", "b", "c"], "b")).toEqual({ kind: "row", key: "c" });
+  });
+
+  it("targets the new last row when the removed one was last", () => {
+    expect(focusTargetAfterRemoval(["a", "b", "c"], "c")).toEqual({ kind: "row", key: "b" });
+  });
+
+  it("targets the heading when no row is left", () => {
+    expect(focusTargetAfterRemoval(["a"], "a")).toEqual({ kind: "heading" });
+  });
+
+  it("targets the heading when the removed key isn't in the list (already gone, or never was)", () => {
+    expect(focusTargetAfterRemoval(["a", "b"], "z")).toEqual({ kind: "heading" });
+  });
+});
+
+describe("revokeButtonLabel", () => {
+  it("names the token by symbol and the spender by its resolved label", () => {
+    expect(revokeButtonLabel({ token: TOKEN, symbol: "USDC", spender: SPENDER }, "Permit2")).toBe("Revoke USDC for Permit2");
+  });
+
+  it("falls back to short addresses when the token has no symbol or the spender has no label", () => {
+    expect(revokeButtonLabel({ token: TOKEN, symbol: null, spender: SPENDER }, null)).toBe(
+      `Revoke ${shortAddress(TOKEN)} for spender ${shortAddress(SPENDER)}`,
+    );
+  });
+});
+
+describe("inspectButtonLabel", () => {
+  it("names the spender by its short address", () => {
+    expect(inspectButtonLabel(SPENDER)).toBe(`Inspect spender ${shortAddress(SPENDER)}`);
   });
 });

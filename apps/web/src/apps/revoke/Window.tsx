@@ -1,20 +1,25 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, getAddress, isAddress, type Address } from "viem";
-import { activeChain, explorerUrl } from "@arcos/chain";
+import { activeChain, activeNetwork, explorerUrl } from "@arcos/chain";
 import { useDesktop, type AppProps } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
-import type { Approval } from "@/lib/approvals";
+import { spenderLabel, type Approval } from "@/lib/approvals";
 import { UserFacingError } from "@/lib/contract-error";
 import { shortAddress } from "@/lib/format";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import {
   allowanceText,
+  ALLOWANCE_STILL_SET,
+  APPROVE_ABI,
   fetchApprovals,
+  focusTargetAfterRemoval,
+  inspectButtonLabel,
   markRevoked,
+  revokeButtonLabel,
   revokeFailure,
   revokeView,
   rowKey,
@@ -45,14 +50,18 @@ export default function RevokeWindow({ params }: AppProps) {
           </button>
         </div>
       )}
-      {view.kind === "invalid" && <p className="text-danger-text">{"That isn't an address."}</p>}
+      {view.kind === "invalid" && (
+        <p className="text-danger-text" role="alert">
+          {"That isn't an address."}
+        </p>
+      )}
       {view.kind === "list" &&
         (view.canRevoke ? (
           <ConnectGate>
-            <ApprovalList owner={view.owner} canRevoke />
+            <ApprovalList key={view.owner} owner={view.owner} canRevoke />
           </ConnectGate>
         ) : (
-          <ApprovalList owner={view.owner} canRevoke={false} />
+          <ApprovalList key={view.owner} owner={view.owner} canRevoke={false} />
         ))}
       <p className="text-xs text-faint">Token approvals only. NFT and Permit2 approvals come later.</p>
     </div>
@@ -109,13 +118,18 @@ function LookupForm({ mine, onLook }: { mine?: string; onLook: (owner: Address) 
           </button>
         )}
       </div>
-      {bad && <p className="text-xs text-danger-text">{"That isn't an address."}</p>}
+      {bad && (
+        <p className="text-xs text-danger-text" role="alert">
+          {"That isn't an address."}
+        </p>
+      )}
     </form>
   );
 }
 
 function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean }) {
   const chain = activeChain();
+  const network = activeNetwork();
   const { address, chainId: walletChainId } = useAccount();
   const client = usePublicClient({ chainId: chain.id });
   const { writeContractAsync } = useWriteContract();
@@ -125,16 +139,26 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     queryFn: () => fetchApprovals(owner),
     retry: false,
   });
-  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const [left, setLeft] = useState<Readonly<Record<string, string>>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [failures, setFailures] = useState<Readonly<Record<string, { text: string; hash?: string }>>>({});
+  // Focus targets after a row disappears: the list's own landmark (no heading text exists here, so this container
+  // stands in for one — see focusTargetAfterRemoval's "heading" case) and each row's Revoke button.
+  const listRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
-  if (query.isPending) return <p className="text-muted">Loading approvals…</p>;
+  if (query.isPending)
+    return (
+      <p className="text-muted" aria-live="polite">
+        Loading approvals…
+      </p>
+    );
   if (query.isError) {
     return (
       <div className="grid justify-items-start gap-2">
-        <p className="text-danger-text">{"Couldn't load approvals. Try again in a minute."}</p>
+        <p className="text-danger-text" role="alert">
+          {"Couldn't load approvals. Try again in a minute."}
+        </p>
         <button type="button" className={BUTTON} onClick={() => void query.refetch()}>
           Try again
         </button>
@@ -142,12 +166,16 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     );
   }
 
-  const rows = stillLive(owner, query.data.approvals).filter((row) => !gone.has(rowKey(row)));
+  // key={owner} on this component (see RevokeWindow) means every state hook above starts fresh for a new owner —
+  // there is no per-owner overlay to filter here beyond stillLive, which already carries the owner in its own key.
+  const rows = stillLive(owner, query.data.approvals);
 
-  // One revoke at a time: approve(spender, 0), simulated first, confirmed in the wallet, then the pair is read again.
+  // One revoke at a time: approve(spender, 0), simulated first, confirmed in the wallet, then the pair is read again
+  // at the block the revoke landed in.
   const revoke = async (row: Approval) => {
     const key = rowKey(row);
     if (busy !== null || !client || !address) return;
+    const keysBefore = rows.map(rowKey);
     setBusy(key);
     setFailures((prev) => {
       const next = { ...prev };
@@ -159,10 +187,12 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     try {
       // Defence in depth; the real guard is the chainId withChain sets, which viem enforces when signing.
       assertWalletOnChain(walletChainId, chain.id);
+      // APPROVE_ABI (not erc20Abi) declares no return value: a USDT-style token whose approve sends back no data
+      // would otherwise fail simulateContract's decode before the transaction is ever sent.
       const { request } = await client.simulateContract({
         account: address,
         address: row.token,
-        abi: erc20Abi,
+        abi: APPROVE_ABI,
         functionName: "approve",
         args: [row.spender, 0n],
       });
@@ -176,12 +206,16 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
         abi: erc20Abi,
         functionName: "allowance",
         args: [owner, row.spender],
+        blockNumber: receipt.blockNumber,
       });
       if (now === 0n) {
         markRevoked(owner, row, Number(receipt.blockNumber));
-        setGone((prev) => new Set(prev).add(key));
+        const target = focusTargetAfterRemoval(keysBefore, key);
+        if (target.kind === "heading") listRef.current?.focus();
+        else rowRefs.current[target.key]?.focus();
       } else {
         setLeft((prev) => ({ ...prev, [key]: now.toString() }));
+        setFailures((prev) => ({ ...prev, [key]: { text: ALLOWANCE_STILL_SET, ...(hash ? { hash } : {}) } }));
       }
     } catch (err) {
       setFailures((prev) => ({ ...prev, [key]: { text: revokeFailure(stage, err), ...(hash ? { hash } : {}) } }));
@@ -191,10 +225,10 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
   };
 
   return (
-    <div className="grid gap-3">
+    <div ref={listRef} tabIndex={-1} aria-label="Approvals list" className="grid gap-3">
       {!canRevoke && <p className="text-xs text-muted">{`Viewing ${shortAddress(owner)}. Only its own wallet can revoke.`}</p>}
       {query.data.truncated && (
-        <p className="text-xs text-accent-3-text">
+        <p className="text-xs text-accent-3-text" role="alert">
           {"This list may be incomplete: some approvals couldn't be read."}
         </p>
       )}
@@ -205,28 +239,32 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
           {rows.map((row) => {
             const key = rowKey(row);
             const failure = failures[key];
+            const spenderName = spenderLabel(row.spender, network);
             return (
               <li key={key} className="grid gap-2 rounded-lg border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="font-mono text-sm">
+                    <p className="break-all font-mono text-sm" title={row.token}>
                       {row.symbol ? `${row.symbol} · ${shortAddress(row.token)}` : shortAddress(row.token)}
                     </p>
                     <p className="truncate text-xs text-muted">{row.name ?? "Unnamed token"}</p>
                   </div>
-                  <p className="font-mono text-sm">{allowanceText(left[key] ?? row.allowance, row.decimals)}</p>
+                  <p className="min-w-0 break-all font-mono text-sm">{allowanceText(left[key] ?? row.allowance, row.decimals)}</p>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs text-muted">
                     {"Spender: "}
-                    {row.spenderLabel ?? "Unknown contract"}{" "}
-                    <span className="font-mono">{shortAddress(row.spender)}</span>
-                    {!row.spenderLabel && (
+                    {spenderName ?? "Unknown contract"}{" "}
+                    <span className="font-mono" title={row.spender}>
+                      {shortAddress(row.spender)}
+                    </span>
+                    {!spenderName && (
                       <>
                         {" "}
                         <button
                           type="button"
                           className="min-h-8 text-accent-text underline pointer-coarse:min-h-11"
+                          aria-label={inspectButtonLabel(row.spender)}
                           onClick={() => open("inspector", { token: row.spender })}
                         >
                           Inspect
@@ -235,19 +273,28 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
                     )}
                   </p>
                   {canRevoke && (
-                    <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => void revoke(row)}>
+                    <button
+                      type="button"
+                      className={BUTTON}
+                      disabled={busy !== null}
+                      aria-label={revokeButtonLabel(row, spenderName)}
+                      ref={(el) => {
+                        rowRefs.current[key] = el;
+                      }}
+                      onClick={() => void revoke(row)}
+                    >
                       {busy === key ? "Waiting for your wallet…" : "Revoke"}
                     </button>
                   )}
                 </div>
                 {failure && (
-                  <p className="text-xs text-danger-text">
+                  <p className="text-xs text-danger-text" role="alert">
                     {failure.text}
                     {failure.hash && (
                       <>
                         {" "}
                         <a
-                          className="text-accent-text underline"
+                          className="inline-flex min-h-8 items-center text-accent-text underline pointer-coarse:min-h-11"
                           href={explorerUrl("tx", failure.hash)}
                           target="_blank"
                           rel="noopener noreferrer"

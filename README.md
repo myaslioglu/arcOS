@@ -155,6 +155,10 @@ but does have privileged functions, both the ownership and privileges findings r
   later run uses it or you revoke it in Revoke.
 - Revoke lists ERC-20 approvals only: NFT approvals and Permit2's own allowances come later, and it
   revokes one approval at a time.
+- Revoke's list reads at most 5 pages of 1,000 approval logs and considers at most 500 (token,
+  spender) pairs, the most recent first; a wallet with more history than that may not see its oldest
+  approvals. Hiding a pair just revoked lasts only for that page — reopening Revoke reads the chain
+  again from scratch.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
   indexer, which arrives with Radar.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
