@@ -64,7 +64,9 @@ Revoke's list (`/api/approvals`) reads approval events through the same key; wit
 public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
-build`.
+build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
+and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the
+network.
 
 ## Repo layout
 
