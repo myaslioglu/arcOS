@@ -1,4 +1,5 @@
-import { isRateLimitError, isUserCancellationError, type SwapResult } from "@circle-fin/app-kit";
+import { isRateLimitError, type SwapResult } from "@circle-fin/app-kit";
+import { isKitCancellation } from "@/lib/kit-errors";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
 import type { SwapToken } from "./tokenPair";
 
@@ -63,8 +64,9 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
  * Decides what Swap's submit catch-all should show — pulled out as a pure function (mirrors Mint's
  * `classifyMintFailure`, apps/mint/session.ts) so it's unit-tested without a live wallet/RPC/SDK.
  *
- * A cancellation is a definite, pre-broadcast failure: `isUserCancellationError` fires before any
- * signature is sent, so it keeps its own plain sentence. A rate limit is Circle's API throttling, but
+ * A cancellation is a definite, pre-broadcast failure: `isKitCancellation` (lib/kit-errors.ts: the kit's
+ * `isUserCancellationError`, minus its code-4001 collision with the kit's own RPC endpoint error) fires
+ * before any signature is sent, so it keeps its own plain sentence. A rate limit is Circle's API throttling, but
  * `kit.swap()` also talks to that API after the wallet sends (it follows the swap's progress), so a
  * rate limit can come after a broadcast: it says the service is busy and hedges like the unknown case.
  *
@@ -84,7 +86,7 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
  */
 export function classifySwapFailure(err: unknown): string {
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
-  if (isUserCancellationError(err)) return "Cancelled.";
+  if (isKitCancellation(err)) return "Cancelled.";
   if (isRateLimitError(err)) return "The swap service is busy, and the swap may still have gone through. Check your wallet's activity before trying again in a minute.";
   return "The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.";
 }

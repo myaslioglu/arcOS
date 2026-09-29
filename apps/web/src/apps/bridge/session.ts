@@ -1,5 +1,6 @@
-import { isRateLimitError, isUserCancellationError, type BridgeResult } from "@circle-fin/app-kit";
+import { isRateLimitError, type BridgeResult } from "@circle-fin/app-kit";
 import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
+import { isKitCancellation } from "@/lib/kit-errors";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
 import type { ChainId } from "./chains";
 
@@ -91,7 +92,7 @@ export function bridgeSessionReducer(state: BridgeSessionState, action: BridgeSe
  */
 export function classifyBridgeFailure(err: unknown, note: string): string {
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
-  if (isUserCancellationError(err)) return "Cancelled.";
+  if (isKitCancellation(err)) return "Cancelled.";
   if (isRateLimitError(err)) return `The bridge service is busy. Try again in a minute. ${note}`;
   return `${GENERIC_TRANSACTION_ERROR} ${note}`;
 }
