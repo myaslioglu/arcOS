@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { explorerUrl } from "@arcos/chain";
 import type { AppManifest } from "@arcos/shell/core";
-import { COMMAND_NAMES, PLAIN_TRANSFER_GAS, complete, echo, parseCommand, runCommand, type TermEnv } from "../commands";
+import { COMMAND_NAMES, PLAIN_TRANSFER_GAS, complete, echo, parseCommand, runCommand, sanitize, type TermEnv } from "../commands";
 
 const icon = (() => null) as unknown as AppManifest["icon"];
 const app = (id: string, name: string, over: Partial<AppManifest> = {}): AppManifest => ({
@@ -260,6 +260,11 @@ describe("clear, history and about", () => {
     expect(await texts("history", setup().env)).toEqual(["  1  help", "  2  block"]);
   });
 
+  it("sanitizes a typed line the same way its echo would be, so a stored bidi override can't reorder the list", async () => {
+    const s = setup({ history: ["help", "open \u202Efoo\u200B"] });
+    expect(await texts("history", s.env)).toEqual(["  1  help", "  2  open foo"]);
+  });
+
   it("says what 4rc.OS is", async () => {
     expect(await texts("about", setup().env)).toEqual([
       "4rc.OS is a desktop for Circle's Arc network: inspect a token, mint one and send to many wallets at once.",
@@ -280,6 +285,17 @@ describe("complete", () => {
     expect(complete("", ids)).toEqual([]);
     expect(complete("balance 0x", ids)).toEqual([]);
     expect(complete("open finder x", ids)).toEqual([]);
+  });
+});
+
+describe("sanitize", () => {
+  it("strips every Unicode format character (\\p{Cf}), aligned with cleanLabel's set: the zero-width and joiner characters too, not just the bidi controls", () => {
+    expect(sanitize("a\u200Bb\u200Cc\u200Dd\u2060e\uFEFFf")).toBe("abcdef");
+  });
+
+  it("still strips C0/C1 control characters and the bidi overrides", () => {
+    expect(sanitize("\u0007bell\u009F")).toBe("bell");
+    expect(sanitize("a\u202Eb\u200Ec")).toBe("abc");
   });
 });
 

@@ -26,13 +26,27 @@ export function emptyLog(): LogState {
 }
 
 /**
+ * Appends the typed line (sanitized) and a pending "…" placeholder under an id the caller already
+ * chose, rather than deriving one from `state.nextId`. Window.tsx keeps that id in a ref (incremented
+ * synchronously on every submit) and applies this through a functional `setState(s => submitWithId(s,
+ * id, typed))` — so the id, and the update, never depend on a render closure's `state`, which two
+ * Enters typed before a re-render would otherwise both read as the same stale value (see `submit`'s
+ * own history: it read `state.nextId` and was applied non-functionally, and a queued command's line
+ * could vanish when a second one raced it). `nextId` still advances here too, at least past `id`, so a
+ * caller that mixes this with `submit` never hands out a duplicate.
+ */
+export function submitWithId(state: LogState, id: number, typed: string): LogState {
+  const lines = cap([...state.lines, { kind: "in", text: sanitize(typed), id }, { kind: "out", text: "…", id }]);
+  return { ...state, lines, nextId: Math.max(state.nextId, id + 1) };
+}
+
+/**
  * Appends the typed line (sanitized) and a pending "…" placeholder, both tagged with a new id.
  * Returns the new state, the id and the epoch it was submitted under — both needed by `answer`.
  */
 export function submit(state: LogState, typed: string): { state: LogState; id: number; epoch: number } {
   const id = state.nextId;
-  const lines = cap([...state.lines, { kind: "in", text: sanitize(typed), id }, { kind: "out", text: "…", id }]);
-  return { state: { ...state, lines, nextId: id + 1 }, id, epoch: state.epoch };
+  return { state: submitWithId(state, id, typed), id, epoch: state.epoch };
 }
 
 /**

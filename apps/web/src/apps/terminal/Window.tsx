@@ -38,6 +38,10 @@ export default function TerminalWindow() {
   const [recall, setRecall] = useState<number | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The next submit's id, outside React state: a ref is always current the instant it's read, even
+  // when two Enters land before a re-render lets `state` catch up (see `run`, and log.ts's
+  // `submitWithId`).
+  const nextId = useRef(1);
   const appIds = useMemo(() => list.map((m) => m.id), [list]);
   const matches = useMemo(() => complete(input, appIds), [input, appIds]);
   const completionWord = useMemo(() => {
@@ -65,8 +69,9 @@ export default function TerminalWindow() {
     const nextHistory = [...history, typed].slice(-MAX_HISTORY);
     setHistory(nextHistory);
     setRecall(null);
-    const { state: submitted, id, epoch } = log.submit(state, typed);
-    setState(submitted);
+    const id = nextId.current++;
+    const epoch = state.epoch;
+    setState((prev) => log.submitWithId(prev, id, typed));
     const env: TermEnv = {
       apps: list,
       open: (appId, params) => open(appId, params),

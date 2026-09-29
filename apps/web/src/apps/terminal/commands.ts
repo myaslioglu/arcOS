@@ -40,14 +40,18 @@ const err = (text: string): Outcome => ({ lines: [{ kind: "err", text }] });
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
- * C0/C1 control characters and the bidi control characters (ALM; LRM/RLM; the LRE/RLE/PDF/LRO/RLO
- * block; the LRI/RLI/FSI/PDI block). Stripped from anything shown back to the visitor, so a typed or
- * pasted control character can never reorder, hide part of, or inject a control sequence into a
- * displayed line.
+ * C0/C1 control characters (`\p{Cc}`) and every Unicode format character (`\p{Cf}`) \u2014 the same set
+ * `cleanLabel` (`@arcos/inspector`) strips from an on-chain label: the bidi controls (ALM; LRM/RLM;
+ * the LRE/RLE/PDF/LRO/RLO block; the LRI/RLI/FSI/PDI block) this already covered, plus the zero-width
+ * characters it also covers (U+200B ZWSP, U+200C ZWNJ, U+200D ZWJ, U+2060 word joiner, U+FEFF BOM).
+ * Stripped from anything shown back to the visitor, so a typed or pasted character from either set can
+ * never reorder, hide part of, inject a control sequence into, or silently vanish from a displayed
+ * line.
  */
-const UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const UNSAFE_CHARS = /[\p{Cc}\p{Cf}]/gu;
 
-/** Strips C0/C1 and bidi control characters. Used for the scrollback's "in" line and by `echo()`. */
+/** Strips C0/C1 control and Unicode format characters. Used for the scrollback's "in" line, by
+ * `echo()`, and by the `history` command. */
 export function sanitize(text: string): string {
   return text.replace(UNSAFE_CHARS, "");
 }
@@ -213,7 +217,7 @@ const COMMANDS: Command[] = [
     name: "history",
     usage: "history",
     about: "This window's commands",
-    run: (_args, env) => out(...env.history.map((cmd, i) => `${String(i + 1).padStart(3)}  ${cmd}`)),
+    run: (_args, env) => out(...env.history.map((cmd, i) => `${String(i + 1).padStart(3)}  ${sanitize(cmd)}`)),
   },
   {
     name: "about",

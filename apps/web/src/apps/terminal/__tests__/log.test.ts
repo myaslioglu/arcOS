@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Outcome } from "../commands";
-import { answer, clear, emptyLog, note, submit } from "../log";
+import { answer, clear, emptyLog, note, submit, submitWithId } from "../log";
 
 const out = (text: string): Outcome => ({ lines: [{ kind: "out", text }] });
 
@@ -18,6 +18,58 @@ describe("submit", () => {
   it("sanitizes the typed line", () => {
     const { state } = submit(emptyLog(), "open \u202Efoo");
     expect(state.lines[0]).toEqual({ kind: "in", text: "open foo", id: 1 });
+  });
+});
+
+describe("submitWithId", () => {
+  it("appends the typed line and a pending line under the id the caller chose, not state.nextId", () => {
+    const next = submitWithId(emptyLog(), 7, "help");
+    expect(next.lines).toEqual([
+      { kind: "in", text: "help", id: 7 },
+      { kind: "out", text: "\u2026", id: 7 },
+    ]);
+    expect(next.nextId).toBe(8);
+  });
+
+  it("sanitizes the typed line", () => {
+    const next = submitWithId(emptyLog(), 1, "open \u202Efoo");
+    expect(next.lines[0]).toEqual({ kind: "in", text: "open foo", id: 1 });
+  });
+
+  it("never lowers nextId, even if called with an id below the current one", () => {
+    const first = submitWithId(emptyLog(), 5, "a");
+    const next = submitWithId(first, 2, "b");
+    expect(next.nextId).toBe(6);
+  });
+
+  // The race Window.tsx:65-69 had: `run()` read `state` from its render closure, so two Enters typed
+  // before a re-render both computed their line from the SAME stale state, and the non-functional
+  // `setState(submitted)` let the second call's result silently overwrite the first's. The fix keeps
+  // the next id in a ref (immune to a stale closure) and submits through a functional update
+  // (`setState(s => submitWithId(s, id, typed))`), so each update folds onto whatever the latest state
+  // actually is, however it was scheduled. This reproduces both patterns directly on log.ts's pure
+  // functions, without needing to render Window.tsx.
+  it("chains through a functional update: both commands survive even though both were computed from the same stale state", () => {
+    const staleBase = emptyLog(); // what both `run()` calls saw, before either had re-rendered
+    const id1 = 1;
+    const id2 = 2; // a ref-sourced id: already advanced past id1 even though `state` hasn't caught up
+
+    // The bug: setState(submitted) \u2014 non-functional \u2014 replaces the log with whichever literal value was
+    // computed, so the second call's result (built from the same stale base) wipes out the first's.
+    const firstResult = submitWithId(staleBase, id1, "first");
+    const secondResultFromStaleBase = submitWithId(staleBase, id2, "second");
+    const buggyFinal = secondResultFromStaleBase; // setState(buggyFinal) is all the DOM ever sees
+    expect(buggyFinal.lines.some((l) => l.text === "first")).toBe(false); // the first command vanished
+
+    // The fix: setState(prev => submitWithId(prev, id, typed)) \u2014 each update is handed whatever the
+    // latest pending state is, so the second fold lands on top of the first instead of discarding it.
+    const fixedFinal = submitWithId(firstResult, id2, "second");
+    expect(fixedFinal.lines).toEqual([
+      { kind: "in", text: "first", id: 1 },
+      { kind: "out", text: "\u2026", id: 1 },
+      { kind: "in", text: "second", id: 2 },
+      { kind: "out", text: "\u2026", id: 2 },
+    ]);
   });
 });
 
