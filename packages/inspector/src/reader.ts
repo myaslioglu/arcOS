@@ -1,5 +1,5 @@
 import { BaseError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
-import { isRevert } from "./rpc-errors";
+import { isRevert, revertPayload } from "./rpc-errors";
 import { CallReverted, type ChainReader } from "./types";
 
 /**
@@ -10,7 +10,7 @@ import { CallReverted, type ChainReader } from "./types";
  */
 function mapReadError(e: unknown): never {
   if ((e instanceof BaseError && e.walk((err) => err instanceof ContractFunctionZeroDataError)) || isRevert(e)) {
-    throw new CallReverted(e instanceof BaseError ? e.shortMessage : undefined);
+    throw new CallReverted(e instanceof BaseError ? e.shortMessage : undefined, revertPayload(e));
   }
   throw e;
 }
@@ -23,8 +23,9 @@ export function viemReader(client: PublicClient): ChainReader {
     },
     getStorageAt: async (address, slot) => (await client.getStorageAt({ address, slot })) ?? null,
     // The function name is dynamic here, so viem's per-ABI inference can't apply; the checks cast the result.
-    read: (address, abi: Abi, functionName, args = []) =>
-      client.readContract({ address, abi, functionName, args } as Parameters<PublicClient["readContract"]>[0]).catch(mapReadError),
+    // viem's readContract hands everything it isn't typed for on to eth_call, `gas` included.
+    read: (address, abi: Abi, functionName, args = [], options) =>
+      client.readContract({ address, abi, functionName, args, ...(options?.gas === undefined ? {} : { gas: options.gas }) } as Parameters<PublicClient["readContract"]>[0]).catch(mapReadError),
     blockNumber: () => client.getBlockNumber(),
   };
 }

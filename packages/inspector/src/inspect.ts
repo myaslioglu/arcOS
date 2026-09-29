@@ -92,7 +92,7 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
   return {
     getCode: (address) => watch(() => reader.getCode(address)),
     getStorageAt: (address, slot) => watch(() => reader.getStorageAt(address, slot)),
-    read: (address, abi, functionName, args) => watch(() => reader.read(address, abi, functionName, args)),
+    read: (address, abi, functionName, args, options) => watch(() => reader.read(address, abi, functionName, args, options)),
     blockNumber: () => watch(() => reader.blockNumber()),
   };
 }

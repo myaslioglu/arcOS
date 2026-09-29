@@ -3,9 +3,12 @@ import type { Address, DexConfig, NetworkId } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import type { ExplorerSource } from "./explorer";
 
-/** The call reached the chain and reverted (or returned no data): the function isn't there, or it said no. */
+/**
+ * The call reached the chain and reverted (or returned no data): the function isn't there, or it said no. `data` is what it
+ * reverted with, when the node sent any: an error selector and its arguments, `null` for a bare revert or an empty answer.
+ */
 export class CallReverted extends Error {
-  constructor(message = "execution reverted") {
+  constructor(message = "execution reverted", readonly data: Hex | null = null) {
     super(message);
     this.name = "CallReverted";
   }
@@ -54,9 +57,10 @@ export interface ChainReader {
   getStorageAt(address: Address, slot: Hex): Promise<Hex | null>;
   /**
    * Rejects with `CallReverted` when the call reverts or returns no data. Any other rejection is
-   * a transport failure and means nothing about the contract.
+   * a transport failure and means nothing about the contract. `options.gas` caps the call's gas: a read that could walk an
+   * attacker-chosen amount of state (a v4 quote) gets a limit of its own.
    */
-  read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[]): Promise<unknown>;
+  read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[], options?: { gas?: bigint }): Promise<unknown>;
   blockNumber(): Promise<bigint>;
 }
 

@@ -6,6 +6,7 @@ import {
 import { viemReader } from "../reader";
 import { isDecodeFailure, isNodeAnswer } from "../rpc-errors";
 import { CallReverted } from "../types";
+import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
 
 const abi = parseAbi(["function foo() view returns (uint256)"]);
 const ADDRESS = "0x1111111111111111111111111111111111111111" as const;
@@ -114,5 +115,44 @@ describe("viemReader().read: which node answers are reverts", () => {
     const e: unknown = await read(rpcError(-32602, "invalid argument 0: hex string has length 38")).catch((x: unknown) => x);
     expect(e).not.toBeInstanceOf(CallReverted);
     expect(isNodeAnswer(e)).toBe(true);
+  });
+});
+
+// A quote is one eth_call with a gas limit of its own, and what it reverted with is kept: only the revert payload tells the
+// pool's own "not enough liquidity" from an inner call that ran out of gas.
+describe("viemReader().read: a gas limit and the revert payload", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the gas limit with the eth_call", async () => {
+    const bodies: { method: string; params: [{ gas?: string }] }[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return Response.json({ jsonrpc: "2.0", id: 1, result: `0x${"0".repeat(63)}1` });
+    });
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    await viemReader(client).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n });
+    await viemReader(client).read(ADDRESS, abi, "foo");
+    expect(bodies[0]!.params[0].gas).toBe("0x1e8480");
+    expect(bodies[1]!.params[0].gas).toBeUndefined();
+  });
+
+  it.each([
+    ["not enough liquidity", NOT_ENOUGH_LIQUIDITY],
+    ["an empty inner reason", EMPTY_INNER_REASON],
+    ["an uninitialised pool", POOL_NOT_INITIALIZED],
+  ])("keeps the payload of a revert: %s", async (_, data) => {
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted", data } }));
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    const e: unknown = await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(CallReverted);
+    expect((e as CallReverted).data).toBe(data);
+  });
+
+  it("has no payload for an empty answer or a revert that carries none", async () => {
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, result: "0x" }));
+    expect(((await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)) as CallReverted).data).toBeNull();
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted" } }));
+    expect(((await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)) as CallReverted).data).toBeNull();
   });
 });
