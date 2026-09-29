@@ -63,6 +63,13 @@ export default function TerminalWindow() {
     setAtEnd(el.selectionStart === el.value.length && el.selectionEnd === el.value.length);
   };
 
+  // A value set from code (history, a completion, a cleared line) leaves the caret at its end, but the input fires no
+  // event for that: without this the hint would keep the caret's old place until the key comes up.
+  const setInputFromCode = (value: string) => {
+    setInput(value);
+    setAtEnd(true);
+  };
+
   const run = (raw: string) => {
     const typed = raw.trim();
     if (!typed) return;
@@ -106,13 +113,13 @@ export default function TerminalWindow() {
     if (e.key === "Enter") {
       e.preventDefault();
       run(input);
-      setInput("");
+      setInputFromCode("");
       return;
     }
     if (e.key === "Tab") {
       if (!shouldInterceptTab(e.shiftKey, matches)) return;
       e.preventDefault();
-      if (matches.length === 1) setInput(`${matches[0]} `);
+      if (matches.length === 1) setInputFromCode(`${matches[0]} `);
       else setState((prev) => log.note(prev, matches.map((m) => m.split(" ").at(-1)).join("   ")));
       return;
     }
@@ -121,7 +128,7 @@ export default function TerminalWindow() {
       if (history.length === 0) return;
       const next = recall === null ? history.length - 1 : Math.max(0, recall - 1);
       setRecall(next);
-      setInput(history[next]);
+      setInputFromCode(history[next]);
       return;
     }
     if (e.key === "ArrowDown") {
@@ -130,10 +137,10 @@ export default function TerminalWindow() {
       const next = recall + 1;
       if (next >= history.length) {
         setRecall(null);
-        setInput("");
+        setInputFromCode("");
       } else {
         setRecall(next);
-        setInput(history[next]);
+        setInputFromCode(history[next]);
       }
       return;
     }

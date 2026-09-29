@@ -25,6 +25,9 @@ const APPS = [
 const WALLET = "0x1111111111111111111111111111111111111111";
 const OTHER = "0x2222222222222222222222222222222222222222";
 const ARC = { id: 5042002, name: "Arc Testnet" };
+// U+2028 and U+2029, the line and paragraph separators: JavaScript reads both as whitespace and as line breaks.
+const LINE_SEP = "\u2028";
+const PARA_SEP = "\u2029";
 
 function setup(over: Partial<TermEnv> = {}) {
   const opened: { appId: string; params?: Record<string, string> }[] = [];
@@ -133,6 +136,15 @@ describe("open", () => {
   it("strips a bidi override from the name it echoes back", async () => {
     const s = setup();
     expect(await texts("open \u202Efoo", s.env)).toEqual(["No app called foo. Type open to list them."]);
+    expect(s.opened).toEqual([]);
+  });
+
+  // The parser splits on whitespace, and JavaScript counts a line separator as whitespace, so the name ends there.
+  it("never lets a line or paragraph separator reach what it echoes back", async () => {
+    const s = setup();
+    const lines = await texts(`open foo${LINE_SEP}bar${PARA_SEP}baz`, s.env);
+    expect(lines).toEqual(["No app called foo. Type open to list them."]);
+    expect(lines.join("")).not.toMatch(/\p{Zl}|\p{Zp}/u);
     expect(s.opened).toEqual([]);
   });
 });
@@ -265,6 +277,11 @@ describe("clear, history and about", () => {
     expect(await texts("history", s.env)).toEqual(["  1  help", "  2  open foo"]);
   });
 
+  it("strips a stored line's line and paragraph separators, so one can't split a line of the list in two", async () => {
+    const s = setup({ history: [`open a${LINE_SEP}b${PARA_SEP}c`] });
+    expect(await texts("history", s.env)).toEqual(["  1  open abc"]);
+  });
+
   it("says what 4rc.OS is", async () => {
     expect(await texts("about", setup().env)).toEqual([
       "4rc.OS is a desktop for Circle's Arc network: inspect a token, mint one and send to many wallets at once.",
@@ -297,6 +314,10 @@ describe("sanitize", () => {
     expect(sanitize("\u0007bell\u009F")).toBe("bell");
     expect(sanitize("a\u202Eb\u200Ec")).toBe("abc");
   });
+
+  it("strips the line and paragraph separators (\\p{Zl}, \\p{Zp}) too, as cleanLabel does", () => {
+    expect(sanitize(`a${LINE_SEP}b${PARA_SEP}c`)).toBe("abc");
+  });
 });
 
 describe("echo", () => {
@@ -309,6 +330,11 @@ describe("echo", () => {
   it("strips control and bidi characters before counting or displaying", () => {
     expect(echo("a\u202Eb\u200Ec")).toBe("abc");
     expect(echo("\u0007bell\u009F")).toBe("bell");
+  });
+
+  it("strips the line and paragraph separators before counting or displaying", () => {
+    expect(echo(`a${LINE_SEP}b${PARA_SEP}c`)).toBe("abc");
+    expect(echo(`${LINE_SEP}${"x".repeat(32)}`)).toBe("x".repeat(32));
   });
 
   it("stays correct on a huge paste", () => {

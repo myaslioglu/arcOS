@@ -40,18 +40,17 @@ const err = (text: string): Outcome => ({ lines: [{ kind: "err", text }] });
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
- * C0/C1 control characters (`\p{Cc}`) and every Unicode format character (`\p{Cf}`) \u2014 the same set
- * `cleanLabel` (`@arcos/inspector`) strips from an on-chain label: the bidi controls (ALM; LRM/RLM;
- * the LRE/RLE/PDF/LRO/RLO block; the LRI/RLI/FSI/PDI block) this already covered, plus the zero-width
- * characters it also covers (U+200B ZWSP, U+200C ZWNJ, U+200D ZWJ, U+2060 word joiner, U+FEFF BOM).
- * Stripped from anything shown back to the visitor, so a typed or pasted character from either set can
- * never reorder, hide part of, inject a control sequence into, or silently vanish from a displayed
- * line.
+ * What is stripped from anything shown back to the visitor: C0/C1 control characters (`\p{Cc}`), every Unicode format
+ * character (`\p{Cf}`), and the line and paragraph separators (`\p{Zl}`, U+2028, and `\p{Zp}`, U+2029). That is the
+ * same set `cleanLabel` (`@arcos/inspector`) strips from an on-chain label. The format characters are the bidi controls
+ * (ALM; LRM/RLM; the LRE/RLE/PDF/LRO/RLO block; the LRI/RLI/FSI/PDI block) and the zero-width ones (U+200B ZWSP, U+200C
+ * ZWNJ, U+200D ZWJ, U+2060 word joiner, U+FEFF BOM). A typed or pasted character from any of these can never reorder,
+ * hide part of, inject a control sequence into, break in two, or silently vanish from a displayed line.
  */
-const UNSAFE_CHARS = /[\p{Cc}\p{Cf}]/gu;
+const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
-/** Strips C0/C1 control and Unicode format characters. Used for the scrollback's "in" line, by
- * `echo()`, and by the `history` command. */
+/** Strips C0/C1 control, Unicode format, and line and paragraph separator characters. Used for the scrollback's "in"
+ * line, by `echo()`, and by the `history` command. */
 export function sanitize(text: string): string {
   return text.replace(UNSAFE_CHARS, "");
 }
