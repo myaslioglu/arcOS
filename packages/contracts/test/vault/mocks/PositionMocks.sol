@@ -88,6 +88,10 @@ contract MockV3PositionManager is ERC721 {
         return _positions[id].liquidity;
     }
 
+    function owedOf(uint256 id) external view returns (uint128, uint128) {
+        return (_positions[id].owed0, _positions[id].owed1);
+    }
+
     function collect(CollectParams calldata params) external payable returns (uint256 amount0, uint256 amount1) {
         _onlyApproved(params.tokenId);
         Position storage p = _positions[params.tokenId];
@@ -172,6 +176,10 @@ contract MockV4PositionManager is ERC721 {
 
     function getPositionLiquidity(uint256 id) external view returns (uint128) {
         return _positions[id].liquidity;
+    }
+
+    function owedOf(uint256 id) external view returns (uint128, uint128) {
+        return (_positions[id].owed0, _positions[id].owed1);
     }
 
     function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external payable {

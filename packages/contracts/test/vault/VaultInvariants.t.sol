@@ -418,6 +418,11 @@ contract VaultHandler is Test {
     }
 }
 
+/// 1000 runs of 64 calls per invariant (7 invariants: 448,000 handler calls, about 80 s on four cores). Depth stays low
+/// because every run starts from nothing and a lock's whole life fits in a few dozen calls, while more runs means more
+/// different starting sequences.
+/// forge-config: default.invariant.runs = 1000
+/// forge-config: default.invariant.depth = 64
 contract VaultInvariantsTest is VaultTestBase {
     VaultHandler internal handler;
 

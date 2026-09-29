@@ -20,14 +20,15 @@ fs_permissions = [{ access = "read", path = "./test/vectors" }]
 [fuzz]
 runs = 512
 
-# The vault invariant suite (test/vault/VaultInvariants.t.sol). Each invariant function is its own campaign, so
-# these numbers are multiplied by the number of invariants (seven): 1000 runs of 64 calls is 448,000 handler calls
-# and takes about 80 seconds on four cores. Depth stays low because every run starts from nothing and a lock's whole
-# life fits in a few dozen calls, while more runs means more different starting sequences. `fail_on_revert` is on:
-# the handler catches every call into the contracts under test and predicts its outcome, so a revert here can only
-# be a bug in the handler itself.
+# The default for an invariant suite that sets nothing of its own. Each suite sets its runs and depth inline, next to
+# its contract (`/// forge-config: default.invariant.runs = ...`), because each invariant function is its own campaign
+# and the right numbers depend on how many invariants a suite has and how costly its handler's calls are:
+#   test/vault/VaultInvariants.t.sol     1000 runs x 64 calls (7 invariants)
+#   test/vault/PositionInvariants.t.sol  1000 runs x 64 calls (6 invariants)
+# `fail_on_revert` is on: each handler catches every call into the contracts under test and predicts its outcome, so a
+# revert here can only be a bug in the handler itself.
 [invariant]
-runs = 1000
+runs = 128
 depth = 64
 fail_on_revert = true
 
