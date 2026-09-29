@@ -27,8 +27,9 @@ file, and starts only after the checks pass and the owner approves it.
      settings, not the running files themselves;
    - signs in with Workload Identity Federation: GitHub's short-lived token for this repository's `production`
      environment is exchanged for short-lived access as a service account that can do only what a source deploy needs;
-   - runs `firebase deploy --only apphosting:arcos` with a pinned Firebase CLI. The CLI uploads the source, App Hosting
-     builds it and rolls it out, and the CLI waits until the rollout has finished.
+   - installs the Firebase CLI from its lockfile (`.github/deploy-tools`: one exact version, every package in its tree
+     locked with an integrity hash, install scripts off) and runs `firebase deploy --only apphosting:arcos` with it. The
+     CLI uploads the source, App Hosting builds it and rolls it out, and the CLI waits until the rollout has finished.
 
    A separate `smoke` job, with no credentials, then calls the live site (`scripts/smoke.mjs`): `/` answers 200,
    `/api/pulse` answers 200 with 1,024 ratios, and `/api/approvals` answers 200 with at least one row. It retries for
@@ -53,6 +54,14 @@ file, and starts only after the checks pass and the owner approves it.
   plainly, without slashes around it (as in `/expression/i`) or quotes. The scan stops on a line written that way, since
   it would look for the slashes or quotes too and find nothing, and on a line that is not a valid expression. The list
   is not in the repository.
+- **The Firebase CLI** (`.github/deploy-tools`): a private package that names the CLI at one exact version, and its
+  `package-lock.json`, which locks the CLI's whole dependency tree. The CLI ships no lockfile of its own, and it is the
+  code that runs with the deploy credential. The folder is not an npm workspace of the repo root, and its `node_modules`
+  stays out of the source the deploy uploads (`firebase.json` and `.gitignore` both leave out `node_modules`). To bump
+  it, change `package.json` and regenerate the lockfile with npm 11.19.1: in that folder run
+  `npm install --package-lock-only --ignore-scripts`, again until the file stops changing. Then run
+  `npm audit --prefix .github/deploy-tools`, read the CLI's release notes, and run a dry run before the next real
+  deploy.
 - **Google Cloud**: a workload identity provider that accepts tokens only from this repository's `production`
   environment, and a deployer service account with App Hosting Developer, Service Usage Consumer and Storage Bucket
   Viewer on the project, and Storage Object Creator on the bucket that holds uploaded source. It has no key.

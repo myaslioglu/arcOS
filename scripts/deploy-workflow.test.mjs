@@ -9,6 +9,11 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const deploy = read(".github/workflows/deploy.yml");
 const ci = read(".github/workflows/ci.yml");
+/** deploy.yml without its comment lines, for checks on what runs (a comment may name what it explains away). */
+const deployCode = deploy
+  .split("\n")
+  .filter((line) => !/^\s*#/.test(line))
+  .join("\n");
 
 /** The text of one top-level job of deploy.yml, from its key to the next job's key. */
 function job(name) {
@@ -85,12 +90,9 @@ describe("deploy.yml", () => {
     expect(deploy).toMatch(/google-github-actions\/auth@[0-9a-f]{40} # v\d+\.\d+\.\d+/);
   });
 
-  it("runs the Firebase CLI at an exact version, without prompts and without --force", () => {
-    expect(deploy).toMatch(/^ {2}FIREBASE_TOOLS_VERSION: "\d+\.\d+\.\d+"$/m);
-    expect(deploy).toMatch(/npx --yes "firebase-tools@\$\{FIREBASE_TOOLS_VERSION\}" deploy --only "apphosting:\$\{APPHOSTING_BACKEND\}" --project "\$FIREBASE_PROJECT" --non-interactive$/m);
-    expect(deploy).toMatch(/npx --yes "firebase-tools@\$\{FIREBASE_TOOLS_VERSION\}" apphosting:backends:list .*--non-interactive$/m);
+  it("never passes --force, which would skip a backend it can't find and still report success", () => {
     expect(deploy).not.toMatch(/(^|\s)--force\b(?!:)/m); // the comment that explains why not is allowed to name it
-    expect(deploy.split("\n").filter((l) => /^\s*run:.*firebase-tools/.test(l) && /--force/.test(l))).toEqual([]);
+    expect(deploy.split("\n").filter((l) => /^\s*run:.*firebase/.test(l) && /--force/.test(l))).toEqual([]);
   });
 
   describe("keeps third-party code away from the production credential", () => {
@@ -158,7 +160,8 @@ describe("deploy.yml", () => {
     expect(at("uses: actions/checkout@")).toBeGreaterThanOrEqual(0);
     expect(at("uses: actions/download-artifact@")).toBeGreaterThan(at("uses: actions/checkout@"));
     expect(at("run: node scripts/scan-bundle.mjs")).toBeGreaterThan(at("uses: actions/download-artifact@"));
-    expect(at("uses: google-github-actions/auth@")).toBeGreaterThan(at("run: node scripts/scan-bundle.mjs"));
+    expect(at("run: npm ci --ignore-scripts --prefix .github/deploy-tools")).toBeGreaterThan(at("run: node scripts/scan-bundle.mjs"));
+    expect(at("uses: google-github-actions/auth@")).toBeGreaterThan(at("run: npm ci --ignore-scripts --prefix .github/deploy-tools"));
     expect(at("run: git check-ignore")).toBeGreaterThan(at("uses: google-github-actions/auth@"));
     expect(at("deploy --only")).toBeGreaterThan(at("run: git check-ignore"));
     expect(text).toMatch(/BUNDLE_DENY_PATTERNS: \$\{\{ secrets\.BUNDLE_DENY_PATTERNS \}\}/);
@@ -173,5 +176,50 @@ describe("deploy.yml", () => {
     const text = job("smoke");
     expect(text).toMatch(/if: \$\{\{ !inputs\.dry_run \}\}/);
     expect(text).not.toMatch(/google-github-actions|GOOGLE_|firebase-tools|secrets\./);
+  });
+});
+
+describe("the Firebase CLI the deploy runs", () => {
+  const tools = ".github/deploy-tools";
+  const cli = `${tools}/node_modules/.bin/firebase`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // as a pattern
+  const pkg = () => JSON.parse(read(`${tools}/package.json`));
+  const lock = () => JSON.parse(read(`${tools}/package-lock.json`));
+
+  it("is a private package that names the CLI at one exact version, and nothing else", () => {
+    expect(pkg().private).toBe(true);
+    expect(Object.keys(pkg().dependencies)).toEqual(["firebase-tools"]);
+    expect(pkg().dependencies["firebase-tools"]).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg().devDependencies).toBeUndefined();
+  });
+
+  it("is locked: that version and every package under it, each with an integrity hash from the npm registry", () => {
+    const { lockfileVersion, packages } = lock();
+    expect(lockfileVersion).toBe(3);
+    expect(packages["node_modules/firebase-tools"].version).toBe(pkg().dependencies["firebase-tools"]);
+    const entries = Object.entries(packages).filter(([name]) => name !== "");
+    expect(entries.length).toBeGreaterThan(100);
+    for (const [name, entry] of entries) {
+      expect(entry.resolved, `${name} has a registry URL`).toMatch(/^https:\/\/registry\.npmjs\.org\//);
+      expect(entry.integrity, `${name} has a hash`).toMatch(/^sha512-/);
+      expect(entry.extraneous, `${name} is needed by something`).toBeUndefined(); // npm leaves these after a first pass
+    }
+  });
+
+  it("is installed from the lockfile without install scripts, and the deploy runs that binary, never npx", () => {
+    const text = job("deploy");
+    expect(text).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix \.github\/deploy-tools$/m);
+    expect(deployCode).not.toMatch(/\bnpx\b/); // npx would resolve the CLI's whole tree afresh on every run
+    expect(deployCode).not.toMatch(/FIREBASE_TOOLS_VERSION|firebase-tools@/);
+    expect(text).toMatch(new RegExp(`^ {8}run: ${cli} deploy --only "apphosting:\\$\\{APPHOSTING_BACKEND\\}" --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
+    expect(text).toMatch(new RegExp(`^ {8}run: ${cli} apphosting:backends:list --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
+  });
+
+  it("stays out of the source the CLI uploads, and is not an npm workspace of the root", () => {
+    const firebase = JSON.parse(read("firebase.json"));
+    expect(firebase.apphosting[0].ignore).toContain("node_modules"); // matched at any depth, so this folder's too
+    expect(read(".gitignore")).toMatch(/^node_modules$/m);
+    const { workspaces } = JSON.parse(read("package.json"));
+    for (const glob of workspaces) expect(glob, "a workspace glob").toMatch(/^(apps|packages)\/[^/]*$/);
+    expect(read("package-lock.json")).not.toMatch(/deploy-tools/);
   });
 });

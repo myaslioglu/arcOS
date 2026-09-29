@@ -1,0 +1,8 @@
+{
+  "name": "arcos-deploy-tools",
+  "private": true,
+  "description": "The Firebase CLI that .github/workflows/deploy.yml runs, at one exact version, with its whole dependency tree locked in package-lock.json. Not an npm workspace of the repo root.",
+  "dependencies": {
+    "firebase-tools": "15.32.0"
+  }
+}
