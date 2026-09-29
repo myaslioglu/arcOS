@@ -13,10 +13,11 @@ import {MockToken, MockV2Pair} from "./mocks/VaultMocks.sol";
 /// Drives random sequences of lock, extend, withdraw, ownership transfer, donation, time passing and fee changes by
 /// random actors, and keeps an exact ledger of what every vault must hold.
 ///
-/// `fail_on_revert` is off, so a handler that let a call revert would hide a bug. Every action therefore predicts
-/// its own outcome from the vault's live owner, pending owner, unlock time and the clock, and sets a flag that never
-/// clears when the real outcome differs (a call that should have reverted succeeded, one that should have succeeded
-/// reverted, a revert moved tokens or changed state).
+/// `fail_on_revert` is on (foundry.toml), so the handler catches every call into the contracts under test; a revert
+/// that reaches the fuzzer is a bug in the handler itself. Every action predicts its own outcome from the vault's live
+/// owner, pending owner, unlock time and the clock, and sets a flag that never clears when the real outcome differs (a
+/// call that should have reverted succeeded, one that should have succeeded reverted, a revert moved tokens or changed
+/// state).
 contract VaultHandler is Test {
     using SafeCast for uint256;
 
@@ -448,12 +449,10 @@ contract VaultInvariantsTest is VaultTestBase {
     function invariant_heldByVaultsEqualsLockedMinusWithdrawn() public view {
         uint256[2] memory held;
         uint256 n = handler.vaultCount();
-        uint256 nowTs = block.timestamp;
         for (uint256 i; i < n; ++i) {
             VaultHandler.VaultInfo memory vi = handler.info(i);
             uint256 balance = handler.tokenAt(vi.tokenIdx).balanceOf(vi.vault);
             assertEq(balance, vi.expected, "a vault's balance drifted from the ledger");
-            if (nowTs < LockVault(vi.vault).unlockAt()) assertGe(balance, vi.expected, "tokens left a locked vault");
             held[vi.tokenIdx] += balance;
         }
         for (uint8 t; t < 2; ++t) {

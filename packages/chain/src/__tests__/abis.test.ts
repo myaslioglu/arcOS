@@ -153,7 +153,7 @@ describe("abis", () => {
     ]);
   });
 
-  it("vaultFactoryAbi's fee-key constants and errors are the ones the Vault app reads and decodes", () => {
+  it("vaultFactoryAbi has the errors the Vault app decodes", () => {
     const errors = names(vaultFactoryAbi, "error");
     for (const name of ["WrongFee", "FeeTransferFailed", "FeeOutOfRange", "ManagerNotAllowed", "NotAToken", "ZeroAmount"]) {
       expect(errors).toContain(name);

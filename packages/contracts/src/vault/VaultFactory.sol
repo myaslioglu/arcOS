@@ -234,8 +234,11 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         if (!ok) revert FeeTransferFailed();
     }
 
-    /// @dev A Uniswap-v2-style pair answers token0(), token1() and getReserves(). An LP token can't hide this
-    /// interface, and nobody gains by faking it (it only adds a fee).
+    /// @dev A Uniswap-v2-style pair answers token0(), token1() and getReserves(). Detection is by shape only: any
+    /// ERC-20 can answer the same way, and then everyone who locks it pays the LP fee (at most 1%) on it, which harms
+    /// its own lockers but no other token or the factory. A real v2-fork pair whose getReserves() does not return
+    /// exactly 96 bytes escapes the LP fee. A hostile token can burn gas in these calls only within its
+    /// own lock.
     function _isV2Pair(address token) private view returns (bool) {
         (bool a, bytes memory ra) = token.staticcall(abi.encodeWithSignature("token0()"));
         (bool b, bytes memory rb) = token.staticcall(abi.encodeWithSignature("token1()"));
