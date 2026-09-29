@@ -36,26 +36,48 @@ function ipv6Prefix64(addr: string): string {
 }
 
 /**
+ * How many entries at the right of `x-forwarded-for` belong to the site's own proxies, from the server-only
+ * `ARCOS_TRUSTED_HOPS`. Unset, empty, negative and non-integer all read as 0, which is the behaviour from before the
+ * setting: the rightmost entry is the client's. Only plain digits count, so "1.5", "-1", "+1" and "1e2" are 0 too,
+ * and so is a number too large to be exact.
+ */
+export function trustedHops(raw: string | undefined = process.env.ARCOS_TRUSTED_HOPS): number {
+  const text = raw?.trim();
+  if (!text || !/^\d+$/.test(text)) return 0;
+  const hops = Number(text);
+  return Number.isSafeInteger(hops) ? hops : 0;
+}
+
+/**
  * The rate-limit bucket for a request: `x-vercel-forwarded-for` when present AND this process is
  * actually running on Vercel (`process.env.VERCEL === "1"` — set by the platform itself, never by
- * a request); otherwise the RIGHTMOST entry of `x-forwarded-for` — the hop added by the nearest
- * proxy, since every entry to its left is client-supplied and trivially spoofed; then `x-real-ip`;
- * then `"unknown"`. Off Vercel, nothing distinguishes a genuine `x-vercel-forwarded-for` from one a
- * client set on itself, so it's ignored there rather than trusted. Normalised (trimmed,
+ * a request); otherwise the entry of `x-forwarded-for` the site's own proxies vouch for — the
+ * RIGHTMOST one, or, with `ARCOS_TRUSTED_HOPS` set to n, the one n places to its left, since every
+ * entry to the left of the nearest proxy's is client-supplied and trivially spoofed; then
+ * `x-real-ip`; then `"unknown"`. Off Vercel, nothing distinguishes a genuine `x-vercel-forwarded-for`
+ * from one a client set on itself, so it's ignored there rather than trusted. Normalised (trimmed,
  * lowercased) and, for IPv6, collapsed to its /64 prefix so a client cycling through addresses in
  * the same block doesn't dodge the limit. See SECURITY.md for the trusted-proxy assumption this
  * relies on.
+ *
+ * The setting is for a load balancer that adds its own entry to the right of the client's, which
+ * would otherwise give every visitor the same key. It must not be higher than the number of proxies
+ * the site really has: past that, the entry read is one the client wrote.
  */
-export function clientKey(headers: Pick<Headers, "get">): string {
+export function clientKey(headers: Pick<Headers, "get">, hops: number = trustedHops()): string {
   const vercel = process.env.VERCEL === "1" ? headers.get("x-vercel-forwarded-for")?.trim() : undefined;
-  const forwardedFor = headers.get("x-forwarded-for");
-  const rightmost = forwardedFor
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .at(-1);
+  const entries =
+    headers
+      .get("x-forwarded-for")
+      ?.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean) ?? [];
+  // A header of `hops` entries or fewer can't hold one for each of the site's proxies and one for the client, so no entry in
+  // it is vouched for and the leftmost is read. That is no looser than the rightmost is without the setting: with nothing
+  // vouched for, the rightmost is as much the client's to choose as the leftmost is.
+  const forwarded = entries[Math.max(0, entries.length - 1 - hops)];
   const realIp = headers.get("x-real-ip")?.trim();
-  const raw = vercel || rightmost || realIp || "unknown";
+  const raw = vercel || forwarded || realIp || "unknown";
   const lower = raw.toLowerCase();
   if (lower === "unknown" || lower === "") return "unknown";
   return lower.includes(":") ? ipv6Prefix64(lower) : lower;
