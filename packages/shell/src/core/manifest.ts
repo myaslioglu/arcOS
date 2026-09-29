@@ -83,12 +83,15 @@ export function isCategory(value: unknown): value is AppCategory {
 
 /**
  * A folder window big enough to show all `n` of its apps without scrolling: up to four across, the rest in rows.
- * Cells, padding and the status line match `.os-group-grid` and `.os-group-status` in styles/desk.css.
+ * Cells, padding and the status line match `.os-group-grid` and `.os-group-status` in styles/desk.css. Every row
+ * budgets 102px, tall enough for a row that holds a grey app (its "Soon" tag measures about 102px, against a plain
+ * row's 94px): simpler than sizing each row by whether it happens to hold one, at the cost of a little slack on a
+ * folder with none.
  */
 export function folderWindowSize(n: number): WindowSize {
   const cols = n <= 4 ? Math.max(n, 2) : n <= 6 ? 3 : 4;
   const rows = Math.max(1, Math.ceil(n / cols));
-  return { w: Math.max(380, cols * 116 + 56), h: 110 + rows * 94 };
+  return { w: Math.max(380, cols * 116 + 56), h: 110 + rows * 102 };
 }
 
 export function buildRegistry(list: AppManifest[]): Registry {

@@ -10,8 +10,10 @@
  */
 
 /* The desk: folders down the first column, desk items down the last, the wallpaper open between them. The columns are
-   spread edge to edge, so the last one stands against the right side; four rows keep every icon clear of the dock,
-   three when the screen is short. */
+   spread edge to edge, so the last one stands against the right side; four rows keep every icon clear of the dock.
+   On a short screen the bottom cushion (padding-bottom, clear of the dock either way) shrinks instead of the row
+   count: dropping to three rows still forces a fourth item in the last column into an implicit row past it, landing
+   behind the dock; four rows keep fitting the same way, just with less spare room below the last one. */
 .os-desk {
   --desk-cell: 7.5rem;
   position: relative; z-index: 10;
@@ -24,7 +26,7 @@
   gap: 4px 8px; padding: 18px 14px 7rem;
   user-select: none;
 }
-@media (max-height: 640px) { .os-desk { grid-template-rows: repeat(3, var(--desk-cell)); } }
+@media (max-height: 640px) { .os-desk { padding-bottom: 5rem; } }
 
 .os-desk-cell {
   --os-hue: var(--os-group, var(--accent));

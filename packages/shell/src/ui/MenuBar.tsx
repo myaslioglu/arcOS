@@ -12,6 +12,8 @@ type Props = {
   brand: string;
   windows: DesktopWindow[];
   activeId: string | null;
+  /** Names the View menu's Desktop group the way the touch switch does ("List", not "Trays"). */
+  touch: boolean;
   /** Help's GitHub item opens this in a new tab; empty or missing leaves the item off. */
   repoUrl?: string;
   onSearch: () => void;
@@ -64,7 +66,7 @@ function useShortcut(): string {
  * or ↓ opens a menu on its first item, ↑ ↓ walk it, ← → step to the neighbouring menu, Esc closes.
  */
 export function MenuBar(props: Props) {
-  const { brand, windows, activeId, repoUrl } = props;
+  const { brand, windows, activeId, touch, repoUrl } = props;
   const { list } = useRegistry();
   const [open, setOpen] = useState<string | null>(null);
   const barRef = useRef<HTMLElement>(null);
@@ -84,6 +86,7 @@ export function MenuBar(props: Props) {
     activeId,
     view,
     theme: theme.preference,
+    touch,
     repoUrl,
     on: {
       search: props.onSearch,

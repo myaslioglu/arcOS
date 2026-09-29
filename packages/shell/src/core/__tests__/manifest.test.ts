@@ -117,7 +117,7 @@ describe("folder windows", () => {
       instanceKey: "trust",
       params: { group: "trust" },
       title: "Trust",
-      size: { w: 380, h: 204 },
+      size: { w: 380, h: 212 },
       flush: true,
     });
   });
@@ -131,13 +131,13 @@ describe("folder windows", () => {
 });
 
 describe("folderWindowSize", () => {
-  it("fits every app without scrolling: up to four across, then rows", () => {
-    expect(folderWindowSize(1)).toEqual({ w: 380, h: 204 });
-    expect(folderWindowSize(2)).toEqual({ w: 380, h: 204 });
-    expect(folderWindowSize(3)).toEqual({ w: 404, h: 204 });
-    expect(folderWindowSize(4)).toEqual({ w: 520, h: 204 });
-    expect(folderWindowSize(5)).toEqual({ w: 404, h: 298 });
-    expect(folderWindowSize(7)).toEqual({ w: 520, h: 298 });
+  it("fits every app without scrolling: up to four across, then rows, each row tall enough for a grey app's Soon tag", () => {
+    expect(folderWindowSize(1)).toEqual({ w: 380, h: 212 });
+    expect(folderWindowSize(2)).toEqual({ w: 380, h: 212 });
+    expect(folderWindowSize(3)).toEqual({ w: 404, h: 212 });
+    expect(folderWindowSize(4)).toEqual({ w: 520, h: 212 });
+    expect(folderWindowSize(5)).toEqual({ w: 404, h: 314 });
+    expect(folderWindowSize(7)).toEqual({ w: 520, h: 314 });
   });
 });
 

@@ -42,6 +42,7 @@ function model(over: Partial<MenuInput> = {}) {
     activeId: null,
     view: "folders",
     theme: "system",
+    touch: false,
     repoUrl: "https://github.com/myaslioglu/arcOS",
     on,
     ...over,
@@ -100,6 +101,19 @@ describe("menuModel", () => {
     choices.find((i) => i.label === "Match system")!.onSelect();
     expect(on.view).toHaveBeenCalledWith("trays");
     expect(on.theme).toHaveBeenCalledWith("system");
+  });
+
+  it("names the Desktop group's Trays choice \"List\" on touch, matching the touch switch, though the underlying value is unchanged", () => {
+    const view = menu(model({ view: "trays", touch: true }).menus, "view");
+    expect(items(view.entries).map((i) => [i.label, i.role, i.checked]).slice(0, 2)).toEqual([
+      ["Folders", "menuitemradio", false],
+      ["List", "menuitemradio", true],
+    ]);
+    const { menus, on } = model({ touch: true });
+    items(menu(menus, "view").entries)
+      .find((i) => i.label === "List")!
+      .onSelect();
+    expect(on.view).toHaveBeenCalledWith("trays");
   });
 
   it("opens the Roadmap, the repository and About from Help", () => {

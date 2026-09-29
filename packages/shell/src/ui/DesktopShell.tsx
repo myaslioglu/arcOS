@@ -205,6 +205,7 @@ export function DesktopShell({
             brand={brand}
             windows={state.windows}
             activeId={state.activeId}
+            touch={touch}
             onSearch={() => setLauncher(true)}
             onOpenApp={(id) => open(id)}
             onAbout={() => open(aboutAppId)}

@@ -52,3 +52,8 @@ export type DeskItem = {
 
 /** The View menu's names for the desktop's views. */
 export const VIEW_LABEL: Record<DesktopView, string> = { folders: "Folders", trays: "Trays" };
+
+/** The same choice's names on touch, where the touch switch (TouchHome) and the View menu's Desktop
+ * group must read the same way: on a phone, the rack's trays read as a list. The stored `arcos-view`
+ * value is unchanged either way — "trays" — only its label differs by pointer. */
+export const TOUCH_VIEW_LABEL: Record<DesktopView, string> = { folders: "Folders", trays: "List" };

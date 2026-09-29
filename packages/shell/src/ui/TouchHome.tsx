@@ -7,6 +7,7 @@ import {
   CATEGORY_LABEL,
   CATEGORY_ORDER,
   DESKTOP_VIEWS,
+  TOUCH_VIEW_LABEL,
   folderContents,
   type AppCategory,
   type AppManifest,
@@ -17,9 +18,6 @@ import { DeskItemCell, FolderCell } from "./DeskCells";
 import { useRegistry } from "./registry";
 import { TouchRow } from "./TouchRow";
 import { setDesktopView, useDesktopView } from "./view";
-
-/** The touch switch's names for the two views: on a phone, the rack's trays read as a list. */
-export const TOUCH_VIEW_LABEL: Record<DesktopView, string> = { folders: "Folders", trays: "List" };
 
 export type TouchHomeViewProps = {
   apps: readonly AppManifest[];

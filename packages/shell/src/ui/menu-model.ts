@@ -1,5 +1,6 @@
 import {
   DESKTOP_VIEWS,
+  TOUCH_VIEW_LABEL,
   VIEW_LABEL,
   type AppManifest,
   type DesktopView,
@@ -51,6 +52,9 @@ export type MenuInput = {
   activeId: string | null;
   view: DesktopView;
   theme: ThemePreference;
+  /** Names the Desktop group's choices the way the touch switch (TouchHome) does — "List" rather than
+   * "Trays" — so the two never disagree on what to call the same `arcos-view` value on a phone. */
+  touch: boolean;
   /** Help's GitHub item links here; empty or missing leaves the item off. */
   repoUrl?: string;
   on: MenuActions;
@@ -137,7 +141,10 @@ export function menuModel(input: MenuInput): Menu[] {
           type: "group",
           label: "Desktop",
           items: DESKTOP_VIEWS.map((v) =>
-            item(VIEW_LABEL[v], () => on.view(v), { role: "menuitemradio", checked: input.view === v }),
+            item((input.touch ? TOUCH_VIEW_LABEL : VIEW_LABEL)[v], () => on.view(v), {
+              role: "menuitemradio",
+              checked: input.view === v,
+            }),
           ),
         },
         SEP,
