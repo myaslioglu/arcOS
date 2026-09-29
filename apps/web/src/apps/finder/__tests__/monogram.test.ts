@@ -13,7 +13,7 @@ describe("tokenMonogram", () => {
   it("keeps only A-Z and 0-9", () => {
     expect(tokenMonogram("$DIA")).toBe("DIA");
     expect(tokenMonogram("w.E-T_H")).toBe("WET");
-    expect(tokenMonogram("U​SDC")).toBe("USD");
+    expect(tokenMonogram("U\u200BSDC")).toBe("USD");
     expect(tokenMonogram("&lt;script&gt;")).toBe("LTS");
     expect(tokenMonogram("_AB")).toBe("AB");
   });
@@ -30,7 +30,7 @@ describe("tokenMonogram", () => {
     expect(tokenMonogram("")).toBeNull();
     expect(tokenMonogram("🚀🚀")).toBeNull();
     expect(tokenMonogram("⌚")).toBeNull();
-    expect(tokenMonogram("\u0000‮\u0007")).toBeNull();
+    expect(tokenMonogram("\u0000\u202E\u0007")).toBeNull();
     // Finder's own stand-ins for a symbol it hasn't read.
     expect(tokenMonogram("…")).toBeNull();
     expect(tokenMonogram("?")).toBeNull();
