@@ -14,6 +14,16 @@ export function proExplorerApi(chainId: number, apiKey: string | undefined): Exp
   return key ? { url: `https://api.blockscout.com/${chainId}/api/v2`, apiKey: key } : undefined;
 }
 
+/**
+ * The same PRO API's Etherscan-style module endpoint (`?module=logs&action=getLogs…`), which Revoke reads approval
+ * events from, with the same key; undefined without one. The key goes in the Authorization header, as for the
+ * Inspector.
+ */
+export function proLogsApi(chainId: number, apiKey: string | undefined): ExplorerApi | undefined {
+  const key = apiKey?.trim();
+  return key ? { url: `https://api.blockscout.com/${chainId}/api`, apiKey: key } : undefined;
+}
+
 export function inspectInput(
   address: Address,
   client: PublicClient,

@@ -57,6 +57,8 @@ from Blockscout's PRO API when `BLOCKSCOUT_API_KEY` is set. It's a server-only v
 `NEXT_PUBLIC_`; on App Hosting it's a Secret Manager secret. Without it, the explorer-backed checks
 on those pages (source verification, holder concentration) read "unknown", except that a token made
 by 4rc.OS's own TokenFactory still passes source verification through the factory (see below).
+Revoke's list (`/api/approvals`) reads approval events through the same key; without one it asks the
+public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`.

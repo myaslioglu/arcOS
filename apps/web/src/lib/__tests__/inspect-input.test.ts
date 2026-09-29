@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublicClient } from "viem";
 import { activeChain } from "@arcos/chain";
-import { inspectInput, proExplorerApi } from "../inspect-input";
+import { inspectInput, proExplorerApi, proLogsApi } from "../inspect-input";
 
 const T = "0x1111111111111111111111111111111111111111";
 const PRO = { url: "https://api.blockscout.com/5042/api/v2", apiKey: "proapi_k" };
@@ -57,5 +57,16 @@ describe("inspectInput", () => {
   it("keeps linking evidence to the public explorer either way", () => {
     expect(inspectInput(T, client, fetch, PRO).explorerBase).toBe(chainExplorer.url);
     expect(inspectInput(T, client).explorerBase).toBe(chainExplorer.url);
+  });
+});
+
+describe("proLogsApi", () => {
+  it("is off without a key", () => {
+    expect(proLogsApi(5042, undefined)).toBeUndefined();
+    expect(proLogsApi(5042, "  \n")).toBeUndefined();
+  });
+
+  it("points at the logs module of the chain's Blockscout PRO API, with the key trimmed", () => {
+    expect(proLogsApi(5042, " proapi_k \n")).toEqual({ url: "https://api.blockscout.com/5042/api", apiKey: "proapi_k" });
   });
 });

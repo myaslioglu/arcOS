@@ -30,7 +30,7 @@ fixed. Coordinated disclosure — please give us time to address a report before
 
 ## Rate limiting and the trusted-proxy assumption
 
-`/api/inspect` keys its per-client rate limit off `x-vercel-forwarded-for` when present AND
+`/api/inspect` and `/api/approvals` key their per-client rate limits off `x-vercel-forwarded-for` when present AND
 `process.env.VERCEL === "1"` (set by the platform itself, never by a request — so a deployment
 that isn't actually running on Vercel never trusts a header a client could set on itself),
 otherwise the rightmost entry of `x-forwarded-for`, otherwise `x-real-ip` (see `clientKey` in
@@ -40,13 +40,15 @@ tried to inject — the leftmost entries of `x-forwarded-for` are client-control
 trusted for this decision. Running this app behind a different reverse proxy that doesn't set one
 of these headers correctly (or exposing it directly to the internet without one) would let every
 request collapse onto the `"unknown"` key, sharing one limit — not a security hole in itself, but
-it does mean the safety valve for that endpoint stops being per-client.
+it does mean the safety valve for those endpoints stops being per-client.
 
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
-does: the server's client behind `/api/inspect`, `/badge`, `/t` and its image (`inspectionClient` in
-`apps/web/src/lib/inspection-client.ts`), and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
+does: the server's one client (`serverRpcClient` in `apps/web/src/lib/server-rpc.ts`, built by `inspectionClient` in
+`apps/web/src/lib/inspection-client.ts`) behind `/api/inspect`, `/badge`, `/t` and its image, `/api/pulse`, and
+`/api/approvals`, which reads the allowance, symbol, name and decimals of whatever token contracts an address has
+approved; and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
 With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is
 a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
 Swap and Bridge only read Circle's own contracts.

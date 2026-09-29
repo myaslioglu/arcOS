@@ -1,0 +1,359 @@
+import { describe, expect, it, vi } from "vitest";
+import { decodeFunctionData, encodeAbiParameters, erc20Abi, pad, toEventSelector, type Address, type Hex } from "viem";
+import { ARCOS } from "@arcos/chain";
+import {
+  APPROVAL_TOPIC,
+  ApprovalsUnavailable,
+  LOGS_PAGE,
+  MAX_PAGES,
+  MAX_PAIRS,
+  PERMIT2,
+  SWAP_ADAPTER,
+  UNLIMITED,
+  approvalPairs,
+  collectApprovalLogs,
+  isUnlimited,
+  liveApprovals,
+  loadApprovals,
+  logsPageUrl,
+  readLog,
+  readLogsPage,
+  spenderLabel,
+  type Aggregate,
+  type ExplorerLog,
+} from "../approvals";
+
+const OWNER: Address = "0x1111111111111111111111111111111111111111";
+const STRANGER: Address = "0x2222222222222222222222222222222222222222";
+const TOKEN_A: Address = "0x3333333333333333333333333333333333333333";
+const TOKEN_B: Address = "0x4444444444444444444444444444444444444444";
+const SPENDER_X: Address = "0x5555555555555555555555555555555555555555";
+const SPENDER_Y: Address = "0x6666666666666666666666666666666666666666";
+const TRANSFER_TOPIC = toEventSelector("Transfer(address,address,uint256)");
+
+const topic = (a: Address): Hex => pad(a.toLowerCase() as Hex, { size: 32 });
+const txHash = (block: number, index: number) => `0x${(block * 1000 + index).toString(16).padStart(64, "0")}`;
+
+/** One log as Blockscout's logs module sends it: hex numbers ("0x" for 0), topics padded with nulls to four. */
+function rawLog(token: Address, spender: Address, block: number, index = 0, extra: (string | null)[] = [null], from: Address = OWNER) {
+  return {
+    address: token.toLowerCase(),
+    topics: [APPROVAL_TOPIC, topic(from), topic(spender), ...extra],
+    data: pad("0x01", { size: 32 }),
+    blockNumber: `0x${block.toString(16)}`,
+    logIndex: index === 0 ? "0x" : `0x${index.toString(16)}`,
+    transactionHash: txHash(block, index),
+    timeStamp: "0x0",
+  };
+}
+const logOf = (raw: ReturnType<typeof rawLog>): ExplorerLog => readLog(raw)!;
+const str = (s: string): Hex => encodeAbiParameters([{ type: "string" }], [s]);
+
+/** A stub Multicall3: answers each ERC-20 call from `answers`, "revert" failing that call alone. */
+function stubChain(answers: {
+  allowance: (token: Address, spender: Address) => bigint | "revert";
+  symbol?: (token: Address) => Hex | "revert";
+  name?: (token: Address) => string | "revert";
+  decimals?: (token: Address) => number | "revert";
+}) {
+  const batches: number[] = [];
+  const aggregate: Aggregate = async (calls) => {
+    batches.push(calls.length);
+    return calls.map(({ target, callData }) => {
+      const { functionName, args } = decodeFunctionData({ abi: erc20Abi, data: callData });
+      const answer =
+        functionName === "allowance"
+          ? answers.allowance(target, (args as readonly [Address, Address])[1])
+          : functionName === "symbol"
+            ? (answers.symbol?.(target) ?? str("SYM"))
+            : functionName === "name"
+              ? (answers.name?.(target) ?? "Token")
+              : functionName === "decimals"
+                ? (answers.decimals?.(target) ?? 18)
+                : "revert";
+      if (answer === "revert") return { success: false, returnData: "0x" as Hex };
+      const returnData =
+        functionName === "allowance"
+          ? encodeAbiParameters([{ type: "uint256" }], [answer as bigint])
+          : functionName === "symbol"
+            ? (answer as Hex)
+            : functionName === "name"
+              ? str(answer as string)
+              : encodeAbiParameters([{ type: "uint8" }], [answer as number]);
+      return { success: true, returnData };
+    });
+  };
+  return { aggregate, batches };
+}
+
+function answering(status: number, body: string) {
+  const calls: { url: string; headers: Headers }[] = [];
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), headers: new Headers(init?.headers) });
+    return new Response(body, { status, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  return { calls, fetchFn };
+}
+
+describe("readLog", () => {
+  it("reads Blockscout's hex numbers, an empty logIndex as 0, and drops the nulls it pads topics with", () => {
+    expect(readLog(rawLog(TOKEN_A, SPENDER_X, 26))).toEqual({
+      address: TOKEN_A,
+      topics: [APPROVAL_TOPIC, topic(OWNER), topic(SPENDER_X)],
+      blockNumber: 26,
+      logIndex: 0,
+      transactionHash: txHash(26, 0),
+    });
+    expect(readLog({ ...rawLog(TOKEN_A, SPENDER_X, 26), blockNumber: "26", logIndex: "3" })?.logIndex).toBe(3);
+  });
+
+  it("refuses a log with a missing or malformed field", () => {
+    const good = rawLog(TOKEN_A, SPENDER_X, 26);
+    const bad: unknown[] = [
+      null,
+      "x",
+      { ...good, address: "nope" },
+      { ...good, topics: "0x" },
+      { ...good, topics: [APPROVAL_TOPIC, "0x12"] },
+      { ...good, blockNumber: "twelve" },
+      { ...good, transactionHash: 7 },
+    ];
+    for (const value of bad) expect(readLog(value)).toBeNull();
+  });
+});
+
+describe("logsPageUrl", () => {
+  it("asks the logs module for the owner's Approval events from a block on, with no key in the URL", () => {
+    const url = new URL(logsPageUrl("https://api.blockscout.com/5042/api", OWNER, 77));
+    expect(`${url.origin}${url.pathname}`).toBe("https://api.blockscout.com/5042/api");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      module: "logs",
+      action: "getLogs",
+      fromBlock: "77",
+      toBlock: "latest",
+      topic0: APPROVAL_TOPIC,
+      topic1: topic(OWNER),
+      topic0_1_opr: "and",
+    });
+  });
+
+  it("filters on the Approval event's own topic", () => {
+    expect(APPROVAL_TOPIC).toBe(toEventSelector("Approval(address,address,uint256)"));
+  });
+});
+
+describe("readLogsPage", () => {
+  it("sends the key as a bearer token, never in the URL, and returns the page's logs", async () => {
+    const { calls, fetchFn } = answering(200, JSON.stringify({ status: "1", message: "OK", result: [rawLog(TOKEN_A, SPENDER_X, 5)] }));
+    const url = logsPageUrl("https://api.blockscout.com/5042/api", OWNER, 0);
+    expect(await readLogsPage(url, fetchFn, "proapi_k")).toHaveLength(1);
+    expect(calls[0].url).toBe(url);
+    expect(calls[0].url).not.toContain("proapi_k");
+    expect(calls[0].headers.get("authorization")).toBe("Bearer proapi_k");
+  });
+
+  it("sends no authorization header without a key", async () => {
+    const { calls, fetchFn } = answering(200, JSON.stringify({ status: "1", message: "OK", result: [] }));
+    await readLogsPage("https://explorer.testnet.arc.io/api?module=logs", fetchFn);
+    expect(calls[0].headers.has("authorization")).toBe(false);
+  });
+
+  it("reads 'No logs found' as an empty page", async () => {
+    const { fetchFn } = answering(200, JSON.stringify({ status: "0", message: "No logs found", result: [] }));
+    expect(await readLogsPage("https://x.test/api", fetchFn)).toEqual([]);
+  });
+
+  it("treats a refused key, a rate limit, a body that isn't JSON, or one without a list as an outage", async () => {
+    const outages: [number, string][] = [
+      [402, "Proceed with an API key"],
+      [429, "{}"],
+      [200, "<html>Just a moment...</html>"],
+      [200, JSON.stringify({ status: "0", message: "Error! Invalid topic", result: null })],
+    ];
+    for (const [status, body] of outages) {
+      await expect(readLogsPage("https://x.test/api", answering(status, body).fetchFn)).rejects.toBeInstanceOf(ApprovalsUnavailable);
+    }
+  });
+});
+
+describe("collectApprovalLogs", () => {
+  it("reads a short page once", async () => {
+    const readPage = vi.fn(async () => [rawLog(TOKEN_A, SPENDER_X, 5)]);
+    const { logs, truncated } = await collectApprovalLogs(readPage);
+    expect(readPage.mock.calls).toEqual([[0]]);
+    expect(logs).toHaveLength(1);
+    expect(truncated).toBe(false);
+  });
+
+  it("pages on from the last block a full page reached, and drops the logs it sees twice", async () => {
+    const first = Array.from({ length: LOGS_PAGE }, (_, i) => rawLog(TOKEN_A, SPENDER_X, i + 1));
+    const second = [rawLog(TOKEN_A, SPENDER_X, LOGS_PAGE), rawLog(TOKEN_B, SPENDER_Y, LOGS_PAGE + 1)];
+    const readPage = vi.fn(async (from: number) => (from === 0 ? first : second));
+    const { logs, truncated } = await collectApprovalLogs(readPage);
+    expect(readPage.mock.calls.map(([from]) => from)).toEqual([0, LOGS_PAGE]);
+    expect(logs).toHaveLength(LOGS_PAGE + 1);
+    expect(truncated).toBe(false);
+  });
+
+  it(`stops after ${MAX_PAGES} full pages and says the list was cut`, async () => {
+    const readPage = vi.fn(async (from: number) =>
+      Array.from({ length: LOGS_PAGE }, (_, i) => rawLog(TOKEN_A, SPENDER_X, from + i + 1)),
+    );
+    const { truncated } = await collectApprovalLogs(readPage);
+    expect(readPage).toHaveBeenCalledTimes(MAX_PAGES);
+    expect(truncated).toBe(true);
+  });
+
+  it("stops, and says the list was cut, when one block holds a full page", async () => {
+    const readPage = vi.fn(async () => Array.from({ length: LOGS_PAGE }, (_, i) => rawLog(TOKEN_A, SPENDER_X, 0, i)));
+    const { truncated } = await collectApprovalLogs(readPage);
+    expect(readPage).toHaveBeenCalledTimes(1);
+    expect(truncated).toBe(true);
+  });
+});
+
+describe("approvalPairs", () => {
+  it("keeps ERC-20 approvals only: exactly three topics", () => {
+    const erc721 = logOf(rawLog(TOKEN_B, SPENDER_Y, 11, 0, [pad("0x07", { size: 32 })]));
+    expect(approvalPairs(OWNER, [logOf(rawLog(TOKEN_A, SPENDER_X, 10)), erc721])).toEqual([
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10 },
+    ]);
+  });
+
+  it("keeps each token and spender once, with its latest approval's block, newest first", () => {
+    const logs = [
+      rawLog(TOKEN_A, SPENDER_X, 10),
+      rawLog(TOKEN_A, SPENDER_X, 30, 1),
+      rawLog(TOKEN_A, SPENDER_X, 20, 2),
+      rawLog(TOKEN_B, SPENDER_Y, 15),
+    ].map(logOf);
+    expect(approvalPairs(OWNER, logs)).toEqual([
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 30 },
+      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 15 },
+    ]);
+  });
+
+  it("skips another event, another owner's approval, and a spender topic that isn't an address", () => {
+    const transfer = { ...logOf(rawLog(TOKEN_A, SPENDER_X, 10)), topics: [TRANSFER_TOPIC, topic(OWNER), topic(SPENDER_X)] };
+    const stranger = logOf(rawLog(TOKEN_A, SPENDER_X, 10, 0, [null], STRANGER));
+    const junk = { ...logOf(rawLog(TOKEN_A, SPENDER_X, 10)), topics: [APPROVAL_TOPIC, topic(OWNER), `0x${"f".repeat(64)}` as Hex] };
+    expect(approvalPairs(OWNER, [transfer, stranger, junk])).toEqual([]);
+  });
+});
+
+describe("liveApprovals", () => {
+  const pairs = [
+    { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 30 },
+    { token: TOKEN_A, spender: SPENDER_Y, lastApprovalBlock: 20 },
+    { token: TOKEN_B, spender: SPENDER_X, lastApprovalBlock: 10 },
+  ];
+
+  it("reads every pair's allowance and each token's symbol, name and decimals in one multicall, dropping pairs at zero", async () => {
+    const { aggregate, batches } = stubChain({
+      allowance: (token, spender) =>
+        token === TOKEN_A && spender === SPENDER_X ? 5n * 10n ** 18n : token === TOKEN_B ? UNLIMITED : 0n,
+      symbol: (token) => str(token === TOKEN_A ? "AAA" : "BBB"),
+      name: (token) => (token === TOKEN_A ? "Token A" : "Token B"),
+      decimals: (token) => (token === TOKEN_A ? 18 : 6),
+    });
+    expect(await liveApprovals(OWNER, pairs, aggregate, "mainnet")).toEqual([
+      {
+        token: TOKEN_A,
+        symbol: "AAA",
+        name: "Token A",
+        decimals: 18,
+        spender: SPENDER_X,
+        spenderLabel: null,
+        allowance: (5n * 10n ** 18n).toString(),
+        lastApprovalBlock: 30,
+      },
+      {
+        token: TOKEN_B,
+        symbol: "BBB",
+        name: "Token B",
+        decimals: 6,
+        spender: SPENDER_X,
+        spenderLabel: null,
+        allowance: UNLIMITED.toString(),
+        lastApprovalBlock: 10,
+      },
+    ]);
+    expect(batches).toEqual([3 + 2 * 3]);
+  });
+
+  it("cleans hostile labels, and reads a failed or odd answer as unknown", async () => {
+    const { aggregate } = stubChain({
+      allowance: () => 1n,
+      // A bidi override and a zero-width space in one symbol; a bytes32 symbol (MKR's kind) in the other.
+      symbol: (token) => (token === TOKEN_A ? str("A‮AA​") : pad("0x4d4b52", { size: 32, dir: "right" })),
+      name: (token) => (token === TOKEN_A ? "Token A" : "revert"),
+      decimals: (token) => (token === TOKEN_A ? 18 : "revert"),
+    });
+    const [a, b] = await liveApprovals(OWNER, [pairs[0], pairs[2]], aggregate, "mainnet");
+    expect(a.symbol).toBe("AAA");
+    expect([b.symbol, b.name, b.decimals]).toEqual([null, null, null]);
+  });
+
+  it("drops a pair whose allowance can't be read", async () => {
+    const { aggregate } = stubChain({ allowance: (token) => (token === TOKEN_A ? "revert" : 1n) });
+    expect((await liveApprovals(OWNER, pairs, aggregate, "mainnet")).map((a) => a.token)).toEqual([TOKEN_B]);
+  });
+
+  it("answers nothing without pairs, and never calls the chain", async () => {
+    const aggregate = vi.fn<Aggregate>();
+    expect(await liveApprovals(OWNER, [], aggregate, "mainnet")).toEqual([]);
+    expect(aggregate).not.toHaveBeenCalled();
+  });
+
+  it("treats a multicall that answers the wrong number of results as an outage", async () => {
+    await expect(liveApprovals(OWNER, pairs, async () => [], "mainnet")).rejects.toBeInstanceOf(ApprovalsUnavailable);
+  });
+});
+
+describe("spenderLabel", () => {
+  it("names Permit2, Drop's Multisend and Circle's swap adapter on each network, and nothing else", () => {
+    for (const network of ["mainnet", "testnet"] as const) {
+      expect(spenderLabel(PERMIT2.toLowerCase(), network)).toBe("Permit2");
+      expect(spenderLabel(ARCOS[network]!.multisend, network)).toBe("4rc.OS Multisend");
+      expect(spenderLabel(SWAP_ADAPTER[network], network)).toBe("Circle swap adapter");
+      expect(spenderLabel(SPENDER_X, network)).toBeNull();
+    }
+  });
+});
+
+describe("isUnlimited", () => {
+  it("reads 2^255 and above as unlimited", () => {
+    expect(isUnlimited(UNLIMITED - 1n)).toBe(false);
+    expect(isUnlimited(UNLIMITED)).toBe(true);
+    expect(isUnlimited(2n ** 256n - 1n)).toBe(true);
+    expect(isUnlimited(0n)).toBe(false);
+  });
+});
+
+describe("loadApprovals", () => {
+  it("joins the pieces: the explorer's logs, their pairs, and what is still live", async () => {
+    const { aggregate } = stubChain({ allowance: (token) => (token === TOKEN_A ? 7n : 0n) });
+    const answer = await loadApprovals(OWNER, {
+      network: "testnet",
+      aggregate,
+      readPage: async () => [rawLog(TOKEN_A, PERMIT2, 9), rawLog(TOKEN_B, SPENDER_Y, 8)],
+    });
+    expect(answer).toEqual({
+      approvals: [
+        expect.objectContaining({ token: TOKEN_A, spender: PERMIT2, spenderLabel: "Permit2", allowance: "7", lastApprovalBlock: 9 }),
+      ],
+      truncated: false,
+    });
+  });
+
+  it(`checks at most ${MAX_PAIRS} pairs, the most recent, and says the list was cut`, async () => {
+    const spender = (i: number) => `0x${(i + 0x1000).toString(16).padStart(40, "0")}` as Address;
+    const logs = Array.from({ length: MAX_PAIRS + 1 }, (_, i) => rawLog(TOKEN_A, spender(i), i + 1));
+    const { aggregate, batches } = stubChain({ allowance: () => 1n });
+    const answer = await loadApprovals(OWNER, { network: "testnet", aggregate, readPage: async () => logs });
+    expect(batches).toEqual([MAX_PAIRS + 3]);
+    expect(answer.approvals).toHaveLength(MAX_PAIRS);
+    expect(answer.approvals.at(-1)?.lastApprovalBlock).toBe(2);
+    expect(answer.truncated).toBe(true);
+  });
+});
