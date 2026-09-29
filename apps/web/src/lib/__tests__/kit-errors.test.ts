@@ -41,6 +41,17 @@ describe("isKitCancellation", () => {
     expect(isKitCancellation(null)).toBe(false);
   });
 
+  it("looks through a nested RPC endpoint error, whose own 4001 says nothing either", () => {
+    expect(isKitCancellation(rpcEndpointError(rpcEndpointError(new Error("boom"))))).toBe(false);
+    expect(isKitCancellation(rpcEndpointError(rpcEndpointError(new Error("User rejected the request."))))).toBe(true);
+  });
+
+  it("answers no, never throws, for an error whose properties throw when read", () => {
+    const hostile = new Proxy({}, { get: () => { throw new Error("no reading this"); } });
+    expect(isKitCancellation(hostile)).toBe(false);
+    expect(isKitCancellation(rpcEndpointError(hostile))).toBe(false);
+  });
+
   it("answers no, never throws, for an error that loops (the kit's own check would throw on it)", () => {
     const looped: Record<string, unknown> = { message: "boom" };
     looped.self = looped;

@@ -9,7 +9,8 @@ import { createViemAdapterFromProvider, resolveChainIdentifier } from "@circle-f
 const ACCOUNT = "0x00000000000000000000000000000000000000a1";
 const TO = "0x00000000000000000000000000000000000000f1";
 
-/** Makes every `fetch` in the calling test file fail, and restores it after each test. */
+/** Makes every `fetch` fail in the suite that calls it (a test file, or a `describe` block), and restores it after each
+ * test. */
 export function stubNoNetwork(): void {
   beforeEach(() => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("this test makes no network request")));

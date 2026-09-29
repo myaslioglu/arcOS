@@ -14,16 +14,30 @@ import { isUserCancellationError } from "@circle-fin/app-kit";
  * answer.
  */
 export function isKitCancellation(err: unknown): boolean {
-  if (!isKitRpcEndpointError(err)) return askKit(err);
-  const seen = new Set<unknown>();
-  let current: unknown = (err as { cause?: { trace?: { rawError?: unknown } } }).cause?.trace?.rawError;
-  while (current !== null && current !== undefined && !seen.has(current)) {
-    if (askKit(current)) return true;
-    if (typeof current !== "object") return false;
-    seen.add(current);
-    current = (current as { cause?: unknown }).cause;
+  try {
+    if (!isKitRpcEndpointError(err)) return askKit(err);
+    const seen = new Set<unknown>();
+    let current: unknown = rawErrorOf(err);
+    while (current !== null && current !== undefined && !seen.has(current)) {
+      seen.add(current);
+      // A nested RPC endpoint error's own 4001 says nothing either: look at what it wraps.
+      if (isKitRpcEndpointError(current)) {
+        current = rawErrorOf(current);
+        continue;
+      }
+      if (askKit(current)) return true;
+      if (typeof current !== "object") return false;
+      current = (current as { cause?: unknown }).cause;
+    }
+    return false;
+  } catch {
+    // Reading a property can throw too (a getter on a hostile object); that reads as no, like `askKit` below.
+    return false;
   }
-  return false;
+}
+
+function rawErrorOf(err: unknown): unknown {
+  return (err as { cause?: { trace?: { rawError?: unknown } } }).cause?.trace?.rawError;
 }
 
 function isKitRpcEndpointError(err: unknown): boolean {
