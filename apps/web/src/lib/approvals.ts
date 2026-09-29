@@ -25,6 +25,13 @@ export const LOGS_PAGE = 1000;
 export const MAX_PAGES = 5;
 /** One lookup checks at most this many (token, spender) pairs, the most recent first, so its multicall stays bounded. */
 export const MAX_PAIRS = 500;
+/**
+ * One lookup's multicall makes at most this many `aggregate3` calls in total. A clean lookup makes exactly one; a
+ * spoofed Approval event can poison a whole call (a target whose fallback burns unbounded gas fails the entire
+ * `eth_call`, not just its own entry), so a call that throws is retried as two half-sized calls, recursively, until
+ * this budget runs out.
+ */
+export const MULTICALL_BUDGET = 16;
 /** An allowance this large or larger reads "Unlimited": 2^255, half of uint256's range. */
 export const UNLIMITED = 2n ** 255n;
 
@@ -118,7 +125,9 @@ export async function readLogsPage(url: string, fetchFn: typeof fetch, apiKey?: 
   }
   const result = typeof body === "object" && body !== null ? (body as { result?: unknown }).result : undefined;
   if (!Array.isArray(result)) throw new ApprovalsUnavailable("The explorer answered without a list of logs.");
-  return result;
+  // The logs module answers at most LOGS_PAGE logs a request; bounded again here so a misbehaving response can't
+  // make collectApprovalLogs process an oversized page whole.
+  return result.slice(0, LOGS_PAGE);
 }
 
 const HEX_NUMBER = /^0x[0-9a-fA-F]*$/;
@@ -229,18 +238,63 @@ function decoded(result: CallResult | undefined, functionName: "allowance" | "sy
   }
 }
 
+/** One `resilientAggregate` attempt's outcome, and the two facts needed to decide the next one. */
+type MulticallOutcome = { results: CallResult[]; anySucceeded: boolean; anyUnresolved: boolean };
+
+/** A call neither answered nor attempted: `aggregate` never saw it, so it reads exactly like an on-chain revert. */
+const UNRESOLVED: CallResult = { success: false, returnData: "0x" };
+
+/**
+ * Calls `aggregate` with as many calls as it can. A clean call succeeds and this makes exactly one `aggregate` call
+ * in total, at any depth. One that throws (a poisoned target's fallback burns unbounded gas and fails the whole
+ * `eth_call`, not just its own entry) or answers the wrong number of results is retried as its calls split into two
+ * halves, recursively, each drawing from the one `budget` shared by the whole tree: `budget.left` is checked before
+ * every attempt, so once it runs out no further `aggregate` call is made. A one-call batch that fails, or any batch
+ * left unattempted when the budget runs out, resolves as `UNRESOLVED` for each of its calls rather than failing the
+ * whole lookup — the caller decides what an unresolved call means (liveApprovals drops it like a revert), and marks
+ * its answer `truncated` when `anyUnresolved` comes back true. `anySucceeded` carries whether ANY attempt, anywhere
+ * in the tree, actually got an answer from the chain: when it's false throughout, the caller still rejects, so an
+ * outage is never read as "no approvals".
+ */
+async function resilientAggregate(calls: readonly Call[], aggregate: Aggregate, budget: { left: number }): Promise<MulticallOutcome> {
+  if (budget.left <= 0) {
+    return { results: calls.map(() => UNRESOLVED), anySucceeded: false, anyUnresolved: true };
+  }
+  budget.left -= 1;
+  try {
+    const results = await aggregate(calls);
+    if (results.length !== calls.length) throw new ApprovalsUnavailable("The multicall answered the wrong number of results.");
+    return { results: [...results], anySucceeded: true, anyUnresolved: false };
+  } catch {
+    if (calls.length === 1) {
+      return { results: [UNRESOLVED], anySucceeded: false, anyUnresolved: true };
+    }
+    const mid = Math.ceil(calls.length / 2);
+    const left = await resilientAggregate(calls.slice(0, mid), aggregate, budget);
+    const right = await resilientAggregate(calls.slice(mid), aggregate, budget);
+    return {
+      results: [...left.results, ...right.results],
+      anySucceeded: left.anySucceeded || right.anySucceeded,
+      anyUnresolved: left.anyUnresolved || right.anyUnresolved,
+    };
+  }
+}
+
 /**
  * The pairs still live: every pair's `allowance(owner, spender)` and each token's symbol, name and decimals, in one
- * multicall. A pair at zero drops out, and so does one whose allowance can't be read. Labels come from contracts
- * anyone can deploy, so they are cleaned (`cleanLabel`); a label or decimals that can't be read is null.
+ * multicall (see `resilientAggregate` for how a poisoned target's calls are isolated rather than failing the whole
+ * lookup). A pair at zero drops out, and so does one whose allowance can't be read, or came back unresolved. Labels
+ * come from contracts anyone can deploy, so they are cleaned (`cleanLabel`); a label or decimals that can't be read
+ * is null. `truncated` is true only when some call came back unresolved — a pair legitimately reading zero, or a
+ * plain revert from a well-behaved multicall, is not truncation.
  */
 export async function liveApprovals(
   owner: Address,
   pairs: readonly ApprovalPair[],
   aggregate: Aggregate,
   network: NetworkId,
-): Promise<Approval[]> {
-  if (pairs.length === 0) return [];
+): Promise<{ approvals: Approval[]; truncated: boolean }> {
+  if (pairs.length === 0) return { approvals: [], truncated: false };
   const tokens = [...new Set(pairs.map((p) => p.token))];
   const calls: Call[] = [
     ...pairs.map((p) => ({
@@ -249,8 +303,8 @@ export async function liveApprovals(
     })),
     ...tokens.flatMap((token) => [SYMBOL, NAME, DECIMALS].map((callData) => ({ target: token, callData }))),
   ];
-  const results = await aggregate(calls);
-  if (results.length !== calls.length) throw new ApprovalsUnavailable("The multicall answered the wrong number of results.");
+  const { results, anySucceeded, anyUnresolved } = await resilientAggregate(calls, aggregate, { left: MULTICALL_BUDGET });
+  if (!anySucceeded) throw new ApprovalsUnavailable("The multicall could not complete.");
   const meta = new Map(
     tokens.map((token, i) => {
       const at = pairs.length + i * 3;
@@ -268,7 +322,7 @@ export async function liveApprovals(
       ] as const;
     }),
   );
-  return pairs.flatMap((p, i) => {
+  const approvals = pairs.flatMap((p, i) => {
     const allowance = decoded(results[i], "allowance");
     if (typeof allowance !== "bigint" || allowance === 0n) return [];
     const m = meta.get(p.token) ?? { symbol: null, name: null, decimals: null };
@@ -285,12 +339,13 @@ export async function liveApprovals(
       },
     ];
   });
+  return { approvals, truncated: anyUnresolved };
 }
 
 /** The whole lookup: the explorer's logs, their pairs (at most MAX_PAIRS, the most recent), and what is still live. */
 export async function loadApprovals(owner: Address, deps: ApprovalsDeps): Promise<ApprovalsAnswer> {
   const { logs, truncated } = await collectApprovalLogs(deps.readPage);
   const pairs = approvalPairs(owner, logs);
-  const approvals = await liveApprovals(owner, pairs.slice(0, MAX_PAIRS), deps.aggregate, deps.network);
-  return { approvals, truncated: truncated || pairs.length > MAX_PAIRS };
+  const live = await liveApprovals(owner, pairs.slice(0, MAX_PAIRS), deps.aggregate, deps.network);
+  return { approvals: live.approvals, truncated: truncated || pairs.length > MAX_PAIRS || live.truncated };
 }

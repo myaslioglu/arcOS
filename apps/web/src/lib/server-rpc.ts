@@ -25,3 +25,16 @@ export function serverRpcClient(): PublicClient {
 export function explorerPacer(): () => Promise<void> {
   return processGlobal("inspect.explorerPacer", () => perSecond(4));
 }
+
+/**
+ * Revoke's own RPC client, one per process, built exactly like serverRpcClient() (the same URL list, in the same
+ * order, and the same per-attempt timeout) but over its own endpoint-health record instead of the Inspector's. A
+ * spoofed Approval event can make an owner's multicall fail on every endpoint (see approvals.ts's resilient
+ * aggregate3 splitting): that must not put the URLs the Inspector, /badge, /t and /api/pulse share on cooldown, so
+ * Revoke's failures cool only Revoke's own client.
+ */
+export function approvalsRpcClient(): PublicClient {
+  return processGlobal("approvals.rpcClient", () =>
+    inspectionClient(activeChain(), processGlobal("approvals.rpcHealth", endpointHealth)),
+  );
+}

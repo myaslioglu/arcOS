@@ -7,6 +7,7 @@ import {
   LOGS_PAGE,
   MAX_PAGES,
   MAX_PAIRS,
+  MULTICALL_BUDGET,
   PERMIT2,
   SWAP_ADAPTER,
   UNLIMITED,
@@ -174,6 +175,12 @@ describe("readLogsPage", () => {
       await expect(readLogsPage("https://x.test/api", answering(status, body).fetchFn)).rejects.toBeInstanceOf(ApprovalsUnavailable);
     }
   });
+
+  it(`bounds a page to ${LOGS_PAGE} logs, even when the explorer sends more`, async () => {
+    const oversized = Array.from({ length: LOGS_PAGE + 1 }, (_, i) => rawLog(TOKEN_A, SPENDER_X, i + 1));
+    const { fetchFn } = answering(200, JSON.stringify({ status: "1", message: "OK", result: oversized }));
+    expect(await readLogsPage("https://x.test/api", fetchFn)).toHaveLength(LOGS_PAGE);
+  });
 });
 
 describe("collectApprovalLogs", () => {
@@ -256,28 +263,31 @@ describe("liveApprovals", () => {
       name: (token) => (token === TOKEN_A ? "Token A" : "Token B"),
       decimals: (token) => (token === TOKEN_A ? 18 : 6),
     });
-    expect(await liveApprovals(OWNER, pairs, aggregate, "mainnet")).toEqual([
-      {
-        token: TOKEN_A,
-        symbol: "AAA",
-        name: "Token A",
-        decimals: 18,
-        spender: SPENDER_X,
-        spenderLabel: null,
-        allowance: (5n * 10n ** 18n).toString(),
-        lastApprovalBlock: 30,
-      },
-      {
-        token: TOKEN_B,
-        symbol: "BBB",
-        name: "Token B",
-        decimals: 6,
-        spender: SPENDER_X,
-        spenderLabel: null,
-        allowance: UNLIMITED.toString(),
-        lastApprovalBlock: 10,
-      },
-    ]);
+    expect(await liveApprovals(OWNER, pairs, aggregate, "mainnet")).toEqual({
+      approvals: [
+        {
+          token: TOKEN_A,
+          symbol: "AAA",
+          name: "Token A",
+          decimals: 18,
+          spender: SPENDER_X,
+          spenderLabel: null,
+          allowance: (5n * 10n ** 18n).toString(),
+          lastApprovalBlock: 30,
+        },
+        {
+          token: TOKEN_B,
+          symbol: "BBB",
+          name: "Token B",
+          decimals: 6,
+          spender: SPENDER_X,
+          spenderLabel: null,
+          allowance: UNLIMITED.toString(),
+          lastApprovalBlock: 10,
+        },
+      ],
+      truncated: false,
+    });
     expect(batches).toEqual([3 + 2 * 3]);
   });
 
@@ -285,28 +295,54 @@ describe("liveApprovals", () => {
     const { aggregate } = stubChain({
       allowance: () => 1n,
       // A bidi override and a zero-width space in one symbol; a bytes32 symbol (MKR's kind) in the other.
-      symbol: (token) => (token === TOKEN_A ? str("A‮AA​") : pad("0x4d4b52", { size: 32, dir: "right" })),
+      symbol: (token) => (token === TOKEN_A ? str("A\u202EAA\u200B") : pad("0x4d4b52", { size: 32, dir: "right" })),
       name: (token) => (token === TOKEN_A ? "Token A" : "revert"),
       decimals: (token) => (token === TOKEN_A ? 18 : "revert"),
     });
-    const [a, b] = await liveApprovals(OWNER, [pairs[0], pairs[2]], aggregate, "mainnet");
+    const { approvals } = await liveApprovals(OWNER, [pairs[0], pairs[2]], aggregate, "mainnet");
+    const [a, b] = approvals;
     expect(a.symbol).toBe("AAA");
     expect([b.symbol, b.name, b.decimals]).toEqual([null, null, null]);
   });
 
   it("drops a pair whose allowance can't be read", async () => {
     const { aggregate } = stubChain({ allowance: (token) => (token === TOKEN_A ? "revert" : 1n) });
-    expect((await liveApprovals(OWNER, pairs, aggregate, "mainnet")).map((a) => a.token)).toEqual([TOKEN_B]);
+    const { approvals } = await liveApprovals(OWNER, pairs, aggregate, "mainnet");
+    expect(approvals.map((a) => a.token)).toEqual([TOKEN_B]);
   });
 
   it("answers nothing without pairs, and never calls the chain", async () => {
     const aggregate = vi.fn<Aggregate>();
-    expect(await liveApprovals(OWNER, [], aggregate, "mainnet")).toEqual([]);
+    expect(await liveApprovals(OWNER, [], aggregate, "mainnet")).toEqual({ approvals: [], truncated: false });
     expect(aggregate).not.toHaveBeenCalled();
   });
 
   it("treats a multicall that answers the wrong number of results as an outage", async () => {
     await expect(liveApprovals(OWNER, pairs, async () => [], "mainnet")).rejects.toBeInstanceOf(ApprovalsUnavailable);
+  });
+
+  it("splits the batch to isolate one poisoned token's calls: its pair is dropped, every other pair keeps its correct value, and the answer is marked truncated", async () => {
+    const { aggregate: healthy } = stubChain({ allowance: (token) => (token === TOKEN_B ? 9n : 1n) });
+    const poisoned = vi.fn<Aggregate>(async (calls) => {
+      // The poisoned token's fallback burns unbounded gas: any batch that touches it fails the whole eth_call, exactly
+      // as it would running for real, whatever else shares the batch.
+      if (calls.some((c) => c.target === TOKEN_A)) throw new Error("out of gas");
+      return healthy(calls);
+    });
+    const { approvals, truncated } = await liveApprovals(OWNER, pairs, poisoned, "mainnet");
+    expect(approvals).toEqual([
+      expect.objectContaining({ token: TOKEN_B, spender: SPENDER_X, allowance: "9" }),
+    ]);
+    expect(truncated).toBe(true);
+    expect(poisoned.mock.calls.length).toBeLessThanOrEqual(MULTICALL_BUDGET);
+  });
+
+  it(`rejects when the multicall never once succeeds, after at most ${MULTICALL_BUDGET} calls, so the route still answers 503`, async () => {
+    const alwaysThrows = vi.fn<Aggregate>(async () => {
+      throw new Error("out of gas");
+    });
+    await expect(liveApprovals(OWNER, pairs, alwaysThrows, "mainnet")).rejects.toBeInstanceOf(ApprovalsUnavailable);
+    expect(alwaysThrows.mock.calls.length).toBeLessThanOrEqual(MULTICALL_BUDGET);
   });
 });
 

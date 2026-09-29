@@ -11,9 +11,10 @@ const get = (query: string, ip = "198.51.100.7") =>
   GET(new Request(`https://4rcos.test/api/approvals${query}`, { headers: { "x-real-ip": ip } }));
 
 describe("GET /api/approvals", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     cachedApprovals.mockReset();
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -37,11 +38,13 @@ describe("GET /api/approvals", () => {
     expect(cachedApprovals).toHaveBeenCalledWith(OWNER);
   });
 
-  it("answers 503 with a sentence to show when the explorer or the RPC fails", async () => {
+  it("answers 503 with a sentence to show when the explorer or the RPC fails, kept by no browser or CDN, logging only the error's name", async () => {
     cachedApprovals.mockRejectedValue(new Error("The explorer answered 402."));
     const res = await get(`?owner=${OWNER}`);
     expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ error: "Couldn't load approvals. Try again in a minute." });
+    expect(errorSpy).toHaveBeenCalledWith("approvals failed", "Error");
   });
 
   it("limits each client to 20 lookups a minute", async () => {
