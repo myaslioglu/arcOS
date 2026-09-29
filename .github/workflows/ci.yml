@@ -4,11 +4,13 @@ on:
   push:
     branches: [r0, main]
   pull_request:
+  workflow_call:
 
 # Read-only, no deploy step, no secrets used anywhere in this workflow: it only checks out the repo,
 # installs dependencies from the committed lockfile, and runs the same typecheck/lint/test/build
 # commands documented in the root README/package.json. Deploying the contracts needs a private key
 # and is run by hand — see packages/contracts/DEPLOY.md — never from CI.
+# The site itself deploys live from deploy.yml, which runs this workflow first (workflow_call).
 permissions:
   contents: read
 

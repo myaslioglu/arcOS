@@ -1,0 +1,25 @@
+{
+  "approvals": [
+    {
+      "token": "0x0000000000000000000000000000000000000001",
+      "symbol": "TSTA",
+      "name": "Test Token A",
+      "decimals": 6,
+      "spender": "0x0000000000000000000000000000000000001001",
+      "spenderLabel": "Example DEX",
+      "allowance": "1000000",
+      "lastApprovalBlock": 100
+    },
+    {
+      "token": "0x0000000000000000000000000000000000000002",
+      "symbol": "TSTB",
+      "name": "Test Token B",
+      "decimals": 18,
+      "spender": "0x0000000000000000000000000000000000001002",
+      "spenderLabel": "Example Router",
+      "allowance": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "lastApprovalBlock": 200
+    }
+  ],
+  "truncated": false
+}
