@@ -28,60 +28,84 @@ There's no bounty program at this time.
 An acknowledgement within a few business days, and a report back once the issue is understood or
 fixed. Coordinated disclosure — please give us time to address a report before making it public.
 
+## Where the site runs
+
+https://4rcos.com runs on Firebase App Hosting (Cloud Run, behind Google's load balancers), configured in
+`apps/web/apphosting.yaml`. Its one server secret, `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which the
+server's explorer reads use because explorer.arc.io refuses server requests), is a Secret Manager secret, pinned to a
+version and available at runtime only. It is never a `NEXT_PUBLIC_` value and never in the repository. Every other
+setting in that file is public: `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, for one, is a client identifier that ships in
+the browser bundle.
+
 ## Rate limiting and the trusted-proxy assumption
 
-`/api/inspect` and `/api/approvals` key their per-client rate limits off `x-vercel-forwarded-for` when present AND
-`process.env.VERCEL === "1"` (set by the platform itself, never by a request — so a deployment
-that isn't actually running on Vercel never trusts a header a client could set on itself),
-otherwise the rightmost entry of `x-forwarded-for`, otherwise `x-real-ip` (see `clientKey` in
-`apps/web/src/lib/rate-limit.ts`). On Vercel, this assumes the platform's edge network appends the
-real client IP as the last hop of that header chain and strips or overwrites anything a client
-tried to inject — the leftmost entries of `x-forwarded-for` are client-controlled and never
-trusted for this decision. Running this app behind a different reverse proxy that doesn't set one
-of these headers correctly (or exposing it directly to the internet without one) would let every
-request collapse onto the `"unknown"` key, sharing one limit — not a security hole in itself, but
-it does mean the safety valve for those endpoints stops being per-client.
+`/api/inspect`, `/api/approvals`, `/api/event` and `/api/csp-report` limit each client, in memory and per server
+instance: a first line of defence, not a guarantee. A client is the entry of `x-forwarded-for` that the site's own
+proxies vouch for (`clientKey` in `apps/web/src/lib/rate-limit.ts`), else `x-real-ip`, else one shared `"unknown"` key.
+By default that entry is the rightmost one, the hop the nearest proxy added: every entry to its left is client-supplied
+and trivially spoofed, and is never trusted. An IPv6 address counts by its /64, so a client cycling through a block
+doesn't dodge its limit.
+
+If a Google load balancer in front of App Hosting adds an entry of its own to the right of the client's, every visitor
+is keyed by that one entry and they share a single bucket: stricter, never looser. `ARCOS_TRUSTED_HOPS` (server-only,
+optional) says how many entries, counted from the right, belong to the site's own proxies; n skips n entries before it
+reads the client. Unset, empty, negative or not a whole number, it is 0, and the rightmost entry is the client's. A
+header with n entries or fewer holds no entry the proxies vouch for, so the leftmost is read, which is no looser than
+reading the rightmost: with nothing vouched for, the client chose that one as freely as any other. The value is
+measured, not guessed (`apps/web/apphosting.yaml` says how) and never set higher than the measurement shows. A value
+above the real number of the site's own proxies makes the key an entry the client wrote, and a client can then pick its
+own bucket on every request.
+
+`x-vercel-forwarded-for` is read only when `process.env.VERCEL === "1"`, which the platform sets and no request can, so
+only on a Vercel deployment; anywhere else nothing tells a genuine header from one a client set on itself, and it is
+ignored. The live site doesn't run on Vercel. Running the app behind a different reverse proxy that doesn't set these
+headers correctly, or exposing it directly to the internet, would let every request collapse onto one key: not a
+security hole in itself, but the safety valve for those endpoints would stop being per-client.
 
 ## Security headers and the content security policy
 
-Every response carries these headers (`headers()` in `apps/web/next.config.ts`, built in `apps/web/src/lib/security-headers.ts`):
+Every response carries these headers (`headers()` in `apps/web/next.config.ts`, built in
+`apps/web/src/lib/security-headers.ts`):
 
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains`, without `preload`.
-- `X-Frame-Options: DENY` and a content security policy of `frame-ancestors 'none'; object-src 'none'; base-uri 'none';
-  form-action 'self'`, both enforced: the windows that ask a wallet to sign can't be framed by another site.
+- `X-Frame-Options: DENY` and a content security policy of
+  `frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'`, both enforced: the windows that ask
+  a wallet to sign can't be framed by another site.
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` and a `Permissions-Policy` that
   turns off the camera, microphone, geolocation, payment and browsing-topics features.
-- `Cross-Origin-Opener-Policy: same-origin-allow-popups`, not `same-origin`, which would cut a wallet's popup off from the
-  page that opened it.
+- `Cross-Origin-Opener-Policy: same-origin-allow-popups`, not `same-origin`, which would cut a wallet's popup off from
+  the page that opened it.
 
-The full policy is sent as `Content-Security-Policy-Report-Only`, so it blocks nothing. It says the page takes its scripts
-and styles from itself (and one font stylesheet from Google Fonts, for the WalletConnect modal) and calls only itself,
-Arc's RPC nodes and explorers, WalletConnect and Reown, and Circle's App Kit; `security-headers.ts` lists each host with
-who calls it. Browsers post what it would have blocked to `/api/csp-report`,
-which writes one log line for each violation (the directive, the blocked origin or keyword, and the page's path) and
-answers 204 to everything. It logs no query string, no address, no client address and no user agent, reads at most 16 KB
-and limits each client. The policy watches real traffic for a few days before it is enforced, in a later step.
+The full policy is sent as `Content-Security-Policy-Report-Only`, so it blocks nothing. It says the page takes its
+scripts and styles from itself (and one font stylesheet from Google Fonts, for the WalletConnect modal) and calls only
+itself, Arc's RPC nodes and explorers, WalletConnect and Reown, and Circle's App Kit; `security-headers.ts` lists each
+host with who calls it. Browsers post what it would have blocked to `/api/csp-report`, which writes one log line for
+each violation (the directive, the blocked origin or keyword, and the page's path) and answers 204 to everything. It
+logs no query string, no address, no client address and no user agent, reads at most 16 KB and limits each client. The
+policy watches real traffic for a few days before it is enforced, in a later step.
 
-`script-src` allows `'unsafe-inline'`. Next's own bootstrap scripts and the theme script are inline and carry no nonce, and
-a nonce is made for each request, which would make every page render on the server on each visit instead of being served
-as a static file. So the policy keeps every other host's script out, but not an inline one: a known gap that nonces or
-hashes would close.
+`script-src` allows `'unsafe-inline'`. Next's own bootstrap scripts and the theme script are inline and carry no nonce,
+and a nonce is made for each request, which would make every page render on the server on each visit instead of being
+served as a static file. So the policy keeps every other host's script out, but not an inline one: a known gap that
+nonces or hashes would close.
 
 ## Event counts
 
-The site counts a few things itself, so its maker can see whether they are used: an inspection run, a proof-page share, a
-mint, a drop, a swap, a bridge, a revoke, a click on a fix that isn't ready yet, and the name of a Terminal command. When
-one happens the page sends its name and a few small values (how many checks passed, how many recipients, which pair or
-chains, the command's name) to `/api/event` on this site, and that route writes one line to the host's logs, which on
+The site counts a few things itself, so its maker can see whether they are used: an inspection run, a proof-page share,
+a mint, a drop, a swap, a bridge, a revoke, a click on a fix that isn't ready yet, and the name of a Terminal command.
+When one happens the page sends its name and a few small values (how many checks passed, how many recipients, which pair
+or chains, the command's name) to `/api/event` on this site, and that route writes one line to the host's logs, which on
 Firebase App Hosting is Cloud Logging. There are no cookies and no third-party script.
 
-The line holds the event's name and those values and nothing else: no address (a wallet's or a token's), no IP address, no
-user agent and nothing typed in the Terminal past a command's name. It has no visitor or session identifier, so a count
-says how often something happens and not who did it. The route takes only the nine event names, and for each only its own
-values, which are whole numbers up to 1,000,000 or labels of up to 32 letters, digits, dots, underscores and hyphens (an
-address is longer, so it can't pass); anything else is dropped. It ignores a body over 2 KB and a request whose `Origin`
-is another site, limits each client, and answers 204 to everything. The host keeps its own request log, as it does for
-any page, and these counts add nothing to it.
+The line holds the event's name and those values and nothing else: no address (a wallet's or a token's), no IP address,
+no user agent and nothing typed in the Terminal past a command's name. It has no visitor or session identifier, so a
+count says how often something happens and not who did it. The route takes only the nine event names, and for each only
+its own values, which are whole numbers up to 1,000,000 or labels of up to 32 letters, digits, dots, underscores and
+hyphens (an address is longer, so it can't pass); anything else is dropped. It ignores a body over 2 KB and a request
+whose `Origin` is another site, limits each client, and answers 204 to everything. The host keeps its own request log,
+as it does for any page, and these counts add nothing to it. They are also separate from what the services the page
+calls do on their own: WalletConnect and Reown (below), and Circle's App Kit behind Swap and Bridge, which by default
+sends its own usage and error reports to Circle.
 
 ## Reading contracts anyone can deploy
 

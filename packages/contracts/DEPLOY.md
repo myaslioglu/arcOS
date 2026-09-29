@@ -193,7 +193,7 @@ These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the a
 The testnet `TokenFactory` predates the current name rule (it checks each byte only for ASCII control characters, so malformed UTF-8 and bidi, line-break and invisible characters still pass there); the
 mainnet deployment uses the current source.
 
-## What the agent still needs from you
+## Open questions
 
 Every step that signs a transaction is yours: with a keystore key in your terminal, or with the browser-wallet
 path above, where the agent can run the command but only you can confirm each transaction in your wallet.

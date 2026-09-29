@@ -1,7 +1,9 @@
 # 4rc.OS
 
 4rc.OS is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
-contract, mint one without writing code, and send a token to many wallets in one flow.
+contract, mint one without writing code, send a token to many wallets in one flow, swap and
+bridge, and revoke token approvals. A Terminal reads the chain and opens apps from typed
+commands, and a Roadmap window lists the apps still on the way.
 
 Automated analysis, not investment advice.
 
@@ -35,7 +37,7 @@ why, and the condition for removing it.
 
 ## Run it
 
-Needs Node 22.16 or newer and **npm 11 or newer** (`npm -v`). npm 10 installs Foundry but leaves out the
+Needs Node 22 (22.16 or later) and **npm 11 or newer** (`npm -v`). npm 10 installs Foundry but leaves out the
 `forge`, `cast` and `anvil` commands, so the `npx forge` / `npx cast` commands in
 [DEPLOY.md](packages/contracts/DEPLOY.md) would offer to download unrelated npm packages with those
 names instead; `npm install -g npm@11` fixes it.
@@ -70,7 +72,8 @@ build`.
 
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
   proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
-  (the wallpaper's live chart) and `/api/approvals` (Revoke's list).
+  (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts)
+  and `/api/csp-report` (content security policy violation reports).
 - `packages/shell` — the desktop itself: windows, dock, folders and trays, launcher, drag and
   drop. `src/core` is pure TypeScript (no React beyond type imports), `src/ui` holds the React
   components and `src/styles` the CSS. No wagmi or viem imports.
