@@ -6,6 +6,7 @@ const STILL = "@media (prefers-reduced-motion: reduce)";
 const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "");
 const css = stripComments(readFileSync(new URL("../desk.css", import.meta.url), "utf8"));
 const desktopCss = stripComments(readFileSync(new URL("../desktop.css", import.meta.url), "utf8"));
+const desktopPage = readFileSync(new URL("../../../../../apps/web/src/app/page.tsx", import.meta.url), "utf8");
 
 /** Where the block that begins at `from` ends: the index of its closing brace, found by matching braces. */
 function blockEnd(text: string, from: number): number {
@@ -74,6 +75,17 @@ describe("desk.css", () => {
     expect(stilled(".os-icon:hover .os-icon-tile", "transform: none")).toBe(true);
     // Motion off and nothing else: a layout property here would change the desk under a reduced-motion setting only.
     expect(rules.flatMap((r) => r.declarations).filter((d) => !/^(?:transition|transform): none$/.test(d))).toEqual([]);
+  });
+
+  // The reduce block above beats desktop.css's own transition and hover lift only by coming after it, at equal specificity,
+  // so the desktop page has to import desktop.css first.
+  it("is imported by the desktop page after desktop.css, which is what lets its reduce block win", () => {
+    const sheets = [...desktopPage.matchAll(/^import\s+["']([^"']+\.css)["'];?\s*$/gm)].map((m) => m[1]);
+    const desktop = sheets.indexOf("@arcos/shell/styles/desktop.css");
+    const desk = sheets.indexOf("@arcos/shell/styles/desk.css");
+    expect(desktop, "desktop.css imported by the page").toBeGreaterThan(-1);
+    expect(desk, "desk.css imported by the page").toBeGreaterThan(-1);
+    expect(desktop).toBeLessThan(desk);
   });
 
   // A 1366x768 laptop leaves about 657px inside the browser. The desk kept a 7rem cushion above 640px, which scrolled it

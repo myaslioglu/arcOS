@@ -17,6 +17,7 @@ import {
   APPROVE_ABI,
   fetchApprovals,
   focusTargetAfterRemoval,
+  focusWasLost,
   inspectButtonLabel,
   markRevoked,
   nodeHasSeenApproval,
@@ -148,17 +149,20 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
   // stands in for one — see focusTargetAfterRemoval's "heading" case) and each row's Revoke button.
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  // Where focus goes once a revoke has removed its row. revoke() only stores it: every Revoke button is disabled while
-  // busy is set, and a disabled button can't take focus, so the effect focuses it once busy is null again, after the
-  // list has re-rendered without the row.
+  // Where focus goes once a revoke has ended. revoke() only stores it: every Revoke button is disabled while busy is
+  // set, and a disabled button can't take focus, so the effect acts once busy is null again, after the list has
+  // re-rendered without a removed row. It moves focus only if it was lost, which is to say the body holds it, as it
+  // does when the focused row leaves the list or its button is disabled. A visitor who has moved on meanwhile, to the
+  // Terminal or another window, keeps their place. The list's container stands in for a row no longer listed.
   const pendingFocus = useRef<FocusTarget | null>(null);
   useEffect(() => {
     if (busy !== null) return;
     const target = pendingFocus.current;
     if (target === null) return;
     pendingFocus.current = null;
-    if (target.kind === "heading") listRef.current?.focus();
-    else rowRefs.current[target.key]?.focus();
+    if (!focusWasLost(document.activeElement, document.body)) return;
+    const row = target.kind === "row" ? rowRefs.current[target.key] : null;
+    (row ?? listRef.current)?.focus();
   }, [busy]);
 
   if (query.isPending)
@@ -257,6 +261,9 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     } catch (err) {
       setFailures((prev) => ({ ...prev, [key]: { text: revokeFailure(stage, err), ...(hash ? { hash } : {}) } }));
     } finally {
+      // Unless a success stored where focus goes next, it goes back to this row's button: a revoke that ended without
+      // removing the row (a failure) left focus on the body, where the disabled button dropped it.
+      if (pendingFocus.current === null) pendingFocus.current = { kind: "row", key };
       setBusy(null);
     }
   };

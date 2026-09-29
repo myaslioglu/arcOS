@@ -15,15 +15,26 @@ export type Pulse = { oldestBlock: number; ratios: number[] };
 export type FeeHistoryAnswer = { oldestBlock: bigint; gasUsedRatio: readonly number[] };
 
 /**
+ * A fee history the chart can't be drawn from, refused by `toPulse`. Named, because the route's log keeps an error's
+ * name and nothing else: "PulseRefused" reads apart from an RPC failure, which arrives as a plain Error or a TypeError.
+ */
+export class PulseRefused extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "PulseRefused";
+  }
+}
+
+/**
  * The route's answer: the oldest block as a number, and each ratio kept within 0..1 and rounded to 4 decimals. Throws
- * on a ratio that isn't a finite number, which would plot a value nobody measured, and on fewer than 2 ratios, which
- * would draw nothing; the route then answers 503 and the browser keeps the last good chart.
+ * `PulseRefused` on a ratio that isn't a finite number, which would plot a value nobody measured, and on fewer than 2
+ * ratios, which would draw nothing; the route then answers 503 and the browser keeps the last good chart.
  */
 export function toPulse(history: FeeHistoryAnswer): Pulse {
   const { gasUsedRatio } = history;
-  if (gasUsedRatio.length < 2) throw new Error("The fee history has fewer than 2 ratios.");
+  if (gasUsedRatio.length < 2) throw new PulseRefused("The fee history has fewer than 2 ratios.");
   if (!gasUsedRatio.every((r) => Number.isFinite(r))) {
-    throw new Error("The fee history has a ratio that isn't a number.");
+    throw new PulseRefused("The fee history has a ratio that isn't a number.");
   }
   return {
     oldestBlock: Number(history.oldestBlock),

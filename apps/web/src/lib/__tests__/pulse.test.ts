@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { PULSE_BLOCKS, parsePulse, pulseCache, toPulse, type Pulse } from "../pulse";
+import { PULSE_BLOCKS, PulseRefused, parsePulse, pulseCache, toPulse, type FeeHistoryAnswer, type Pulse } from "../pulse";
 
 const ANSWER: Pulse = { oldestBlock: 100, ratios: [0.1, 0.2] };
+
+/** What toPulse throws for a history, or undefined when it takes it. */
+const refusal = (history: FeeHistoryAnswer): unknown => {
+  try {
+    toPulse(history);
+  } catch (e) {
+    return e;
+  }
+  return undefined;
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,6 +39,21 @@ describe("toPulse", () => {
   it("refuses a ratio that isn't a finite number, instead of plotting it as 0", () => {
     for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
       expect(() => toPulse({ oldestBlock: 1n, gasUsedRatio: [0.1, bad, 0.2] }), String(bad)).toThrow();
+    }
+  });
+
+  // The route's log keeps an error's name and nothing else, so a refusal has a name of its own to read apart from an RPC
+  // failure, which arrives as a plain Error or a TypeError.
+  it("names every refusal PulseRefused", () => {
+    const refusals = [
+      refusal({ oldestBlock: 1n, gasUsedRatio: [0.1, Number.NaN, 0.2] }),
+      refusal({ oldestBlock: 1n, gasUsedRatio: [0.5] }),
+      refusal({ oldestBlock: 1n, gasUsedRatio: [] }),
+    ];
+    for (const e of refusals) {
+      expect((e as Error | undefined)?.name).toBe("PulseRefused");
+      expect(e).toBeInstanceOf(PulseRefused);
+      expect(e).toBeInstanceOf(Error);
     }
   });
 

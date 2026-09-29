@@ -5,6 +5,7 @@ const { cachedPulse } = vi.hoisted(() => ({ cachedPulse: vi.fn() }));
 vi.mock("@/lib/pulse-server", () => ({ cachedPulse }));
 
 import { GET } from "@/app/api/pulse/route";
+import { toPulse } from "@/lib/pulse";
 
 describe("GET /api/pulse", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -31,6 +32,18 @@ describe("GET /api/pulse", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ error: "unavailable" });
     expect(errorSpy).toHaveBeenCalledWith("pulse failed", "Error");
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // The real toPulse in place of the cache: a fee history the chart can't be drawn from ends as a 503 like any other
+  // failure, and the log names it as a refusal, which a plain Error from the RPC never is.
+  it("logs a refused fee history as PulseRefused, and still answers 503 unavailable", async () => {
+    cachedPulse.mockImplementation(async () => toPulse({ oldestBlock: 5n, gasUsedRatio: [0.5] }));
+    const res = await GET();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "unavailable" });
+    expect(errorSpy).toHaveBeenCalledWith("pulse failed", "PulseRefused");
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 

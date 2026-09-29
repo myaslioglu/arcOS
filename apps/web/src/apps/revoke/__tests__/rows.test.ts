@@ -10,6 +10,7 @@ import {
   APPROVE_ABI,
   fetchApprovals,
   focusTargetAfterRemoval,
+  focusWasLost,
   forgetRevokes,
   inspectButtonLabel,
   markRevoked,
@@ -346,6 +347,28 @@ describe("focusTargetAfterRemoval", () => {
   });
 });
 
+describe("focusWasLost", () => {
+  // Small stand-ins for DOM nodes: all that is read is which object holds focus, and whether it is the body.
+  const body = { tagName: "BODY" };
+  const button = { tagName: "BUTTON" };
+  const input = { tagName: "INPUT" };
+
+  // Focus lands on the body when the element that held it goes away (a revoked row) or is disabled (a Revoke button while
+  // a revoke runs), and nothing holds it at all before the page has been clicked.
+  it("is true when nothing holds focus, or the body does", () => {
+    expect(focusWasLost(null, body)).toBe(true);
+    expect(focusWasLost(body, body)).toBe(true);
+  });
+
+  // A visitor who has moved on, to the lookup field, an Inspect button or a window of another app, keeps their place: their
+  // next Space or Enter must not start a revoke they didn't choose.
+  it("is false for any other element", () => {
+    expect(focusWasLost(button, body)).toBe(false);
+    expect(focusWasLost(input, body)).toBe(false);
+    expect(focusWasLost(button, null)).toBe(false);
+  });
+});
+
 describe("revokeButtonLabel", () => {
   it("names the token by symbol and the spender by its resolved label", () => {
     expect(revokeButtonLabel({ token: TOKEN, symbol: "USDC", spender: SPENDER }, "Permit2")).toBe("Revoke USDC for Permit2");
@@ -416,13 +439,26 @@ describe("Window.tsx focuses the next row only once no revoke is running", () =>
     expect(revokeBody).not.toMatch(/\.focus\(/);
   });
 
-  it("focuses the stored target in an effect that waits for busy to be null, then forgets it", () => {
+  it("focuses the stored target in an effect that waits for busy to be null, forgets it, and moves focus only if it was lost", () => {
     const effect = source.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[busy\]\);/)?.[1] ?? "";
     expect(effect, "an effect keyed on busy").not.toBe("");
-    expect(effect).toMatch(/busy !== null/);
-    expect(effect).toMatch(/listRef\.current\?\.focus\(\)/);
-    expect(effect).toMatch(/rowRefs\.current\[[^\]]+\]\?\.focus\(\)/);
-    expect(effect).toMatch(/=\s*null;/);
+    const at = (text: string) => effect.indexOf(text);
+    // In this order: wait for busy, forget the target (one that is declined too), check that focus was lost, then focus.
+    expect(at("busy !== null")).toBeGreaterThan(-1);
+    expect(at("pendingFocus.current = null")).toBeGreaterThan(at("busy !== null"));
+    expect(at("focusWasLost(document.activeElement, document.body)")).toBeGreaterThan(at("pendingFocus.current = null"));
+    expect(at(".focus()")).toBeGreaterThan(at("focusWasLost("));
+    // The list's own container stands in for the heading target, and for a row that is gone by then.
+    expect(effect).toMatch(/\?\?\s*listRef\.current/);
+  });
+
+  // The Revoke button that was clicked is disabled while busy, so focus drops to the body. A revoke that ends without
+  // removing its row (a failure) sends focus back to that row's button through the same effect, and so the same guard.
+  it("sends focus back to the row's own button when a revoke ends without removing it", () => {
+    const ending = revokeBody.match(/finally \{([\s\S]*?)\n    \}/)?.[1] ?? "";
+    expect(ending, "revoke()'s finally").not.toBe("");
+    expect(ending).toMatch(/pendingFocus\.current === null\)\s*pendingFocus\.current = \{ kind: "row", key \}/);
+    expect(ending.indexOf("setBusy(null)")).toBeGreaterThan(ending.indexOf("pendingFocus.current"));
   });
 });
 

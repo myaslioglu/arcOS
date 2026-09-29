@@ -197,6 +197,16 @@ export function focusTargetAfterRemoval(keysBefore: readonly string[], removedKe
 }
 
 /**
+ * Whether focus was lost: nothing holds it, or the page body does, which is where it lands when the element that had it
+ * is removed (a revoked row) or disabled (the Revoke button that was clicked, while its revoke runs). Window.tsx moves
+ * focus on when a revoke ends only then. A visitor who has moved on, to the Terminal, the lookup field or a window of
+ * another app, keeps their place, so their next Space or Enter can't start a revoke they didn't choose.
+ */
+export function focusWasLost(active: object | null, body: object | null): boolean {
+  return active === null || active === body;
+}
+
+/**
  * The Revoke button's accessible name, e.g. "Revoke USDC for Permit2" — the token by symbol, else its short
  * address; the spender by its resolved label, else "spender " plus its short address, matching inspectButtonLabel's
  * own wording for one Revoke doesn't recognise.
