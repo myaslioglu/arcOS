@@ -1,4 +1,5 @@
 import { formatUsdc } from "@arcos/chain";
+import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "./wallet-frame";
 
 /**
  * Shown for any error this module can't decode into one of the mappings below — a network hiccup,
@@ -172,15 +173,18 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
 /**
  * Turns a thrown wallet/contract error into one plain sentence a user can act on. Checks, in order:
  * 1. `UserFacingError` — a message this app already wrote, returned as-is.
- * 2. A wallet-level user rejection ("You cancelled the request in your wallet.").
- * 3. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
- * 4. A balance too low for the value plus gas (`INSUFFICIENT_FUNDS_ERROR`).
- * 5. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
+ * 2. A wallet that took the page for an embedded frame, whatever code it sent (`EMBEDDED_FRAME_MESSAGE`,
+ *    lib/wallet-frame.ts): trying again can't help, a reload can.
+ * 3. A wallet-level user rejection ("You cancelled the request in your wallet.").
+ * 4. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
+ * 5. A balance too low for the value plus gas (`INSUFFICIENT_FUNDS_ERROR`).
+ * 6. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
 export function describeContractError(err: unknown): string {
   if (err instanceof UserFacingError) return err.message;
+  if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
 
   const revert = findDecodedRevert(err);

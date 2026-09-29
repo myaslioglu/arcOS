@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { feeControllerAbi, multisendAbi, tokenFactoryAbi } from "@arcos/chain";
 import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
+import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
 
 type AbiErrorItem = { type: string; name?: string };
 
@@ -280,5 +281,20 @@ describe("describeContractError — a wallet that can't cover the transaction", 
     expect(INSUFFICIENT_FUNDS_ERROR).toMatch(/USDC/);
     expect(INSUFFICIENT_FUNDS_ERROR).toMatch(/gas/);
     expect(INSUFFICIENT_FUNDS_ERROR).not.toMatch(/OutOfFunds|-32003|revert/i);
+  });
+});
+
+// A wallet that took the page for an embedded frame refuses the transaction too, until the page reloads
+// (lib/wallet-frame.ts). Its words never reach the visitor, and it isn't read as the visitor cancelling.
+describe("describeContractError — a wallet that takes the page for an embedded frame", () => {
+  const TRUST_WALLET_TEXT =
+    "Request blocked: embedded frames are not allowed for this origin. For your security, 4rcos.com can't make this request from an embedded frame.";
+
+  it("says to reload", () => {
+    expect(describeContractError({ code: 4100, message: TRUST_WALLET_TEXT })).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
+  it("says to reload even under a rejection code", () => {
+    expect(describeContractError({ code: 4001, message: TRUST_WALLET_TEXT })).toBe(EMBEDDED_FRAME_MESSAGE);
   });
 });

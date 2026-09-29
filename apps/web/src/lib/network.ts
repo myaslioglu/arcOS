@@ -3,6 +3,7 @@
 import { useAccount, useSwitchChain } from "wagmi";
 import { SwitchChainError, UserRejectedRequestError } from "viem";
 import { activeChain } from "@arcos/chain";
+import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "./wallet-frame";
 
 /** Walks an error's `cause` chain (viem's own `BaseError.cause` and the standard `Error.cause`
  * both use this shape) looking for a user rejection: viem's own `UserRejectedRequestError`, or the
@@ -65,9 +66,11 @@ export const ALREADY_OPEN_MESSAGE = "Your wallet already has a request open. Che
  * GENERIC_TRANSACTION_ERROR for the same rule elsewhere). A refused switch (the wallet's own "add
  * network" dialog dismissed) reads as a rejection; code 4902 means the wallet doesn't have the chain
  * added yet; code -32002 means the wallet already has a request open. Anything else — an
- * unrecognized code, or no code at all — gets one generic sentence.
+ * unrecognized code, or no code at all — gets one generic sentence. A wallet that took the page for
+ * an embedded frame is checked first, whatever code it sent (lib/wallet-frame.ts).
  */
 export function switchNetworkErrorMessage(error: unknown, chainName: string): string {
+  if (isEmbeddedFrameRefusal(error)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(error)) {
     return `Your wallet didn't switch networks. Try again, or add ${chainName} in your wallet.`;
   }
@@ -107,8 +110,12 @@ function isWalletConnectLoadError(error: unknown): boolean {
  * keeps that failure, so the button fails again until the page reloads. `lazyWalletConnect` raises a
  * `WalletConnectLoadError` for exactly that and nothing else: a wallet that refuses (an unsupported chain, say) gets the
  * generic sentence, since a reload wouldn't change its answer.
+ *
+ * A wallet that took the page for an embedded frame refuses until the page reloads, whatever code it sends, even
+ * 4001, so it's checked before everything else (lib/wallet-frame.ts).
  */
 export function connectErrorMessage(error: unknown): string {
+  if (isEmbeddedFrameRefusal(error)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(error)) return "You cancelled the request in your wallet.";
   if (isWalletConnectLoadError(error)) return "WalletConnect couldn't load. Reload the page and try again.";
   if (errorCode(error) === -32002) return ALREADY_OPEN_MESSAGE;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BaseError, ResourceUnavailableRpcError, SwitchChainError, UserRejectedRequestError } from "viem";
 import { WalletConnectLoadError } from "@/providers/lazyWalletConnect";
 import { ALREADY_OPEN_MESSAGE, connectErrorMessage, switchNetworkErrorMessage } from "../network";
+import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
 
 const CHAIN_NAME = "Arc";
 const REJECTED = "Your wallet didn't switch networks. Try again, or add Arc in your wallet.";
@@ -177,5 +178,24 @@ describe("connectErrorMessage when WalletConnect can't load", () => {
   it("still reads a refusal first", () => {
     const refusal = new UserRejectedRequestError(new Error("User rejected."));
     expect(connectErrorMessage(refusal)).toBe("You cancelled the request in your wallet.");
+  });
+});
+
+// Trust Wallet's extension refuses every request from a page it takes for an embedded frame, including one Chrome
+// preloaded from the address bar; a reload fixes it (lib/wallet-frame.ts).
+describe("a wallet that takes the page for an embedded frame", () => {
+  const TRUST_WALLET_TEXT =
+    "Request blocked: embedded frames are not allowed for this origin. For your security, 4rcos.com can't make this request from an embedded frame.";
+
+  it("connectErrorMessage says to reload, never the wallet's own words", () => {
+    expect(connectErrorMessage({ code: 4100, message: TRUST_WALLET_TEXT })).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
+  it("connectErrorMessage says to reload even under a rejection code", () => {
+    expect(connectErrorMessage({ code: 4001, message: TRUST_WALLET_TEXT })).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
+  it("switchNetworkErrorMessage says to reload too", () => {
+    expect(switchNetworkErrorMessage({ code: 4100, message: TRUST_WALLET_TEXT }, CHAIN_NAME)).toBe(EMBEDDED_FRAME_MESSAGE);
   });
 });
