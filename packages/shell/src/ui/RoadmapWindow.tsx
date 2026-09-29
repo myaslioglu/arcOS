@@ -17,7 +17,7 @@ export function RoadmapWindow({ apps }: { apps: readonly AppManifest[] }) {
             </span>
             <span className="os-roadmap-text">
               <span className="os-roadmap-name">{app.name}</span>
-              <span className="os-roadmap-blurb">{app.blurb}</span>
+              <span className="os-roadmap-blurb" title={app.blurb}>{app.blurb}</span>
             </span>
             <span className="os-roadmap-stage">{stage}</span>
           </li>

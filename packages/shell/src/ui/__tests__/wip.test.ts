@@ -80,6 +80,16 @@ describe("RoadmapWindow", () => {
     expect(html).toContain("Alerts when a token you hold changes");
   });
 
+  it("titles each blurb with its full text, since the row cuts a long one short with an ellipsis", () => {
+    const html = renderToStaticMarkup(createElement(RoadmapWindow, { apps: [VAULT, WATCHDOG] }));
+    const blurbs = [...html.matchAll(/<span ([^>]*class="os-roadmap-blurb"[^>]*)>([^<]*)<\/span>/g)].map((m) => ({
+      attributes: m[1],
+      text: m[2],
+    }));
+    expect(blurbs.map((b) => b.text)).toEqual(["Alerts when a token you hold changes", "Lock liquidity and team tokens"]);
+    for (const { attributes, text } of blurbs) expect(attributes).toContain(`title="${text}"`);
+  });
+
   it("says so when nothing is in progress", () => {
     expect(renderToStaticMarkup(createElement(RoadmapWindow, { apps: [FINDER] }))).toContain("No apps are in progress.");
   });

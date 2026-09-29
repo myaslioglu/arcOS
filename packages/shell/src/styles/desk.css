@@ -6,14 +6,17 @@
  *
  * Two rules, both checked by styles/__tests__/desk-css.test.ts: every colour is a token from tokens.css (shadows use
  * --shadow-nav, highlights --selection-fg, masks any opaque token), and everything that moves does so only inside
- * `@media (prefers-reduced-motion: no-preference)`.
+ * `@media (prefers-reduced-motion: no-preference)`. The one `reduce` block only switches off the transition and hover
+ * lift desktop.css gives the app icons.
  */
 
 /* The desk: folders down the first column, desk items down the last, the wallpaper open between them. The columns are
    spread edge to edge, so the last one stands against the right side; four rows keep every icon clear of the dock.
-   On a short screen the bottom cushion (padding-bottom, clear of the dock either way) shrinks instead of the row
-   count: dropping to three rows still forces a fourth item in the last column into an implicit row past it, landing
-   behind the dock; four rows keep fitting the same way, just with less spare room below the last one. */
+   The bottom cushion (padding-bottom) is 5rem at every height. The dock's band is about 71px and the four rows end
+   550px down the screen (the 40px bar, 18px of padding, four 7.5rem rows and three 4px gaps), so 80px clears the dock,
+   and the desk, 590px tall in all, fits a 640px screen without scrolling. A taller cushion scrolled the desk on a
+   1366x768 laptop, which leaves the page about 657px. The cushion shrinks rather than the row count: dropping to
+   three rows still forces a fourth item in the last column into an implicit row past it, landing behind the dock. */
 .os-desk {
   --desk-cell: 7.5rem;
   position: relative; z-index: 10;
@@ -23,10 +26,9 @@
   grid-template-rows: repeat(4, var(--desk-cell));
   grid-auto-columns: var(--desk-cell); grid-auto-rows: var(--desk-cell);
   align-content: start; justify-content: space-between;
-  gap: 4px 8px; padding: 18px 14px 7rem;
+  gap: 4px 8px; padding: 18px 14px 5rem;
   user-select: none;
 }
-@media (max-height: 640px) { .os-desk { padding-bottom: 5rem; } }
 
 .os-desk-cell {
   --os-hue: var(--os-group, var(--accent));
@@ -121,6 +123,13 @@
   .os-desk-cell:is(:hover, :focus-visible) .os-folder-card {
     transform: translateY(calc(var(--fh) * -0.11)) rotate(calc((var(--i) - (var(--n) - 1) / 2) * 11deg));
   }
+}
+/* The app icons' own motion is set in desktop.css with no condition; a reduced-motion setting stills it here, and this
+   file loads after that one. Only transition and transform are touched, so no box changes size or place. The hover
+   lift is reset by the selector that sets it: `.os-icon-tile` alone would lose to `.os-icon:hover .os-icon-tile`. */
+@media (prefers-reduced-motion: reduce) {
+  .os-icon, .os-icon-tile { transition: none; }
+  .os-icon:hover .os-icon-tile { transform: none; }
 }
 
 /* The folder window: the folder's apps in a grid over a status line that reads out the pointed-at app. */
