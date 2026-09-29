@@ -16,7 +16,21 @@ function load<T>(id: string): T {
   }
 }
 
-type FirestoreApiCtor = new () => { upgradeOldSpec(spec: unknown): unknown; validateSpec(spec: unknown): void };
+type ApiClient = {
+  get(url: string): Promise<{ body: unknown }>;
+  post(url: string, body: unknown): Promise<{ body: unknown }>;
+  patch(url: string, body: unknown, options?: { queryParams?: Record<string, string> }): Promise<{ body: unknown }>;
+  delete(url: string): Promise<{ body: unknown }>;
+};
+type FirestoreApiCtor = new () => {
+  apiClient: ApiClient;
+  upgradeOldSpec(spec: unknown): unknown;
+  validateSpec(spec: unknown): void;
+  deploy(options: unknown, indexes: unknown, fieldOverrides: unknown, databaseId: string): Promise<void>;
+};
+
+/** One request `firebase deploy` would send to the Firestore Admin API. */
+export type DeployRequest = { method: string; url: string; body?: unknown; queryParams?: Record<string, string> };
 type Validator = ((config: unknown) => boolean) & { errors?: unknown[] | null };
 
 /** Throws firebase-tools' own error when the file is not a spec `firebase deploy` accepts (api.js deploy(): upgrade, then validate, before any request). */
@@ -24,6 +38,33 @@ export function validateIndexesSpec(spec: unknown): void {
   const { FirestoreApi } = load<{ FirestoreApi: FirestoreApiCtor }>("firebase-tools/lib/firestore/api");
   const api = new FirestoreApi();
   api.validateSpec(api.upgradeOldSpec(structuredClone(spec)));
+}
+
+/**
+ * The requests firebase-tools' own index deploy (api.js deploy()) sends for `spec`, run offline against a recording
+ * client standing in for a fresh database: no indexes and no field overrides yet, Standard edition. Nothing leaves the
+ * process. `force` is on, so any delete it would make shows up here instead of waiting on a prompt.
+ */
+export async function deployRequests(spec: { indexes: unknown; fieldOverrides: unknown }, databaseId: string): Promise<DeployRequest[]> {
+  const { FirestoreApi } = load<{ FirestoreApi: FirestoreApiCtor }>("firebase-tools/lib/firestore/api");
+  const api = new FirestoreApi();
+  const requests: DeployRequest[] = [];
+  const record = (request: DeployRequest) => {
+    requests.push(request);
+    return Promise.resolve({ body: {} });
+  };
+  api.apiClient = {
+    get: (url) => {
+      requests.push({ method: "GET", url });
+      return Promise.resolve({ body: url.endsWith(`/databases/${databaseId}`) ? { databaseEdition: "STANDARD" } : {} });
+    },
+    post: (url, body) => record({ method: "POST", url, body }),
+    patch: (url, body, options) => record({ method: "PATCH", url, body, ...(options?.queryParams ? { queryParams: options.queryParams } : {}) }),
+    delete: (url) => record({ method: "DELETE", url }),
+  };
+  const copy = structuredClone(spec);
+  await api.deploy({ project: "demo-arcos", nonInteractive: true, force: true }, copy.indexes, copy.fieldOverrides, databaseId);
+  return requests;
 }
 
 /** The databases `firebase deploy --only <only>` reaches with this `firestore` block (fsConfig.js). */
