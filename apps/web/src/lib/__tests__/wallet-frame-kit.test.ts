@@ -23,12 +23,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The error the adapter throws when the wallet refuses the send. It fails the test if the send never reached the
+ * wallet, so a control can't pass on an error thrown earlier (a validation failure, say). */
 async function refusedSend(refuse: () => unknown): Promise<unknown> {
   const chain = resolveChainIdentifier("Arc_Testnet");
   const chainIdHex = `0x${(chain as unknown as { chainId: number }).chainId.toString(16)}`;
+  let reachedWallet = false;
   const provider = {
     request: async ({ method }: { method: string }) => {
-      if (method === "eth_sendTransaction") throw refuse();
+      if (method === "eth_sendTransaction") {
+        reachedWallet = true;
+        throw refuse();
+      }
       if (method === "eth_accounts" || method === "eth_requestAccounts") return [ACCOUNT];
       if (method === "eth_chainId") return chainIdHex;
       throw new Error(`unexpected ${method}`);
@@ -37,35 +43,42 @@ async function refusedSend(refuse: () => unknown): Promise<unknown> {
     removeListener() {},
   };
   const adapter = await createViemAdapterFromProvider({ provider: provider as unknown as AdapterProvider });
+  let failure: unknown = undefined;
   try {
     const prepared = await adapter.prepare({ address: TO, value: 1n } as unknown as PrepareParams, { chain });
     await prepared.execute();
   } catch (err) {
-    return err;
+    failure = err;
   }
-  throw new Error("the send was expected to fail");
+  if (!reachedWallet) throw new Error("the send never reached the wallet");
+  if (failure === undefined) throw new Error("the send was expected to fail");
+  return failure;
 }
 
 describe("a refusal at the send, through Circle's own adapter", () => {
   // With no code, the kit reports an RPC endpoint error whose own code is 4001, which its isUserCancellationError
   // reads as a cancellation. The wallet's words sit under cause.trace.rawError.
-  it("is recognized when the wallet sends no code, and Swap and Bridge say to reload rather than 'Cancelled.'", async () => {
-    for (const refuse of [() => new Error(TEXT), () => TEXT]) {
-      const err = await refusedSend(refuse);
-      expect(isEmbeddedFrameRefusal(err)).toBe(true);
-      expect(classifySwapFailure(err)).toBe(EMBEDDED_FRAME_MESSAGE);
-      expect(classifyBridgeFailure(err, "Check the explorer.")).toBe(EMBEDDED_FRAME_MESSAGE);
-    }
+  it.each([
+    ["an Error with no code", () => new Error(TEXT)],
+    ["a bare string", () => TEXT],
+  ])("is recognized from %s, and Swap and Bridge say to reload rather than 'Cancelled.'", async (_shape, refuse) => {
+    const err = await refusedSend(refuse);
+    expect(isEmbeddedFrameRefusal(err)).toBe(true);
+    expect(classifySwapFailure(err)).toBe(EMBEDDED_FRAME_MESSAGE);
+    expect(classifyBridgeFailure(err, "Check the explorer.")).toBe(EMBEDDED_FRAME_MESSAGE);
   });
 
-  it("is recognized when the wallet sends a code", async () => {
-    for (const code of [4100, 4001]) {
-      expect(isEmbeddedFrameRefusal(await refusedSend(() => ({ code, message: TEXT })))).toBe(true);
-    }
+  it.each([4100, 4001])("is recognized under code %i", async (code) => {
+    expect(isEmbeddedFrameRefusal(await refusedSend(() => ({ code, message: TEXT })))).toBe(true);
   });
 
-  it("leaves any other refusal alone", async () => {
+  it("leaves another failure alone", async () => {
     expect(isEmbeddedFrameRefusal(await refusedSend(() => new Error("boom")))).toBe(false);
-    expect(isEmbeddedFrameRefusal(await refusedSend(() => ({ code: 4001, message: "User rejected the request." })))).toBe(false);
+  });
+
+  it("still reads a real cancellation as cancelled", async () => {
+    const err = await refusedSend(() => ({ code: 4001, message: "User rejected the request." }));
+    expect(isEmbeddedFrameRefusal(err)).toBe(false);
+    expect(classifySwapFailure(err)).toBe("Cancelled.");
   });
 });
