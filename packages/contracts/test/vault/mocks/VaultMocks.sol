@@ -3,6 +3,7 @@ pragma solidity 0.8.30;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {FeeController} from "../../../src/FeeController.sol";
 import {LockVault} from "../../../src/vault/LockVault.sol";
 import {VaultFactory} from "../../../src/vault/VaultFactory.sol";
 
@@ -155,5 +156,25 @@ contract MockReenteringRecipient {
         catch (bytes memory reason) {
             seen = reason;
         }
+    }
+}
+
+/// A fee recipient that also owns the FeeController and, the first time it is paid, points the recipient somewhere
+/// else. It shows which address a single call pays: the one read when the call began.
+contract MockRecipientChanger {
+    FeeController public immutable fees;
+    address payable public immutable next;
+
+    constructor(FeeController fees_, address payable next_) {
+        fees = fees_;
+        next = next_;
+    }
+
+    function acceptOwnership() external {
+        fees.acceptOwnership();
+    }
+
+    receive() external payable {
+        if (fees.owner() == address(this) && fees.recipient() == address(this)) fees.setRecipient(next);
     }
 }

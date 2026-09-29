@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IFeeController} from "../interfaces/IFeeController.sol";
 import {IV3PositionManager} from "./interfaces/IPositionManagers.sol";
@@ -84,13 +85,18 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// caller pays the flat fee as native value and approves this factory for `amount`. Tokens go from the caller
     /// straight to the vault (an LP token's percentage fee, if any, straight to the fee recipient) and never rest in
     /// the factory. The percentage fee applies to Uniswap-v2-style LP tokens only.
+    /// @dev The LP fee is `floor(amount * LOCK_LP_BPS / 10_000)`: it rounds DOWN, so the platform never takes more
+    /// than the stated share and the vault receives the remainder, `amount - fee`. Below `10_000 / LOCK_LP_BPS` LP
+    /// tokens (200 at 50 bps) the fee is zero. `feeOf` is read once per call and only the flat fee and this fee
+    /// are ever charged: nothing is charged at withdrawal, and a later fee change never reaches an existing vault.
     function lockToken(IERC20 token, uint256 amount, uint64 unlockAt, address owner_)
         external
         payable
         nonReentrant
         returns (address vault)
     {
-        _takeFlatFee();
+        address payable feeTo = feeController.recipient(); // read once: one call pays one recipient
+        _takeFlatFee(feeTo);
         if (amount == 0) revert ZeroAmount();
         if (address(token).code.length == 0) revert NotAToken();
 
@@ -99,9 +105,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         _register(vault, owner_);
         _vaultsForToken[address(token)].push(vault);
 
-        // The percentage applies to LP tokens only; a team-token lock pays the flat fee alone.
-        uint256 fee = _isV2Pair(address(token)) ? (amount * feeController.feeOf(LOCK_LP_BPS)) / 10_000 : 0;
-        if (fee != 0) token.safeTransferFrom(msg.sender, feeController.recipient(), fee);
+        // The percentage applies to LP tokens only; a team-token lock pays the flat fee alone. It rounds down (see
+        // above), by mulDiv so that no amount can overflow it.
+        uint256 fee = _isV2Pair(address(token)) ? Math.mulDiv(amount, _bps(LOCK_LP_BPS), BPS_DENOMINATOR) : 0;
+        if (fee != 0) token.safeTransferFrom(msg.sender, feeTo, fee);
         token.safeTransferFrom(msg.sender, vault, amount - fee);
         emit TokenLocked(owner_, address(token), vault, amount - fee, fee, unlockAt);
     }
@@ -116,13 +123,13 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         nonReentrant
         returns (address vault)
     {
-        _takeFlatFee();
+        address payable feeTo = feeController.recipient(); // read once: one call pays one recipient
+        _takeFlatFee(feeTo);
         Manager memory m = managers[manager];
         if (!m.allowed) revert ManagerNotAllowed();
 
         vault = Clones.clone(positionVaultImpl);
-        PositionVault(payable(vault))
-            .initialize(owner_, manager, tokenId, unlockAt, m.kind, _shareBps(), feeController.recipient());
+        PositionVault(payable(vault)).initialize(owner_, manager, tokenId, unlockAt, m.kind, _shareBps(), feeTo);
         _register(vault, owner_);
         IV3PositionManager(manager).safeTransferFrom(msg.sender, vault, tokenId);
         emit PositionLocked(owner_, manager, tokenId, vault, unlockAt);
@@ -211,10 +218,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         _vaultsOf[owner_].push(vault);
     }
 
-    function _takeFlatFee() private {
+    function _takeFlatFee(address payable feeTo) private {
         uint256 fee = feeController.feeOf(LOCK_FLAT);
         if (msg.value != fee) revert WrongFee(fee, msg.value);
-        (bool ok,) = feeController.recipient().call{value: fee}("");
+        (bool ok,) = feeTo.call{value: fee}("");
         if (!ok) revert FeeTransferFailed();
     }
 
