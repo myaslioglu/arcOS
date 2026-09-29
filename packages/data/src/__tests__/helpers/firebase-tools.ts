@@ -1,12 +1,26 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 
-const nodeRequire = createRequire(import.meta.url);
+/** tools/firebase: the Firebase CLI at one exact version, locked apart from the workspaces (see its package.json). */
+const TOOLS = path.resolve(import.meta.dirname, "../../../../../tools/firebase");
+const nodeRequire = createRequire(path.join(TOOLS, "package.json"));
+
+/** Where the pinned firebase-tools is installed; throws with the install command when it is not. */
+export function firebaseToolsDir(): string {
+  const dir = path.join(TOOLS, "node_modules/firebase-tools");
+  if (!existsSync(path.join(dir, "package.json"))) {
+    throw new Error("firebase-tools is not installed in tools/firebase: run npm ci --ignore-scripts --prefix tools/firebase");
+  }
+  return dir;
+}
 
 /**
  * Loads a module from inside the pinned firebase-tools, so a test runs the very code `firebase deploy` runs. One of its
  * dependencies still loads Node's deprecated built-in punycode; that warning is theirs, so it is muted for the load only.
  */
 function load<T>(id: string): T {
+  firebaseToolsDir();
   const before = process.noDeprecation;
   process.noDeprecation = true;
   try {
