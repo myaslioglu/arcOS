@@ -122,10 +122,12 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         emit TokenLocked(owner_, address(token), vault, balanceAfter - balanceBefore, fee, unlockAt);
     }
 
-    /// @notice Locks a concentrated-liquidity position NFT from an allow-listed manager in a new vault. The platform's
-    /// share of collected fees is read now and copied into the vault, so a later fee change never touches this lock.
-    /// @dev In this build the position vault is a placeholder whose `initialize` always reverts, so this function
-    /// cannot create a vault yet.
+    /// @notice Locks a concentrated-liquidity position NFT from an allow-listed manager in a new vault. The caller pays
+    /// the flat fee as native value and approves this factory for the NFT, which moves from the caller straight into
+    /// the vault in this call. The platform's share of collected fees and its recipient are read now and copied into
+    /// the vault, so a later fee change never touches this lock. The vault is registered under `owner_` and under
+    /// both of its pool's currencies (`address(0)` for v4's native currency).
+    /// @dev The NFT is always taken from `msg.sender`: approving the factory lets nobody else lock one's position.
     function lockPosition(address manager, uint256 tokenId, uint64 unlockAt, address owner_)
         external
         payable
@@ -140,7 +142,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         vault = Clones.clone(positionVaultImpl);
         PositionVault(payable(vault)).initialize(owner_, manager, tokenId, unlockAt, m.kind, _shareBps(), feeTo);
         _register(vault, owner_);
-        IV3PositionManager(manager).safeTransferFrom(msg.sender, vault, tokenId);
+        (address currency0, address currency1) = PositionVault(payable(vault)).currencies();
+        _positionVaultsForToken[currency0].push(vault);
+        if (currency1 != currency0) _positionVaultsForToken[currency1].push(vault);
+        IV3PositionManager(manager).safeTransferFrom(msg.sender, vault, tokenId); // same ERC-721 call on v4
         emit PositionLocked(owner_, manager, tokenId, vault, unlockAt);
     }
 

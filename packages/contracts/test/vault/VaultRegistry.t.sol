@@ -6,9 +6,10 @@ import {LockVault} from "../../src/vault/LockVault.sol";
 import {VaultTestBase} from "./VaultTestBase.sol";
 import {MockToken} from "./mocks/VaultMocks.sol";
 
-/// The three registries and their bounded reads. `vaultsOf` and `vaultsForToken` are filled by real locks. Nothing can
-/// fill `positionVaultsForToken` until the position vault exists, so its storage is seeded directly; a canary read
-/// through the getters fails loudly if the slot below ever moves.
+/// The three registries and their bounded reads. `vaultsOf` and `vaultsForToken` are filled by real locks. To run the
+/// same slice tests over the same N vaults in all three registries, `positionVaultsForToken` is seeded directly; a
+/// canary read through the getters fails loudly if the slot below ever moves, and PositionFactory.t.sol checks that
+/// real position locks write exactly this slot.
 contract VaultRegistryTest is VaultTestBase {
     /// Slot of `VaultFactory._positionVaultsForToken` (`forge inspect VaultFactory storage-layout`).
     uint256 internal constant POSITION_REGISTRY_SLOT = 6;

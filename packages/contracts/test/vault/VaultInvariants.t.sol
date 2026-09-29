@@ -512,7 +512,7 @@ contract VaultInvariantsTest is VaultTestBase {
         }
         assertEq(factory.vaultsForTokenLength(address(token)), handler.createdForToken(0), "vaultsForToken(plain)");
         assertEq(factory.vaultsForTokenLength(address(pair)), handler.createdForToken(1), "vaultsForToken(pair)");
-        assertEq(factory.positionVaultsForTokenLength(address(token)), 0, "nothing can fill the position registry yet");
+        assertEq(factory.positionVaultsForTokenLength(address(token)), 0, "this suite makes no position locks");
     }
 
     /// Every action predicted its own outcome (who may call, when, what state results), and the prediction held.
