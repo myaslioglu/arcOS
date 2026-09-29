@@ -64,7 +64,8 @@ Revoke's list (`/api/approvals`) reads approval events through the same key; wit
 public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
-build`.
+build`. `npm run test:emulator -w @arcos/data` runs the Firestore suite against the local emulator;
+it needs Java 21 or newer and no credentials.
 
 ## Repo layout
 
@@ -78,6 +79,9 @@ build`.
   conversions.
 - `packages/inspector` — the token inspection engine. No React or Next imports, so it can run on
   the server and in the browser.
+- `packages/data` — the Firestore layer for the named database `arcos`: collection names, document
+  types, id helpers and converters (the pure entry, `@arcos/data`, which never imports
+  firebase-admin), and `arcosDb()` (the server-only entry, `@arcos/data/server`).
 - `packages/contracts` — the three Solidity contracts and their Foundry tests, scripts and
   deployment guide.
 - `docs/QA-R0.md` — the manual test script for this release.

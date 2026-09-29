@@ -18,6 +18,23 @@
       ]
     }
   ],
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8181
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  },
+  "firestore": [
+    {
+      "database": "arcos",
+      "rules": "firestore/arcos.rules",
+      "indexes": "firestore/arcos.indexes.json"
+    }
+  ],
   "hosting": {
     "site": "arcos",
     "public": "firebase-hosting",
