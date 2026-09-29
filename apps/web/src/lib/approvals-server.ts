@@ -1,7 +1,7 @@
 import "server-only";
 import { multicall3Abi, type Address } from "viem";
 import { activeChain, activeNetwork } from "@arcos/chain";
-import { loadApprovals, logsPageUrl, readLogsPage, type ApprovalsAnswer } from "./approvals";
+import { ApprovalsUnavailable, loadApprovals, logsPageUrl, readLogsPage, type ApprovalsAnswer } from "./approvals";
 import { withDeadline } from "./deadline";
 import { explorerFetch } from "./explorer-fetch";
 import { proLogsApi } from "./inspect-input";
@@ -32,7 +32,9 @@ const gate = processGlobal("approvals.gate", () => inFlightGate(2, () => new App
  * (explorer-fetch.ts), and the whole lookup after 15 s (deadline.ts). The allowances and token details come from
  * Revoke's own RPC client (`approvalsRpcClient()`, its own endpoint-health record, never the Inspector's shared
  * one): a clean multicall is one Multicall3 call, and one a spoofed Approval event poisons is split and retried
- * within its own budget (see `liveApprovals` in approvals.ts) rather than cooling the Inspector's endpoints.
+ * within its own budget (see `liveApprovals` in approvals.ts) rather than cooling the Inspector's endpoints. When
+ * the first Multicall3 call fails, one block-number read on the same client tells an RPC outage (a 503) from a
+ * poisoned call (the halving goes on, and the answer is marked truncated).
  */
 export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
   const chain = activeChain();
@@ -41,6 +43,9 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
     apiKey: "",
   };
   const multicall3 = chain.contracts?.multicall3?.address;
+  // Checked before anything else: without Multicall3 no call could ever be answered, and the canary, finding the RPC
+  // up, would read every call as poisoned and pass an empty list off as merely truncated.
+  if (!multicall3) return Promise.reject(new ApprovalsUnavailable("This chain has no Multicall3."));
   return cache.get(owner.toLowerCase(), () =>
     gate.run(() => {
       const controller = new AbortController();
@@ -51,19 +56,26 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
           network: activeNetwork(),
           readPage: (fromBlock) => readLogsPage(logsPageUrl(api.url, owner, fromBlock), fetchFn, api.apiKey),
           aggregate: async (calls) => {
-            // Once the 15 s deadline has aborted this lookup, no further attempt starts. withDeadline's own timeout
-            // already frees the gate's slot the instant it fires, whether or not this check exists; what this check
-            // actually saves is the RPC work itself: without it, the resilient multicall keeps making real
-            // aggregate3 attempts in the background, on Revoke's RPC client, long after the route has already
-            // answered 503 and stopped waiting on any of it.
+            // A backstop: once the 15 s deadline has aborted this lookup, no further attempt starts. With the one
+            // clock loadApprovals keeps, MULTICALL_TIME_BUDGET_MS (9 s from the lookup's start) already stops every
+            // attempt but the first long before the deadline fires, so this only matters when that clock doesn't
+            // keep pace with the deadline's timer: an injected clock that steps backwards or stands still, as a
+            // test's can. (withDeadline frees the gate's slot when it fires either way.)
             controller.signal.throwIfAborted();
-            if (!multicall3) throw new Error("This chain has no Multicall3.");
             return client.readContract({
               address: multicall3,
               abi: multicall3Abi,
               functionName: "aggregate3",
               args: [calls.map((c) => ({ target: c.target, allowFailure: true, callData: c.callData }))],
             });
+          },
+          canary: async () => {
+            // Asked when the first aggregate3 call fails, and that call, exempt from the time budget, can still be
+            // running when the deadline fires: once the route has answered 503, no read is sent.
+            controller.signal.throwIfAborted();
+            // cacheTime 0: a live read. viem would otherwise answer from the block number it read in the last few
+            // seconds, which says nothing about whether the RPC answers now.
+            await client.getBlockNumber({ cacheTime: 0 });
           },
         }),
         controller,

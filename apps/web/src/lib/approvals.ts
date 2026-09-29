@@ -30,7 +30,7 @@ export const MAX_PAIRS = 500;
  * spoofed Approval event can poison a whole call (a target whose fallback burns unbounded gas fails the entire
  * `eth_call`, not just its own entry), so a call that throws has its calls split in two and retried, breadth-first —
  * every batch at one level is attempted before any failed one is split further (see `resilientAggregate`) — until
- * this budget runs out.
+ * this budget runs out. The canary's one read (see `Canary`) doesn't count against it.
  */
 export const MULTICALL_BUDGET = 16;
 /**
@@ -40,7 +40,10 @@ export const MULTICALL_BUDGET = 16;
  * deadline on its own separate reckoning). The one exception is the very first `aggregate3` attempt, which always
  * starts regardless of the time already spent, so a clean lookup behind a slow explorer phase still gets its one
  * call. Whatever the halving hasn't resolved once the budget (this or MULTICALL_BUDGET) runs out counts as failed,
- * same as an ordinary revert, and marks the answer `truncated`.
+ * same as an ordinary revert, and marks the answer `truncated`. That holds even when no attempt was answered at all,
+ * as long as the canary (see `Canary`) has answered: the RPC is up, so the lookup returns what it has, an empty list
+ * if need be, marked `truncated`. When the canary fails too, the RPC is down, and the lookup rejects instead (the
+ * route answers 503).
  */
 export const MULTICALL_TIME_BUDGET_MS = 9_000;
 /**
@@ -95,8 +98,27 @@ export type CallResult = { success: boolean; returnData: Hex };
 export type Aggregate = (calls: readonly Call[]) => Promise<readonly CallResult[]>;
 /** One page of the owner's Approval logs, from `fromBlock` on, as the explorer sent them. */
 export type LogsPageReader = (fromBlock: number) => Promise<unknown[]>;
-/** `now`, when given, is the one clock `loadApprovals` measures both time budgets against; default `Date.now`. */
-export type ApprovalsDeps = { readPage: LogsPageReader; aggregate: Aggregate; network: NetworkId; now?: () => number };
+/**
+ * One cheap read on the RPC client `aggregate` uses (approvals-server.ts asks it for the block number), which tells an
+ * RPC outage from a poisoned multicall. A lookup asks it at most once, and only when its first aggregate call fails:
+ * it answering means the RPC is up, so the calls themselves failed and the halving goes on; it throwing means the RPC
+ * is down, and the lookup rejects. It counts against neither MULTICALL_BUDGET nor MULTICALL_TIME_BUDGET_MS.
+ */
+export type Canary = () => Promise<unknown>;
+/**
+ * `now`, when given, is the one clock `loadApprovals` measures both time budgets against. Its default is
+ * `performance.now()`, which, unlike `Date.now`, a wall-clock correction can't move mid-lookup.
+ */
+export type ApprovalsDeps = {
+  readPage: LogsPageReader;
+  aggregate: Aggregate;
+  canary: Canary;
+  network: NetworkId;
+  now?: () => number;
+};
+
+/** The default clock for both time budgets: monotonic, so a wall-clock step can neither stretch nor cut one. */
+const monotonicNow = (): number => performance.now();
 
 export function isUnlimited(allowance: bigint): boolean {
   return allowance >= UNLIMITED;
@@ -202,7 +224,7 @@ export function topicAddress(topic: Hex): Address | null {
  */
 export async function collectApprovalLogs(
   readPage: LogsPageReader,
-  now: () => number = Date.now,
+  now: () => number = monotonicNow,
   start: number = now(),
 ): Promise<{ logs: ExplorerLog[]; truncated: boolean }> {
   const seen = new Set<string>();
@@ -266,8 +288,8 @@ function decoded(result: CallResult | undefined, functionName: "allowance" | "sy
   }
 }
 
-/** One `resilientAggregate` run's outcome, and the two facts needed to decide what it means for the lookup. */
-type MulticallOutcome = { results: CallResult[]; anySucceeded: boolean; anyUnresolved: boolean };
+/** One `resilientAggregate` run's outcome: every call's result, and whether any of them is `UNRESOLVED`. */
+type MulticallOutcome = { results: CallResult[]; anyUnresolved: boolean };
 
 /** A call neither answered nor attempted: `aggregate` never saw it, so it reads exactly like an on-chain revert. */
 const UNRESOLVED: CallResult = { success: false, returnData: "0x" };
@@ -277,15 +299,28 @@ function isAbortError(e: unknown): boolean {
   return e instanceof DOMException && e.name === "AbortError";
 }
 
+/**
+ * Asks the canary. It answering means the RPC is up. An abort stays an abort (the lookup was cancelled); any other
+ * failure means the RPC is down, and the lookup rejects with ApprovalsUnavailable, so the route answers 503.
+ */
+async function confirmRpcAnswers(canary: Canary): Promise<void> {
+  try {
+    await canary();
+  } catch (e) {
+    if (isAbortError(e)) throw e;
+    throw new ApprovalsUnavailable("The RPC isn't answering.");
+  }
+}
+
 /** One batch mid-retry: its calls, and where they belong in the overall results array. */
 type Batch = { calls: Call[]; offset: number };
 
 /**
  * Splits one failed batch for a retry: by distinct `target` when more than one remains — the call list is ordered
- * token by token (see `liveApprovals`), so this isolates a whole poisoned token's calls to one side in a single
- * split, whatever the batch's size — or, once only one target is left, by plain index, so a token's own calls can
- * still be narrowed down individually (its allowance calls might resolve even where its metadata doesn't, or the
- * reverse).
+ * token by token, oldest token first (see `liveApprovals`), so this isolates a whole poisoned token's calls to one
+ * side in a single split, whatever the batch's size, and the left side, attempted first, holds the older tokens — or,
+ * once only one target is left, by plain index, so a token's own calls can still be narrowed down individually (its
+ * allowance calls might resolve even where its metadata doesn't, or the reverse).
  */
 function splitBatch(calls: readonly Call[]): [Call[], Call[]] {
   const targets: string[] = [];
@@ -312,7 +347,12 @@ function splitBatch(calls: readonly Call[]): [Call[], Call[]] {
  * Calls `aggregate` with as many calls as it can, breadth-first: every batch at one level is attempted before any
  * failed one is split further (see `splitBatch`), so the largest healthy batches get their turn early instead of
  * the retries spending their whole budget narrowing down one poisoned path first. A clean call succeeds and this
- * makes exactly one `aggregate` call in total, at any depth.
+ * makes exactly one `aggregate` call in total, at any depth, and never asks the canary.
+ *
+ * When the first attempt fails, the canary is asked, once, before anything else is tried. If it fails too, the RPC is
+ * down: this rejects with ApprovalsUnavailable, and nothing is split or retried. If it answers, the failure was the
+ * calls' own (a poisoned target), and from then on no failed attempt can make this reject: whatever isn't answered
+ * resolves as `UNRESOLVED`, even if that is every call.
  *
  * Every attempt draws from the one call `budget` (`MULTICALL_BUDGET`) and one time budget
  * (`MULTICALL_TIME_BUDGET_MS`, against the injectable `now`, counted from `start` — `loadApprovals`'s one clock for
@@ -320,27 +360,26 @@ function splitBatch(calls: readonly Call[]): [Call[], Call[]] {
  * without either behaves as if the lookup just began) shared by the whole tree: both are checked before every
  * attempt, so once either runs out no further `aggregate` call is made — except the very first attempt, which
  * always starts regardless of the time already spent, so a clean lookup behind a slow explorer phase still gets its
- * one call. A one-call batch that fails, or any batch left unattempted when a budget runs out, resolves as
- * `UNRESOLVED` for each of its calls rather than failing the whole lookup — the caller decides what an unresolved
- * call means (`liveApprovals` drops it like a revert), and marks its answer `truncated` when `anyUnresolved` comes
- * back true. `anySucceeded` carries whether ANY attempt, anywhere in the tree, actually got an answer from the
- * chain: when it's false throughout, the caller still rejects, so an outage (or a poison too slow for the time
- * budget) is never read as "no approvals". An abort (the route's own 15 s deadline firing, checked by the
- * `aggregate` the caller supplies) is rethrown at once instead of being treated as a poisoned batch to isolate:
- * cancellation is a fact about the whole lookup, not about whichever batch happened to be in flight, so no further
- * attempt — not even an immediate one — follows it.
+ * one call. The canary counts against neither. A one-call batch that fails, or any batch left unattempted when a
+ * budget runs out, resolves as `UNRESOLVED` for each of its calls rather than failing the whole lookup — the caller
+ * decides what an unresolved call means (`liveApprovals` drops it like a revert), and marks its answer `truncated`
+ * when `anyUnresolved` comes back true. An abort (the route's own 15 s deadline firing, checked by the `aggregate`
+ * and the canary the caller supplies) is rethrown at once instead of being treated as a poisoned batch to isolate or
+ * as an outage: cancellation is a fact about the whole lookup, not about whichever batch happened to be in flight,
+ * so no further attempt — not even an immediate one — follows it.
  */
 async function resilientAggregate(
   calls: readonly Call[],
   aggregate: Aggregate,
+  canary: Canary,
   budget: { left: number },
-  now: () => number = Date.now,
+  now: () => number = monotonicNow,
   start: number = now(),
 ): Promise<MulticallOutcome> {
   const results: CallResult[] = new Array(calls.length);
-  let anySucceeded = false;
   let anyUnresolved = false;
   let attempted = false;
+  let rpcAnswers = false;
   const deadline = start + MULTICALL_TIME_BUDGET_MS;
   let level: Batch[] = [{ calls: [...calls], offset: 0 }];
   while (level.length > 0) {
@@ -359,9 +398,13 @@ async function resilientAggregate(
           throw new ApprovalsUnavailable("The multicall answered the wrong number of results.");
         }
         for (let i = 0; i < batchResults.length; i++) results[batch.offset + i] = batchResults[i];
-        anySucceeded = true;
       } catch (e) {
         if (isAbortError(e)) throw e;
+        // The first attempt to fail is the first attempt: every later one exists only because it failed.
+        if (!rpcAnswers) {
+          await confirmRpcAnswers(canary);
+          rpcAnswers = true;
+        }
         if (batch.calls.length === 1) {
           results[batch.offset] = UNRESOLVED;
           anyUnresolved = true;
@@ -374,7 +417,7 @@ async function resilientAggregate(
     }
     level = nextLevel;
   }
-  return { results, anySucceeded, anyUnresolved };
+  return { results, anyUnresolved };
 }
 
 /** One call in `liveApprovals`'s multicall, and what it answers: a pair's allowance, or one token's metadata. */
@@ -386,20 +429,25 @@ type CallInfo = { kind: "allowance"; pair: ApprovalPair } | { kind: "symbol" | "
  * decimals calls — so a poisoned token's calls stay together for `resilientAggregate` to isolate in one split.
  * Grouped by the token address **lowercased**, not by the address as each pair happens to spell it, so the same
  * contract's calls stay contiguous even if one Approval event's address arrived cased differently from another's.
+ * The tokens go oldest first, by each one's latest approval block: a spoofed Approval event is fresh, so its token
+ * sits at the end of the list, and at every level of the halving the older half, which holds the long-lived
+ * approvals, is attempted before it. The answer keeps the order `pairs` came in, whatever order the calls went in.
  * A pair at zero drops out, and so does one whose allowance can't be read, or came back unresolved. Labels come from
  * contracts anyone can deploy, so they are cleaned (`cleanLabel`); a label or decimals that can't be read is null.
  * `truncated` is true only when some call came back unresolved — a pair legitimately reading zero, or a plain
- * revert from a well-behaved multicall, is not truncation. `now`/`start`, threaded through to `resilientAggregate`,
- * are injectable so a test can drive its time budget without waiting; by default `start` is "right now", so a
- * direct call without either behaves as if the lookup just began (matching how this function behaved before
- * `loadApprovals` grew a single clock for the whole lookup).
+ * revert from a well-behaved multicall, is not truncation. When the first multicall call fails, `canary` decides
+ * between an outage (this rejects) and a poisoned call (the halving goes on; see `resilientAggregate`).
+ * `now`/`start`, threaded through to `resilientAggregate`, are injectable so a test can drive its time budget
+ * without waiting; by default `start` is "right now", so a direct call without either behaves as if the lookup just
+ * began (matching how this function behaved before `loadApprovals` grew a single clock for the whole lookup).
  */
 export async function liveApprovals(
   owner: Address,
   pairs: readonly ApprovalPair[],
   aggregate: Aggregate,
+  canary: Canary,
   network: NetworkId,
-  now: () => number = Date.now,
+  now: () => number = monotonicNow,
   start: number = now(),
 ): Promise<{ approvals: Approval[]; truncated: boolean }> {
   if (pairs.length === 0) return { approvals: [], truncated: false };
@@ -410,9 +458,14 @@ export async function liveApprovals(
     if (list) list.push(p);
     else pairsByToken.set(key, [p]);
   }
+  // Oldest first, by each token's latest approval block (a stable sort: a tie keeps the order the pairs came in).
+  const tokensOldestFirst = [...pairsByToken.values()]
+    .map((group) => ({ group, latest: Math.max(...group.map((p) => p.lastApprovalBlock)) }))
+    .sort((a, b) => a.latest - b.latest)
+    .map(({ group }) => group);
   const calls: Call[] = [];
   const info: CallInfo[] = [];
-  for (const group of pairsByToken.values()) {
+  for (const group of tokensOldestFirst) {
     const token = group[0]!.token;
     for (const p of group) {
       calls.push({
@@ -428,8 +481,7 @@ export async function liveApprovals(
     calls.push({ target: token, callData: DECIMALS });
     info.push({ kind: "decimals", token });
   }
-  const { results, anySucceeded, anyUnresolved } = await resilientAggregate(calls, aggregate, { left: MULTICALL_BUDGET }, now, start);
-  if (!anySucceeded) throw new ApprovalsUnavailable("The multicall could not complete.");
+  const { results, anyUnresolved } = await resilientAggregate(calls, aggregate, canary, { left: MULTICALL_BUDGET }, now, start);
   const meta = new Map<string, { symbol: string | null; name: string | null; decimals: number | null }>();
   const allowanceByPair = new Map<ApprovalPair, bigint | undefined>();
   for (let i = 0; i < calls.length; i++) {
@@ -475,15 +527,15 @@ export async function liveApprovals(
 
 /**
  * The whole lookup: the explorer's logs, their pairs (at most MAX_PAIRS, the most recent), and what is still live.
- * One clock, `deps.now` (default `Date.now`), is recorded once here, before the explorer phase, and passed down to
- * both `collectApprovalLogs`'s EXPLORER_TIME_BUDGET_MS and `liveApprovals`'s MULTICALL_TIME_BUDGET_MS, so a slow
- * explorer phase counts against the multicall's own budget rather than each phase keeping its own separate clock.
+ * One clock, `deps.now` (default `performance.now()`), is recorded once here, before the explorer phase, and passed
+ * down to both `collectApprovalLogs`'s EXPLORER_TIME_BUDGET_MS and `liveApprovals`'s MULTICALL_TIME_BUDGET_MS, so a
+ * slow explorer phase counts against the multicall's own budget rather than each phase keeping its own separate clock.
  */
 export async function loadApprovals(owner: Address, deps: ApprovalsDeps): Promise<ApprovalsAnswer> {
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? monotonicNow;
   const start = now();
   const { logs, truncated: pagesTruncated } = await collectApprovalLogs(deps.readPage, now, start);
   const pairs = approvalPairs(owner, logs);
-  const live = await liveApprovals(owner, pairs.slice(0, MAX_PAIRS), deps.aggregate, deps.network, now, start);
+  const live = await liveApprovals(owner, pairs.slice(0, MAX_PAIRS), deps.aggregate, deps.canary, deps.network, now, start);
   return { approvals: live.approvals, truncated: pagesTruncated || pairs.length > MAX_PAIRS || live.truncated };
 }
