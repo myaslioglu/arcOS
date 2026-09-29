@@ -106,6 +106,14 @@ describe("deploy.yml", () => {
       expect(text).toMatch(/run: npm run build -w @arcos\/web$/m);
     });
 
+    it("restores no cache in the deploy job, so no earlier job's files can land next to the credential", () => {
+      const text = job("deploy");
+      expect(text).not.toMatch(/^\s*cache:/m);
+      const setupNode = steps("deploy").filter((step) => /uses: actions\/setup-node@/.test(step));
+      expect(setupNode.length).toBeGreaterThan(0);
+      for (const step of setupNode) expect(step).toMatch(/package-manager-cache: false/);
+    });
+
     it("runs no project code in the deploy job: no install of the repo, no build, no repo script but the scan", () => {
       const text = job("deploy");
       expect(text).not.toMatch(/npm run|next build|apphosting-env/);

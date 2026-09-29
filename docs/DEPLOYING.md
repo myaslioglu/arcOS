@@ -64,7 +64,8 @@ file, and starts only after the checks pass and the owner approves it.
   are `apps/*` and `packages/*`), so the root install never installs it, and its `node_modules` stays out of the source
   the deploy uploads (`firebase.json` and `.gitignore` both leave out `node_modules`). To bump it, change `package.json`
   and regenerate the lockfile with npm 11.19.1: in that folder run `npm install --package-lock-only --ignore-scripts`,
-  again until the file stops changing. Then run `npm audit --prefix tools/firebase`, read the CLI's release notes, and
+  again until the file stops changing. The deploy job installs it with Node 22's bundled npm 10, so also check that
+  `npm ci --ignore-scripts --prefix tools/firebase` works with npm 10. Then run `npm audit --prefix tools/firebase`, read the CLI's release notes, and
   run a dry run before the next real deploy.
 - **Google Cloud**: a workload identity provider that accepts tokens only from this repository's `production`
   environment, and a deployer service account with App Hosting Developer, Service Usage Consumer and Storage Bucket

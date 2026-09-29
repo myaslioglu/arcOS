@@ -7,8 +7,8 @@ name: Deploy
 #
 # The jobs are split by what they may touch. `checks` and `bundle` install the project's dependencies and run its build,
 # which is third-party code, so they hold no credential. `deploy` holds the credential and runs no project code: only
-# first-party actions, the bundle as data, the scan script from its own checkout and the Firebase CLI installed from its
-# lockfile.
+# first-party actions and the SHA-pinned auth action, the bundle as data, the scan script from its own checkout and the
+# Firebase CLI installed from its lockfile. It restores no cache.
 on:
   push:
     branches: [main]
@@ -111,9 +111,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cache: root package.json names a packageManager, which makes setup-node restore an npm cache by default, and
+      # any job on main that runs install scripts could have written that cache. Restoring it here would put files an
+      # earlier job controlled next to the credential.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          package-manager-cache: false
 
       # Outside the workspace on purpose: the Firebase CLI uploads the workspace as the source, and the bundle is not
       # source.
