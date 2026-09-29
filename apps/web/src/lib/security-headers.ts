@@ -129,6 +129,11 @@ type Directive = readonly [name: string, sources: readonly string[]];
  *
  * `dev` adds 'unsafe-eval', which React's development build needs to rebuild server errors in the browser (the Next guide
  * says so); a production build doesn't.
+ *
+ * There is no `upgrade-insecure-requests`, here or in the enforced policy. A report-only policy ignores it, and Chromium
+ * logs a console error about that on every page. Enforced, it isn't needed: HSTS already keeps every visit on https and
+ * every source above is https:, wss:, data: or blob:. It would also break a local `next start` served over http from a LAN
+ * address, whose own requests would be rewritten to https, which that server doesn't speak.
  */
 export function reportOnlyPolicy({ dev = false }: { dev?: boolean } = {}): string {
   const directives: Directive[] = [
@@ -146,7 +151,6 @@ export function reportOnlyPolicy({ dev = false }: { dev?: boolean } = {}): strin
     ["base-uri", ["'none'"]],
     ["form-action", ["'self'"]],
     ["frame-ancestors", ["'none'"]],
-    ["upgrade-insecure-requests", []],
     ["report-uri", [CSP_REPORT_PATH]],
     ["report-to", ["csp"]],
   ];

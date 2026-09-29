@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/csp-report/route";
+import { reportOnlyPolicy } from "@/lib/security-headers";
 
-const MAX_BODY = 16 * 1024;
+const MAX_BODY = 256 * 1024;
 
 const legacy = (fields: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -173,10 +174,67 @@ describe("POST /api/csp-report", () => {
     expect(String(lines[0]![0]).split("\n")).toHaveLength(1);
   });
 
-  it("writes at most ten lines for one request", async () => {
+  it("writes at most ten lines for one request, when its violations are all different", async () => {
+    const distinct = (i: number) => ({ documentURL: "https://4rcos.com/", effectiveDirective: "img-src", blockedURL: `https://cdn${i}.example/logo.png` });
+    await send(reports(...Array.from({ length: 40 }, (_, i) => distinct(i))), { type: "application/reports+json", ip: freshIp() });
+    expect(lines).toHaveLength(10);
+    expect(logged().map((l) => l.blocked)).toEqual(Array.from({ length: 10 }, (_, i) => `https://cdn${i}.example`));
+  });
+
+  it("writes one line for a violation a request repeats", async () => {
     const one = { documentURL: "https://4rcos.com/", effectiveDirective: "img-src", blockedURL: "data" };
     await send(reports(...Array.from({ length: 40 }, () => one)), { type: "application/reports+json", ip: freshIp() });
-    expect(lines).toHaveLength(10);
+    expect(logged()).toEqual([{ severity: "WARNING", message: "csp-violation", directive: "img-src", blocked: "data", path: "/" }]);
+  });
+
+  // What Chromium sends for a report-only policy: the Reporting API's array, each report with the whole policy in
+  // `originalPolicy` (about 1.4 KB), next to the few fields the log reads. Its cache keeps up to 100 reports for one upload.
+  describe("a batch as Chromium sends it", () => {
+    const chromiumReport = (blockedURL: string, effectiveDirective: string) => ({
+      age: 0,
+      body: {
+        blockedURL,
+        columnNumber: 5,
+        disposition: "report",
+        documentURL: "https://4rcos.com/",
+        effectiveDirective,
+        lineNumber: 2,
+        originalPolicy: reportOnlyPolicy(),
+        referrer: "",
+        sample: "",
+        statusCode: 200,
+      },
+      type: "csp-violation",
+      url: "https://4rcos.com/",
+      user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    });
+    const line = (directive: string, blocked: string) => ({ severity: "WARNING", message: "csp-violation", directive, blocked, path: "/" });
+
+    it("takes 30 reports that each carry the whole policy, about 55 KB, which the old 16 KB cap dropped whole", async () => {
+      const body = JSON.stringify(Array.from({ length: 30 }, (_, i) => chromiumReport(`https://cdn${i}.example/x.js?n=${i}`, "script-src-elem")));
+      expect(Buffer.byteLength(body)).toBeGreaterThan(16 * 1024);
+      expect(Buffer.byteLength(body)).toBeLessThan(MAX_BODY);
+      const res = await send(body, { type: "application/reports+json", ip: freshIp() });
+      expect(res.status).toBe(204);
+      expect(logged()).toEqual(Array.from({ length: 10 }, (_, i) => line("script-src-elem", `https://cdn${i}.example`)));
+    });
+
+    it("takes the most Chromium keeps for one upload, 100 reports, so a policy that grows past that fails here first", async () => {
+      const body = JSON.stringify(Array.from({ length: 100 }, (_, i) => chromiumReport(`https://cdn${i}.example/x.js`, "script-src-elem")));
+      expect(Buffer.byteLength(body)).toBeLessThan(MAX_BODY);
+      const res = await send(body, { type: "application/reports+json", ip: freshIp() });
+      expect(res.status).toBe(204);
+      expect(lines).toHaveLength(10);
+    });
+
+    it("keeps a noisy host's repeats from hiding a different violation later in the same batch", async () => {
+      // A page that blocks 28 font files raises 28 reports that differ only in the file, which the log doesn't keep.
+      const fonts = Array.from({ length: 28 }, (_, i) => chromiumReport(`https://fonts.gstatic.com/s/inter/v${i}/file.woff2`, "font-src"));
+      const body = JSON.stringify([...fonts, chromiumReport("https://fonts.googleapis.com/css2?family=Inter", "style-src-elem")]);
+      const res = await send(body, { type: "application/reports+json", ip: freshIp() });
+      expect(res.status).toBe(204);
+      expect(logged()).toEqual([line("font-src", "https://fonts.gstatic.com"), line("style-src-elem", "https://fonts.googleapis.com")]);
+    });
   });
 
   describe("the size cap", () => {
@@ -186,7 +244,7 @@ describe("POST /api/csp-report", () => {
       return legacy({ "script-sample": "a".repeat(bytes - Buffer.byteLength(base)) });
     };
 
-    it("reads a body of exactly 16 KB", async () => {
+    it("reads a body of exactly 256 KB", async () => {
       const body = padded(MAX_BODY);
       expect(Buffer.byteLength(body)).toBe(MAX_BODY);
       const res = await send(body, { ip: freshIp() });

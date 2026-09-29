@@ -48,6 +48,24 @@ describe("blockedOf", () => {
   it("never lets a very long origin through whole", () => {
     expect(blockedOf(`https://${"a".repeat(300)}.example/x`).length).toBeLessThanOrEqual(200);
   });
+
+  it("replaces a full address in the origin, as it does in a path", () => {
+    expect(blockedOf("https://0x1111111111111111111111111111111111111111.example/x.js")).toBe("https://[address].example");
+    // The URL parser lowercases a host, so an address written in mixed case is found as well.
+    expect(blockedOf("https://0xAbCdEf0123456789aBcDeF0123456789abcdef01.example/x.js")).toBe("https://[address].example");
+    expect(blockedOf("wss://relay.0x1111111111111111111111111111111111111111.example:8443/socket")).toBe("wss://relay.[address].example:8443");
+    // Something that only looks a little like one is left as it is.
+    expect(blockedOf("https://0x1234.example/x.js")).toBe("https://0x1234.example");
+  });
+
+  it("replaces the address before it cuts a long origin, so half of one is never left at the cut", () => {
+    // The 200-character cut would fall in the middle of the address: 8 for "https://", 170 for the label, 2 for "0x", 20 digits.
+    const blocked = blockedOf(`https://${"a".repeat(170)}0x${"1".repeat(40)}.example/x.js`);
+    expect(blocked.length).toBeLessThanOrEqual(200);
+    expect(blocked).toContain("[address]");
+    expect(blocked).not.toMatch(/1{4}/);
+    expect(blocked).not.toContain("0x");
+  });
 });
 
 describe("pathOf", () => {
@@ -162,11 +180,89 @@ describe("violationsFrom, application/reports+json", () => {
     ).toEqual([{ directive: "font-src", blocked: "https://f.example", path: "/" }]);
   });
 
-  it("reads at most ten violations from one request", () => {
-    const many = Array.from({ length: 25 }, () =>
-      violation({ documentURL: "https://4rcos.com/", effectiveDirective: "img-src", blockedURL: "data" }),
+  it("reads at most ten violations from one request, the first ten different ones", () => {
+    const many = Array.from({ length: 25 }, (_, i) =>
+      violation({ documentURL: "https://4rcos.com/", effectiveDirective: "img-src", blockedURL: `https://cdn${i}.example/logo.png` }),
     );
-    expect(violationsFrom("application/reports+json", many)).toHaveLength(10);
+    const out = violationsFrom("application/reports+json", many);
+    expect(out).toHaveLength(10);
+    expect(out.map((v) => v.blocked)).toEqual(Array.from({ length: 10 }, (_, i) => `https://cdn${i}.example`));
+  });
+
+  describe("a violation a request repeats", () => {
+    const img = (blockedURL: string, extra: Record<string, unknown> = {}) =>
+      violation({ documentURL: "https://4rcos.com/", effectiveDirective: "img-src", blockedURL, ...extra });
+
+    it("is read once, in the place it first appears", () => {
+      const many = [...Array.from({ length: 25 }, () => img("data")), img("https://cdn.example/a.png")];
+      expect(violationsFrom("application/reports+json", many)).toEqual([
+        { directive: "img-src", blocked: "data", path: "/" },
+        { directive: "img-src", blocked: "https://cdn.example", path: "/" },
+      ]);
+    });
+
+    it("does not use up the ten, so a different violation after a noisy host's is still read", () => {
+      // A font host blocked for 15 files, then a stylesheet host and a script host: 3 violations, not 10 lines of the first.
+      const noisy = Array.from({ length: 15 }, (_, i) =>
+        violation({ documentURL: "https://4rcos.com/", effectiveDirective: "font-src", blockedURL: `https://fonts.example/f${i}.woff2` }),
+      );
+      const rest = [
+        violation({ documentURL: "https://4rcos.com/", effectiveDirective: "style-src-elem", blockedURL: "https://css.example/a.css" }),
+        violation({ documentURL: "https://4rcos.com/", effectiveDirective: "script-src-elem", blockedURL: "https://js.example/a.js" }),
+      ];
+      expect(violationsFrom("application/reports+json", [...noisy, ...rest])).toEqual([
+        { directive: "font-src", blocked: "https://fonts.example", path: "/" },
+        { directive: "style-src-elem", blocked: "https://css.example", path: "/" },
+        { directive: "script-src-elem", blocked: "https://js.example", path: "/" },
+      ]);
+    });
+
+    it("is a different one when the directive, the blocked origin or the page's path differs", () => {
+      const out = violationsFrom("application/reports+json", [
+        img("https://cdn.example/a.png"),
+        img("https://cdn.example/a.png", { effectiveDirective: "connect-src" }),
+        img("https://other.example/a.png"),
+        img("https://cdn.example/a.png", { documentURL: "https://4rcos.com/badge/x" }),
+      ]);
+      expect(out).toEqual([
+        { directive: "img-src", blocked: "https://cdn.example", path: "/" },
+        { directive: "connect-src", blocked: "https://cdn.example", path: "/" },
+        { directive: "img-src", blocked: "https://other.example", path: "/" },
+        { directive: "img-src", blocked: "https://cdn.example", path: "/badge/x" },
+      ]);
+    });
+
+    it("is the same one when only what the log doesn't keep differs: the blocked file, its query, the page's query", () => {
+      const out = violationsFrom("application/reports+json", [
+        img("https://cdn.example/a.png"),
+        img("https://cdn.example/b.png?again=1"),
+        img("https://cdn.example/c/d.png#top", { documentURL: "https://4rcos.com/?ref=x" }),
+        img("https://cdn.example/a.png", { sample: "different", lineNumber: 9 }),
+      ]);
+      expect(out).toEqual([{ directive: "img-src", blocked: "https://cdn.example", path: "/" }]);
+    });
+
+    // Chromium keeps at most 100 reports for an upload, so a longer array isn't a browser's; reading on through thousands of
+    // tiny ones would only hand a caller with a 256 KB body work to make the route do.
+    it("looks at the first 100 reports of an array and no further, which is all Chromium keeps for one upload", () => {
+      const copies = (n: number) => Array.from({ length: n }, () => img("data"));
+      const last = img("https://cdn.example/a.png");
+      expect(violationsFrom("application/reports+json", [...copies(99), last])).toHaveLength(2);
+      expect(violationsFrom("application/reports+json", [...copies(100), last])).toHaveLength(1);
+    });
+
+    it("is the same when two paths differ only by an address, which is not logged", () => {
+      const out = violationsFrom("application/reports+json", [
+        img("data", { documentURL: "https://4rcos.com/t/0x1111111111111111111111111111111111111111" }),
+        img("data", { documentURL: "https://4rcos.com/t/0x2222222222222222222222222222222222222222" }),
+        img("https://0x3333333333333333333333333333333333333333.example/a.png"),
+        img("https://0x4444444444444444444444444444444444444444.example/b.png"),
+      ]);
+      expect(out).toEqual([
+        { directive: "img-src", blocked: "data", path: "/t/[address]" },
+        { directive: "img-src", blocked: "https://[address].example", path: "/" },
+      ]);
+    });
   });
 
   it("reads nothing from a body that isn't an array", () => {

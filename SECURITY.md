@@ -79,9 +79,10 @@ Every response carries these headers (`headers()` in `apps/web/next.config.ts`, 
 The full policy is sent as `Content-Security-Policy-Report-Only`, so it blocks nothing. It says the page takes its
 scripts and styles from itself (and one font stylesheet from Google Fonts, for the WalletConnect modal) and calls only
 itself, Arc's RPC nodes and explorers, WalletConnect and Reown, and Circle's App Kit; `security-headers.ts` lists each
-host with who calls it. Browsers post what it would have blocked to `/api/csp-report`, which writes one log line for
-each violation (the directive, the blocked origin or keyword, and the page's path) and answers 204 to everything. It
-logs no query string, no address, no client address and no user agent, reads at most 16 KB and limits each client. The
+host with who calls it. Browsers post what it would have blocked to `/api/csp-report`, which writes a log line (the
+directive, the blocked origin or keyword, and the page's path) for at most ten distinct violations per request and
+answers 204 to everything. It logs no query string, no address, no client address and no user agent, reads at most
+256 KB (Chromium puts the whole policy in every report, and keeps up to 100 for one upload) and limits each client. The
 policy watches real traffic for a few days before it is enforced, in a later step.
 
 `script-src` allows `'unsafe-inline'`. Next's own bootstrap scripts and the theme script are inline and carry no nonce,

@@ -7,8 +7,12 @@ import { readBodyCapped } from "@/lib/read-body";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** A report is a few hundred bytes; a batch of ten, a few kilobytes. */
-const MAX_BODY_BYTES = 16 * 1024;
+/**
+ * Chromium puts the whole policy (about 1.4 KB) into every report, so a report is about 2 KB, and its cache holds up to
+ * 100 reports for one upload: about 200 KB. The cap sits just above that. The body is read as a stream and given up on
+ * at the cap, so a larger one costs no more memory than this (lib/read-body.ts).
+ */
+const MAX_BODY_BYTES = 256 * 1024;
 // A page with a policy that doesn't fit raises one report for each thing it blocks, so a real visitor can send a
 // handful in a burst. Each client gets 60 a minute (per server instance); the rest are dropped without a line.
 const limiter = rateLimiter(60, 60_000);
@@ -17,10 +21,10 @@ const limiter = rateLimiter(60, 60_000);
 const done = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
 
 /**
- * Writes one line of JSON on stderr for each violation in an `application/csp-report` or `application/reports+json`
- * body, in the shape Cloud Run reads as a structured log entry: `severity` and `message`, then what was violated, the
- * origin (or keyword) that was blocked, and the page's path. Nothing else of the request or the report is logged: not the
- * client's address, its user agent, a query string or the referrer.
+ * Writes one line of JSON on stderr for each distinct violation in an `application/csp-report` or
+ * `application/reports+json` body, at most ten for a request, in the shape Cloud Run reads as a structured log entry:
+ * `severity` and `message`, then what was violated, the origin (or keyword) that was blocked, and the page's path. Nothing
+ * else of the request or the report is logged: not the client's address, its user agent, a query string or the referrer.
  *
  * It always answers 204: a body that is too large, isn't JSON, has the wrong shape or type, a client over its limit, and
  * a report that is fine all look the same from outside.

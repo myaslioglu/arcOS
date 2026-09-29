@@ -60,6 +60,15 @@ describe("enforcedHeaders", () => {
     const keys = enforcedHeaders().map((h) => h.key.toLowerCase());
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  // HSTS already keeps every visit on https, and every source the full policy names is https:, wss:, data: or blob:. Enforced,
+  // the directive would also rewrite a local `next start` opened over http from a LAN address, which then loads nothing.
+  it("leaves upgrade-insecure-requests out: HSTS keeps visits on https, and it would break a local server on plain http", () => {
+    const csp = valueOf(enforcedHeaders(), "Content-Security-Policy")!;
+    expect(csp).not.toContain("upgrade-insecure-requests");
+    expect(directives(csp)).not.toHaveProperty("upgrade-insecure-requests");
+    for (const { key, value } of enforcedHeaders()) expect(value, key).not.toContain("upgrade-insecure-requests");
+  });
 });
 
 describe("reportOnlyPolicy", () => {
@@ -177,12 +186,19 @@ describe("reportOnlyPolicy", () => {
     });
   });
 
-  it("closes objects, the base URL, form targets and framing, and upgrades insecure requests", () => {
+  it("closes objects, the base URL, form targets and framing", () => {
     expect(d["object-src"]).toEqual(["'none'"]);
     expect(d["base-uri"]).toEqual(["'none'"]);
     expect(d["form-action"]).toEqual(["'self'"]);
     expect(d["frame-ancestors"]).toEqual(["'none'"]);
-    expect(d["upgrade-insecure-requests"]).toEqual([]);
+  });
+
+  // A report-only policy ignores upgrade-insecure-requests, and Chromium logs a console error about it on every page.
+  it("leaves upgrade-insecure-requests out, in production and in development", () => {
+    for (const dev of [false, true]) {
+      expect(reportOnlyPolicy({ dev }), `dev: ${dev}`).not.toContain("upgrade-insecure-requests");
+      expect(directives(reportOnlyPolicy({ dev })), `dev: ${dev}`).not.toHaveProperty("upgrade-insecure-requests");
+    }
   });
 
   it("reports to the site's own endpoint, by report-uri and by report-to", () => {
@@ -243,6 +259,12 @@ describe("next.config.ts", () => {
     const applied = rules.flatMap((r) => r.headers);
     const expected = [...enforcedHeaders(), ...reportOnlyHeaders({ dev: process.env.NODE_ENV === "development" })];
     expect(applied).toEqual(expected);
+  });
+
+  it("sends upgrade-insecure-requests in no header, enforced or report-only", async () => {
+    for (const { key, value } of (await nextConfig.headers!()).flatMap((r) => r.headers)) {
+      expect(`${key}: ${value}`, key).not.toContain("upgrade-insecure-requests");
+    }
   });
 
   it("gives no header key to two rules, since the last rule for a key would win", async () => {

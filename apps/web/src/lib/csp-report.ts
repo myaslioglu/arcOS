@@ -14,8 +14,13 @@
  */
 export type Violation = { directive: string; blocked: string; path: string };
 
-/** A request's cap: a page with a broken policy can raise many violations in one batch. */
+/**
+ * A request's cap on distinct violations: a page with a broken policy can raise many in one batch. A violation counts once
+ * however often the batch repeats it (see `fromReportsJson`), so one noisy host can't use up the cap and hide the rest.
+ */
 const MAX_PER_REQUEST = 10;
+/** The reports of an array that are looked at: Chromium keeps at most 100 for one upload, so what follows isn't a browser's. */
+const MAX_EXAMINED = 100;
 const MAX_LENGTH = 200;
 const DIRECTIVE = /^[a-z][a-z-]{0,39}$/;
 const KEYWORD = /^[a-z][a-z0-9-]{0,31}$/;
@@ -33,9 +38,10 @@ export function directiveOf(value: unknown): string {
 }
 
 /**
- * What was blocked. A web URL is cut to its origin, so its path, query, fragment and credentials are gone. A keyword a
- * browser gives instead of a URL (`inline`, `eval`, `wasm-eval`, `data`, `blob`, …) is kept. Any other scheme (a data:
- * or blob: URL, a browser extension's) is reduced to its name.
+ * What was blocked. A web URL is cut to its origin, so its path, query, fragment and credentials are gone, and any full
+ * address left in the origin (a host label can be one) is replaced, as it is in a path. A keyword a browser gives instead
+ * of a URL (`inline`, `eval`, `wasm-eval`, `data`, `blob`, …) is kept. Any other scheme (a data: or blob: URL, a browser
+ * extension's) is reduced to its name.
  */
 export function blockedOf(value: unknown): string {
   if (typeof value !== "string") return "unknown";
@@ -48,7 +54,8 @@ export function blockedOf(value: unknown): string {
     // Not a URL: a keyword such as `inline`, or nothing this log wants.
   }
   if (url) {
-    if (WEB_SCHEMES.has(url.protocol)) return url.origin.slice(0, MAX_LENGTH);
+    // The address goes before the cut: a cut in the middle of one would leave half of it.
+    if (WEB_SCHEMES.has(url.protocol)) return url.origin.replace(ADDRESS, "[address]").slice(0, MAX_LENGTH);
     const scheme = url.protocol.slice(0, -1).toLowerCase();
     return KEYWORD.test(scheme) ? scheme : "other";
   }
@@ -86,10 +93,18 @@ function fromCspReport(body: unknown): Violation[] {
   return usable(violation) ? [violation] : [];
 }
 
+/**
+ * Chromium sends one report for each thing a page is stopped from loading, all in one array, and a page whose policy
+ * doesn't fit raises the same violation many times (28 font files from one host are 28 reports). What is logged is a
+ * violation's directive, blocked origin and path, so the reports that agree on all three are one violation: it is read
+ * once, in the place it first appears, and only distinct violations count towards the cap. Only the first
+ * `MAX_EXAMINED` reports are looked at, which bounds the work a body of many tiny ones can cause.
+ */
 function fromReportsJson(body: unknown): Violation[] {
   if (!Array.isArray(body)) return [];
   const out: Violation[] = [];
-  for (const report of body) {
+  const seen = new Set<string>();
+  for (const report of body.slice(0, MAX_EXAMINED)) {
     if (out.length >= MAX_PER_REQUEST) break;
     if (!isRecord(report) || report.type !== "csp-violation") continue;
     const fields = isRecord(report.body) ? report.body : {};
@@ -98,7 +113,11 @@ function fromReportsJson(body: unknown): Violation[] {
       blocked: blockedOf(fields.blockedURL),
       path: firstKnown(pathOf(fields.documentURL), pathOf(report.url)),
     };
-    if (usable(violation)) out.push(violation);
+    if (!usable(violation)) continue;
+    const key = JSON.stringify([violation.directive, violation.blocked, violation.path]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(violation);
   }
   return out;
 }
