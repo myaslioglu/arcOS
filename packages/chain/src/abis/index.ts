@@ -3,6 +3,8 @@ import { keccak256, toHex } from "viem";
 export { feeControllerAbi } from "./feeController";
 export { tokenFactoryAbi } from "./tokenFactory";
 export { multisendAbi } from "./multisend";
+export { lockVaultAbi } from "./lockVault";
+export { vaultFactoryAbi } from "./vaultFactory";
 
 const key = (name: string) => keccak256(toHex(name));
 

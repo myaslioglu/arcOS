@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { keccak256, toBytes, toHex } from "viem";
-import { FEE_KEYS, feeControllerAbi, multisendAbi, tokenFactoryAbi } from "../abis";
+import { FEE_KEYS, feeControllerAbi, lockVaultAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi } from "../abis";
 
 type AbiInput = { name?: string };
 type AbiItem = { type: string; name?: string; inputs?: readonly AbiInput[] };
 
 const names = (abi: readonly AbiItem[], type: string) =>
   abi.filter((item) => item.type === type).map((item) => item.name);
+
+const hasType = (abi: readonly AbiItem[], type: string) => abi.some((item) => item.type === type);
 
 const findItem = (abi: readonly AbiItem[], type: string, name: string) =>
   abi.find((item) => item.type === type && item.name === name);
@@ -60,6 +62,102 @@ describe("abis", () => {
   it("multisendAbi's Drop event carries a failedCount input", () => {
     const event = findItem(multisendAbi, "event", "Drop");
     expect(inputNames(event)).toContain("failedCount");
+  });
+
+  // The vault ABIs are pinned to the exact function list. LockVault holds a user's tokens, so "no admin function that
+  // can move or release a user's asset" is checked here as data: adding any function, an admin power included, makes
+  // this test fail until the new list is reviewed and pasted in deliberately.
+  it("lockVaultAbi has exactly these functions and no receive or fallback", () => {
+    expect(names(lockVaultAbi, "function").sort()).toEqual(
+      [
+        "MAX_DURATION",
+        "acceptOwnership",
+        "extend",
+        "initialize",
+        "lockedAmount",
+        "owner",
+        "pendingOwner",
+        "token",
+        "transferOwnership",
+        "unlockAt",
+        "withdraw",
+      ].sort(),
+    );
+    expect(hasType(lockVaultAbi, "receive") || hasType(lockVaultAbi, "fallback")).toBe(false);
+  });
+
+  it("lockVaultAbi has exactly these events, and the errors the Vault app decodes", () => {
+    expect(names(lockVaultAbi, "event").sort()).toEqual(
+      ["Extended", "Initialized", "OwnershipTransferStarted", "OwnershipTransferred", "Withdrawn"].sort(),
+    );
+    const errors = names(lockVaultAbi, "error");
+    for (const name of ["BadUnlockTime", "NotOwner", "NotPendingOwner", "StillLocked", "ZeroAddress"]) {
+      expect(errors).toContain(name);
+    }
+  });
+
+  it("vaultFactoryAbi has exactly these functions: locking, the registries with bounded reads, and the allow-list", () => {
+    expect(names(vaultFactoryAbi, "function").sort()).toEqual(
+      [
+        "LOCK_FEE_SHARE_BPS",
+        "LOCK_FLAT",
+        "LOCK_LP_BPS",
+        "acceptOwnership",
+        "feeController",
+        "isVault",
+        "lockPosition",
+        "lockToken",
+        "lockVaultImpl",
+        "managers",
+        "owner",
+        "pendingOwner",
+        "positionVaultImpl",
+        "positionVaultsForToken",
+        "positionVaultsForTokenLength",
+        "positionVaultsForTokenSlice",
+        "renounceOwnership",
+        "setManager",
+        "transferOwnership",
+        "vaultsForToken",
+        "vaultsForTokenLength",
+        "vaultsForTokenSlice",
+        "vaultsOf",
+        "vaultsOfLength",
+        "vaultsOfSlice",
+      ].sort(),
+    );
+    expect(hasType(vaultFactoryAbi, "receive") || hasType(vaultFactoryAbi, "fallback")).toBe(false);
+  });
+
+  it("vaultFactoryAbi's slice getters take a start and a count, and its events carry what Inspector reads", () => {
+    for (const name of ["vaultsOfSlice", "vaultsForTokenSlice", "positionVaultsForTokenSlice"]) {
+      expect(inputNames(findItem(vaultFactoryAbi, "function", name)).slice(1)).toEqual(["start", "count"]);
+    }
+    expect(names(vaultFactoryAbi, "event").sort()).toEqual(
+      ["ManagerSet", "OwnershipTransferStarted", "OwnershipTransferred", "PositionLocked", "TokenLocked"].sort(),
+    );
+    expect(inputNames(findItem(vaultFactoryAbi, "event", "TokenLocked"))).toEqual([
+      "owner",
+      "token",
+      "vault",
+      "amount",
+      "fee",
+      "unlockAt",
+    ]);
+    expect(inputNames(findItem(vaultFactoryAbi, "event", "PositionLocked"))).toEqual([
+      "owner",
+      "manager",
+      "tokenId",
+      "vault",
+      "unlockAt",
+    ]);
+  });
+
+  it("vaultFactoryAbi has the errors the Vault app decodes", () => {
+    const errors = names(vaultFactoryAbi, "error");
+    for (const name of ["WrongFee", "FeeTransferFailed", "FeeOutOfRange", "ManagerNotAllowed", "NotAToken", "ZeroAmount"]) {
+      expect(errors).toContain(name);
+    }
   });
 
   it("FEE_KEYS.MINT_FLAT matches keccak256(toHex(\"MINT_FLAT\"))", () => {
