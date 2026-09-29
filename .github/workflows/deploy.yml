@@ -1,9 +1,13 @@
 name: Deploy
 
 # Deploys https://4rcos.com to Firebase App Hosting (project arcos-c80cf, backend arcos) from GitHub Actions. No key
-# file exists anywhere: the job signs in through Workload Identity Federation and a service account (see
-# docs/DEPLOYING.md), and the deploy runs only after the checks pass and the owner approves it in the `production`
-# environment, which allows the main branch only.
+# file exists anywhere: the deploy job signs in through Workload Identity Federation and a service account (see
+# docs/DEPLOYING.md), and it runs only after the checks and the bundle build pass and the owner approves it in the
+# `production` environment, which allows the main branch only.
+#
+# The jobs are split by what they may touch. `checks` and `bundle` install the project's dependencies and run its build,
+# which is third-party code, so they hold no credential. `deploy` holds the credential and runs no project code: only
+# first-party actions, the bundle as data, the scan script from its own checkout and the pinned Firebase CLI.
 on:
   push:
     branches: [main]
@@ -42,20 +46,15 @@ jobs:
     permissions:
       contents: read
 
-  deploy:
-    name: Deploy to production
-    needs: checks
-    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
-    if: github.ref == 'refs/heads/main'
+  # Builds the mainnet bundle that the deploy job scans. It installs the project's dependencies and runs the Next.js
+  # build, so it gets no credential of any kind: a read-only token, no environment, no secret. It runs beside `checks`,
+  # and `deploy` waits for both.
+  bundle:
+    name: Build the mainnet bundle
     runs-on: ubuntu-24.04
-    # Under the hour an access token lives: the Firebase CLI asks for one when it starts and never renews it.
-    timeout-minutes: 45
-    environment:
-      name: production
-      url: https://4rcos.com
+    timeout-minutes: 20
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,13 +77,61 @@ jobs:
       - name: Build the mainnet bundle
         run: npm run build -w @arcos/web
 
+      # Build output only: the two paths share apps/web/.next, so the artifact holds static/ and server/. Hidden files
+      # are kept so the scan sees every file the build made. One day is plenty (the deploy job takes it within this
+      # run), and overwrite lets a re-run of this job replace the artifact of the first attempt.
+      - name: Keep the bundle for the deploy job
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle
+          path: |
+            apps/web/.next/static
+            apps/web/.next/server
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # The only job with a credential. It runs nothing from the project's dependencies and nothing of the project's build:
+  # the bundle arrives as data, and the scan script comes from this job's own checkout, never from the bundle.
+  deploy:
+    name: Deploy to production
+    needs: [checks, bundle]
+    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Under the hour an access token lives: the Firebase CLI asks for one when it starts and never renews it.
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://4rcos.com
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # Outside the workspace on purpose: the Firebase CLI uploads the workspace as the source, and the bundle is not
+      # source.
+      - name: Download the bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: bundle
+          path: ${{ runner.temp }}/bundle
+
       # App Hosting builds the site again from the source this job uploads, so this scan looks at a build of the same
       # commit, lockfile and settings, not at the very files that run. It fails on any match, and when the patterns are
       # missing (see scripts/scan-bundle.mjs). The patterns are a secret, so they aren't in the repo.
       - name: Scan the bundle for strings that must not ship
         env:
           BUNDLE_DENY_PATTERNS: ${{ secrets.BUNDLE_DENY_PATTERNS }}
-        run: node scripts/scan-bundle.mjs apps/web/.next/static apps/web/.next/server
+        run: node scripts/scan-bundle.mjs "$RUNNER_TEMP/bundle/static" "$RUNNER_TEMP/bundle/server"
 
       # Nothing uses the access token asked for here: the Firebase CLI reads the credentials file this step leaves.
       # Asking makes this step prove the whole sign-in, acting as the service account included, and name the stage
