@@ -6,7 +6,7 @@
  * It does so for a page that is not in a frame at all, when Chrome loaded it ahead of time from the address bar
  * (prerendering). Such a page's main frame carries a non-zero extension frame id, which the wallet reads as an
  * iframe. The refusal lasts as long as the page does, so trying again fails the same way, and a reload, which loads
- * the page normally, lets the request through.
+ * the page normally, lets the request through. Since the wallet refuses the first request, nothing was sent.
  *
  * The wallet sends no code of its own for this, so it's recognized by its words. They pick this app's sentence and
  * are never shown: the same rule as every other wallet error (lib/network.ts, lib/contract-error.ts).
@@ -16,19 +16,27 @@ export const EMBEDDED_FRAME_MESSAGE =
 
 const EMBEDDED_FRAME = /embedded frame/i;
 
-/** Walks the error's `cause` chain, the shape viem's `BaseError` and the standard `Error` share, and reads each
- * node's own text: `message`, and viem's `details` and `shortMessage`. A wallet may also reject with a bare string. */
+/**
+ * Walks the error's `cause` chain, the shape viem's `BaseError` and the standard `Error` share, reading each node's own
+ * text. A wallet may also reject with a bare string, at the top or as a cause.
+ *
+ * A viem error composes its `message` from its own summary and the call's arguments, which can be text the visitor
+ * typed (a token's name). Its `details` carries the wallet's own words up the chain, so for a viem error (one with a
+ * `shortMessage`) only `details` and `shortMessage` are read. Circle's App Kit keeps the error it wraps under
+ * `cause.trace.originalError`, so the walk follows that too.
+ */
 export function isEmbeddedFrameRefusal(error: unknown): boolean {
-  if (typeof error === "string") return EMBEDDED_FRAME.test(error);
   const seen = new Set<unknown>();
   let current: unknown = error;
-  while (current && typeof current === "object" && !seen.has(current)) {
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    if (typeof current === "string") return EMBEDDED_FRAME.test(current);
+    if (typeof current !== "object") return false;
     seen.add(current);
-    for (const key of ["message", "details", "shortMessage"]) {
-      const text = (current as Record<string, unknown>)[key];
-      if (typeof text === "string" && EMBEDDED_FRAME.test(text)) return true;
-    }
-    current = (current as { cause?: unknown }).cause;
+    const node = current as Record<string, unknown>;
+    const fields = typeof node.shortMessage === "string" ? ["details", "shortMessage"] : ["message", "details"];
+    if (fields.some((key) => typeof node[key] === "string" && EMBEDDED_FRAME.test(node[key] as string))) return true;
+    const trace = node.trace;
+    current = node.cause ?? (trace !== null && typeof trace === "object" ? (trace as { originalError?: unknown }).originalError : undefined);
   }
   return false;
 }

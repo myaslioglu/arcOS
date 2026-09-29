@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { ContractFunctionExecutionError, UserRejectedRequestError } from "viem";
 import { feeControllerAbi, multisendAbi, tokenFactoryAbi } from "@arcos/chain";
 import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
 import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
@@ -296,5 +297,18 @@ describe("describeContractError — a wallet that takes the page for an embedded
 
   it("says to reload even under a rejection code", () => {
     expect(describeContractError({ code: 4001, message: TRUST_WALLET_TEXT })).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
+  it("never takes the visitor's own words for the wallet's: a cancelled token named with the phrase reads as cancelled", () => {
+    const abi = [
+      { type: "function", name: "createToken", stateMutability: "payable", inputs: [{ name: "name", type: "string" }], outputs: [] },
+    ] as const;
+    const err = new ContractFunctionExecutionError(new UserRejectedRequestError(new Error("User rejected the request.")), {
+      abi,
+      functionName: "createToken",
+      args: ["Embedded Frame Coin"],
+    });
+    expect(err.message).toContain("Embedded Frame Coin");
+    expect(describeContractError(err)).toBe("You cancelled the request in your wallet.");
   });
 });

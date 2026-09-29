@@ -2,17 +2,16 @@
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useAccount } from "wagmi";
-import { AppKit, isRateLimitError, isRetryableError, isUserCancellationError, type BridgeResult } from "@circle-fin/app-kit";
+import { AppKit, isRetryableError, type BridgeResult } from "@circle-fin/app-kit";
 import { useDesktop, type Tone } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, adapterFor, bridgeFee, feePercentLabel, feeRecipient } from "@/lib/appkit";
-import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
 import { bridgeChainOptions, chainLabel, type ChainId } from "./chains";
 import { explorerCheckNote, fundsLeftSource, inFlightNote } from "./inFlight";
 import { resolveRoute, type Direction } from "./route";
-import { session } from "./session";
+import { classifyBridgeFailure, session } from "./session";
 
 const STATE_LABEL: Record<string, string> = {
   success: "Bridge complete",
@@ -100,13 +99,7 @@ function Form() {
       if (result.state === "success") trackEvent("bridge_success", { from: bridgeSource, to: bridgeDest });
       notify(STATE_LABEL[result.state] ?? "Bridge submitted", STATE_TONE[result.state] ?? "info");
     } catch (err) {
-      const note = explorerCheckNote(chainLabel(bridgeSource));
-      if (isUserCancellationError(err)) session.fail("Cancelled.");
-      else if (isRateLimitError(err)) session.fail(`The bridge service is busy. Try again in a minute. ${note}`);
-      // Never getErrorMessage(err)'s raw text here — like every other wallet/RPC/SDK error this app
-      // shows, it can carry internal detail or a URL (see lib/contract-error.ts's
-      // GENERIC_TRANSACTION_ERROR, reused here rather than inventing a second "generic" sentence).
-      else session.fail(`${GENERIC_TRANSACTION_ERROR} ${note}`);
+      session.fail(classifyBridgeFailure(err, explorerCheckNote(chainLabel(bridgeSource))));
     }
   };
 

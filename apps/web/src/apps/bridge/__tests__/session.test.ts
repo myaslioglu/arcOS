@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BridgeResult } from "@circle-fin/app-kit";
+import { KitError, RateLimitError, type BridgeResult } from "@circle-fin/app-kit";
+import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
+import { EMBEDDED_FRAME_MESSAGE } from "@/lib/wallet-frame";
 import {
   bridgeSessionReducer,
+  classifyBridgeFailure,
   createBridgeSession,
   initialBridgeSessionState,
   session,
@@ -293,5 +296,25 @@ describe("session store notifies subscribers", () => {
     unsubscribe();
     s.dismiss();
     expect(listener).toHaveBeenCalledTimes(5);
+  });
+});
+
+// What Bridge's submit catch shows, pulled out of Window.tsx like Swap's classifySwapFailure.
+describe("classifyBridgeFailure", () => {
+  const NOTE = "Check the source chain's explorer before trying again.";
+  const TEXT = "Request blocked: embedded frames are not allowed for this origin. For your security, 4rcos.com can't make this request from an embedded frame.";
+
+  it("says to reload when the wallet took the page for an embedded frame: it refused the first request, so nothing was sent", () => {
+    expect(classifyBridgeFailure(new Error(TEXT), NOTE)).toBe(EMBEDDED_FRAME_MESSAGE);
+    expect(classifyBridgeFailure(new Error("Bridge failed", { cause: { trace: { originalError: new Error(TEXT) } } }), NOTE)).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
+  it("keeps its sentences for a cancellation, a rate limit and anything else", () => {
+    expect(classifyBridgeFailure(new Error("User rejected the request"), NOTE)).toBe("Cancelled.");
+    const busy = new KitError({ ...RateLimitError.RATE_LIMIT_EXCEEDED, recoverability: "RETRYABLE", message: "Rate limit exceeded, please retry later" });
+    expect(classifyBridgeFailure(busy, NOTE)).toBe(`The bridge service is busy. Try again in a minute. ${NOTE}`);
+    const raw = classifyBridgeFailure(new Error("raw detail: https://internal.example/x"), NOTE);
+    expect(raw).toBe(`${GENERIC_TRANSACTION_ERROR} ${NOTE}`);
+    expect(raw).not.toMatch(/internal\.example/);
   });
 });

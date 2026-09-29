@@ -5,7 +5,7 @@ import { useAccount, useBalance, useConnect, useDisconnect } from "wagmi";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
 import { useArcNetwork } from "@/lib/network";
 import { connectorLabel, isWalletConnect, visibleConnectors } from "@/providers/wagmi";
-import { ConnectError } from "./ConnectError";
+import { ConnectError, SwitchError } from "./WalletErrors";
 import { holdEscape } from "./escape";
 
 const noSubscription = () => () => {};
@@ -91,7 +91,7 @@ export default function WalletWindow() {
           Disconnect
         </button>
       </div>
-      {switchError && <p className="mt-3 text-accent-3-text">{switchError}</p>}
+      {switchError && <SwitchError message={switchError} />}
     </div>
   );
 }

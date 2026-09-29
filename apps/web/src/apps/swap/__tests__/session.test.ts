@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KitError, RateLimitError, type SwapResult } from "@circle-fin/app-kit";
+import { EMBEDDED_FRAME_MESSAGE } from "@/lib/wallet-frame";
 import {
   classifySwapFailure,
   createSwapSession,
@@ -95,6 +96,12 @@ describe("swapSessionReducer", () => {
 // second, separately-charged swap. Mirrors Mint's classifyMintFailure (mint/session.ts): pulled out as
 // a pure function so it's unit-tested without a live wallet/RPC/SDK.
 describe("classifySwapFailure", () => {
+  it("says to reload when the wallet took the page for an embedded frame: it refused the first request, so nothing was sent", () => {
+    const text = "Request blocked: embedded frames are not allowed for this origin. For your security, 4rcos.com can't make this request from an embedded frame.";
+    const err = new Error("Swap failed", { cause: { trace: { originalError: new Error(text) } } });
+    expect(classifySwapFailure(err)).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
   it("reads as a rejection and keeps its own sentence — nothing was ever signed, so there's nothing to hedge about", () => {
     const err = new Error("User rejected the request");
     expect(classifySwapFailure(err)).toBe("Cancelled.");

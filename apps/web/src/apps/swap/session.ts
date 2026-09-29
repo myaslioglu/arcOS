@@ -1,4 +1,5 @@
 import { isRateLimitError, isUserCancellationError, type SwapResult } from "@circle-fin/app-kit";
+import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
 import type { SwapToken } from "./tokenPair";
 
 export type SwapSessionStatus = "idle" | "swapping" | "done";
@@ -76,8 +77,12 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
  * (bridge/Window.tsx's catch, bridge/inFlight.ts's `explorerCheckNote`) adapted for Swap, which has no
  * per-attempt explorer link to offer at this point (only a successful `SwapResult` carries one).
  * Never the underlying error's own text, same rule as every other wallet/RPC/SDK error this app shows.
+ *
+ * A wallet that took the page for an embedded frame is checked first: it refuses the first request, so nothing was
+ * sent, and only a reload helps (lib/wallet-frame.ts).
  */
 export function classifySwapFailure(err: unknown): string {
+  if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserCancellationError(err)) return "Cancelled.";
   if (isRateLimitError(err)) return "The swap service is busy, and the swap may still have gone through. Check your wallet's activity before trying again in a minute.";
   return "The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.";

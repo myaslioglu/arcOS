@@ -198,4 +198,12 @@ describe("a wallet that takes the page for an embedded frame", () => {
   it("switchNetworkErrorMessage says to reload too", () => {
     expect(switchNetworkErrorMessage({ code: 4100, message: TRUST_WALLET_TEXT }, CHAIN_NAME)).toBe(EMBEDDED_FRAME_MESSAGE);
   });
+
+  it("switchNetworkErrorMessage says to reload even under a rejection code", () => {
+    expect(switchNetworkErrorMessage({ code: 4001, message: TRUST_WALLET_TEXT }, CHAIN_NAME)).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
+
+  it("switchNetworkErrorMessage reads a wallet that refused with a bare string, which wagmi wraps in a SwitchChainError", () => {
+    expect(switchNetworkErrorMessage(new SwitchChainError(TRUST_WALLET_TEXT as unknown as Error), CHAIN_NAME)).toBe(EMBEDDED_FRAME_MESSAGE);
+  });
 });

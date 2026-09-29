@@ -1,4 +1,6 @@
-import type { BridgeResult } from "@circle-fin/app-kit";
+import { isRateLimitError, isUserCancellationError, type BridgeResult } from "@circle-fin/app-kit";
+import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
+import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
 import type { ChainId } from "./chains";
 
 export type BridgeSessionStatus = "idle" | "bridging" | "done";
@@ -74,6 +76,24 @@ export function bridgeSessionReducer(state: BridgeSessionState, action: BridgeSe
     case "dismiss":
       return state.status === "done" ? { ...initialBridgeSessionState } : state;
   }
+}
+
+/**
+ * What Bridge's submit catch shows, pulled out of Window.tsx like Swap's `classifySwapFailure` so it's unit-tested
+ * without a live wallet, RPC or SDK. `note` is the "check the source chain's explorer" hint (inFlight.ts's
+ * `explorerCheckNote`), since a failure after the burn can still mean the funds left.
+ *
+ * - A wallet that took the page for an embedded frame comes first: it refuses the first request, so nothing was sent,
+ *   and only a reload helps (lib/wallet-frame.ts).
+ * - A cancellation and a rate limit keep their own sentences.
+ * - Anything else gets `GENERIC_TRANSACTION_ERROR`, never the error's own text: like every other wallet, RPC or SDK
+ *   error this app shows, it can carry internal detail or a URL.
+ */
+export function classifyBridgeFailure(err: unknown, note: string): string {
+  if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
+  if (isUserCancellationError(err)) return "Cancelled.";
+  if (isRateLimitError(err)) return `The bridge service is busy. Try again in a minute. ${note}`;
+  return `${GENERIC_TRANSACTION_ERROR} ${note}`;
 }
 
 /** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake
