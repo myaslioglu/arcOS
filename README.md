@@ -67,7 +67,9 @@ public explorer, which refuses the server on mainnet, so the list answers "Could
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`. `npm run test:emulator -w @arcos/data` runs the Firestore suite against the local emulator;
-it needs Java 21 or newer and no credentials.
+it needs Java 21 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase
+CLI in `tools/firebase`, which the root install leaves out: install it once with
+`npm ci --ignore-scripts --prefix tools/firebase`.
 
 ## Repo layout
 

@@ -47,11 +47,16 @@ export function scanExports(source: string): ExportScan {
   return { names, unresolved };
 }
 
-/** The ways a firebase.json `functions` block and the entry's exports break the codebase rules; empty when they hold. */
+/**
+ * The ways a firebase.json `functions` block and the entry's exports break the codebase rules; empty when they hold.
+ * `scan` is null when FUNCTIONS_ENTRY does not exist. That is fine only while no functions entry is configured: with
+ * one, the names a deploy would ship can't be checked, so the check fails closed.
+ */
 export function checkFunctions(config: { functions?: unknown }, scan: ExportScan | null): string[] {
   const problems: string[] = [];
   const raw = config.functions;
   const entries = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+  if (entries.length > 0 && scan === null) problems.push(`functions entry configured but ${FUNCTIONS_ENTRY} not found`);
   if (entries.length > 1) problems.push("firebase.json declares more than one functions entry; only the codebase arcos may exist");
   entries.forEach((entry, index) => {
     const codebase = (entry as { codebase?: unknown } | null)?.codebase;

@@ -1,19 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DataError } from "../errors";
 import { resolveDatabaseId } from "../server/database-id";
+import { refusal } from "./helpers/refusal";
 
 const named = (value: string) => resolveDatabaseId({ ARCOS_FIRESTORE_DATABASE: value });
-
-/** What a call refused with; fails the test when it throws anything but a DataError, or does not throw. */
-function refusal(run: () => unknown): { code: string; message: string } {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(DataError);
-    return { code: (error as DataError).code, message: (error as DataError).message };
-  }
-  throw new Error("expected the call to throw");
-}
 
 describe("resolveDatabaseId", () => {
   it("is arcos when nothing overrides it", () => {

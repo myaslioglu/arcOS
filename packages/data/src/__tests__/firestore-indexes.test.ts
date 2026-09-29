@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { COLLECTIONS, TTL_COLLECTIONS, TTL_FIELD } from "../names";
-import { validateIndexesSpec } from "./helpers/firebase-tools";
+import { COLLECTIONS, DATABASE_ID, TTL_COLLECTIONS, TTL_FIELD } from "../names";
+import { deployRequests, validateIndexesSpec } from "./helpers/firebase-tools";
 
 const ROOT = path.resolve(import.meta.dirname, "../../../..");
 type Spec = {
@@ -33,12 +33,6 @@ const DESIGN_INDEXES = [
   composite("deliveries", ["status", asc], ["createdAt", asc]),
 ];
 
-// A TTL field keeps Firestore's default single-field indexes; the override adds the policy.
-const DEFAULT_SINGLE_FIELD = [
-  { order: "ASCENDING", queryScope: "COLLECTION" },
-  { order: "DESCENDING", queryScope: "COLLECTION" },
-  { arrayConfig: "CONTAINS", queryScope: "COLLECTION" },
-];
 
 describe("firestore/arcos.indexes.json", () => {
   it("is a spec firebase-tools accepts, with nothing else in the file", () => {
@@ -59,7 +53,12 @@ describe("firestore/arcos.indexes.json", () => {
     const ttl = spec.fieldOverrides.filter((override) => override.ttl !== undefined);
     expect(ttl.every((override) => override.ttl === true)).toBe(true);
     expect(ttl.map(nameOf).sort()).toEqual(TTL_COLLECTIONS.map((collection) => `${collection}.${TTL_FIELD}`).sort());
-    for (const override of ttl) expect(override.indexes, override.collectionGroup).toEqual(DEFAULT_SINGLE_FIELD);
+  });
+
+  it("does not index the TTL fields: nothing queries expiresAt, and Google advises exempting TTL fields", () => {
+    for (const override of spec.fieldOverrides.filter((o) => o.ttl !== undefined)) {
+      expect(override.indexes, override.collectionGroup).toEqual([]);
+    }
   });
 
   it("does not index reports.report, alerts.detail or radarFeed.rows", () => {
@@ -71,5 +70,44 @@ describe("firestore/arcos.indexes.json", () => {
   it("overrides each field once", () => {
     const keys = spec.fieldOverrides.map(nameOf);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  describe("what firebase deploy sends for it (firebase-tools' own deploy code, against a recording client)", () => {
+    const base = `/projects/demo-arcos/databases/${DATABASE_ID}/collectionGroups`;
+
+    it("sends every request to the arcos database: three reads, eight index creates, eight field patches, no deletes", async () => {
+      const requests = await deployRequests(spec, DATABASE_ID);
+      expect(requests.every((request) => request.url.includes(`/databases/${DATABASE_ID}`))).toBe(true);
+      const count = (method: string) => requests.filter((request) => request.method === method).length;
+      expect([count("GET"), count("POST"), count("PATCH"), count("DELETE")]).toEqual([3, 8, 8, 0]);
+    });
+
+    it("creates the eight composite indexes of design 1.6", async () => {
+      const posts = (await deployRequests(spec, DATABASE_ID)).filter((request) => request.method === "POST");
+      const sent = posts.map((post) => ({
+        collectionGroup: post.url.slice(base.length + 1, -"/indexes".length),
+        queryScope: (post.body as { queryScope: string }).queryScope,
+        fields: (post.body as { fields: unknown }).fields,
+      }));
+      expect(sent.sort(byJson)).toEqual([...DESIGN_INDEXES].sort(byJson));
+    });
+
+    it("turns on TTL for each expiresAt with no single-field indexes, and exempts the three large fields", async () => {
+      const patches = (await deployRequests(spec, DATABASE_ID)).filter((request) => request.method === "PATCH");
+      const expected = [
+        ...TTL_COLLECTIONS.map((collection) => ({
+          method: "PATCH",
+          url: `${base}/${collection}/fields/${TTL_FIELD}`,
+          body: { indexConfig: { indexes: [] }, ttlConfig: {} },
+        })),
+        ...["alerts/fields/detail", "radarFeed/fields/rows", "reports/fields/report"].map((field) => ({
+          method: "PATCH",
+          url: `${base}/${field}`,
+          body: { indexConfig: { indexes: [] } },
+          queryParams: { updateMask: "indexConfig" },
+        })),
+      ];
+      expect([...patches].sort(byJson)).toEqual(expected.sort(byJson));
+    });
   });
 });
