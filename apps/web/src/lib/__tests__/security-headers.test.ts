@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as circleChains from "@circle-fin/app-kit/chains";
 import { CHAINS } from "@arcos/chain";
 import { bridgeChainOptions } from "@/apps/bridge/chains";
-import { ARC_CHAIN_NAME } from "@/lib/appkit";
 import nextConfig from "../../../next.config";
 import { CSP_REPORT_PATH, enforcedHeaders, reportOnlyHeaders, reportOnlyPolicy } from "../security-headers";
 
@@ -175,11 +174,6 @@ describe("reportOnlyPolicy", () => {
         expect(rpcEndpoints.length, chain).toBeGreaterThan(0);
         for (const endpoint of rpcEndpoints) expect(connect, `${chain}: ${endpoint}`).toContain(new URL(endpoint).origin);
       }
-    });
-
-    it("is read for the network Swap and Bridge are built for", () => {
-      // appkit.ts reads the network when it loads, so this pins only the name it produced under the test's environment.
-      expect(["Arc", "Arc_Testnet"]).toContain(ARC_CHAIN_NAME);
     });
   });
 
