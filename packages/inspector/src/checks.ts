@@ -755,6 +755,8 @@ const foundVenues = (pools: readonly Pool[]): string[] =>
 const bestPool = (pools: Pool[]): Pool => pools.reduce((a, b) => (a.liquid !== b.liquid ? (b.liquid ? b : a) : b.depth > a.depth ? b : a));
 
 const wholeUnits = (depth: bigint): string => (depth / 1_000_000n).toLocaleString("en-US");
+/** "1,000": the amount the copy says a liquid pool can pay out, from the one constant that decides it. */
+const MIN_UNITS = wholeUnits(MIN_DEPTH);
 
 export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Finding {
   const { dex } = input;
@@ -771,15 +773,15 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
   if (best.liquid) {
     return best.version === "v4"
       ? finding(
-          "liquidity", "pass", `1,000 ${best.quote} can be swapped out of Uniswap v4`,
-          `The v4 quoter can pay out 1,000 ${best.quote} from this pool. ${units} ${best.quote} in range at the current price; liquidity outside the current tick range isn't counted. ${pools.length} pool(s) found.`,
+          "liquidity", "pass", `${MIN_UNITS} ${best.quote} can be swapped out of Uniswap v4`,
+          `The v4 quoter can pay out ${MIN_UNITS} ${best.quote} from this pool. ${units} ${best.quote} in range at the current price; liquidity outside the current tick range isn't counted. ${pools.length} pool(s) found.`,
           { evidenceUrl: url },
         )
       : finding("liquidity", "pass", `${units} ${best.quote} of liquidity on ${VENUE[best.version]}`, `${pools.length} pool(s) found.`, { evidenceUrl: url });
   }
   const deepest =
     best.version === "v4"
-      ? `Deepest pool has ${units} ${best.quote} in range, and a 1,000 ${best.quote} swap can't be quoted.`
+      ? `Deepest pool has ${units} ${best.quote} in range, and a ${MIN_UNITS} ${best.quote} swap can't be quoted.`
       : `Deepest pool holds ${units} ${best.quote}.`;
   return silent
     ? finding("liquidity", "unknown", "Couldn't read liquidity pools", `${silent} ${deepest}`, { evidenceUrl: url })
