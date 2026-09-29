@@ -232,3 +232,24 @@ describe("the Firebase CLI the deploy runs", () => {
     expect(Object.keys(rootLock.packages).filter((name) => name === "tools" || name.startsWith("tools/"))).toEqual([]);
   });
 });
+
+describe("the Firestore tests in CI", () => {
+  const emulator = read(".github/workflows/emulator.yml");
+  const install = /^ {6}- run: npm ci --ignore-scripts --prefix tools\/firebase$/m;
+  const at = (text, pattern) => text.search(pattern);
+
+  it("runs the @arcos/data unit tests with the other workspaces, after installing the pinned Firebase CLI", () => {
+    const unit = /^ {8}run: npm run test (--workspace=@arcos\/\S+ )*--workspace=@arcos\/data( --workspace=@arcos\/\S+)*$/m;
+    expect(ci).toMatch(unit);
+    expect(ci).toMatch(install);
+    expect(at(ci, install)).toBeLessThan(at(ci, unit));
+  });
+
+  it("runs the emulator suite with the same CLI, installed without install scripts", () => {
+    const suite = /^ {8}run: npm run test:emulator -w @arcos\/data$/m;
+    expect(emulator).toMatch(suite);
+    expect(emulator).toMatch(install);
+    expect(at(emulator, install)).toBeLessThan(at(emulator, suite));
+    expect(emulator).not.toMatch(/firebase-tools@|\bnpx\b/);
+  });
+});

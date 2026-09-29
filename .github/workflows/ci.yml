@@ -51,11 +51,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # The Firebase CLI at the version tools/firebase pins, from its own lockfile (it is not a
+      # workspace, so the install above leaves it out). @arcos/data's unit tests load its deploy code
+      # to check firebase.json and the indexes file. No install scripts: nothing in its tree needs one.
+      - run: npm ci --ignore-scripts --prefix tools/firebase
+
       # The JS/TS workspaces' own vitest suites. @arcos/contracts' "test" script is `forge test`,
       # run as its own step below instead, so a Solidity failure and a TS failure are never
-      # conflated in the same step's output.
+      # conflated in the same step's output. @arcos/data's emulator suite runs in emulator.yml.
       - name: Test (JS workspaces)
-        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector
+        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector --workspace=@arcos/data
 
       # The contracts scripts run forge through packages/contracts/scripts/forge.mjs: the npm `forge`
       # command (@foundry-rs/forge 1.7.1) exits 0 even when a test fails, which kept this step green.
