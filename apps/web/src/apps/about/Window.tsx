@@ -29,7 +29,7 @@ export default function AboutWindow() {
     <div className="p-5 text-sm leading-6">
       <p className="text-base font-medium">4rc.OS</p>
       <p className="mt-2 text-muted">
-        {"A desktop for Circle's Arc network: inspect a token, mint one and send to many wallets at once."}
+        {"A desktop for Circle's Arc network: inspect a token, mint one, send to many wallets at once, swap, bridge, revoke token approvals, and read the chain from a terminal."}
       </p>
 
       <dl className="mt-4 grid grid-cols-[96px_1fr] gap-y-2">
@@ -78,6 +78,8 @@ export default function AboutWindow() {
         <li>{"Lock checks read Uniswap v2 LP tokens only; positions in v3, v4 and Aerodrome pools can't be read without an index yet."}</li>
         <li>{"Swap and Bridge run on Circle's App Kit in keyless mode and charge a 0.20% platform fee, split 90/10 with Circle, only when a fee recipient is configured."}</li>
         <li>{"Bridge covers EVM chains only — no Solana yet, and it shows each step once a transfer settles rather than live progress while it's in flight."}</li>
+        <li>{"Revoke lists ERC-20 approvals only. NFT approvals and Permit2's own allowances come later."}</li>
+        <li>{"The Terminal reads the chain, opens apps and sets the theme. It never signs or sends anything."}</li>
       </ul>
 
       {REPO_URL && (
