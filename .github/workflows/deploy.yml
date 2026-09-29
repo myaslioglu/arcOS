@@ -132,11 +132,11 @@ jobs:
         run: node scripts/scan-bundle.mjs "$RUNNER_TEMP/bundle/static" "$RUNNER_TEMP/bundle/server"
 
       # The Firebase CLI runs with the deploy credential, so its whole dependency tree is locked, not only its version:
-      # .github/deploy-tools holds the exact version and a lockfile with an integrity hash for every package. (npx
-      # would resolve the tree afresh on every run.) Install scripts are off, so nothing from the tree runs until the
-      # CLI does. To bump it: change that folder, read the release notes, run the dry run before the next real deploy.
+      # tools/firebase holds the exact version and a lockfile with an integrity hash for every package. (npx would
+      # resolve the tree afresh on every run.) Install scripts are off, so nothing from the tree runs until the CLI
+      # does. To bump it: change that folder, read the release notes, run the dry run before the next real deploy.
       - name: Install the Firebase CLI from its lockfile
-        run: npm ci --ignore-scripts --prefix .github/deploy-tools
+        run: npm ci --ignore-scripts --prefix tools/firebase
 
       # Nothing uses the access token asked for here: the Firebase CLI reads the credentials file this step leaves.
       # Asking makes this step prove the whole sign-in, acting as the service account included, and name the stage
@@ -159,12 +159,12 @@ jobs:
       # repository (it deploys from source).
       - name: Dry run, list the App Hosting backends
         if: ${{ inputs.dry_run }}
-        run: .github/deploy-tools/node_modules/.bin/firebase apphosting:backends:list --project "$FIREBASE_PROJECT" --non-interactive
+        run: tools/firebase/node_modules/.bin/firebase apphosting:backends:list --project "$FIREBASE_PROJECT" --non-interactive
 
       # No --force: with it, a backend that can't be found is skipped and the CLI still reports success.
       - name: Deploy to App Hosting
         if: ${{ !inputs.dry_run }}
-        run: .github/deploy-tools/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
+        run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
 
   # No credentials here: it only reads the public site.
   smoke:

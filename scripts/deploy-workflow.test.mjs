@@ -110,7 +110,7 @@ describe("deploy.yml", () => {
       const text = job("deploy");
       expect(text).not.toMatch(/npm run|next build|apphosting-env/);
       for (const line of text.split("\n").filter((l) => /\bnpm (ci|install)\b/.test(l))) {
-        expect(line, "an install in the deploy job is of the CLI's own folder only").toMatch(/--prefix \.github\/deploy-tools/);
+        expect(line, "an install in the deploy job is of the CLI's own folder only").toMatch(/--prefix tools\/firebase/);
       }
       const commands = text.split("\n").filter((l) => /^\s*(?:- )?run:/.test(l));
       const scripts = commands.flatMap((l) => [...l.matchAll(/\bnode (\S+)/g)].map((m) => m[1].replace(/"/g, "")));
@@ -160,8 +160,8 @@ describe("deploy.yml", () => {
     expect(at("uses: actions/checkout@")).toBeGreaterThanOrEqual(0);
     expect(at("uses: actions/download-artifact@")).toBeGreaterThan(at("uses: actions/checkout@"));
     expect(at("run: node scripts/scan-bundle.mjs")).toBeGreaterThan(at("uses: actions/download-artifact@"));
-    expect(at("run: npm ci --ignore-scripts --prefix .github/deploy-tools")).toBeGreaterThan(at("run: node scripts/scan-bundle.mjs"));
-    expect(at("uses: google-github-actions/auth@")).toBeGreaterThan(at("run: npm ci --ignore-scripts --prefix .github/deploy-tools"));
+    expect(at("run: npm ci --ignore-scripts --prefix tools/firebase")).toBeGreaterThan(at("run: node scripts/scan-bundle.mjs"));
+    expect(at("uses: google-github-actions/auth@")).toBeGreaterThan(at("run: npm ci --ignore-scripts --prefix tools/firebase"));
     expect(at("run: git check-ignore")).toBeGreaterThan(at("uses: google-github-actions/auth@"));
     expect(at("deploy --only")).toBeGreaterThan(at("run: git check-ignore"));
     expect(text).toMatch(/BUNDLE_DENY_PATTERNS: \$\{\{ secrets\.BUNDLE_DENY_PATTERNS \}\}/);
@@ -180,7 +180,7 @@ describe("deploy.yml", () => {
 });
 
 describe("the Firebase CLI the deploy runs", () => {
-  const tools = ".github/deploy-tools";
+  const tools = "tools/firebase";
   const cli = `${tools}/node_modules/.bin/firebase`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // as a pattern
   const pkg = () => JSON.parse(read(`${tools}/package.json`));
   const lock = () => JSON.parse(read(`${tools}/package-lock.json`));
@@ -207,7 +207,7 @@ describe("the Firebase CLI the deploy runs", () => {
 
   it("is installed from the lockfile without install scripts, and the deploy runs that binary, never npx", () => {
     const text = job("deploy");
-    expect(text).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix \.github\/deploy-tools$/m);
+    expect(text).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix tools\/firebase$/m);
     expect(deployCode).not.toMatch(/\bnpx\b/); // npx would resolve the CLI's whole tree afresh on every run
     expect(deployCode).not.toMatch(/FIREBASE_TOOLS_VERSION|firebase-tools@/);
     expect(text).toMatch(new RegExp(`^ {8}run: ${cli} deploy --only "apphosting:\\$\\{APPHOSTING_BACKEND\\}" --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
@@ -220,6 +220,7 @@ describe("the Firebase CLI the deploy runs", () => {
     expect(read(".gitignore")).toMatch(/^node_modules$/m);
     const { workspaces } = JSON.parse(read("package.json"));
     for (const glob of workspaces) expect(glob, "a workspace glob").toMatch(/^(apps|packages)\/[^/]*$/);
-    expect(read("package-lock.json")).not.toMatch(/deploy-tools/);
+    const rootLock = JSON.parse(read("package-lock.json"));
+    expect(Object.keys(rootLock.packages).filter((name) => name === "tools" || name.startsWith("tools/"))).toEqual([]);
   });
 });
