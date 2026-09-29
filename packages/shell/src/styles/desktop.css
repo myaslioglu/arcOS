@@ -6,10 +6,12 @@
  * Next keeps a route's global stylesheet after a client-side navigation,
  * and nothing here may leak onto another page.
  *
- * Everything that moves does so only inside a
+ * Every transition and animation here sits only inside a
  * `@media (prefers-reduced-motion: no-preference)` block, so a reduced-motion
  * setting stills it. styles/__tests__/desk-css.test.ts checks this file and
- * desk.css alike.
+ * desk.css alike. Two things move without one: the icon's hover lift, which
+ * desk.css resets under reduce, and the dock's swell, which Dock.tsx writes
+ * only when motion isn't reduced.
  */
 
 /* ---------------------------------------------------------------
