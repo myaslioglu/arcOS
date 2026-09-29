@@ -63,6 +63,52 @@ export interface ChainReader {
 /** A Uniswap v4 pool's identity. Its id is keccak256(abi.encode(key)). `currency0 < currency1`, and address(0) is native USDC. */
 export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
 
+/**
+ * A pool the caller already knows about, read live next to the ones discovery finds. The index supplies them (A6): that is
+ * how a v4 pool with hooks, or a fee outside the standard five, gets seen. Nothing fills them yet.
+ */
+export type ExtraPool = { version: "v4"; key: PoolKey };
+
+export type PoolVersion = "v2" | "v3" | "v4" | "aero";
+
+export type Pool = {
+  /** Where the pool's tokens sit: the pair or pool contract, or for v4 the PoolManager, which holds the tokens of every v4 pool. */
+  address: Address;
+  version: PoolVersion;
+  /** The quote currency's symbol. Native USDC on v4 is "USDC" too. */
+  quote: string;
+  /**
+   * In units of the quote currency, 6 decimals. v2, v3 and Aerodrome: the pool's balance of the quote token. v4: what the
+   * active liquidity holds in range at the current price (see `quoteInRange` in v4.ts), not the pool's total.
+   */
+  depth: bigint;
+  /**
+   * The pool alone can pay out 1,000 units of the quote currency. v2, v3 and Aerodrome: `depth` is at least that. v4: a
+   * V4Quoter exact-output quote for that amount succeeded, which is real, extractable USDC through the pool's own hooks.
+   */
+  liquid: boolean;
+  /** v4 only. */
+  poolId?: Hex;
+  key?: PoolKey;
+};
+
+/**
+ * What the pool lookup found, and whether the pool contracts answered at all. An address with no contract code reverts
+ * every call it's given (and inside a multicall answers `0x`), which reaches this code as "no pool", identical to a working
+ * contract saying there is none. "No pool found" read off a contract that never answered is a claim about pools that
+ * nothing actually checked.
+ */
+export type PoolScan = {
+  pools: Pool[];
+  /** Some pool contract answered: a factory call, or v4's StateView, came back with an answer. */
+  factoriesAnswered: boolean;
+  /**
+   * The configured families, by name, none of whose contracts answered. What they said about pools isn't evidence, so
+   * "no pool" and "thin" can't be claimed while one is silent; a liquid pool found elsewhere still stands.
+   */
+  silent: string[];
+};
+
 export type InspectInput = {
   address: Address;
   network: NetworkId;
@@ -75,5 +121,7 @@ export type InspectInput = {
   /** The 4rc.OS TokenFactory on this network. A token it created (`isArcosToken`) runs one of the factory's fixed
    * templates, whose source is published with the factory's verified source. */
   arcosTokenFactory?: Address | null;
+  /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index; nothing fills it yet. */
+  extraPools?: ExtraPool[];
   now?: () => Date;
 };

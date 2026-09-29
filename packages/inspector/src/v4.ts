@@ -1,7 +1,8 @@
-import { encodeAbiParameters, getAddress, keccak256, parseAbi } from "viem";
-import type { Address } from "@arcos/chain";
+import { encodeAbiParameters, getAddress, isAddress, keccak256, parseAbi } from "viem";
+import type { Address, UniswapV4Config } from "@arcos/chain";
 import type { Hex } from "./bytecode";
-import type { PoolKey } from "./types";
+import { multicall, type BatchCall, type BatchResult } from "./multicall";
+import { CallReverted, type ChainReader, type ExtraPool, type Pool, type PoolKey } from "./types";
 
 /** v4's native currency: address(0). On Arc that is USDC, with 18 decimals. */
 export const NATIVE: Address = "0x0000000000000000000000000000000000000000";
@@ -102,4 +103,117 @@ export function quoteInRange(p: { sqrtPriceX96: bigint; tick: number; tickSpacin
   }
   const lowerRatio = sqrtRatioAtTick(tickLower);
   return p.sqrtPriceX96 <= lowerRatio ? 0n : (p.liquidity * (p.sqrtPriceX96 - lowerRatio)) / Q96;
+}
+
+/** A currency pools can quote against, with the decimals its amounts carry: 6 for USDC's ERC-20 view and EURC, 18 for native USDC. */
+export type V4Quote = { address: Address; symbol: string; decimals: number };
+
+export type V4Read = {
+  /** StateView answered at least one question with something it could be decoded from: the contracts are there. */
+  answered: boolean;
+  pools: Pool[];
+};
+
+/** The index may list many pools for one token; one multicall carries no more than this many of them. */
+const MAX_EXTRA_POOLS = 50;
+const MAX_FEE = 2 ** 24 - 1; // a uint24
+const MAX_TICK_SPACING = 32767; // v4 allows 1 to 32767
+
+type Candidate = { key: PoolKey; id: Hex; quote: V4Quote; quoteIsCurrency0: boolean };
+
+/** An entry from the index, normalised; null when it can't be a pool of this token against a quote currency. */
+function usable(key: PoolKey, token: Address, quotes: readonly V4Quote[]): { key: PoolKey; quote: V4Quote } | null {
+  const { currency0, currency1, hooks, fee, tickSpacing } = key;
+  if (![currency0, currency1, hooks].every((a) => typeof a === "string" && isAddress(a, { strict: false }))) return null;
+  if (!Number.isInteger(fee) || fee < 0 || fee > MAX_FEE) return null;
+  if (!Number.isInteger(tickSpacing) || tickSpacing < 1 || tickSpacing > MAX_TICK_SPACING) return null;
+  if (lower(currency0) >= lower(currency1)) return null; // v4 sorts the currencies; a key that doesn't is another pool id
+  const other = lower(currency0) === lower(token) ? currency1 : lower(currency1) === lower(token) ? currency0 : null;
+  const quote = other === null ? undefined : quotes.find((q) => lower(q.address) === lower(other));
+  return quote ? { key: v4PoolKey(currency0, currency1, fee, tickSpacing, hooks), quote } : null;
+}
+
+/** The standard hookless keys for every quote currency, then the index's pools that are usable, each pool once. */
+function candidates(token: Address, quotes: readonly V4Quote[], extra: readonly ExtraPool[]): Candidate[] {
+  const seen = new Set<string>();
+  const out: Candidate[] = [];
+  const add = (key: PoolKey, quote: V4Quote) => {
+    const id = v4PoolId(key);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ key, id, quote, quoteIsCurrency0: lower(key.currency0) === lower(quote.address) });
+  };
+  for (const quote of quotes) for (const t of STANDARD_V4_TIERS) add(v4PoolKey(token, quote.address, t.fee, t.tickSpacing), quote);
+  for (const e of extra.slice(0, MAX_EXTRA_POOLS)) {
+    const found = e.version === "v4" ? usable(e.key, token, quotes) : null;
+    if (found) add(found.key, found.quote);
+  }
+  return out;
+}
+
+const toSixDecimals = (raw: bigint, decimals: number): bigint =>
+  decimals >= 6 ? raw / 10n ** BigInt(decimals - 6) : raw * 10n ** BigInt(6 - decimals);
+
+/**
+ * `token`'s v4 pools against each quote currency, in two round trips whatever their number.
+ * 1. One multicall of `StateView.getSlot0` for every candidate: the standard hookless keys (`STANDARD_V4_TIERS` against each
+ *    quote) and the index's pools. A pool whose `sqrtPriceX96` is 0 was never initialised.
+ * 2. One multicall, for the pools that exist, of `StateView.getLiquidity` (what `quoteInRange` needs) and a V4Quoter
+ *    exact-output quote for `quoteUnits` of the quote currency. A pool is `liquid` when that quote succeeds: real,
+ *    extractable USDC through the pool's own hooks, which a narrow position can't fake. `depth` is the in-range amount, shown
+ *    as such; it doesn't decide anything.
+ * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure rejects.
+ */
+export async function readV4Pools(a: {
+  reader: ChainReader;
+  v4: UniswapV4Config;
+  token: Address;
+  quotes: readonly V4Quote[];
+  extra: readonly ExtraPool[];
+  /** How many units of the quote currency a liquid pool must pay out. */
+  quoteUnits: bigint;
+}): Promise<V4Read> {
+  const asked = candidates(a.token, a.quotes, a.extra);
+  if (asked.length === 0) return { answered: false, pools: [] };
+  let slots: BatchResult[];
+  try {
+    slots = await multicall(a.reader, asked.map((c): BatchCall => ({ target: a.v4.stateView, abi: stateViewAbi, functionName: "getSlot0", args: [c.id] })));
+  } catch (e) {
+    if (e instanceof CallReverted) return { answered: false, pools: [] };
+    throw e;
+  }
+  const answered = slots.some((s) => s.ok);
+  const live = asked.flatMap((c, i) => {
+    const slot = slots[i]!;
+    if (!slot.ok) return [];
+    const [sqrtPriceX96, tick] = slot.value as readonly [bigint, number, number, number];
+    return sqrtPriceX96 > 0n ? [{ ...c, sqrtPriceX96, tick }] : [];
+  });
+  if (live.length === 0) return { answered, pools: [] };
+
+  const depth = await multicall(
+    a.reader,
+    live.flatMap((c): BatchCall[] => [
+      { target: a.v4.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [c.id] },
+      {
+        target: a.v4.quoter,
+        abi: quoterAbi,
+        functionName: "quoteExactOutputSingle",
+        // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
+        args: [{ poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" }],
+      },
+    ]),
+  );
+  return {
+    answered,
+    pools: live.map((c, i): Pool => {
+      const liquidity = depth[i * 2]!;
+      const quote = depth[i * 2 + 1]!;
+      // A liquidity read that failed inside an answered multicall is a depth of 0, never a made-up figure.
+      const held = liquidity.ok
+        ? quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: liquidity.value as bigint, quoteIsCurrency0: c.quoteIsCurrency0 })
+        : 0n;
+      return { address: a.v4.poolManager, version: "v4", quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), liquid: quote.ok, poolId: c.id, key: c.key };
+    }),
+  };
 }

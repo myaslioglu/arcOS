@@ -39,11 +39,16 @@
  *   holders is a floor, not a concentration figure — a floor can still be a warn or a fail, but
  *   never a pass.
  * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
- *   or every factory call reverted (an address with no contract code does that), which is never
- *   reported as "no pool found" — that would be a claim about pools made from a call that failed.
- * - lp-lock: no DEX is configured, pool discovery failed, the factories never answered, only
- *   Uniswap v3 pools exist (position locks need an indexer, which arrives with Radar), or the v2
- *   pair's LP totalSupply is zero (no evidence to compute a locked share from).
+ *   or every pool contract reverted (an address with no contract code does that, and inside a
+ *   multicall answers 0x), which is never reported as "no pool found" — that would be a claim about
+ *   pools made from a call that failed. The same goes for one family (Uniswap v2 and v3, Uniswap v4,
+ *   Aerodrome) that never answered while another did: a liquid pool found elsewhere still passes, but
+ *   "no pool" and "thin" wait for it. A v4 pool is liquid when a V4Quoter quote for 1,000 USDC out
+ *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing.
+ * - lp-lock: no DEX is configured, pool discovery failed, the pool contracts never answered (or a
+ *   family didn't and no pool was found), only pools other than Uniswap v2 exist (positions in v3, v4
+ *   and Aerodrome pools can't be read without an index), or the v2 pair's LP totalSupply is zero (no
+ *   evidence to compute a locked share from).
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  *
@@ -55,11 +60,12 @@
  * running NOW and stand unchanged.
  */
 import { parseAbi } from "viem";
-import { BURN_ADDRESSES, type Address } from "@arcos/chain";
+import { BURN_ADDRESSES, USDC, type Address, type DexConfig } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { ContractInfo, HolderPage } from "./explorer";
-import { CallReverted, type ChainReader, type Finding, type InspectInput } from "./types";
+import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
+import { NATIVE, readV4Pools, type V4Quote } from "./v4";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -297,34 +303,53 @@ export async function beaconImplementation(reader: ChainReader, beacon: Address 
   }
 }
 
-export type Pool = { address: Address; version: "v2" | "v3"; quote: string; depth: bigint };
-
-/**
- * What the pool lookup found, and whether the DEX factories answered at all. An address with no
- * contract code reverts every call it's given, which reaches this code as "no pair" — identical to
- * a working factory saying there is no pool. "No Uniswap pool found" read off a factory that never
- * answered is a claim about pools that nothing actually checked.
- */
-export type PoolScan = { pools: Pool[]; factoriesAnswered: boolean };
+/** 1,000 units of a 6-decimal quote token: what a pool must hold, or on v4 must pay out to a quote, to count as liquid. */
+const MIN_DEPTH = 1_000_000_000n;
 
 /** Distinguishes "the factory reverted" from "the factory answered the zero address". */
 const REVERTED = Symbol("factory call reverted");
 
+const VENUE: Record<PoolVersion, string> = { v2: "Uniswap v2", v3: "Uniswap v3", v4: "Uniswap v4", aero: "Aerodrome" };
+
+/** "a", "a and b", "a, b and c" (or "or"). */
+const listWith = (word: "and" | "or", items: readonly string[]): string =>
+  items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} ${word} ${items[items.length - 1]}`;
+
+/** The Uniswap versions a config reads, in order. */
+const uniswapVersions = (dex: DexConfig): ("v2" | "v3" | "v4")[] => [
+  ...(dex.v2Factory ? ["v2" as const] : []),
+  ...(dex.v3Factory ? ["v3" as const] : []),
+  ...(dex.v4 ? ["v4" as const] : []),
+];
+
+/** The v2 and v3 factories are one family: they were always asked together and read as answered together. */
+const uniswapV2V3Name = (dex: DexConfig): string => `Uniswap ${listWith("and", [dex.v2Factory && "v2", dex.v3Factory && "v3"].filter((v): v is string => Boolean(v)))}`;
+
+/**
+ * What can be quoted against: the config's quote tokens and, on v4, native USDC (currency `address(0)`, the same asset as the
+ * USDC ERC-20 view, with 18 decimals). A token is never its own quote, so inspecting USDC leaves out both forms of it.
+ */
+function v4Quotes(dex: DexConfig, token: Address): V4Quote[] {
+  const quotes = dex.quoteTokens.filter((q) => lower(q.address) !== lower(token)).map((q) => ({ ...q, decimals: 6 }));
+  const native = dex.quoteTokens.some((q) => lower(q.address) === lower(USDC)) && lower(token) !== lower(USDC);
+  return native ? [...quotes, { address: NATIVE, symbol: "USDC", decimals: 18 }] : quotes;
+}
+
 /** Rejects if any call fails at the transport level — the caller decides what "pools unknown" means. */
 export async function findPools(input: InspectInput): Promise<PoolScan> {
   const { dex, reader, address } = input;
-  if (!dex) return { pools: [], factoriesAnswered: false };
-  let factoriesAnswered = false;
+  if (!dex) return { pools: [], factoriesAnswered: false, silent: [] };
+  let uniswapAnswered = false;
   const askFactory = async (factory: Address, abi: typeof v2FactoryAbi | typeof v3FactoryAbi, fn: string, args: unknown[]): Promise<unknown> => {
     const answer = await catchReverted<unknown>(reader.read(factory, abi, fn, args), REVERTED);
     if (answer === REVERTED) return null;
-    factoriesAnswered = true;
+    uniswapAnswered = true;
     return answer;
   };
-  const add = async (pool: unknown, version: Pool["version"], quote: { address: Address; symbol: string }): Promise<Pool | null> => {
+  const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
-    return { address: pool as Address, version, quote: quote.symbol, depth };
+    return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH };
   };
   // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
   // doesn't name, and v3 without fee tiers has no pool to look for.
@@ -343,8 +368,22 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
       ]);
       return [v2Pool, ...v3Pools];
     });
-  const results = await Promise.all(perQuote);
-  return { pools: results.flat().filter((p): p is Pool => p !== null), factoriesAnswered };
+  const v4 = dex.v4
+    ? readV4Pools({ reader, v4: dex.v4, token: address, quotes: v4Quotes(dex, address), extra: input.extraPools ?? [], quoteUnits: MIN_DEPTH / 1_000_000n })
+    : null;
+  const [uniswapResults, v4Read] = await Promise.all([Promise.all(perQuote), v4]);
+
+  // A family whose contracts never answered says nothing about its pools. The answer that matters to a finding is whether
+  // one exists, so each configured family is accounted for on its own.
+  const families = [
+    { name: uniswapV2V3Name(dex), configured: Boolean(v2Factory || v3Factory), answered: uniswapAnswered },
+    { name: VENUE.v4, configured: Boolean(dex.v4), answered: v4Read?.answered ?? false },
+  ];
+  return {
+    pools: [...uniswapResults.flat().filter((p): p is Pool => p !== null), ...(v4Read?.pools ?? [])],
+    factoriesAnswered: families.some((f) => f.configured && f.answered),
+    silent: families.filter((f) => f.configured && !f.answered).map((f) => f.name),
+  };
 }
 
 const finding = (id: Finding["id"], status: Finding["status"], title: string, detail: string, extra: Partial<Finding> = {}): Finding => ({
@@ -649,23 +688,63 @@ export function checkHolders(
   return finding("holders", "pass", title, detail, { evidenceUrl: url });
 }
 
-/** 1,000 units of a 6-decimal quote token. */
-const MIN_DEPTH = 1_000_000_000n;
 const FACTORIES_SILENT =
-  "Every call to the configured Uniswap factories reverted, so no pool was found or ruled out — the factory address may hold no contract on this network.";
+  "Every call to the configured DEX contracts reverted, so no pool was found or ruled out — an address may hold no contract on this network.";
+
+/** What was looked at, named from the config so that the finding is true of exactly the pools that were scanned. */
+function noPoolFinding(dex: DexConfig): Finding {
+  const uniswap = uniswapVersions(dex);
+  const title = dex.aero
+    ? `No ${uniswap.length > 0 ? "Uniswap or Aerodrome" : "Aerodrome"} pool found`
+    : `No Uniswap ${listWith("or", uniswap)} pool found`;
+  const venues = [...uniswap.map((v) => VENUE[v]), ...(dex.aero ? [VENUE.aero] : [])];
+  const v4Caveat = dex.v4
+    ? " Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it."
+    : "";
+  return finding("liquidity", "warn", title, `Looked at ${listWith("and", venues)} pools against ${listWith("and", dex.quoteTokens.map((q) => q.symbol))}.${v4Caveat}`);
+}
+
+/** What to say while a family of pool contracts never answered; null when every one did. */
+const silentNote = (scan: PoolScan): string | null =>
+  scan.silent.length > 0 ? `${listWith("and", scan.silent)} didn't answer, so a pool there can't be ruled out.` : null;
+
+/** The kinds of pool a scan found, by name, in the order v2, v3, v4, Aerodrome. */
+const foundVenues = (pools: readonly Pool[]): string[] =>
+  (["v2", "v3", "v4", "aero"] as const).filter((v) => pools.some((p) => p.version === v)).map((v) => VENUE[v]);
+
+/** The pool a finding is about: a liquid one before any that isn't, then the deepest. */
+const bestPool = (pools: Pool[]): Pool => pools.reduce((a, b) => (a.liquid !== b.liquid ? (b.liquid ? b : a) : b.depth > a.depth ? b : a));
+
+const wholeUnits = (depth: bigint): string => (depth / 1_000_000n).toLocaleString("en-US");
 
 export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Finding {
-  if (!input.dex) return finding("liquidity", "unknown", "Liquidity isn't checked on this network", "No DEX registry is configured here.");
+  const { dex } = input;
+  if (!dex) return finding("liquidity", "unknown", "Liquidity isn't checked on this network", "No DEX registry is configured here.");
   if (scan === null) return finding("liquidity", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
   if (!scan.factoriesAnswered) return finding("liquidity", "unknown", "Couldn't read liquidity pools", FACTORIES_SILENT);
   const pools = scan.pools;
-  if (pools.length === 0) return finding("liquidity", "warn", "No Uniswap v2 or v3 pool found", "Pools against USDC or EURC only. Uniswap v4 and Aerodrome pools aren't scanned yet.");
-  const best = pools.reduce((a, b) => (b.depth > a.depth ? b : a));
-  const units = (best.depth / 1_000_000n).toLocaleString("en-US");
+  // A family that never answered can't be ruled out, so "no pool" and "thin" wait for it. A liquid pool found elsewhere doesn't.
+  const silent = silentNote(scan);
+  if (pools.length === 0) return silent ? finding("liquidity", "unknown", "Couldn't read liquidity pools", silent) : noPoolFinding(dex);
+  const best = bestPool(pools);
+  const units = wholeUnits(best.depth);
   const url = `${input.explorerBase}/address/${best.address}`;
-  return best.depth >= MIN_DEPTH
-    ? finding("liquidity", "pass", `${units} ${best.quote} of liquidity on Uniswap ${best.version}`, `${pools.length} pool(s) found.`, { evidenceUrl: url })
-    : finding("liquidity", "warn", "Thin liquidity", `Deepest pool holds ${units} ${best.quote}.`, { evidenceUrl: url });
+  if (best.liquid) {
+    return best.version === "v4"
+      ? finding(
+          "liquidity", "pass", `1,000 ${best.quote} can be swapped out of Uniswap v4`,
+          `The v4 quoter can pay out 1,000 ${best.quote} from this pool. ${units} ${best.quote} in range at the current price; liquidity outside the current tick range isn't counted. ${pools.length} pool(s) found.`,
+          { evidenceUrl: url },
+        )
+      : finding("liquidity", "pass", `${units} ${best.quote} of liquidity on ${VENUE[best.version]}`, `${pools.length} pool(s) found.`, { evidenceUrl: url });
+  }
+  const deepest =
+    best.version === "v4"
+      ? `Deepest pool has ${units} ${best.quote} in range, and a 1,000 ${best.quote} swap can't be quoted.`
+      : `Deepest pool holds ${units} ${best.quote}.`;
+  return silent
+    ? finding("liquidity", "unknown", "Couldn't read liquidity pools", `${silent} ${deepest}`, { evidenceUrl: url })
+    : finding("liquidity", "warn", "Thin liquidity", deepest, { evidenceUrl: url });
 }
 
 export async function checkLpLock(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
@@ -673,9 +752,13 @@ export async function checkLpLock(input: InspectInput, scan: PoolScan | null): P
   if (scan === null) return finding("lp-lock", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
   const v2 = scan.pools.filter((p) => p.version === "v2");
   if (v2.length === 0) {
+    // Only v2 has LP tokens to count. Positions in v3, v4 and Aerodrome pools are NFTs or entries in the PoolManager, and
+    // reading who holds them needs an index.
     const why = !scan.factoriesAnswered
       ? FACTORIES_SILENT
-      : scan.pools.length === 0 ? "No pool was found." : "Only Uniswap v3 pools were found; position locks need an indexer, which arrives with Radar.";
+      : scan.pools.length === 0
+        ? (silentNote(scan) ?? "No pool was found.")
+        : `Only ${listWith("and", foundVenues(scan.pools))} pools were found, and liquidity positions in them can't be read without an index yet.`;
     // A "fix" button doesn't belong on something we couldn't check.
     return finding("lp-lock", "unknown", "Couldn't check liquidity locks", why, { fixAppId: null });
   }
