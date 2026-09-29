@@ -49,8 +49,12 @@ env:
   # network, such as a phone on mobile data.
   #   - A normal answer (here 404, "No contract at that address.") means visitors have buckets of their own: leave it unset.
   #   - A 429 means the two networks share a bucket: set it to 1 (uncomment the entry below) and measure again.
+  # The value is safe only if every address the backend answers on reaches the app through the same number of proxies:
+  # https://4rcos.com and the default address, https://arcos--arcos-c80cf.europe-west4.hosted.app. One number can't be right
+  # for two paths. Measure both, and if they differ leave it unset.
   # Never set it higher than the measurement shows. A value above the real number of the site's own proxies makes the key
-  # an entry the client wrote, and a client can then choose its own bucket on every request.
+  # an entry the client wrote as soon as the client adds entries of its own to X-Forwarded-For, and it can then choose its
+  # own bucket on every request.
   # - variable: ARCOS_TRUSTED_HOPS
   #   value: "1"
   #   availability:

@@ -9,7 +9,7 @@ const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono"
 
 export const metadata: Metadata = {
   title: "4rc.OS",
-  description: "A desktop for Arc: inspect tokens, mint, send in bulk, swap and bridge.",
+  description: "A desktop for Circle's Arc network: inspect a token, mint one, send to many wallets, swap, bridge, revoke token approvals, and read the chain in a Terminal.",
   // Lets URL-based metadata fields (og:image, twitter:image, …) resolve to an absolute URL —
   // without it, a relative /t/<address>/opengraph-image path can't be embedded by link previews.
   ...(process.env.NEXT_PUBLIC_SITE_URL ? { metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL) } : {}),

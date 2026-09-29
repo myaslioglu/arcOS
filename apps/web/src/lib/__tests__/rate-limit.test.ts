@@ -166,25 +166,45 @@ describe("clientKey with ARCOS_TRUSTED_HOPS", () => {
     vi.unstubAllEnvs();
   });
 
-  const chain = (n: number) => ["203.0.113.1", "198.51.100.2", "192.0.2.3"].slice(0, n).join(", ");
+  const chain = (n: number) => ["203.0.113.1", "198.51.100.2", "192.0.2.3", "192.0.2.4"].slice(0, n).join(", ");
   const key = (entries: number) => clientKey(new Headers({ "x-forwarded-for": chain(entries) }));
 
-  // Leftmost is 203.0.113.1, rightmost of three is 192.0.2.3. n hops skip n entries from the right; a chain of n or fewer entries
-  // has no entry the site's own proxies vouch for, and reads as its leftmost.
+  // The leftmost entry of each header is 203.0.113.1, and its rightmost is the last address of the first n. n hops skip n entries
+  // from the right. A header of n entries or fewer has no entry the site's own proxies vouch for, and reads as its rightmost:
+  // the key it has without the setting, so the setting is never looser than that, whatever n is.
   it.each([
     // [hops, entries in the header, the key]
     [0, 1, "203.0.113.1"],
     [0, 2, "198.51.100.2"],
     [0, 3, "192.0.2.3"],
+    [0, 4, "192.0.2.4"],
     [1, 1, "203.0.113.1"],
     [1, 2, "203.0.113.1"],
     [1, 3, "198.51.100.2"],
+    [1, 4, "192.0.2.3"],
     [2, 1, "203.0.113.1"],
-    [2, 2, "203.0.113.1"],
+    [2, 2, "198.51.100.2"],
     [2, 3, "203.0.113.1"],
+    [2, 4, "198.51.100.2"],
+    [3, 1, "203.0.113.1"],
+    [3, 2, "198.51.100.2"],
+    [3, 3, "192.0.2.3"],
+    [3, 4, "203.0.113.1"],
+    [9, 4, "192.0.2.4"],
   ])("with %i hop(s) reads a header of %i entries as %s", (hops, entries, expected) => {
     vi.stubEnv("ARCOS_TRUSTED_HOPS", String(hops));
     expect(key(entries)).toBe(expected);
+  });
+
+  it("is never looser than without the setting when the header is too short: it reads the same entry, for every n", () => {
+    for (let entries = 1; entries <= 4; entries++) {
+      vi.unstubAllEnvs();
+      const without = key(entries);
+      for (let hops = entries; hops <= 12; hops++) {
+        vi.stubEnv("ARCOS_TRUSTED_HOPS", String(hops));
+        expect(key(entries), `${hops} hops, ${entries} entries`).toBe(without);
+      }
+    }
   });
 
   it("is today's key, the rightmost entry, when the setting is unset, empty, negative or not a whole number", () => {
@@ -210,14 +230,26 @@ describe("clientKey with ARCOS_TRUSTED_HOPS", () => {
     expect(clientKey(h)).toBe("203.0.113.10");
   });
 
-  // Documents what the setting must never be: above the real number of the site's own proxies, the entry read is one the
-  // client wrote, and it can change it on every request to get a bucket of its own.
-  it("reads the leftmost entry, which a client wrote, when the setting is higher than the header allows", () => {
+  // A setting higher than the header allows reads the rightmost entry, the key without the setting, and not the leftmost, which is
+  // the one a client can write: it can't pick its own bucket by changing what it sends.
+  it("reads the rightmost entry, not the leftmost a client wrote, when the setting is higher than the header allows", () => {
     vi.stubEnv("ARCOS_TRUSTED_HOPS", "3");
     const first = clientKey(new Headers({ "x-forwarded-for": "spoof-a, 203.0.113.10, 35.191.0.7" }));
     const second = clientKey(new Headers({ "x-forwarded-for": "spoof-b, 203.0.113.10, 35.191.0.7" }));
-    expect(first).toBe("spoof-a");
-    expect(second).toBe("spoof-b");
+    expect(first).toBe("35.191.0.7");
+    expect(second).toBe("35.191.0.7");
+    vi.unstubAllEnvs();
+    expect(clientKey(new Headers({ "x-forwarded-for": "spoof-a, 203.0.113.10, 35.191.0.7" }))).toBe("35.191.0.7");
+  });
+
+  // What the setting must still never be. The fallback covers a header that is too short. A client that adds entries to the
+  // left of its own address makes the header long enough, and then the entry n places from the right is one it wrote.
+  it("still reads an entry the client wrote when the setting is higher than the site's proxies and the client adds entries", () => {
+    vi.stubEnv("ARCOS_TRUSTED_HOPS", "2");
+    const behindOneProxy = (sent: string) => new Headers({ "x-forwarded-for": `${sent}203.0.113.10, 35.191.0.7` });
+    expect(clientKey(behindOneProxy(""))).toBe("35.191.0.7");
+    expect(clientKey(behindOneProxy("spoof-a, "))).toBe("spoof-a");
+    expect(clientKey(behindOneProxy("spoof-b, "))).toBe("spoof-b");
   });
 
   it("drops empty entries before counting, as it does with no setting", () => {

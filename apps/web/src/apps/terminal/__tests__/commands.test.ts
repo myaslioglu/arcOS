@@ -282,9 +282,9 @@ describe("clear, history and about", () => {
     expect(await texts("history", s.env)).toEqual(["  1  open abc"]);
   });
 
-  it("says what 4rc.OS is", async () => {
+  it("says what 4rc.OS is, as the About window does: with swap, bridge, Revoke and the Terminal", async () => {
     expect(await texts("about", setup().env)).toEqual([
-      "4rc.OS is a desktop for Circle's Arc network: inspect a token, mint one and send to many wallets at once.",
+      "4rc.OS is a desktop for Circle's Arc network: inspect a token, mint one, send to many wallets at once, swap, bridge, revoke token approvals, and read the chain from a terminal.",
       "Type open about for more.",
     ]);
   });

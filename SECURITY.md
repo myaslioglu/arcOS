@@ -50,11 +50,13 @@ If a Google load balancer in front of App Hosting adds an entry of its own to th
 is keyed by that one entry and they share a single bucket: stricter, never looser. `ARCOS_TRUSTED_HOPS` (server-only,
 optional) says how many entries, counted from the right, belong to the site's own proxies; n skips n entries before it
 reads the client. Unset, empty, negative or not a whole number, it is 0, and the rightmost entry is the client's. A
-header with n entries or fewer holds no entry the proxies vouch for, so the leftmost is read, which is no looser than
-reading the rightmost: with nothing vouched for, the client chose that one as freely as any other. The value is
+header with n entries or fewer holds no entry the proxies vouch for, so the rightmost is read, the same key as without
+the setting: for a header that short the setting is never looser than leaving it unset, whatever n is. The value is
 measured, not guessed (`apps/web/apphosting.yaml` says how) and never set higher than the measurement shows. A value
-above the real number of the site's own proxies makes the key an entry the client wrote, and a client can then pick its
-own bucket on every request.
+above the real number of the site's own proxies makes the key an entry the client wrote once the client adds entries of
+its own to the header, and it can then pick its own bucket on every request. The value is also safe only if every
+address the backend answers on, `4rcos.com` and the default `*.hosted.app` address, reaches the app through the same
+number of proxies, since one value can't be right for two paths. Both are measured, and if they differ it stays unset.
 
 `x-vercel-forwarded-for` is read only when `process.env.VERCEL === "1"`, which the platform sets and no request can, so
 only on a Vercel deployment; anywhere else nothing tells a genuine header from one a client set on itself, and it is

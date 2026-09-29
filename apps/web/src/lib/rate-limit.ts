@@ -62,7 +62,10 @@ export function trustedHops(raw: string | undefined = process.env.ARCOS_TRUSTED_
  *
  * The setting is for a load balancer that adds its own entry to the right of the client's, which
  * would otherwise give every visitor the same key. It must not be higher than the number of proxies
- * the site really has: past that, the entry read is one the client wrote.
+ * the site really has: past that, the entry read is one the client wrote, once it adds entries of
+ * its own to the header. That number must also be the same for every address the backend answers on
+ * (the site's domain and the platform's default one), since one value can't be right for two.
+ * A header too short for the setting isn't read that way: see below.
  */
 export function clientKey(headers: Pick<Headers, "get">, hops: number = trustedHops()): string {
   const vercel = process.env.VERCEL === "1" ? headers.get("x-vercel-forwarded-for")?.trim() : undefined;
@@ -73,9 +76,9 @@ export function clientKey(headers: Pick<Headers, "get">, hops: number = trustedH
       .map((s) => s.trim())
       .filter(Boolean) ?? [];
   // A header of `hops` entries or fewer can't hold one for each of the site's proxies and one for the client, so no entry in
-  // it is vouched for and the leftmost is read. That is no looser than the rightmost is without the setting: with nothing
-  // vouched for, the rightmost is as much the client's to choose as the leftmost is.
-  const forwarded = entries[Math.max(0, entries.length - 1 - hops)];
+  // it is vouched for, and the rightmost is read: the key without the setting, so the setting is never looser than that, for
+  // any value. The leftmost would be looser: it is the entry a client writes, and the rightmost is the nearest proxy's.
+  const forwarded = entries.length > hops ? entries[entries.length - 1 - hops] : entries.at(-1);
   const realIp = headers.get("x-real-ip")?.trim();
   const raw = vercel || forwarded || realIp || "unknown";
   const lower = raw.toLowerCase();
