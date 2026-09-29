@@ -16,14 +16,19 @@ export const EMBEDDED_FRAME_MESSAGE =
 
 const EMBEDDED_FRAME = /embedded frame/i;
 
+/** Where Circle's App Kit keeps an error it wraps (see `isEmbeddedFrameRefusal`). */
+type KitTrace = { rawError?: unknown; originalError?: unknown };
+
 /**
  * Walks the error's `cause` chain, the shape viem's `BaseError` and the standard `Error` share, reading each node's own
  * text. A wallet may also reject with a bare string, at the top or as a cause.
  *
- * A viem error composes its `message` from its own summary and the call's arguments, which can be text the visitor
- * typed (a token's name). Its `details` carries the wallet's own words up the chain, so for a viem error (one with a
- * `shortMessage`) only `details` and `shortMessage` are read. Circle's App Kit keeps the error it wraps under
- * `cause.trace.originalError`, so the walk follows that too.
+ * - **A viem error** (one with a `shortMessage`) is read by its `details` alone, which carry the wallet's own words up
+ *   the chain. Its `message` also holds the call's arguments, which can be text the visitor typed (a token's name), and
+ *   its `shortMessage` can hold a contract's own revert reason.
+ * - **Circle's App Kit** keeps the error it wraps under `cause.trace.rawError` (a send the wallet refused; with no
+ *   code, the kit calls it an RPC endpoint error), under `rawError`, or under `cause.trace.originalError`, so the
+ *   walk follows those too.
  */
 export function isEmbeddedFrameRefusal(error: unknown): boolean {
   const seen = new Set<unknown>();
@@ -33,10 +38,10 @@ export function isEmbeddedFrameRefusal(error: unknown): boolean {
     if (typeof current !== "object") return false;
     seen.add(current);
     const node = current as Record<string, unknown>;
-    const fields = typeof node.shortMessage === "string" ? ["details", "shortMessage"] : ["message", "details"];
+    const fields = typeof node.shortMessage === "string" ? ["details"] : ["message", "details"];
     if (fields.some((key) => typeof node[key] === "string" && EMBEDDED_FRAME.test(node[key] as string))) return true;
-    const trace = node.trace;
-    current = node.cause ?? (trace !== null && typeof trace === "object" ? (trace as { originalError?: unknown }).originalError : undefined);
+    const trace = node.trace !== null && typeof node.trace === "object" ? (node.trace as KitTrace) : undefined;
+    current = node.cause ?? node.rawError ?? trace?.rawError ?? trace?.originalError;
   }
   return false;
 }

@@ -86,7 +86,7 @@ function Form() {
       if (presentation.isSuccess) trackEvent("swap_success", { pair: `${pair.tokenIn}-${pair.tokenOut}` });
       notify(presentation.headline, presentation.tone);
     } catch (err) {
-      // classifySwapFailure (./session) decides Cancelled / rate-limited / hedged-unknown — see its
+      // classifySwapFailure (./session) decides reload / Cancelled / rate-limited / hedged-unknown — see its
       // own doc comment for why the unknown case can't just say "Try again" the way
       // GENERIC_TRANSACTION_ERROR does elsewhere: a swap whose promise rejected AFTER it was actually
       // broadcast (a lost wallet response, a timeout) must not read as "nothing happened".

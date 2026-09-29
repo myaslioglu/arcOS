@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ContractFunctionExecutionError, SwitchChainError, UnauthorizedProviderError, UserRejectedRequestError, type Abi, type BaseError } from "viem";
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  SwitchChainError,
+  UnauthorizedProviderError,
+  UserRejectedRequestError,
+  type Abi,
+  type BaseError,
+} from "viem";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "../wallet-frame";
 
 // Trust Wallet's browser extension, word for word, for a page it takes for an embedded frame.
@@ -43,6 +51,18 @@ describe("isEmbeddedFrameRefusal", () => {
 
   it("still finds the wallet's words under a viem contract error", () => {
     expect(isEmbeddedFrameRefusal(contractError(new UnauthorizedProviderError(new Error(TRUST_WALLET_TEXT)), "Plain Coin"))).toBe(true);
+  });
+
+  it("never reads a viem error's shortMessage, which can carry a contract's own revert reason", () => {
+    const err = new ContractFunctionRevertedError({ abi: [], functionName: "transfer", message: "embedded frame blocked by token" });
+    expect(err.shortMessage).toContain("embedded frame");
+    expect(isEmbeddedFrameRefusal(err)).toBe(false);
+  });
+
+  it("follows the keys Circle's App Kit keeps a refused send under: rawError and cause.trace.rawError", () => {
+    expect(isEmbeddedFrameRefusal({ message: "Unknown blockchain error", rawError: new Error(TRUST_WALLET_TEXT) })).toBe(true);
+    const kitError = new Error("RPC endpoint error on Arc Testnet", { cause: { trace: { rawError: new Error(TRUST_WALLET_TEXT) } } });
+    expect(isEmbeddedFrameRefusal(kitError)).toBe(true);
   });
 
   it("recognizes a bare string as a cause", () => {

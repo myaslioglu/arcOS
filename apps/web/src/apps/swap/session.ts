@@ -74,8 +74,9 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
  * follow a lost wallet response or a timeout AFTER the swap was actually broadcast as it could precede
  * one. Saying "Try again" alone would read as "nothing happened" and could invite a second,
  * separately-charged swap — this hedges instead, mirroring Bridge's identical reasoning
- * (bridge/Window.tsx's catch, bridge/inFlight.ts's `explorerCheckNote`) adapted for Swap, which has no
- * per-attempt explorer link to offer at this point (only a successful `SwapResult` carries one).
+ * (bridge/session.ts's `classifyBridgeFailure`, bridge/inFlight.ts's `explorerCheckNote`) adapted for
+ * Swap, which has no per-attempt explorer link to offer at this point (only a successful `SwapResult`
+ * carries one).
  * Never the underlying error's own text, same rule as every other wallet/RPC/SDK error this app shows.
  *
  * A wallet that took the page for an embedded frame is checked first: it refuses the first request, so nothing was
