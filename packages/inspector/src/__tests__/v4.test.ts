@@ -68,6 +68,16 @@ describe("sqrtRatioAtTick", () => {
     expect(sqrtRatioAtTick(887272)).toBe(1461446703485210103244672773810124308346321380902n);
   });
 
+  it("agrees with floating point across the whole tick range, to 1e-10", () => {
+    // Floating point can't be exact out here (that is why the value is computed in integers), but it is an independent check on
+    // every bit of the exponent: a slip in any one of them shows as a factor of 1.0001^(2^bit / 2).
+    for (let tick = -887272; tick <= 887272; tick += 7919) {
+      const exact = Number(sqrtRatioAtTick(tick));
+      const approx = 1.0001 ** (tick / 2) * 2 ** 96;
+      expect(Math.abs(exact - approx) / approx, `tick ${tick}`).toBeLessThan(1e-10);
+    }
+  });
+
   it("is the reciprocal at the opposite tick, to rounding", () => {
     for (const t of [1, 10, 1251, 67270, 400000]) {
       const product = sqrtRatioAtTick(t) * sqrtRatioAtTick(-t);
