@@ -18,7 +18,10 @@ jobs:
   ci:
     runs-on: ubuntu-24.04
     steps:
+      # No token in .git/config: the tests load the Firebase CLI's code, and nothing here pushes or fetches.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Node version comes from .nvmrc ("22": the newest 22.x), which satisfies the root package.json's
       # "engines": { "node": "^22.16.0" } and is what contributors run locally. 22.16 fixed an
@@ -80,3 +83,7 @@ jobs:
 
       - name: npm audit (high/critical)
         run: npm audit --audit-level=high
+
+      # The pinned Firebase CLI is not a root workspace, so the root audit doesn't see it.
+      - name: npm audit of the Firebase CLI (high/critical)
+        run: npm audit --audit-level=high --prefix tools/firebase

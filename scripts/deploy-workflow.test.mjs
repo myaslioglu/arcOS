@@ -252,4 +252,14 @@ describe("the Firestore tests in CI", () => {
     expect(at(emulator, install)).toBeLessThan(at(emulator, suite));
     expect(emulator).not.toMatch(/firebase-tools@|\bnpx\b/);
   });
+
+  it("audits the Firebase CLI's packages too, since CI now installs and loads them", () => {
+    expect(ci).toMatch(/^ {8}run: npm audit --audit-level=high --prefix tools\/firebase$/m);
+  });
+
+  it("leaves no GitHub token in the checkout of either job, since both run the CLI's code", () => {
+    for (const text of [ci, emulator]) {
+      expect(text).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false\n/);
+    }
+  });
 });
