@@ -17,6 +17,8 @@ file, and starts only after the checks pass and the owner approves it.
    `bundle` have passed, and then sits at "Waiting" until the reviewer approves it; no Google Cloud credential exists
    until then. Rejecting a run skips that deploy. Every merge asks, including one that only changes docs. Runs queue one
    behind another (a newer waiting run replaces an older waiting one), and a deploy that has started is not cancelled.
+   Approve within a day: the bundle is kept for one day, so an approval given later fails at the download and the
+   workflow has to be re-run (all jobs).
 4. **The deploy, then the smoke checks.** The `deploy` job holds the credential, so it runs none of the project's
    dependencies and none of its build. After approval it:
    - downloads the bundle as data, into a temporary folder outside the workspace (the Firebase CLI uploads the
