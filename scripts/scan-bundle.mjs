@@ -9,8 +9,9 @@
 // nothing else about what it found (no matched text, no file names). Matching is case-insensitive.
 //
 // Exit codes: 0 no pattern matched; 1 a pattern matched; 2 the scan could not be trusted to have looked (it fails
-// closed): no patterns, a pattern that is not a regular expression or matches the empty string, a directory that is
-// missing or holds no files, or an entry that is not a plain file or directory.
+// closed): no patterns, a pattern that is not a regular expression, matches the empty string, or is pasted as a
+// /pattern/flags literal or inside quotes (each would search for those marks themselves and find nothing), a directory
+// that is missing or holds no files, or an entry that is not a plain file or directory.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,10 +19,18 @@ import { fileURLToPath } from "node:url";
 export const ENV_NAME = "BUNDLE_DENY_PATTERNS";
 const FLAGS = "gi";
 
+// A line pasted the way code writes a regular expression or a string: /text/flags, or text inside one kind of quote.
+// As a pattern it would look for the slashes or the quotes as well, so it would match nothing and the scan would pass
+// without having looked. A slash that belongs to the text is written \/ (and /etc/hosts, /api/pulse stay accepted:
+// what follows their last slash is not a run of flag letters).
+const DELIMITED = /^\/.+\/[dgimsuvy]*$/;
+const QUOTED = /^(["'`]).+\1$/;
+
 /**
  * The patterns in `text`, one per line, blank lines skipped. Each is numbered by its line, so "pattern 3" is the third
- * line of the secret. A line that isn't a regular expression, or one that matches the empty string (it would match
- * everywhere), is a problem, reported by line and reason only, never by its text.
+ * line of the secret. A line that isn't a regular expression, one that matches the empty string (it would match
+ * everywhere), and one written as /pattern/flags or inside quotes (it would match nothing) is a problem, reported by
+ * line and reason only, never by its text.
  */
 export function parsePatterns(text) {
   const patterns = [];
@@ -32,6 +41,14 @@ export function parsePatterns(text) {
       const source = raw.trim();
       if (source === "") return;
       const line = index + 1;
+      if (DELIMITED.test(source)) {
+        problems.push({ line, reason: "delimited" });
+        return;
+      }
+      if (QUOTED.test(source)) {
+        problems.push({ line, reason: "quoted" });
+        return;
+      }
       let regex;
       try {
         regex = new RegExp(source, FLAGS);
@@ -48,6 +65,14 @@ export function parsePatterns(text) {
     });
   return { patterns, problems };
 }
+
+// What run() says about each kind of problem, after "pattern N". Never the pattern itself.
+const PROBLEMS = {
+  invalid: "is not a valid regular expression",
+  "empty-match": "matches the empty string",
+  delimited: "is written as /pattern/flags: write the expression without the slashes, or escape the first slash with a backslash if it belongs to the text",
+  quoted: "is wrapped in quotes: write the expression without them, or escape the first quote with a backslash if it belongs to the text",
+};
 
 /** How many times the global `regex` matches in `text`. */
 export function countMatches(text, regex) {
@@ -110,9 +135,7 @@ export function run(argv, env, io) {
   }
   const { patterns, problems } = parsePatterns(text);
   if (problems.length > 0) {
-    for (const { line, reason } of problems) {
-      io.error(reason === "empty-match" ? `pattern ${line} matches the empty string` : `pattern ${line} is not a valid regular expression`);
-    }
+    for (const { line, reason } of problems) io.error(`pattern ${line} ${PROBLEMS[reason] ?? PROBLEMS.invalid}`);
     return 2;
   }
   if (patterns.length === 0) {

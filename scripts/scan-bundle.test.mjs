@@ -64,6 +64,42 @@ describe("parsePatterns", () => {
     expect(problems).toEqual([{ line: 1, reason: "empty-match" }]);
   });
 
+  it.each(["/pattern/", "/pattern/i", "/pattern/gi", "/a/b/"])(
+    "rejects %s, a /pattern/flags literal: its slashes would be searched for, so it would never match",
+    (pattern) => {
+      const { patterns, problems } = parsePatterns(pattern);
+      expect(patterns).toEqual([]);
+      expect(problems).toEqual([{ line: 1, reason: "delimited" }]);
+    },
+  );
+
+  it.each([..."dgimsuvy"])("rejects /pattern/%s, whichever flag letter follows the slash", (flag) => {
+    expect(parsePatterns(`/pattern/${flag}`).problems).toEqual([{ line: 1, reason: "delimited" }]);
+  });
+
+  it.each(['"pattern"', "'pattern'", "`pattern`"])("rejects %s, wrapped in quotes that would be searched for", (pattern) => {
+    const { patterns, problems } = parsePatterns(pattern);
+    expect(patterns).toEqual([]);
+    expect(problems).toEqual([{ line: 1, reason: "quoted" }]);
+  });
+
+  // Not pasted as a literal: no /flags run after the last slash, or no pair of the same quote around the whole line.
+  // A slash or quote that belongs to the text stays possible: escape the first one.
+  it.each([
+    "/etc/hosts",
+    "/api/pulse",
+    "\\/pattern\\/",
+    "\\\"pattern\"",
+    "it's",
+    'say "hi"',
+    "a/b",
+    "'pattern\"",
+    '"pattern`',
+    '"key": "value',
+  ])("accepts %s", (pattern) => {
+    expect(parsePatterns(pattern).problems).toEqual([]);
+  });
+
   it("reads nothing from an undefined or empty secret", () => {
     expect(parsePatterns(undefined)).toEqual({ patterns: [], problems: [] });
     expect(parsePatterns("")).toEqual({ patterns: [], problems: [] });
@@ -152,6 +188,17 @@ describe("run", () => {
       const code = await run([staticDir], { BUNDLE_DENY_PATTERNS: "x*" }, c.io);
       expect(code).toBe(2);
       expect(c.err.join("\n")).toContain("pattern 1 matches the empty string");
+    });
+
+    it("when a pattern is pasted as a /pattern/flags literal or inside quotes, which would silently match nothing", async () => {
+      const c = capture();
+      const code = await run([staticDir], { BUNDLE_DENY_PATTERNS: `ok\n/${FAKE_WORD}/i\n"${FAKE_ADDRESS}"\n` }, c.io);
+      expect(code).toBe(2);
+      expect(c.err.join("\n")).toContain("pattern 2 is written as /pattern/flags");
+      expect(c.err.join("\n")).toContain("pattern 3 is wrapped in quotes");
+      expect(c.all()).not.toContain(FAKE_WORD);
+      expect(c.all()).not.toContain(FAKE_ADDRESS);
+      expect(c.out.filter((l) => l.startsWith("pattern"))).toEqual([]);
     });
 
     it("when no directory is given", async () => {

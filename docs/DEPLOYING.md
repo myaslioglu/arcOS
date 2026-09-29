@@ -42,8 +42,10 @@ file, and starts only after the checks pass and the owner approves it.
   to `main`, administrator bypass off, and "prevent self-review" off (one maintainer both merges and approves).
 - **Repository variables** `GCP_WIF_PROVIDER` and `GCP_DEPLOY_SA`: the identity provider's resource name and the service
   account's address. They identify things; they are not secrets.
-- **The secret `BUNDLE_DENY_PATTERNS`**: one regular expression per line, matched without regard to case. The list is not
-  in the repository.
+- **The secret `BUNDLE_DENY_PATTERNS`**: one regular expression per line, matched without regard to case and written
+  plainly, without slashes around it (as in `/expression/i`) or quotes. The scan stops on a line written that way, since
+  it would look for the slashes or quotes too and find nothing, and on a line that is not a valid expression. The list
+  is not in the repository.
 - **Google Cloud**: a workload identity provider that accepts tokens only from this repository's `production`
   environment, and a deployer service account with App Hosting Developer, Service Usage Consumer and Storage Bucket
   Viewer on the project, and Storage Object Creator on the bucket that holds uploaded source. It has no key.
