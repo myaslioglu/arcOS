@@ -134,6 +134,23 @@ describe("lazyWalletConnect: a visitor picks it", () => {
     expect(store.get(RECENT)).toBe(JSON.stringify("walletConnect"));
   });
 
+  // What a wallet is asked to approve. wagmi's connect() sends the chains as optional ones, so a wallet that lacks one of
+  // them still connects, and the config's own chains are the whole list: no other chain is asked for.
+  it("asks the wallet for exactly the config's Arc chains, the one being connected first", async () => {
+    const provider = fakeProvider();
+    inner.getProvider.mockResolvedValue(provider);
+    const { config, connector } = makeConfig();
+    await connect(config, { connector, chainId: mainnet.id });
+    expect(provider.connect).toHaveBeenCalledTimes(1);
+    const [request] = provider.connect.mock.calls[0] as unknown as [{ optionalChains?: number[] }];
+    const asked = request.optionalChains ?? [];
+    expect(asked[0]).toBe(mainnet.id);
+    expect([...asked].sort((a, b) => a - b)).toEqual(config.chains.map((chain) => chain.id).sort((a, b) => a - b));
+    expect(asked).toHaveLength(2);
+    // Nothing that would make a wallet refuse when it lacks a chain.
+    expect(request).not.toHaveProperty("chains");
+  });
+
   // The same error the Wallet window turns into a sentence. This runs wagmi's real connect(), so it shows what it throws.
   it("reads a closed WalletConnect modal as a cancelled request, and leaves nothing to restore", async () => {
     inner.getProvider.mockResolvedValue(
@@ -161,13 +178,15 @@ describe("lazyWalletConnect: after a WalletConnect connection", () => {
   it("restores it when the page reloads", async () => {
     const provider = fakeProvider({ accounts: [ACCOUNT], session: { topic: "t" } });
     inner.getProvider.mockResolvedValue(provider);
-    const { config } = makeConfig(lastConnection("walletConnect"));
+    const { config, store } = makeConfig(lastConnection("walletConnect"));
     await reconnect(config);
     expect(inner.getProvider).toHaveBeenCalled();
     expect(config.state.status).toBe("connected");
     expect(config.state.connections.size).toBe(1);
     // The session was restored, not asked for again.
     expect(provider.connect).not.toHaveBeenCalled();
+    // And the record stays, so the next reload restores it too: only a session that is gone is forgotten.
+    expect(store.get(RECENT)).toBe(JSON.stringify("walletConnect"));
   });
 
   it("stops loading on a reload once the visitor disconnects", async () => {
@@ -222,6 +241,19 @@ describe("lazyWalletConnect: a session that ended without the app disconnecting"
     inner.getProvider.mockClear();
     await reconnect(makeConfig(store).config);
     expect(inner.getProvider).not.toHaveBeenCalled();
+  });
+
+  // wagmi's onDisconnect asks for the provider, so it can fail (a provider that no longer loads, say). The session it was
+  // told about has ended all the same, so the record must go whether or not wagmi's own handler got to the end.
+  it("forgets the record even when wagmi's own handler for the ended session fails, and still fails as it did", async () => {
+    inner.getProvider.mockResolvedValue(fakeProvider());
+    const { config, connector, store } = makeConfig();
+    await connect(config, { connector, chainId: mainnet.id });
+    expect(store.get(RECENT)).toBe(JSON.stringify("walletConnect"));
+
+    inner.getProvider.mockRejectedValue(new Error("provider gone"));
+    await expect(connector.onDisconnect()).rejects.toThrow("provider gone");
+    expect(store.has(RECENT)).toBe(false);
   });
 
   it("leaves another wallet's record alone when the wallet ends its session", async () => {

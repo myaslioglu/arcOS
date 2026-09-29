@@ -78,9 +78,13 @@ export function lazyWalletConnect(parameters: WalletConnectParameters): ReturnTy
     };
 
     // The wallet ended the session while the page was open (the provider's session_delete or disconnect, or no accounts left).
+    // The record goes even when wagmi's own handler fails, which still fails as it did: the session has ended either way.
     connector.onDisconnect = async function (this: unknown, ...args: Parameters<typeof onDisconnect>) {
-      await onDisconnect.apply(this, args);
-      await forget();
+      try {
+        await onDisconnect.apply(this, args);
+      } finally {
+        await forget();
+      }
     } as typeof onDisconnect;
 
     // wagmi asks this to reconnect after a reload, so false means there was nothing to restore.
