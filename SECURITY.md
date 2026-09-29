@@ -42,6 +42,31 @@ of these headers correctly (or exposing it directly to the internet without one)
 request collapse onto the `"unknown"` key, sharing one limit — not a security hole in itself, but
 it does mean the safety valve for those endpoints stops being per-client.
 
+## Security headers and the content security policy
+
+Every response carries these headers (`headers()` in `apps/web/next.config.ts`, built in `apps/web/src/lib/security-headers.ts`):
+
+- `Strict-Transport-Security: max-age=63072000; includeSubDomains`, without `preload`.
+- `X-Frame-Options: DENY` and a content security policy of `frame-ancestors 'none'; object-src 'none'; base-uri 'none';
+  form-action 'self'`, both enforced: the windows that ask a wallet to sign can't be framed by another site.
+- `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` and a `Permissions-Policy` that
+  turns off the camera, microphone, geolocation, payment and browsing-topics features.
+- `Cross-Origin-Opener-Policy: same-origin-allow-popups`, not `same-origin`, which would cut a wallet's popup off from the
+  page that opened it.
+
+The full policy is sent as `Content-Security-Policy-Report-Only`, so it blocks nothing. It says the page takes its scripts
+and styles from itself (and one font stylesheet from Google Fonts, for the WalletConnect modal) and calls only itself,
+Arc's RPC nodes and explorers, WalletConnect and Reown, and Circle's App Kit; `security-headers.ts` lists each host with
+who calls it. Browsers post what it would have blocked to `/api/csp-report`,
+which writes one log line for each violation (the directive, the blocked origin or keyword, and the page's path) and
+answers 204 to everything. It logs no query string, no address, no client address and no user agent, reads at most 16 KB
+and limits each client. The policy watches real traffic for a few days before it is enforced, in a later step.
+
+`script-src` allows `'unsafe-inline'`. Next's own bootstrap scripts and the theme script are inline and carry no nonce, and
+a nonce is made for each request, which would make every page render on the server on each visit instead of being served
+as a static file. So the policy keeps every other host's script out, but not an inline one: a known gap that nonces or
+hashes would close.
+
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
