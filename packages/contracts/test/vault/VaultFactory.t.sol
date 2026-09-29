@@ -311,6 +311,20 @@ contract VaultFactoryTest is VaultTestBase {
         _assertNothingLeftBehind(s, alice, address(0));
     }
 
+    /// The placeholder's own two refusals: it can neither be initialised nor be sent value, whoever asks. It goes with
+    /// the placeholder.
+    function test_positionVaultPlaceholder_refusesToInitialise_andToReceiveValue() public {
+        PositionVault placeholder = PositionVault(payable(factory.positionVaultImpl()));
+        vm.expectRevert(PositionVault.NotImplemented.selector);
+        placeholder.initialize(
+            alice, makeAddr("manager"), 1, uint64(block.timestamp + 1 days), PositionVault.Kind.V3, 200, payable(bob)
+        );
+
+        (bool ok,) = address(placeholder).call{value: 1}("");
+        assertFalse(ok);
+        assertEq(address(placeholder).balance, 0);
+    }
+
     // ---------------------------------------------------------------------
     // The position-manager allow-list, and the factory's own two-step ownership
     // ---------------------------------------------------------------------
