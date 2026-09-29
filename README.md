@@ -85,6 +85,7 @@ it needs Java 21 or newer and no credentials.
 - `packages/contracts` — the three Solidity contracts and their Foundry tests, scripts and
   deployment guide.
 - `docs/QA-R0.md` — the manual test script for this release.
+- `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the owner's approval, the deploy and its smoke checks.
 
 ## Contracts
 

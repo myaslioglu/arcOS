@@ -17,3 +17,6 @@ firebase-debug.log
 firebase-debug.*.log
 firestore-debug.log
 .firebase/
+
+# Written into the workspace by google-github-actions/auth; the deploy uploads the workspace, so keep it out
+gha-creds-*.json
