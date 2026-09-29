@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublicClient } from "viem";
-import { activeChain } from "@arcos/chain";
+import { DEX, activeChain } from "@arcos/chain";
 import { inspectInput, proExplorerApi, proLogsApi } from "../inspect-input";
 
 const T = "0x1111111111111111111111111111111111111111";
@@ -52,6 +52,19 @@ describe("inspectInput", () => {
     expect(inspectInput(T, client).arcosTokenFactory).toBe("0xa68edD822048C00dC816d93005B72F8a50234a24");
     vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
     expect(inspectInput(T, client).arcosTokenFactory).toBe("0x41FaFc54ED3be1545695B82af4aA490607447884");
+  });
+
+  // The browser Inspector and the server both build their input here, so this is where each network's pools get named.
+  it("reads Uniswap v4 on both networks and Aerodrome on mainnet only, and fills no extra pools yet", () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    expect(inspectInput(T, client).dex).toBe(DEX.mainnet);
+    expect(inspectInput(T, client).dex?.v4).toBeDefined();
+    expect(inspectInput(T, client).dex?.aero).toBeDefined();
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
+    expect(inspectInput(T, client).dex).toBe(DEX.testnet);
+    expect(inspectInput(T, client).dex?.v4).toBeDefined();
+    expect(inspectInput(T, client).dex?.aero).toBeUndefined();
+    expect(inspectInput(T, client).extraPools).toBeUndefined();
   });
 
   it("keeps linking evidence to the public explorer either way", () => {
