@@ -1,0 +1,23 @@
+{
+  "name": "@arcos/data",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@arcos/chain": "file:../chain"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "fast-check": "^4.10.2",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  }
+}
