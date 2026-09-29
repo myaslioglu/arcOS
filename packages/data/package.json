@@ -9,10 +9,12 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:emulator": "firebase emulators:exec --only firestore --project demo-arcos \"vitest run --config vitest.emulator.config.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@arcos/chain": "file:../chain"
+    "@arcos/chain": "file:../chain",
+    "firebase-admin": "14.5.0"
   },
   "devDependencies": {
     "@types/node": "^20",
