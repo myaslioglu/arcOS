@@ -89,6 +89,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// than the stated share and the vault receives the remainder, `amount - fee`. Below `10_000 / LOCK_LP_BPS` LP
     /// tokens (200 at 50 bps) the fee is zero. `feeOf` is read once per call and only the flat fee and this fee
     /// are ever charged: nothing is charged at withdrawal, and a later fee change never reaches an existing vault.
+    /// `TokenLocked.amount` is what the vault actually received (its balance after the transfer minus before it), so
+    /// a token that takes a cut on transfer, or that rebases and rounds down, is recorded as it landed; `fee` is
+    /// what was sent to the fee recipient, before any cut the token itself takes. A token that delivers nothing
+    /// reverts `ZeroAmount`. The vault records no amount of its own: its live balance is the truth from then on.
     function lockToken(IERC20 token, uint256 amount, uint64 unlockAt, address owner_)
         external
         payable
@@ -109,8 +113,13 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         // above), by mulDiv so that no amount can overflow it.
         uint256 fee = _isV2Pair(address(token)) ? Math.mulDiv(amount, _bps(LOCK_LP_BPS), BPS_DENOMINATOR) : 0;
         if (fee != 0) token.safeTransferFrom(msg.sender, feeTo, fee);
+        // Record what ARRIVED, not what was asked for: a token that takes a cut on transfer, or rounds down as a
+        // rebasing token does, delivers less. Nothing arriving at all is refused.
+        uint256 balanceBefore = token.balanceOf(vault);
         token.safeTransferFrom(msg.sender, vault, amount - fee);
-        emit TokenLocked(owner_, address(token), vault, amount - fee, fee, unlockAt);
+        uint256 balanceAfter = token.balanceOf(vault);
+        if (balanceAfter <= balanceBefore) revert ZeroAmount();
+        emit TokenLocked(owner_, address(token), vault, balanceAfter - balanceBefore, fee, unlockAt);
     }
 
     /// @notice Locks a concentrated-liquidity position NFT from an allow-listed manager in a new vault. The platform's

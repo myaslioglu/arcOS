@@ -178,3 +178,161 @@ contract MockRecipientChanger {
         if (fees.owner() == address(this) && fees.recipient() == address(this)) fees.setRecipient(next);
     }
 }
+
+/// Takes `feeBps` of every transfer and burns it, like a taxed token.
+contract MockFeeOnTransferToken is ERC20 {
+    uint256 public immutable feeBps;
+
+    constructor(uint256 feeBps_) ERC20("Taxed", "TAX") {
+        feeBps = feeBps_;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != address(0) && to != address(0)) {
+            uint256 tax = (value * feeBps) / 10_000;
+            if (tax != 0) super._update(from, address(0), tax);
+            value -= tax;
+        }
+        super._update(from, to, value);
+    }
+}
+
+/// Balances follow an index: balanceOf = shares * index / 1e18, so `rebase` changes every holder's balance at once.
+/// A transfer moves whole shares, so it can deliver a little less than asked, as stETH does.
+contract MockRebasingToken is IERC20 {
+    uint256 public index = 1e18;
+    uint256 public totalShares;
+    mapping(address account => uint256) private _shares;
+    mapping(address account => mapping(address spender => uint256)) public override allowance;
+
+    function totalSupply() external view returns (uint256) {
+        return (totalShares * index) / 1e18;
+    }
+
+    function balanceOf(address account) public view returns (uint256) {
+        return (_shares[account] * index) / 1e18;
+    }
+
+    function mint(address to, uint256 amount) external {
+        uint256 shares = (amount * 1e18) / index;
+        _shares[to] += shares;
+        totalShares += shares;
+    }
+
+    function rebase(uint256 newIndex) external {
+        index = newIndex;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        _move(msg.sender, to, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        if (allowed != type(uint256).max) {
+            require(allowed >= amount, "allowance");
+            allowance[from][msg.sender] = allowed - amount;
+        }
+        _move(from, to, amount);
+        return true;
+    }
+
+    function _move(address from, address to, uint256 amount) private {
+        uint256 shares = (amount * 1e18) / index; // rounds down
+        _shares[from] -= shares;
+        _shares[to] += shares;
+        emit Transfer(from, to, amount);
+    }
+}
+
+    /// transferFrom succeeds and returns true but moves nothing, like a token that takes 100% or is simply broken.
+    contract MockZeroTransferToken {
+        function balanceOf(address) external pure returns (uint256) {
+            return 0;
+        }
+
+        function transferFrom(address, address, uint256) external pure returns (bool) {
+            return true;
+        }
+    }
+
+    /// A token that never answers balanceOf, so nothing can tell how much a transfer delivered.
+    contract MockNoBalanceToken {
+        function transferFrom(address, address, uint256) external pure returns (bool) {
+            return true;
+        }
+    }
+
+    /// Moves funds and returns nothing at all from transfer, transferFrom and approve, like USDT on Ethereum.
+    contract MockNoReturnToken {
+        mapping(address account => uint256) public balanceOf;
+        mapping(address account => mapping(address spender => uint256)) public allowance;
+
+        function mint(address to, uint256 amount) external {
+            balanceOf[to] += amount;
+        }
+
+        function approve(address spender, uint256 amount) external {
+            allowance[msg.sender][spender] = amount;
+        }
+
+        function transfer(address to, uint256 amount) external {
+            balanceOf[msg.sender] -= amount;
+            balanceOf[to] += amount;
+        }
+
+        function transferFrom(address from, address to, uint256 amount) external {
+            allowance[from][msg.sender] -= amount;
+            balanceOf[from] -= amount;
+            balanceOf[to] += amount;
+        }
+    }
+
+    /// Returns false from transferFrom and moves nothing.
+    contract MockFalseReturnToken {
+        function balanceOf(address) external pure returns (uint256) {
+            return 0;
+        }
+
+        function transferFrom(address, address, uint256) external pure returns (bool) {
+            return false;
+        }
+    }
+
+    /// An ERC-20 whose answers to token0(), token1() and getReserves() can be set to any length, or to revert, to test
+    /// how the factory decides that a token is a v2 pair.
+    contract MockShapedToken is ERC20 {
+        mapping(bytes4 selector => uint256) public wordsFor;
+        mapping(bytes4 selector => bool) public revertsFor;
+
+        constructor() ERC20("Shaped", "SHP") {}
+
+        function mint(address to, uint256 amount) external {
+            _mint(to, amount);
+        }
+
+        function shape(bytes4 selector, uint256 words, bool doRevert) external {
+            wordsFor[selector] = words;
+            revertsFor[selector] = doRevert;
+        }
+
+        fallback() external {
+            if (revertsFor[msg.sig]) revert("shaped");
+            uint256 words = wordsFor[msg.sig];
+            assembly {
+                for { let i := 0 } lt(i, words) { i := add(i, 1) } { mstore(mul(i, 0x20), 0) }
+                return(0, mul(words, 0x20))
+            }
+        }
+    }
