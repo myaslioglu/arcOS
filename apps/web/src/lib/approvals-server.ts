@@ -1,5 +1,5 @@
 import "server-only";
-import { multicall3Abi, type Address } from "viem";
+import { multicall3Abi, parseAbi, type Address } from "viem";
 import { activeChain, activeNetwork } from "@arcos/chain";
 import { ApprovalsUnavailable, loadApprovals, logsPageUrl, readLogsPage, type ApprovalsAnswer } from "./approvals";
 import { withDeadline } from "./deadline";
@@ -18,6 +18,10 @@ export class ApprovalsBusy extends Error {
   }
 }
 
+// viem's multicall3Abi lists only aggregate3, getEthBalance and getCurrentBlockTimestamp, so the canary declares the
+// one other Multicall3 function it calls.
+const BLOCK_NUMBER_ABI = parseAbi(["function getBlockNumber() view returns (uint256)"]);
+
 // One cache and one gate per server process, whichever bundled copy of this module runs (see process-global.ts).
 // Each owner's answer is kept for 60 s; a failed lookup is dropped, never cached (see ttl-cache.ts).
 const cache = processGlobal("approvals.cache", () => ttlCache<ApprovalsAnswer>(60_000));
@@ -33,8 +37,9 @@ const gate = processGlobal("approvals.gate", () => inFlightGate(4, () => new App
  * Revoke's own RPC client (`approvalsRpcClient()`, its own endpoint-health record, never the Inspector's shared
  * one): a clean multicall is one Multicall3 call, and one a spoofed Approval event poisons is split and retried
  * within its own budget (see `liveApprovals` in approvals.ts) rather than cooling the Inspector's endpoints. When
- * the first Multicall3 call fails, one block-number read on the same client tells an RPC outage (a 503) from a
- * poisoned call (the halving goes on, and the answer is marked truncated).
+ * the first Multicall3 call fails, one read of Multicall3's own `getBlockNumber()` on the same client, an eth_call
+ * like the aggregate3 calls, tells an RPC outage (a 503) from a poisoned call (the halving goes on, and the answer is
+ * marked truncated).
  */
 export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
   const chain = activeChain();
@@ -43,8 +48,7 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
     apiKey: "",
   };
   const multicall3 = chain.contracts?.multicall3?.address;
-  // Checked before anything else: without Multicall3 no call could ever be answered, and the canary, finding the RPC
-  // up, would read every call as poisoned and pass an empty list off as merely truncated.
+  // Checked before anything else: without Multicall3 no call could ever be answered, and the canary reads it too.
   if (!multicall3) return Promise.reject(new ApprovalsUnavailable("This chain has no Multicall3."));
   return cache.get(owner.toLowerCase(), () =>
     gate.run(() => {
@@ -73,9 +77,10 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
             // Asked when the first aggregate3 call fails, and that call, exempt from the time budget, can still be
             // running when the deadline fires: once the route has answered 503, no read is sent.
             controller.signal.throwIfAborted();
-            // cacheTime 0: a live read. viem would otherwise answer from the block number it read in the last few
-            // seconds, which says nothing about whether the RPC answers now.
-            await client.getBlockNumber({ cacheTime: 0 });
+            // Multicall3's own getBlockNumber(): an eth_call, so it travels the way the aggregate3 calls do. A gateway
+            // may answer eth_blockNumber from a different backend than eth_call, and say the RPC is up while the calls
+            // fail. It takes no arguments, so nothing an attacker chose can poison it.
+            await client.readContract({ address: multicall3, abi: BLOCK_NUMBER_ABI, functionName: "getBlockNumber" });
           },
         }),
         controller,

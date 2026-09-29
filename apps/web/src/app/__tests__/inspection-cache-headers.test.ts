@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Report } from "@arcos/inspector";
 
 // The real module is server-only and opens an RPC client when it loads; these routes only need its answer.
@@ -94,6 +94,55 @@ describe("an inspection that ended without a report, whichever bundled copy thre
   it("answers 404 when there's no contract, not 502", async () => {
     cachedInspection.mockRejectedValue(fromAnotherCopy("NotAContract"));
     expect((await inspect()).status).toBe(404);
+  });
+});
+
+// The way the approvals and pulse routes log: the error's name only, since a node's or an explorer's message can carry
+// an endpoint's URL, and the address a visitor looked up isn't the log's to keep either.
+describe("what the Inspector route logs when an inspection fails", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  const inspect = () => inspectRoute(new Request(`https://4rcos.test/api/inspect/${ADDRESS}`), params());
+
+  beforeEach(() => {
+    cachedInspection.mockReset();
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("logs one line naming the error, and answers 502", async () => {
+    cachedInspection.mockRejectedValue(new TypeError("fetch failed"));
+    expect((await inspect()).status).toBe(502);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith("inspect failed", "TypeError");
+  });
+
+  it("never logs the failure's message or the address, only its name", async () => {
+    cachedInspection.mockRejectedValue(new Error("https://secret-rpc.example/abc123 timed out"));
+    await inspect();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    for (const call of errorSpy.mock.calls) {
+      for (const arg of call) {
+        expect(String(arg)).not.toContain("secret-rpc");
+        expect(String(arg)).not.toContain(ADDRESS);
+      }
+    }
+  });
+
+  it("logs 'unknown' for a failure that isn't an Error", async () => {
+    cachedInspection.mockRejectedValue("https://secret-rpc.example/abc123 timed out");
+    expect((await inspect()).status).toBe(502);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith("inspect failed", "unknown");
+  });
+
+  it("logs nothing for the answers that aren't failures: no contract, and busy", async () => {
+    cachedInspection.mockRejectedValue(Object.assign(new Error("x"), { name: "NotAContract" }));
+    expect((await inspect()).status).toBe(404);
+    cachedInspection.mockRejectedValue(Object.assign(new Error("x"), { name: "InspectorBusy" }));
+    expect((await inspect()).status).toBe(503);
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });
 

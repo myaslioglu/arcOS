@@ -35,7 +35,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ address: string
         { status: 503, headers: { "retry-after": "5", "cache-control": "no-store" } },
       );
     }
-    console.error("inspect failed", address, e);
+    // The error's name only, the way the approvals and pulse routes log: a node's or an explorer's message could carry
+    // its URL.
+    console.error("inspect failed", e instanceof Error ? e.name : "unknown");
     return NextResponse.json(
       { error: "Couldn't reach the network. Try again." },
       { status: 502, headers: { "cache-control": "no-store" } },

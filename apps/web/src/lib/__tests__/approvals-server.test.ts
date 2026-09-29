@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeAbiParameters, getAddress, pad, type Address, type Hex } from "viem";
+import { encodeAbiParameters, getAddress, pad, parseAbi, type Address, type Hex } from "viem";
 
 // The real module is server-only; stub it the way pulse-server.test.ts does, so the module can load under vitest.
 vi.mock("server-only", () => ({}));
 
 // Revoke's own RPC client, mocked here: this file checks that cachedApprovals reads it (and only it), never the
-// Inspector's serverRpcClient, and it never touches a real network. getBlockNumber is the canary's read.
+// Inspector's serverRpcClient, and it never touches a real network. Its readContract serves the multicall and the
+// canary alike; getBlockNumber (eth_blockNumber) is what the canary used to read, and must stay unused.
 const { readContract, getBlockNumber, approvalsRpcClient, serverRpcClient } = vi.hoisted(() => ({
   readContract: vi.fn(),
   getBlockNumber: vi.fn(),
@@ -35,6 +36,19 @@ const TOKEN: Address = "0x3333333333333333333333333333333333333333";
 const SPENDER: Address = "0x5555555555555555555555555555555555555555";
 const str = (s: string): Hex => encodeAbiParameters([{ type: "string" }], [s]);
 const topic = (a: Address): Hex => pad(a.toLowerCase() as Hex, { size: 32 });
+
+/** The chain's Multicall3, which the multicall and the canary both read. */
+const multicall3 = (): Address => {
+  const address = activeChain().contracts?.multicall3?.address;
+  if (!address) throw new Error("the active chain has no Multicall3");
+  return address;
+};
+type Read = { address: Address; functionName: string };
+/** What the client was asked to read, told apart by function: the multicall's aggregate3 calls, and the canary. */
+const readsOf = (functionName: string): Read[] =>
+  (readContract.mock.calls as [Read][]).map(([args]) => args).filter((args) => args.functionName === functionName);
+const aggregateCalls = () => readsOf("aggregate3");
+const canaryReads = () => readsOf("getBlockNumber");
 
 /** One Blockscout logs-module answer: `result` as its own list of raw logs. */
 function logsResponse(result: unknown[]) {
@@ -106,31 +120,39 @@ describe("cachedApprovals", () => {
     expect(serverRpcClient).not.toHaveBeenCalled();
     expect(readContract).toHaveBeenCalledTimes(1);
     expect(readContract.mock.calls[0][0]).toMatchObject({ functionName: "aggregate3" });
+    expect(canaryReads()).toEqual([]);
     expect(getBlockNumber).not.toHaveBeenCalled();
   });
 
-  it("asks Revoke's own client for the block number, once and past viem's cache, when the first aggregate3 call fails, and answers what it has, truncated, when that read answers (review N1 ruling)", async () => {
+  it("asks Multicall3 for the block number, on Revoke's own client and the multicall's own eth_call path, once, when the first aggregate3 call fails, and answers what it has, truncated, when that read answers (review N1 ruling)", async () => {
     const owner: Address = "0x8888888888888888888888888888888888888888";
     fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
-    readContract.mockRejectedValue(new Error("out of gas")); // the owner's only token is poisoned
+    readContract.mockImplementation(async (args: Read) => {
+      if (args.functionName === "getBlockNumber") return 1n; // the RPC answers
+      throw new Error("out of gas"); // the owner's only token is poisoned
+    });
 
     await expect(cachedApprovals(owner)).resolves.toEqual({ approvals: [], truncated: true });
 
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
-    expect(getBlockNumber).toHaveBeenCalledWith({ cacheTime: 0 }); // a live read, never a cached block number
+    // Multicall3's own getBlockNumber(): no arguments, so nothing an attacker chose can poison it, and an eth_call like
+    // the aggregate3 calls, where eth_blockNumber might be answered by another backend behind the same gateway.
+    const abi = parseAbi(["function getBlockNumber() view returns (uint256)"]);
+    expect(canaryReads()).toEqual([{ address: multicall3(), abi, functionName: "getBlockNumber" }]);
+    expect(aggregateCalls().length).toBeGreaterThan(1); // the canary answered, so the halving went on
+    expect(getBlockNumber).not.toHaveBeenCalled();
     expect(serverRpcClient).not.toHaveBeenCalled();
   });
 
   it("rejects, so the route answers 503, when the first aggregate3 call fails and the block number can't be read either: the RPC is down (review N1 ruling)", async () => {
     const owner: Address = "0x9999999999999999999999999999999999999999";
     fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
-    readContract.mockRejectedValue(new Error("fetch failed"));
-    getBlockNumber.mockRejectedValue(new Error("fetch failed"));
+    readContract.mockRejectedValue(new Error("fetch failed")); // every read fails, the canary's included
 
     await expect(cachedApprovals(owner)).rejects.toMatchObject({ name: "ApprovalsUnavailable" });
 
-    expect(readContract).toHaveBeenCalledTimes(1); // an outage is never split and retried
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
+    expect(aggregateCalls()).toHaveLength(1); // an outage is never split and retried
+    expect(canaryReads()).toHaveLength(1);
+    expect(getBlockNumber).not.toHaveBeenCalled();
   });
 
   it("answers 503 at once on a chain without Multicall3, never an empty list the canary would pass as truncated", async () => {
@@ -163,6 +185,7 @@ describe("cachedApprovals", () => {
     await vi.advanceTimersByTimeAsync(4_500); // it fails at 16 s, after the abort
 
     expect(readContract).toHaveBeenCalledTimes(1);
+    expect(canaryReads()).toEqual([]);
     expect(getBlockNumber).not.toHaveBeenCalled();
   });
 
@@ -211,7 +234,11 @@ describe("cachedApprovals", () => {
         approvalLogFor(owner, TOKEN_B, SPENDER, 7),
       ]),
     );
-    readContract.mockImplementation(() => new Promise((_, reject) => setTimeout(() => reject(new Error("slow poison")), 1_100)));
+    readContract.mockImplementation((args: Read) =>
+      args.functionName === "getBlockNumber"
+        ? Promise.resolve(1n) // the canary: the RPC is up
+        : new Promise((_, reject) => setTimeout(() => reject(new Error("slow poison")), 1_100)),
+    );
 
     const outcome: { settled: unknown } = { settled: undefined };
     cachedApprovals(owner).then(
@@ -221,11 +248,12 @@ describe("cachedApprovals", () => {
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(outcome.settled).toMatchObject({ name: "InspectionTimeout" });
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
-    const countAfterDeadline = readContract.mock.calls.length;
+    expect(canaryReads()).toHaveLength(1);
+    expect(getBlockNumber).not.toHaveBeenCalled();
+    const countAfterDeadline = aggregateCalls().length;
     expect(countAfterDeadline).toBe(14);
 
     await vi.advanceTimersByTimeAsync(20_000); // plenty more simulated time, if anything were still driving it
-    expect(readContract.mock.calls.length).toBe(countAfterDeadline); // not even one more attempt followed the abort
+    expect(aggregateCalls().length).toBe(countAfterDeadline); // not even one more attempt followed the abort
   });
 });

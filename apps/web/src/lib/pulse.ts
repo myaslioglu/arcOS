@@ -14,13 +14,20 @@ export type Pulse = { oldestBlock: number; ratios: number[] };
 /** What viem's getFeeHistory answers, as far as the pulse needs it. */
 export type FeeHistoryAnswer = { oldestBlock: bigint; gasUsedRatio: readonly number[] };
 
-/** The route's answer: the oldest block as a number, and each ratio kept within 0..1 and rounded to 4 decimals. */
+/**
+ * The route's answer: the oldest block as a number, and each ratio kept within 0..1 and rounded to 4 decimals. Throws
+ * on a ratio that isn't a finite number, which would plot a value nobody measured, and on fewer than 2 ratios, which
+ * would draw nothing; the route then answers 503 and the browser keeps the last good chart.
+ */
 export function toPulse(history: FeeHistoryAnswer): Pulse {
+  const { gasUsedRatio } = history;
+  if (gasUsedRatio.length < 2) throw new Error("The fee history has fewer than 2 ratios.");
+  if (!gasUsedRatio.every((r) => Number.isFinite(r))) {
+    throw new Error("The fee history has a ratio that isn't a number.");
+  }
   return {
     oldestBlock: Number(history.oldestBlock),
-    ratios: history.gasUsedRatio.map((r) =>
-      Number.isFinite(r) ? Math.round(Math.min(Math.max(r, 0), 1) * 10_000) / 10_000 : 0,
-    ),
+    ratios: gasUsedRatio.map((r) => Math.round(Math.min(Math.max(r, 0), 1) * 10_000) / 10_000),
   };
 }
 

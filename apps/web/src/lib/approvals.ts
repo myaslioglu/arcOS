@@ -99,10 +99,11 @@ export type Aggregate = (calls: readonly Call[]) => Promise<readonly CallResult[
 /** One page of the owner's Approval logs, from `fromBlock` on, as the explorer sent them. */
 export type LogsPageReader = (fromBlock: number) => Promise<unknown[]>;
 /**
- * One cheap read on the RPC client `aggregate` uses (approvals-server.ts asks it for the block number), which tells an
- * RPC outage from a poisoned multicall. A lookup asks it at most once, and only when its first aggregate call fails:
- * it answering means the RPC is up, so the calls themselves failed and the halving goes on; it throwing means the RPC
- * is down, and the lookup rejects. It counts against neither MULTICALL_BUDGET nor MULTICALL_TIME_BUDGET_MS.
+ * One cheap read on the RPC client `aggregate` uses (approvals-server.ts asks Multicall3 for the block number, an
+ * eth_call like `aggregate` itself), which tells an RPC outage from a poisoned multicall. A lookup asks it at most
+ * once, and only when its first aggregate call fails: it answering means the RPC is up, so the calls themselves failed
+ * and the halving goes on; it throwing means the RPC is down, and the lookup rejects. It counts against neither
+ * MULTICALL_BUDGET nor MULTICALL_TIME_BUDGET_MS.
  */
 export type Canary = () => Promise<unknown>;
 /**

@@ -20,10 +20,23 @@ describe("toPulse", () => {
     expect(PULSE_BLOCKS).toBe(1024);
   });
 
-  it("keeps every ratio within 0 and 1, and reads a non-number as 0", () => {
-    expect(toPulse({ oldestBlock: 1n, gasUsedRatio: [-0.5, 1.7, Number.NaN, Number.POSITIVE_INFINITY] }).ratios).toEqual([
-      0, 1, 0, 0,
-    ]);
+  it("keeps every ratio within 0 and 1", () => {
+    expect(toPulse({ oldestBlock: 1n, gasUsedRatio: [-0.5, 1.7, 0.5] }).ratios).toEqual([0, 1, 0.5]);
+  });
+
+  // A ratio that isn't a number used to be plotted as 0, which is data nobody measured. Refused, the route answers 503
+  // and the browser keeps the last good chart.
+  it("refuses a ratio that isn't a finite number, instead of plotting it as 0", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => toPulse({ oldestBlock: 1n, gasUsedRatio: [0.1, bad, 0.2] }), String(bad)).toThrow();
+    }
+  });
+
+  // One ratio, or none, would draw a chart of nothing (a line needs two points), and would replace the last good one.
+  it("refuses fewer than 2 ratios, and takes 2", () => {
+    expect(() => toPulse({ oldestBlock: 1n, gasUsedRatio: [] })).toThrow();
+    expect(() => toPulse({ oldestBlock: 1n, gasUsedRatio: [0.5] })).toThrow();
+    expect(toPulse({ oldestBlock: 1n, gasUsedRatio: [0.5, 0.25] })).toEqual({ oldestBlock: 1, ratios: [0.5, 0.25] });
   });
 });
 
