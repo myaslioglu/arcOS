@@ -10,4 +10,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `packages/shell/src/ui` never imports wagmi or viem.
 - `packages/inspector` never imports React or Next.
 - Apps in `apps/web/src/apps/*` never import each other; they open each other with `useDesktop().open()`.
+- `packages/data` is the Firestore layer. Its pure entry, `@arcos/data`, never imports firebase-admin. Its server entry,
+  `@arcos/data/server`, is imported only from server code (route handlers, server-only modules, functions). Its tests run
+  against the Firestore emulator under a `demo-` project id, never against the live project.
 - Never commit secrets. `.env*` is ignored; only `.env.example` is tracked.
