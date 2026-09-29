@@ -66,9 +66,11 @@ build`.
 ## Repo layout
 
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
-  proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes.
-- `packages/shell` — the desktop itself: windows, dock, trays, launcher, drag and drop. No wagmi
-  or viem imports.
+  proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
+  (the wallpaper's live chart) and `/api/approvals` (Revoke's list).
+- `packages/shell` — the desktop itself: `core` (pure TypeScript — windows, dock, trays, drag and
+  drop, no React) and `ui` (the React components and styles that render it: windows, dock, trays,
+  launcher). No wagmi or viem imports.
 - `packages/chain` — chain facts and USDC math: network config, contract addresses, unit
   conversions.
 - `packages/inspector` — the token inspection engine. No React or Next imports, so it can run on
@@ -157,7 +159,8 @@ but does have privileged functions, both the ownership and privileges findings r
   revokes one approval at a time.
 - Revoke's list reads at most 5 pages of 1,000 approval logs and considers at most 500 (token,
   spender) pairs, the most recent first; a wallet with more history than that may not see its oldest
-  approvals. Hiding a pair just revoked lasts only for that page — reopening Revoke reads the chain
+  approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
+  newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
   indexer, which arrives with Radar.

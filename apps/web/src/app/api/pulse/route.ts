@@ -8,7 +8,9 @@ export const runtime = "nodejs";
 export async function GET() {
   try {
     return NextResponse.json(await cachedPulse(), { headers: { "cache-control": "public, max-age=30" } });
-  } catch {
+  } catch (e) {
+    // The error's name only, the way the approvals route logs: an RPC endpoint's message could carry its URL.
+    console.error("pulse failed", e instanceof Error ? e.name : "unknown");
     return NextResponse.json({ error: "unavailable" }, { status: 503, headers: { "cache-control": "no-store" } });
   }
 }

@@ -21,9 +21,9 @@ export class ApprovalsBusy extends Error {
 // One cache and one gate per server process, whichever bundled copy of this module runs (see process-global.ts).
 // Each owner's answer is kept for 60 s; a failed lookup is dropped, never cached (see ttl-cache.ts).
 const cache = processGlobal("approvals.cache", () => ttlCache<ApprovalsAnswer>(60_000));
-// At most two uncached lookups at once: each pages the explorer sequentially, one request waited on at a time, on
+// At most four uncached lookups at once: each pages the explorer sequentially, one request waited on at a time, on
 // the pacer the Inspector shares.
-const gate = processGlobal("approvals.gate", () => inFlightGate(2, () => new ApprovalsBusy()));
+const gate = processGlobal("approvals.gate", () => inFlightGate(4, () => new ApprovalsBusy()));
 
 /**
  * The owner's live ERC-20 approvals. The logs come from Blockscout's PRO API with the Inspector's key when one is set
