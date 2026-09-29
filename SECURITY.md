@@ -67,6 +67,22 @@ a nonce is made for each request, which would make every page render on the serv
 as a static file. So the policy keeps every other host's script out, but not an inline one: a known gap that nonces or
 hashes would close.
 
+## Event counts
+
+The site counts a few things itself, so its maker can see whether they are used: an inspection run, a proof-page share, a
+mint, a drop, a swap, a bridge, a revoke, a click on a fix that isn't ready yet, and the name of a Terminal command. When
+one happens the page sends its name and a few small values (how many checks passed, how many recipients, which pair or
+chains, the command's name) to `/api/event` on this site, and that route writes one line to the host's logs, which on
+Firebase App Hosting is Cloud Logging. There are no cookies and no third-party script.
+
+The line holds the event's name and those values and nothing else: no address (a wallet's or a token's), no IP address, no
+user agent and nothing typed in the Terminal past a command's name. It has no visitor or session identifier, so a count
+says how often something happens and not who did it. The route takes only the nine event names, and for each only its own
+values, which are whole numbers up to 1,000,000 or labels of up to 32 letters, digits, dots, underscores and hyphens (an
+address is longer, so it can't pass); anything else is dropped. It ignores a body over 2 KB and a request whose `Origin`
+is another site, limits each client, and answers 204 to everything. The host keeps its own request log, as it does for
+any page, and these counts add nothing to it.
+
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that

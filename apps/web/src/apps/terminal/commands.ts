@@ -240,6 +240,16 @@ export function parseCommand(raw: string): { name: string; args: string[] } | nu
   return { name: name.toLowerCase(), args };
 }
 
+/**
+ * What the Terminal counts for a typed line (the `terminal_run` event): its command's name when that is a known command,
+ * else "unknown". Never an argument, and never a word that isn't a command, since that could be anything typed, a wallet
+ * address included.
+ */
+export function countedCommand(raw: string): string {
+  const parsed = parseCommand(raw);
+  return parsed && COMMAND_NAMES.includes(parsed.name) ? parsed.name : "unknown";
+}
+
 /** Runs one typed line. Every answer is text; a command that throws answers with a sentence, never its error. */
 export async function runCommand(raw: string, env: TermEnv): Promise<Outcome> {
   const parsed = parseCommand(raw);

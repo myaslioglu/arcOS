@@ -182,6 +182,14 @@ but does have privileged functions, both the ownership and privileges findings r
   hit by unrelated traffic, and isn't a sign anything here is broken.
 - The contracts are unaudited.
 
+## Event counts
+
+The site counts a few of its own events (an inspection, a mint, a drop, a swap, a bridge, a revoke, the name of a Terminal
+command) so its maker can see what is used. The page sends each one's name and a few small values to `/api/event`, which
+writes one line to the host's logs. There are no cookies and no third-party script, and the line holds no address, IP
+address or user agent and nothing typed past a command's name. It says how often something happens, not who did it. The
+details are in [SECURITY.md](./SECURITY.md#event-counts).
+
 ## Security
 
 See [SECURITY.md](./SECURITY.md) for how to report a vulnerability.
