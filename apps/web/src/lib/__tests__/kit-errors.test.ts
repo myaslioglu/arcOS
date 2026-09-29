@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { KitError, RpcError } from "@circle-fin/app-kit";
+import { describe, expect, it } from "vitest";
+import { InputError, KitError, RateLimitError, RpcError } from "@circle-fin/app-kit";
 import { classifyBridgeFailure } from "@/apps/bridge/session";
 import { classifySwapFailure } from "@/apps/swap/session";
 import { GENERIC_TRANSACTION_ERROR } from "../contract-error";
 import { isKitCancellation } from "../kit-errors";
-import { refusedSend } from "./fixtures/kit-send";
+import { refusedSend, stubNoNetwork } from "./fixtures/kit-send";
 
 const SWAP_UNKNOWN = "The swap didn't finish. It may still have gone through, so check your wallet's activity before trying again.";
 const NOTE = "Check the explorer.";
@@ -31,21 +31,30 @@ describe("isKitCancellation", () => {
   });
 
   it("keeps the kit's own answer for everything else", () => {
+    const permitDeclined = new KitError({ ...InputError.USER_CANCELLED, recoverability: "FATAL", message: "User cancelled permit signature request" });
+    expect(isKitCancellation(permitDeclined)).toBe(true);
+    const busy = new KitError({ ...RateLimitError.RATE_LIMIT_EXCEEDED, recoverability: "RETRYABLE", message: "Rate limit exceeded, please retry later" });
+    expect(isKitCancellation(busy)).toBe(false);
     expect(isKitCancellation({ code: 4001, message: "User rejected the request." })).toBe(true);
     expect(isKitCancellation(new Error("User denied transaction signature"))).toBe(true);
     expect(isKitCancellation(new Error("boom"))).toBe(false);
     expect(isKitCancellation(null)).toBe(false);
   });
+
+  it("answers no, never throws, for an error that loops (the kit's own check would throw on it)", () => {
+    const looped: Record<string, unknown> = { message: "boom" };
+    looped.self = looped;
+    expect(isKitCancellation(looped)).toBe(false);
+    expect(isKitCancellation(rpcEndpointError(looped))).toBe(false);
+    const chain: { message: string; cause?: unknown } = { message: "boom" };
+    chain.cause = chain;
+    expect(isKitCancellation(rpcEndpointError(chain))).toBe(false);
+  });
 });
 
 // Circle's real adapter (fixtures/kit-send.ts); it makes no network request.
 describe("a failed send through Circle's own adapter", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", () => Promise.reject(new Error("this test makes no network request")));
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  stubNoNetwork();
 
   it.each([
     ["a node error", () => new Error("boom")],
@@ -59,6 +68,8 @@ describe("a failed send through Circle's own adapter", () => {
 
   it.each([
     ["with no code", () => new Error("User rejected the request.")],
+    ["as a bare string", () => "User rejected the request."],
+    ["with its words in a nested cause", () => new Error("Request failed", { cause: new Error("User rejected the request.") })],
     ["under code 4001", () => ({ code: 4001, message: "User rejected the request." })],
   ])("is a cancellation when the wallet refused %s", async (_shape, refuse) => {
     const err = await refusedSend(refuse);

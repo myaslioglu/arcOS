@@ -1,19 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { classifyBridgeFailure } from "@/apps/bridge/session";
 import { classifySwapFailure } from "@/apps/swap/session";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "../wallet-frame";
-import { refusedSend } from "./fixtures/kit-send";
+import { refusedSend, stubNoNetwork } from "./fixtures/kit-send";
 
 const TEXT =
   "Request blocked: embedded frames are not allowed for this origin. For your security, 4rcos.com can't make this request from an embedded frame.";
 
 // Circle's real adapter refuses the send (fixtures/kit-send.ts); it makes no network request.
-beforeEach(() => {
-  vi.stubGlobal("fetch", () => Promise.reject(new Error("this test makes no network request")));
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+stubNoNetwork();
 
 describe("a refusal at the send, through Circle's own adapter", () => {
   // With no code, the kit reports an RPC endpoint error whose own code is 4001, which its isUserCancellationError

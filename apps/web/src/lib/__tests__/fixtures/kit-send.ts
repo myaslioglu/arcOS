@@ -1,12 +1,23 @@
+import { afterEach, beforeEach, vi } from "vitest";
 import { createViemAdapterFromProvider, resolveChainIdentifier } from "@circle-fin/adapter-viem-v2";
 
 // Circle's own adapter, the one lib/appkit.ts builds for Swap and Bridge, driven by a provider that answers what a
 // send needs and refuses the send itself. The send is a plain value transfer: it takes the same execute path to the
 // wallet as Swap's and Bridge's contract calls, and makes no network request (a contract call reads the chain first).
-// Tests that use it stub `fetch` to fail, so a request would fail them loudly.
+// A test that uses it calls `stubNoNetwork()`, so a request would fail it loudly.
 
 const ACCOUNT = "0x00000000000000000000000000000000000000a1";
 const TO = "0x00000000000000000000000000000000000000f1";
+
+/** Makes every `fetch` in the calling test file fail, and restores it after each test. */
+export function stubNoNetwork(): void {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("this test makes no network request")));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+}
 
 type AdapterProvider = Parameters<typeof createViemAdapterFromProvider>[0]["provider"];
 type PrepareParams = Parameters<Awaited<ReturnType<typeof createViemAdapterFromProvider>>["prepare"]>[0];
