@@ -34,7 +34,9 @@ file, and starts only after the checks pass and the owner approves it.
    A separate `smoke` job, with no credentials, then calls the live site (`scripts/smoke.mjs`): `/` answers 200,
    `/api/pulse` answers 200 with 1,024 ratios, and `/api/approvals` answers 200 with at least one row. It retries for
    about two minutes, since a fresh rollout can take a moment. A failed smoke check means the new version is already
-   live: roll it back (below).
+   live, so confirm the failure by hand before rolling back: open the site and the two routes in a browser. The
+   approvals check reads the allowances of Multicall3, a public contract that anyone can change, so that check can fail
+   while the deploy is fine. If the failure is real, roll back (below).
 5. **A dry run, and rolling back.**
    - *Dry run:* Actions, Deploy, Run workflow, tick `dry_run`. It runs the checks and the bundle build, scans and signs
      in, then lists the App Hosting backends and stops. Approval is still needed. Use it after changing anything in the
