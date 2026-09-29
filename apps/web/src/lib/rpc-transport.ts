@@ -22,6 +22,12 @@ export type RpcTransportOptions = {
   now?: () => number;
   /** The cooldowns, shared by every transport given the same one. Default: this transport's own. */
   health?: EndpointHealth;
+  /**
+   * An additional "the node answered, not the endpoint failing" rule, checked alongside the shared one
+   * (rpc-errors.ts) but never in place of it. Opt-in and undefined by default: only Revoke's client supplies one
+   * (`outOfGasIsNodeAnswer`, below), since an out-of-gas answer isn't the right call for every reader of the chain.
+   */
+  isNodeAnswer?: (e: unknown) => boolean;
 };
 
 /**
@@ -52,6 +58,7 @@ export function rpcTransport(
     connect = (url) => http(url, { timeout: ATTEMPT_MS, retryCount: 0 }),
     now = () => Date.now(),
     health = endpointHealth(),
+    isNodeAnswer: extraIsNodeAnswer,
   }: RpcTransportOptions = {},
 ): Transport<"cooldown", { transports: Endpoint[] }> {
   const urls = chain.rpcUrls.default.http;
@@ -75,9 +82,9 @@ export function rpcTransport(
           }
           return answer;
         } catch (e) {
-          // The caller gave up (its own signal, not this attempt's timeout), or the node answered: neither says the
-          // endpoint failed.
-          if (options?.signal?.aborted || isNodeAnswer(e)) throw e;
+          // The caller gave up (its own signal, not this attempt's timeout), or the node answered (the shared rule,
+          // or this transport's own extra one): neither says the endpoint failed.
+          if (options?.signal?.aborted || isNodeAnswer(e) || extraIsNodeAnswer?.(e)) throw e;
           coolingUntil.set(url, now() + COOLDOWN_MS);
           failedAt.set(url, ++health.seq);
           failure = e;
@@ -90,4 +97,25 @@ export function rpcTransport(
       { transports: endpoints.map(({ transport }) => transport) },
     );
   }) as Transport<"cooldown", { transports: Endpoint[] }>;
+}
+
+/** Arc's code for an eth_call that ran out of gas mid-execution, distinct from -32000 "intrinsic gas too low". */
+const OUT_OF_GAS_CODE = -32003;
+const OUT_OF_GAS_TEXT = /^out of gas/i;
+
+/**
+ * An `isNodeAnswer` override for Revoke's client alone (see server-rpc.ts). Arc answers an eth_call that runs out of
+ * gas during execution with -32003 "out of gas: gas required exceeds: N" — unlike a revert, that message never
+ * contains "revert", so the shared classifier (rpc-errors.ts, imported above) reads it as the endpoint failing. A
+ * multicall target whose fallback burns unbounded gas would then fail over to, and cool, every endpoint on one
+ * attempt. This is Arc's own out-of-gas shape specifically: a different -32003 (a custom revert reason, say) still
+ * reaches the shared classifier's text check unaffected, and -32000 "intrinsic gas too low" still fails over as any
+ * other JSON-RPC error does.
+ */
+export function outOfGasIsNodeAnswer(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  const link = e as { code?: unknown; shortMessage?: unknown; details?: unknown; message?: unknown };
+  if (link.code !== OUT_OF_GAS_CODE) return false;
+  const text = typeof link.shortMessage === "string" ? link.details : link.message;
+  return typeof text === "string" && OUT_OF_GAS_TEXT.test(text);
 }

@@ -45,10 +45,11 @@ it does mean the safety valve for those endpoints stops being per-client.
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
-does: the server's one client (`serverRpcClient` in `apps/web/src/lib/server-rpc.ts`, built by `inspectionClient` in
-`apps/web/src/lib/inspection-client.ts`) behind `/api/inspect`, `/badge`, `/t` and its image, `/api/pulse`, and
-`/api/approvals`, which reads the allowance, symbol, name and decimals of whatever token contracts an address has
-approved; and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
+does: the server's two clients (`serverRpcClient` and `approvalsRpcClient` in `apps/web/src/lib/server-rpc.ts`, both
+built by `inspectionClient` in `apps/web/src/lib/inspection-client.ts`, each with its own endpoint-health record) —
+`serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and `/api/pulse`; `approvalsRpcClient` behind
+`/api/approvals` alone, which reads the allowance, symbol, name and decimals of whatever token contracts an address
+has approved — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
 With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is
 a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
 Swap and Bridge only read Circle's own contracts.

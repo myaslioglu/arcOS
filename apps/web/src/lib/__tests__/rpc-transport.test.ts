@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, createTransport, type EIP1193RequestFn, type Transport } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { inspect, viemReader } from "@arcos/inspector";
-import { endpointHealth, rpcTransport } from "../rpc-transport";
+import { endpointHealth, outOfGasIsNodeAnswer, rpcTransport } from "../rpc-transport";
 
 type Built = ReturnType<ReturnType<typeof rpcTransport>>;
 const blockNumber = (transport: Built) => transport.request({ method: "eth_blockNumber" });
@@ -409,5 +409,74 @@ describe("an inspection over rpcTransport when owner() gets a gateway error", ()
     const r = await node(() => gatewayError());
     expect(r.findings.find((f) => f.id === "ownership")).toMatchObject({ status: "unknown", title: "Couldn't read the owner" });
     expect(r.degraded).toBe(true);
+  });
+});
+
+// Revoke's extra classifier (fix round 2, Important 2b): Arc answers an eth_call that runs out of gas during
+// execution with -32003 "out of gas: gas required exceeds: N", unlike a revert's -32003 ("revert: OutOfFunds",
+// above), which the shared classifier already reads as the node's answer through its "revert" text check.
+describe("outOfGasIsNodeAnswer", () => {
+  const rpcErr = (code: number, message: string) => new RpcRequestError({ body: {}, url: "https://x.test", error: { code, message } });
+
+  it("reads Arc's out-of-gas answer as the node's", () => {
+    expect(outOfGasIsNodeAnswer(rpcErr(-32003, "out of gas: gas required exceeds: 21000000"))).toBe(true);
+  });
+
+  it("leaves everything else to the shared rule: intrinsic gas too low, an unrelated -32003, a timeout, and junk", () => {
+    expect(outOfGasIsNodeAnswer(rpcErr(-32000, "intrinsic gas too low"))).toBe(false);
+    expect(outOfGasIsNodeAnswer(rpcErr(-32003, "revert: OutOfFunds"))).toBe(false);
+    expect(outOfGasIsNodeAnswer(new TimeoutError({ body: {}, url: "https://x.test" }))).toBe(false);
+    expect(outOfGasIsNodeAnswer(null)).toBe(false);
+    expect(outOfGasIsNodeAnswer("out of gas")).toBe(false);
+  });
+});
+
+describe("rpcTransport with Revoke's isNodeAnswer override", () => {
+  const chain = CHAINS.mainnet;
+  const urls = chain.rpcUrls.default.http.map((u) => new URL(u).href);
+  const rpcError = (code: number, message: string) => () => Response.json({ jsonrpc: "2.0", id: 1, error: { code, message } });
+  const result = (value: string) => Response.json({ jsonrpc: "2.0", id: 1, result: value });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function primaryAnswers(respond: () => Response) {
+    const tried: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      tried.push(String(input));
+      return String(input) === urls[0] ? respond() : result("0x10");
+    });
+    return { tried, transport: rpcTransport(chain, { isNodeAnswer: outOfGasIsNodeAnswer })({ chain }) };
+  }
+
+  it("returns an out-of-gas answer after exactly one attempt, and cools nothing (review 2b)", async () => {
+    const { tried, transport } = primaryAnswers(rpcError(-32003, "out of gas: gas required exceeds: 21000000"));
+    await expect(blockNumber(transport)).rejects.toMatchObject({ code: -32003 });
+    await expect(blockNumber(transport)).rejects.toMatchObject({ code: -32003 });
+    expect(tried).toEqual([urls[0], urls[0]]);
+  });
+
+  it("still fails intrinsic-gas-too-low over to the next endpoint, and cools the first, with the override in place", async () => {
+    const { tried, transport } = primaryAnswers(rpcError(-32000, "intrinsic gas too low"));
+    await expect(blockNumber(transport)).resolves.toBe("0x10");
+    expect(tried).toEqual([urls[0], urls[1]]);
+  });
+
+  it("still fails a timeout over to the next endpoint, with the override in place", async () => {
+    vi.useFakeTimers();
+    const tried: string[] = [];
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init: RequestInit) => {
+      tried.push(String(input));
+      return String(input) === urls[0]
+        ? new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason)))
+        : Promise.resolve(result("0x10"));
+    });
+    const transport = rpcTransport(chain, { isNodeAnswer: outOfGasIsNodeAnswer })({ chain });
+    const call = blockNumber(transport);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(call).resolves.toBe("0x10");
+    expect(tried).toEqual([urls[0], urls[1]]);
+    vi.useRealTimers();
   });
 });

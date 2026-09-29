@@ -51,6 +51,10 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
           network: activeNetwork(),
           readPage: (fromBlock) => readLogsPage(logsPageUrl(api.url, owner, fromBlock), fetchFn, api.apiKey),
           aggregate: async (calls) => {
+            // Once the 15 s deadline has aborted this lookup, no further attempt starts: without this, a slow
+            // poison keeps the resilient multicall (its own call and time budgets independent of the route's
+            // deadline) running, and the gate's slot held, long after the route has already answered 503.
+            controller.signal.throwIfAborted();
             if (!multicall3) throw new Error("This chain has no Multicall3.");
             return client.readContract({
               address: multicall3,

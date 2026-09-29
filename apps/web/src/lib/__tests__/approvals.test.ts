@@ -8,6 +8,7 @@ import {
   MAX_PAGES,
   MAX_PAIRS,
   MULTICALL_BUDGET,
+  MULTICALL_TIME_BUDGET_MS,
   PERMIT2,
   SWAP_ADAPTER,
   UNLIMITED,
@@ -321,8 +322,14 @@ describe("liveApprovals", () => {
     await expect(liveApprovals(OWNER, pairs, async () => [], "mainnet")).rejects.toBeInstanceOf(ApprovalsUnavailable);
   });
 
-  it("splits the batch to isolate one poisoned token's calls: its pair is dropped, every other pair keeps its correct value, and the answer is marked truncated", async () => {
-    const { aggregate: healthy } = stubChain({ allowance: (token) => (token === TOKEN_B ? 9n : 1n) });
+  it("splits the batch to isolate one poisoned token's calls: its pair is dropped, every other pair keeps its exact value, and the answer is marked truncated", async () => {
+    // Every token gets its own metadata, so a wrong mapping after a split (review M-d) would fail this.
+    const { aggregate: healthy } = stubChain({
+      allowance: (token, spender) => (token === TOKEN_B && spender === SPENDER_X ? 9n : 0n),
+      symbol: (token) => str(token === TOKEN_A ? "AAA" : "BBB"),
+      name: (token) => (token === TOKEN_A ? "Token A" : "Token B"),
+      decimals: (token) => (token === TOKEN_A ? 18 : 6),
+    });
     const poisoned = vi.fn<Aggregate>(async (calls) => {
       // The poisoned token's fallback burns unbounded gas: any batch that touches it fails the whole eth_call, exactly
       // as it would running for real, whatever else shares the batch.
@@ -331,7 +338,7 @@ describe("liveApprovals", () => {
     });
     const { approvals, truncated } = await liveApprovals(OWNER, pairs, poisoned, "mainnet");
     expect(approvals).toEqual([
-      expect.objectContaining({ token: TOKEN_B, spender: SPENDER_X, allowance: "9" }),
+      { token: TOKEN_B, symbol: "BBB", name: "Token B", decimals: 6, spender: SPENDER_X, spenderLabel: null, allowance: "9", lastApprovalBlock: 10 },
     ]);
     expect(truncated).toBe(true);
     expect(poisoned.mock.calls.length).toBeLessThanOrEqual(MULTICALL_BUDGET);
@@ -343,6 +350,44 @@ describe("liveApprovals", () => {
     });
     await expect(liveApprovals(OWNER, pairs, alwaysThrows, "mainnet")).rejects.toBeInstanceOf(ApprovalsUnavailable);
     expect(alwaysThrows.mock.calls.length).toBeLessThanOrEqual(MULTICALL_BUDGET);
+  });
+
+  it("splits breadth-first, ordered token by token, so one poisoned token among 100 loses at most 4 of 200 pairs and nulls at most 8 tokens' metadata, within the call budget (review I-2)", async () => {
+    const tokenAt = (i: number): Address => `0x${(0x1000 + i).toString(16).padStart(40, "0")}` as Address;
+    const spenderAt = (i: number): Address => `0x${(0x9000 + i).toString(16).padStart(40, "0")}` as Address;
+    const tokens100 = Array.from({ length: 100 }, (_, i) => tokenAt(i));
+    const poisonedToken = tokens100[42]!;
+    const pairs200 = tokens100.flatMap((token, i) => [
+      { token, spender: spenderAt(i * 2), lastApprovalBlock: i * 2 + 1 },
+      { token, spender: spenderAt(i * 2 + 1), lastApprovalBlock: i * 2 + 2 },
+    ]);
+    const { aggregate: healthy } = stubChain({ allowance: () => 1n });
+    const poisoned = vi.fn<Aggregate>(async (calls) => {
+      if (calls.some((c) => c.target === poisonedToken)) throw new Error("out of gas");
+      return healthy(calls);
+    });
+    const { approvals, truncated } = await liveApprovals(OWNER, pairs200, poisoned, "mainnet");
+    const lostPairs = pairs200.length - approvals.length;
+    const nulledTokens = new Set(approvals.filter((a) => a.symbol === null).map((a) => a.token));
+    expect(lostPairs).toBeLessThanOrEqual(4);
+    expect(nulledTokens.size).toBeLessThanOrEqual(8);
+    expect(truncated).toBe(true);
+    expect(poisoned.mock.calls.length).toBeLessThanOrEqual(MULTICALL_BUDGET);
+  });
+
+  it(`stops starting new attempts once ${MULTICALL_TIME_BUDGET_MS}ms have passed, marking what's left unresolved and truncated, with an injectable clock`, async () => {
+    let elapsed = 0;
+    const now = () => elapsed;
+    const { aggregate: healthy } = stubChain({ allowance: (token) => (token === TOKEN_B ? 9n : 1n) });
+    const slowPoison = vi.fn<Aggregate>(async (calls) => {
+      elapsed += 3_000;
+      if (calls.some((c) => c.target === TOKEN_A)) throw new Error("out of gas");
+      return healthy(calls);
+    });
+    const { approvals, truncated } = await liveApprovals(OWNER, pairs, slowPoison, "mainnet", now);
+    expect(approvals.map((a) => a.token)).toEqual([TOKEN_B]);
+    expect(truncated).toBe(true);
+    expect(slowPoison.mock.calls.length).toBe(3);
   });
 });
 

@@ -32,6 +32,13 @@ export const MAX_PAIRS = 500;
  * this budget runs out.
  */
 export const MULTICALL_BUDGET = 16;
+/**
+ * One lookup's multicall stops starting new `aggregate3` attempts once this long has passed since it began, so a
+ * slow poison (an endpoint that answers, just slowly, on every attempt) can't run past the route's 15 s deadline
+ * and keep the server working after it has already answered 503. Whatever the halving hasn't resolved by then
+ * counts as failed, same as running out of MULTICALL_BUDGET.
+ */
+export const MULTICALL_TIME_BUDGET_MS = 9_000;
 /** An allowance this large or larger reads "Unlimited": 2^255, half of uint256's range. */
 export const UNLIMITED = 2n ** 255n;
 
@@ -238,93 +245,174 @@ function decoded(result: CallResult | undefined, functionName: "allowance" | "sy
   }
 }
 
-/** One `resilientAggregate` attempt's outcome, and the two facts needed to decide the next one. */
+/** One `resilientAggregate` run's outcome, and the two facts needed to decide what it means for the lookup. */
 type MulticallOutcome = { results: CallResult[]; anySucceeded: boolean; anyUnresolved: boolean };
 
 /** A call neither answered nor attempted: `aggregate` never saw it, so it reads exactly like an on-chain revert. */
 const UNRESOLVED: CallResult = { success: false, returnData: "0x" };
 
+/** One batch mid-retry: its calls, and where they belong in the overall results array. */
+type Batch = { calls: Call[]; offset: number };
+
 /**
- * Calls `aggregate` with as many calls as it can. A clean call succeeds and this makes exactly one `aggregate` call
- * in total, at any depth. One that throws (a poisoned target's fallback burns unbounded gas and fails the whole
- * `eth_call`, not just its own entry) or answers the wrong number of results is retried as its calls split into two
- * halves, recursively, each drawing from the one `budget` shared by the whole tree: `budget.left` is checked before
- * every attempt, so once it runs out no further `aggregate` call is made. A one-call batch that fails, or any batch
- * left unattempted when the budget runs out, resolves as `UNRESOLVED` for each of its calls rather than failing the
- * whole lookup — the caller decides what an unresolved call means (liveApprovals drops it like a revert), and marks
- * its answer `truncated` when `anyUnresolved` comes back true. `anySucceeded` carries whether ANY attempt, anywhere
- * in the tree, actually got an answer from the chain: when it's false throughout, the caller still rejects, so an
- * outage is never read as "no approvals".
+ * Splits one failed batch for a retry: by distinct `target` when more than one remains — the call list is ordered
+ * token by token (see `liveApprovals`), so this isolates a whole poisoned token's calls to one side in a single
+ * split, whatever the batch's size — or, once only one target is left, by plain index, so a token's own calls can
+ * still be narrowed down individually (its allowance calls might resolve even where its metadata doesn't, or the
+ * reverse).
  */
-async function resilientAggregate(calls: readonly Call[], aggregate: Aggregate, budget: { left: number }): Promise<MulticallOutcome> {
-  if (budget.left <= 0) {
-    return { results: calls.map(() => UNRESOLVED), anySucceeded: false, anyUnresolved: true };
-  }
-  budget.left -= 1;
-  try {
-    const results = await aggregate(calls);
-    if (results.length !== calls.length) throw new ApprovalsUnavailable("The multicall answered the wrong number of results.");
-    return { results: [...results], anySucceeded: true, anyUnresolved: false };
-  } catch {
-    if (calls.length === 1) {
-      return { results: [UNRESOLVED], anySucceeded: false, anyUnresolved: true };
+function splitBatch(calls: readonly Call[]): [Call[], Call[]] {
+  const targets: string[] = [];
+  const seen = new Set<string>();
+  for (const c of calls) {
+    const key = c.target.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      targets.push(key);
     }
-    const mid = Math.ceil(calls.length / 2);
-    const left = await resilientAggregate(calls.slice(0, mid), aggregate, budget);
-    const right = await resilientAggregate(calls.slice(mid), aggregate, budget);
-    return {
-      results: [...left.results, ...right.results],
-      anySucceeded: left.anySucceeded || right.anySucceeded,
-      anyUnresolved: left.anyUnresolved || right.anyUnresolved,
-    };
   }
+  if (targets.length > 1) {
+    const firstHalf = new Set(targets.slice(0, Math.ceil(targets.length / 2)));
+    const left: Call[] = [];
+    const right: Call[] = [];
+    for (const c of calls) (firstHalf.has(c.target.toLowerCase()) ? left : right).push(c);
+    return [left, right];
+  }
+  const mid = Math.ceil(calls.length / 2);
+  return [calls.slice(0, mid), calls.slice(mid)];
 }
 
 /**
+ * Calls `aggregate` with as many calls as it can, breadth-first: every batch at one level is attempted before any
+ * failed one is split further (see `splitBatch`), so the largest healthy batches get their turn early instead of
+ * the retries spending their whole budget narrowing down one poisoned path first. A clean call succeeds and this
+ * makes exactly one `aggregate` call in total, at any depth.
+ *
+ * Every attempt draws from the one call `budget` (`MULTICALL_BUDGET`) and one time budget
+ * (`MULTICALL_TIME_BUDGET_MS`, against the injectable `now`, counted from when this run started) shared by the
+ * whole tree: both are checked before every attempt, so once either runs out no further `aggregate` call is made. A
+ * one-call batch that fails, or any batch left unattempted when a budget runs out, resolves as `UNRESOLVED` for each
+ * of its calls rather than failing the whole lookup — the caller decides what an unresolved call means
+ * (`liveApprovals` drops it like a revert), and marks its answer `truncated` when `anyUnresolved` comes back true.
+ * `anySucceeded` carries whether ANY attempt, anywhere in the tree, actually got an answer from the chain: when
+ * it's false throughout, the caller still rejects, so an outage (or a poison too slow for the time budget) is never
+ * read as "no approvals".
+ */
+async function resilientAggregate(
+  calls: readonly Call[],
+  aggregate: Aggregate,
+  budget: { left: number },
+  now: () => number = Date.now,
+): Promise<MulticallOutcome> {
+  const results: CallResult[] = new Array(calls.length);
+  let anySucceeded = false;
+  let anyUnresolved = false;
+  const deadline = now() + MULTICALL_TIME_BUDGET_MS;
+  let level: Batch[] = [{ calls: [...calls], offset: 0 }];
+  while (level.length > 0) {
+    const nextLevel: Batch[] = [];
+    for (const batch of level) {
+      if (budget.left <= 0 || now() >= deadline) {
+        for (let i = 0; i < batch.calls.length; i++) results[batch.offset + i] = UNRESOLVED;
+        anyUnresolved = true;
+        continue;
+      }
+      budget.left -= 1;
+      try {
+        const batchResults = await aggregate(batch.calls);
+        if (batchResults.length !== batch.calls.length) {
+          throw new ApprovalsUnavailable("The multicall answered the wrong number of results.");
+        }
+        for (let i = 0; i < batchResults.length; i++) results[batch.offset + i] = batchResults[i];
+        anySucceeded = true;
+      } catch {
+        if (batch.calls.length === 1) {
+          results[batch.offset] = UNRESOLVED;
+          anyUnresolved = true;
+        } else {
+          const [left, right] = splitBatch(batch.calls);
+          nextLevel.push({ calls: left, offset: batch.offset });
+          nextLevel.push({ calls: right, offset: batch.offset + left.length });
+        }
+      }
+    }
+    level = nextLevel;
+  }
+  return { results, anySucceeded, anyUnresolved };
+}
+
+/** One call in `liveApprovals`'s multicall, and what it answers: a pair's allowance, or one token's metadata. */
+type CallInfo = { kind: "allowance"; pair: ApprovalPair } | { kind: "symbol" | "name" | "decimals"; token: Address };
+
+/**
  * The pairs still live: every pair's `allowance(owner, spender)` and each token's symbol, name and decimals, in one
- * multicall (see `resilientAggregate` for how a poisoned target's calls are isolated rather than failing the whole
- * lookup). A pair at zero drops out, and so does one whose allowance can't be read, or came back unresolved. Labels
- * come from contracts anyone can deploy, so they are cleaned (`cleanLabel`); a label or decimals that can't be read
- * is null. `truncated` is true only when some call came back unresolved — a pair legitimately reading zero, or a
- * plain revert from a well-behaved multicall, is not truncation.
+ * multicall, its calls ordered token by token — each token's own allowance call(s) next to its own symbol, name and
+ * decimals calls — so a poisoned token's calls stay together for `resilientAggregate` to isolate in one split. A
+ * pair at zero drops out, and so does one whose allowance can't be read, or came back unresolved. Labels come from
+ * contracts anyone can deploy, so they are cleaned (`cleanLabel`); a label or decimals that can't be read is null.
+ * `truncated` is true only when some call came back unresolved — a pair legitimately reading zero, or a plain
+ * revert from a well-behaved multicall, is not truncation. `now`, threaded through to `resilientAggregate`, is
+ * injectable so a test can drive its time budget without waiting.
  */
 export async function liveApprovals(
   owner: Address,
   pairs: readonly ApprovalPair[],
   aggregate: Aggregate,
   network: NetworkId,
+  now: () => number = Date.now,
 ): Promise<{ approvals: Approval[]; truncated: boolean }> {
   if (pairs.length === 0) return { approvals: [], truncated: false };
   const tokens = [...new Set(pairs.map((p) => p.token))];
-  const calls: Call[] = [
-    ...pairs.map((p) => ({
-      target: p.token,
-      callData: encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [owner, p.spender] }),
-    })),
-    ...tokens.flatMap((token) => [SYMBOL, NAME, DECIMALS].map((callData) => ({ target: token, callData }))),
-  ];
-  const { results, anySucceeded, anyUnresolved } = await resilientAggregate(calls, aggregate, { left: MULTICALL_BUDGET });
+  const pairsByToken = new Map<Address, ApprovalPair[]>();
+  for (const p of pairs) {
+    const list = pairsByToken.get(p.token);
+    if (list) list.push(p);
+    else pairsByToken.set(p.token, [p]);
+  }
+  const calls: Call[] = [];
+  const info: CallInfo[] = [];
+  for (const token of tokens) {
+    for (const p of pairsByToken.get(token)!) {
+      calls.push({
+        target: p.token,
+        callData: encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [owner, p.spender] }),
+      });
+      info.push({ kind: "allowance", pair: p });
+    }
+    calls.push({ target: token, callData: SYMBOL });
+    info.push({ kind: "symbol", token });
+    calls.push({ target: token, callData: NAME });
+    info.push({ kind: "name", token });
+    calls.push({ target: token, callData: DECIMALS });
+    info.push({ kind: "decimals", token });
+  }
+  const { results, anySucceeded, anyUnresolved } = await resilientAggregate(calls, aggregate, { left: MULTICALL_BUDGET }, now);
   if (!anySucceeded) throw new ApprovalsUnavailable("The multicall could not complete.");
-  const meta = new Map(
-    tokens.map((token, i) => {
-      const at = pairs.length + i * 3;
-      const symbol = decoded(results[at], "symbol");
-      const name = decoded(results[at + 1], "name");
-      const decimals = decoded(results[at + 2], "decimals");
-      return [
-        token,
-        {
-          symbol: typeof symbol === "string" ? cleanLabel(symbol, 32) : null,
-          name: typeof name === "string" ? cleanLabel(name, 64) : null,
-          decimals:
-            typeof decimals === "number" && Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : null,
-        },
-      ] as const;
-    }),
-  );
-  const approvals = pairs.flatMap((p, i) => {
-    const allowance = decoded(results[i], "allowance");
-    if (typeof allowance !== "bigint" || allowance === 0n) return [];
+  const meta = new Map<Address, { symbol: string | null; name: string | null; decimals: number | null }>();
+  const allowanceByPair = new Map<ApprovalPair, bigint | undefined>();
+  for (let i = 0; i < calls.length; i++) {
+    const inf = info[i]!;
+    if (inf.kind === "allowance") {
+      const allowance = decoded(results[i], "allowance");
+      allowanceByPair.set(inf.pair, typeof allowance === "bigint" ? allowance : undefined);
+      continue;
+    }
+    const current = meta.get(inf.token) ?? { symbol: null, name: null, decimals: null };
+    if (inf.kind === "symbol") {
+      const symbol = decoded(results[i], "symbol");
+      current.symbol = typeof symbol === "string" ? cleanLabel(symbol, 32) : null;
+    } else if (inf.kind === "name") {
+      const name = decoded(results[i], "name");
+      current.name = typeof name === "string" ? cleanLabel(name, 64) : null;
+    } else {
+      const decimals = decoded(results[i], "decimals");
+      current.decimals = typeof decimals === "number" && Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : null;
+    }
+    meta.set(inf.token, current);
+  }
+  const approvals = pairs.flatMap((p) => {
+    const allowance = allowanceByPair.get(p);
+    if (allowance === undefined || allowance === 0n) return [];
     const m = meta.get(p.token) ?? { symbol: null, name: null, decimals: null };
     return [
       {

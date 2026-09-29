@@ -4,12 +4,14 @@ import { activeChain } from "@arcos/chain";
 import { inspectionClient } from "./inspection-client";
 import { processGlobal } from "./process-global";
 import { perSecond } from "./rate-limit";
-import { endpointHealth } from "./rpc-transport";
+import { endpointHealth, outOfGasIsNodeAnswer } from "./rpc-transport";
 
 /**
- * The server's RPC client, one per process: the inspection engine, /api/pulse and /api/approvals all read Arc through
- * it, over the chain's URLs in order with one shared cooldown record (see rpc-transport.ts). CCIP-Read is off on it
- * (see inspection-client.ts), which matters for every route that reads contracts anyone can deploy.
+ * The server's RPC client, one per process: the inspection engine, `/api/pulse`, `/api/inspect`, `/badge` and `/t`
+ * all read Arc through it, over the chain's URLs in order with one shared cooldown record (see rpc-transport.ts).
+ * CCIP-Read is off on it (see inspection-client.ts), which matters for every route that reads contracts anyone can
+ * deploy. `/api/approvals` reads Arc through its own client instead — `approvalsRpcClient()`, below — with its own
+ * cooldown record, so it can never put this one's endpoints on cooldown.
  */
 export function serverRpcClient(): PublicClient {
   return processGlobal("server.rpcClient", () =>
@@ -28,13 +30,17 @@ export function explorerPacer(): () => Promise<void> {
 
 /**
  * Revoke's own RPC client, one per process, built exactly like serverRpcClient() (the same URL list, in the same
- * order, and the same per-attempt timeout) but over its own endpoint-health record instead of the Inspector's. A
- * spoofed Approval event can make an owner's multicall fail on every endpoint (see approvals.ts's resilient
- * aggregate3 splitting): that must not put the URLs the Inspector, /badge, /t and /api/pulse share on cooldown, so
- * Revoke's failures cool only Revoke's own client.
+ * order, and the same per-attempt timeout, CCIP-Read still off) but over its own endpoint-health record instead of
+ * the Inspector's. A spoofed Approval event can make an owner's multicall fail on every endpoint (see approvals.ts's
+ * resilient aggregate3 splitting): that must not put the URLs the Inspector, /badge, /t and /api/pulse share on
+ * cooldown, so Revoke's failures cool only Revoke's own client.
+ *
+ * It alone also opts in to `outOfGasIsNodeAnswer`: a poisoned multicall target can make an eth_call run out of gas
+ * mid-execution, which the shared classifier doesn't read as the node's answer (see rpc-transport.ts), so without
+ * this every such failure would fail over to, and cool, every endpoint on one attempt instead of costing one.
  */
 export function approvalsRpcClient(): PublicClient {
   return processGlobal("approvals.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("approvals.rpcHealth", endpointHealth)),
+    inspectionClient(activeChain(), processGlobal("approvals.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
   );
 }

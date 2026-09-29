@@ -48,6 +48,19 @@ function approvalLog(owner: Address) {
   };
 }
 
+/** One Approval log for `owner`, naming any token and spender, distinguished by `block` so a set of them never dedupes. */
+function approvalLogFor(owner: Address, token: Address, spender: Address, block: number) {
+  return {
+    address: token,
+    topics: [APPROVAL_TOPIC, topic(owner), topic(spender), null],
+    data: pad("0x01", { size: 32 }),
+    blockNumber: `0x${block.toString(16)}`,
+    logIndex: "0x",
+    transactionHash: `0x${block.toString(16).padStart(64, "0")}`,
+    timeStamp: "0x0",
+  };
+}
+
 describe("cachedApprovals", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -62,6 +75,7 @@ describe("cachedApprovals", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("reads the multicall through approvalsRpcClient(), never the Inspector's shared serverRpcClient()", async () => {
@@ -104,5 +118,49 @@ describe("cachedApprovals", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(String(url)).not.toContain("proapi_k");
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer proapi_k");
+  });
+
+  it("stops attempting the multicall once the route's 15 s deadline aborts it, even though the multicall's own budgets haven't run out yet (review minor I-3)", async () => {
+    vi.useFakeTimers();
+    const owner: Address = "0x4444444444444444444444444444444444444444";
+    const TOKEN_B: Address = "0x6666666666666666666666666666666666666666";
+    const SPENDER_Y: Address = "0x7777777777777777777777777777777777777777";
+    // 3 pairs over 2 tokens (9 calls: the same shape approvals.test.ts's "always throws" case proves needs up to
+    // MULTICALL_BUDGET = 16 attempts to exhaust). The explorer phase alone takes 10 s, so with every attempt taking
+    // 500 ms, exhausting the budget would run from t=10 s to t=18 s if uninterrupted — well past the route's 15 s
+    // deadline, isolating the abort check from the multicall's own call and time budgets (neither would have run out
+    // by t=15 s on its own).
+    fetchMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve(
+                logsResponse([
+                  approvalLogFor(owner, TOKEN, SPENDER, 5),
+                  approvalLogFor(owner, TOKEN, SPENDER_Y, 6),
+                  approvalLogFor(owner, TOKEN_B, SPENDER, 7),
+                ]),
+              ),
+            10_000,
+          ),
+        ),
+    );
+    readContract.mockImplementation(() => new Promise((_, reject) => setTimeout(() => reject(new Error("slow poison")), 500)));
+
+    const outcome: { settled: unknown } = { settled: undefined };
+    cachedApprovals(owner).then(
+      (v) => (outcome.settled = v),
+      (e: unknown) => (outcome.settled = e),
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(outcome.settled).toBeInstanceOf(Error);
+    const attemptsAtDeadline = readContract.mock.calls.length;
+    expect(attemptsAtDeadline).toBeGreaterThan(0);
+    expect(attemptsAtDeadline).toBeLessThan(16); // still mid-flight, not yet at MULTICALL_BUDGET, when the deadline hit
+
+    await vi.advanceTimersByTimeAsync(10_000); // well past t=18 s, if the multicall's own budgets were still driving it
+    expect(readContract.mock.calls.length).toBe(attemptsAtDeadline); // no attempt started after the deadline aborted it
   });
 });

@@ -45,6 +45,7 @@ describe("GET /api/approvals", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ error: "Couldn't load approvals. Try again in a minute." });
     expect(errorSpy).toHaveBeenCalledWith("approvals failed", "Error");
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
   it("limits each client to 20 lookups a minute", async () => {

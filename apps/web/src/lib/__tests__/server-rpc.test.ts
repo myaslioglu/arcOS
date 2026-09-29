@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // A marker module that throws outside a server build; these tests only need what server-rpc.ts builds.
 vi.mock("server-only", () => ({}));
@@ -23,11 +23,26 @@ describe("server-rpc", () => {
     expect(approvalsRpcClient()).not.toBe(serverRpcClient());
   });
 
-  it("gives Revoke's RPC client its own endpoint-health record, so a spoofed approval's failures can't cool the Inspector's endpoints", () => {
-    approvalsRpcClient();
-    serverRpcClient();
-    const revokeHealth = processGlobal("approvals.rpcHealth", endpointHealth);
-    const inspectorHealth = processGlobal("inspect.rpcHealth", endpointHealth);
-    expect(revokeHealth).not.toBe(inspectorHealth);
+  // A test that only re-derives the same two processGlobal keys can't fail: it proves nothing about which record
+  // approvalsRpcClient() actually wired in. This drives a real failure through it instead (review M-a).
+  describe("Revoke's RPC client's endpoint-health isolation (review M-a)", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      const revokeHealth = processGlobal("approvals.rpcHealth", endpointHealth);
+      revokeHealth.coolingUntil.clear();
+      revokeHealth.failedAt.clear();
+    });
+
+    it("cools only Revoke's own endpoints when a request fails through approvalsRpcClient(), leaving the Inspector's record empty", async () => {
+      const revokeHealth = processGlobal("approvals.rpcHealth", endpointHealth);
+      const inspectorHealth = processGlobal("inspect.rpcHealth", endpointHealth);
+      expect(inspectorHealth.coolingUntil.size).toBe(0); // the baseline this test actually checks against
+
+      vi.stubGlobal("fetch", async () => new Response("unavailable", { status: 503 }));
+      await expect(approvalsRpcClient().getBlockNumber()).rejects.toThrow();
+
+      expect(revokeHealth.coolingUntil.size).toBeGreaterThan(0);
+      expect(inspectorHealth.coolingUntil.size).toBe(0);
+    });
   });
 });
