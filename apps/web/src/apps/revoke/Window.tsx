@@ -258,11 +258,14 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
           {"This list may be incomplete: some approvals couldn't be read."}
         </p>
       )}
-      {canRevoke && rows.length > 1 && (
+      {/* Stop goes with the run, not with the list: a refetch can shrink the list to one row, or none, mid-run. */}
+      {((canRevoke && rows.length > 1) || (mine && mine.steps > 1)) && (
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className={BUTTON} disabled={busy} onClick={() => revoke(rows)}>
-            {`Revoke all (${rows.length})`}
-          </button>
+          {canRevoke && rows.length > 1 && (
+            <button type="button" className={BUTTON} disabled={busy} onClick={() => revoke(rows)}>
+              {`Revoke all (${rows.length})`}
+            </button>
+          )}
           {mine && mine.steps > 1 && (
             <button type="button" className={BUTTON} disabled={mine.stopping} onClick={revokeSession.stop}>
               Stop after this one

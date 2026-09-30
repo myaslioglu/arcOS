@@ -324,6 +324,30 @@ describe("a remounted window picks up the revoke where it is", () => {
     await done;
   });
 
+  it("keeps Stop while a bulk run has steps to go, however short the list has become", async () => {
+    state.address = OWNER;
+    const { pending, done } = start([[row()], [second()]]);
+    for (const shown of [[second()], []]) {
+      listing(shown);
+      const html = render();
+      expect(html).toContain(">Stop after this one</button>");
+      expect(html).not.toContain("Revoke all");
+    }
+    pending[0]!([{ key: rowKey(row()), result: "revoked", block: 11 }]);
+    await new Promise((r) => setTimeout(r, 0));
+    pending[1]!([]);
+    await done;
+  });
+
+  it("offers no Stop for a single-transaction run", async () => {
+    state.address = OWNER;
+    listing([row(), second()]);
+    const { pending, done } = start([[row()]]);
+    expect(render()).not.toContain("Stop after this one");
+    pending[0]!([]);
+    await done;
+  });
+
   it("shows a failed revoke's sentence and its transaction after the window is opened again", async () => {
     state.address = OWNER;
     listing([row()]);
