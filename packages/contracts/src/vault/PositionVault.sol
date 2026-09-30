@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IV3PositionManager, IV4PositionManager} from "./interfaces/IPositionManagers.sol";
 
@@ -190,7 +191,7 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
     function _split(address currency) private {
         uint256 amount = currency == address(0) ? address(this).balance : IERC20(currency).balanceOf(address(this));
         if (amount == 0) return;
-        uint256 toPlatform = (amount * feeShareBps) / BPS_DENOMINATOR;
+        uint256 toPlatform = Math.mulDiv(amount, feeShareBps, BPS_DENOMINATOR); // no balance can overflow it
         if (toPlatform != 0 && !_tryPayPlatform(currency, toPlatform)) {
             emit PlatformShareSkipped(currency, toPlatform);
             toPlatform = 0;

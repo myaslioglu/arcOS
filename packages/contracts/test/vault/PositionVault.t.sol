@@ -3,6 +3,7 @@ pragma solidity 0.8.30;
 
 import {Vm} from "forge-std/Vm.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -279,6 +280,33 @@ contract PositionVaultTest is PositionTestBase {
         assertEq(tokenA.balanceOf(feeRecipient), 0);
         assertEq(tokenB.balanceOf(alice), 49);
         assertEq(tokenB.balanceOf(feeRecipient), 1);
+    }
+
+    /// Review M1: `amount * share` overflows above `type(uint256).max / share` (about 5.8e74 units at 200 bps, 1.16e73
+    /// at 10,000), so a donation that large made every collect revert. The share is computed with mulDiv and cannot
+    /// overflow.
+    function test_collect_aHugeDonationCannotOverflowTheShare() public {
+        (PositionVault vault,) = _lockedV3();
+        uint256 huge = type(uint256).max / 100; // above type(uint256).max / 200
+        tokenA.mint(address(vault), huge);
+        vm.prank(alice);
+        vault.collect();
+        uint256 share = Math.mulDiv(huge, SHARE_BPS, BPS);
+        assertEq(tokenA.balanceOf(feeRecipient), share);
+        assertEq(tokenA.balanceOf(alice), huge - share);
+
+        // At a share of 10,000 bps, just above 1.16e73 units.
+        PositionVault all = _freshClone();
+        uint256 id = v3.mint(address(this), address(tokenA), address(tokenB), LIQUIDITY);
+        all.initialize(
+            alice, address(v3), id, uint64(block.timestamp + 1 days), PositionVault.Kind.V3, 10_000, feeRecipient
+        );
+        v3.safeTransferFrom(address(this), address(all), id);
+        uint256 over = type(uint256).max / BPS + 1;
+        tokenA.mint(address(all), over);
+        vm.prank(alice);
+        all.collect();
+        assertEq(tokenA.balanceOf(feeRecipient), share + over);
     }
 
     /// The share is the one copied at creation: a later fee change, a new recipient, or a manager being disallowed
