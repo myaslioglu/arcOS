@@ -274,4 +274,106 @@ contract DeployR1Test is Test {
         vm.expectRevert(bytes("DeployR1: ARCOS_VESTING_FACTORY is wired to another FeeController."));
         deployR1.deploy(cfg);
     }
+
+    // Continue mode: each address given must be the contract its variable names, wired to this FeeController, and
+    // each key present must match the spec exactly, with nothing pending.
+
+    function _continueConfig() internal view returns (DeployR1.Config memory cfg) {
+        cfg = _config();
+        cfg.continueRun = true;
+    }
+
+    function test_continue_refusesAKeyWithTheRightCapButAnotherFee() public {
+        vm.prank(projectWallet);
+        fees.addKey(keccak256("VEST_FLAT"), 19 ether, 100 ether);
+        vm.expectRevert(bytes("DeployR1: fee key VEST_FLAT exists with another fee or cap. Check it by hand."));
+        deployR1.deploy(_continueConfig());
+    }
+
+    function test_continue_refusesAKeyWithAPendingFeeChange() public {
+        vm.startPrank(projectWallet);
+        fees.addKey(keccak256("PRO_MONTHLY"), 9 ether, 29 ether);
+        fees.setFee(keccak256("PRO_MONTHLY"), 29 ether); // an increase: scheduled, not applied
+        vm.stopPrank();
+        assertEq(fees.feeOf(keccak256("PRO_MONTHLY")), 9 ether, "the fee itself still matches");
+        vm.expectRevert(bytes("DeployR1: fee key PRO_MONTHLY has a pending fee change. Check it by hand."));
+        deployR1.deploy(_continueConfig());
+    }
+
+    function test_continue_refusesAVaultFactoryOwnedBySomeoneElse() public {
+        deployR1.deploy(_config());
+        VaultFactory foreign = new VaultFactory(makeAddr("someoneElse"), fees);
+        DeployR1.Config memory cfg = _continueConfig();
+        cfg.vaultFactory = address(foreign);
+        vm.expectRevert(bytes("DeployR1: the sender does not own ARCOS_VAULT_FACTORY."));
+        deployR1.deploy(cfg);
+    }
+
+    function _otherFeeController() internal returns (FeeController other) {
+        other = new FeeController(projectWallet, payable(projectWallet));
+        vm.startPrank(projectWallet);
+        other.addKey(keccak256("LOCK_FLAT"), 1, 1);
+        other.addKey(keccak256("LOCK_LP_BPS"), 1, 1);
+        other.addKey(keccak256("LOCK_FEE_SHARE_BPS"), 1, 1);
+        other.addKey(keccak256("PRO_MONTHLY"), 1, 1);
+        vm.stopPrank();
+    }
+
+    function test_continue_refusesAVaultFactoryOnAnotherFeeController() public {
+        deployR1.deploy(_config());
+        VaultFactory foreign = new VaultFactory(projectWallet, _otherFeeController());
+        DeployR1.Config memory cfg = _continueConfig();
+        cfg.vaultFactory = address(foreign);
+        vm.expectRevert(bytes("DeployR1: ARCOS_VAULT_FACTORY is wired to another FeeController."));
+        deployR1.deploy(cfg);
+    }
+
+    function test_continue_refusesAProPassOnAnotherFeeController() public {
+        deployR1.deploy(_config());
+        ProPass foreign = new ProPass(_otherFeeController());
+        DeployR1.Config memory cfg = _continueConfig();
+        cfg.proPass = address(foreign);
+        vm.expectRevert(bytes("DeployR1: ARCOS_PRO_PASS is wired to another FeeController."));
+        deployR1.deploy(cfg);
+    }
+
+    // A failed deploy leaves its broadcast open, so each case runs in its own test.
+    function _assertRefused(string memory envName, uint8 given, string memory expected) internal {
+        (VaultFactory vaults, VestingFactory vestings, ProPass pass) = deployR1.deploy(_config());
+        address[4] memory candidates = [address(vaults), address(vestings), address(pass), address(fees)];
+        DeployR1.Config memory cfg = _continueConfig();
+        if (keccak256(bytes(envName)) == keccak256("ARCOS_VAULT_FACTORY")) cfg.vaultFactory = candidates[given];
+        else if (keccak256(bytes(envName)) == keccak256("ARCOS_VESTING_FACTORY")) cfg.vestingFactory = candidates[given];
+        else cfg.proPass = candidates[given];
+        vm.expectRevert(bytes(expected));
+        deployR1.deploy(cfg);
+    }
+
+    function test_continue_refusesAVestingFactoryAsTheVaultFactory() public {
+        _assertRefused("ARCOS_VAULT_FACTORY", 1, "DeployR1: ARCOS_VAULT_FACTORY is not a VaultFactory.");
+    }
+
+    function test_continue_refusesAProPassAsTheVaultFactory() public {
+        _assertRefused("ARCOS_VAULT_FACTORY", 2, "DeployR1: ARCOS_VAULT_FACTORY is not a VaultFactory.");
+    }
+
+    function test_continue_refusesAVaultFactoryAsTheVestingFactory() public {
+        _assertRefused("ARCOS_VESTING_FACTORY", 0, "DeployR1: ARCOS_VESTING_FACTORY is not a VestingFactory.");
+    }
+
+    function test_continue_refusesAProPassAsTheVestingFactory() public {
+        _assertRefused("ARCOS_VESTING_FACTORY", 2, "DeployR1: ARCOS_VESTING_FACTORY is not a VestingFactory.");
+    }
+
+    function test_continue_refusesAVaultFactoryAsTheProPass() public {
+        _assertRefused("ARCOS_PRO_PASS", 0, "DeployR1: ARCOS_PRO_PASS is not a ProPass.");
+    }
+
+    function test_continue_refusesAVestingFactoryAsTheProPass() public {
+        _assertRefused("ARCOS_PRO_PASS", 1, "DeployR1: ARCOS_PRO_PASS is not a ProPass.");
+    }
+
+    function test_continue_refusesTheFeeControllerAsTheProPass() public {
+        _assertRefused("ARCOS_PRO_PASS", 3, "DeployR1: ARCOS_PRO_PASS is not a ProPass.");
+    }
 }

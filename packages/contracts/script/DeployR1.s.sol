@@ -86,17 +86,33 @@ contract DeployR1 is Script {
             present[i] = _checkKey(fees, keys[i], cfg.continueRun);
         }
         if (cfg.vaultFactory != address(0)) {
-            _checkWired(cfg.vaultFactory, fees, "ARCOS_VAULT_FACTORY");
+            _checkWired(
+                cfg.vaultFactory,
+                fees,
+                VaultFactory(cfg.vaultFactory).LOCK_FLAT.selector,
+                "LOCK_FLAT",
+                "ARCOS_VAULT_FACTORY",
+                "VaultFactory"
+            );
             require(
                 VaultFactory(cfg.vaultFactory).owner() == sender,
                 "DeployR1: the sender does not own ARCOS_VAULT_FACTORY."
             );
         }
         if (cfg.vestingFactory != address(0)) {
-            _checkWired(cfg.vestingFactory, fees, "ARCOS_VESTING_FACTORY");
+            _checkWired(
+                cfg.vestingFactory,
+                fees,
+                VestingFactory(cfg.vestingFactory).VEST_FLAT.selector,
+                "VEST_FLAT",
+                "ARCOS_VESTING_FACTORY",
+                "VestingFactory"
+            );
         }
         if (cfg.proPass != address(0)) {
-            _checkWired(cfg.proPass, fees, "ARCOS_PRO_PASS");
+            _checkWired(
+                cfg.proPass, fees, ProPass(cfg.proPass).PRO_MONTHLY.selector, "PRO_MONTHLY", "ARCOS_PRO_PASS", "ProPass"
+            );
         }
 
         for (uint256 i; i < keys.length; ++i) {
@@ -130,7 +146,8 @@ contract DeployR1 is Script {
         console2.log("fee recipient code size", fees.recipient().code.length);
     }
 
-    /// True if the key is already there with this fee and cap (allowed only when continuing); reverts otherwise.
+    /// True if the key is already there with this fee and cap and no change pending (allowed only when continuing);
+    /// reverts otherwise.
     function _checkKey(FeeController fees, FeeKey memory k, bool continueRun) internal view returns (bool present) {
         try fees.feeOf(k.key) returns (uint256 value) {
             require(
@@ -145,6 +162,11 @@ contract DeployR1 is Script {
                 value == k.value && fees.capOf(k.key) == k.cap,
                 string.concat("DeployR1: fee key ", k.name, " exists with another fee or cap. Check it by hand.")
             );
+            (, uint64 pendingAt) = fees.pendingOf(k.key);
+            require(
+                pendingAt == 0,
+                string.concat("DeployR1: fee key ", k.name, " has a pending fee change. Check it by hand.")
+            );
             return true;
         } catch (bytes memory reason) {
             // Anything but "no such key" (a wrong address, a node error) must stop the run, not add the key.
@@ -156,9 +178,24 @@ contract DeployR1 is Script {
         }
     }
 
-    /// VaultFactory, VestingFactory and ProPass all expose `feeController()`.
-    function _checkWired(address target, FeeController fees, string memory envName) internal view {
+    /// The contract at `target` is the kind `envName` names, told apart by one of its own key constants (`keySelector`,
+    /// the getter of the constant that must equal keccak256(`keyName`)), and is wired to `fees`. VaultFactory,
+    /// VestingFactory and ProPass all expose `feeController()`.
+    function _checkWired(
+        address target,
+        FeeController fees,
+        bytes4 keySelector,
+        string memory keyName,
+        string memory envName,
+        string memory kind
+    ) internal view {
         require(target.code.length != 0, string.concat("DeployR1: no contract at ", envName, "."));
+        // A low-level call, so a contract without that getter (or with a fallback) is refused, not a stray revert.
+        (bool ok, bytes memory ret) = target.staticcall(abi.encodeWithSelector(keySelector));
+        require(
+            ok && ret.length == 32 && abi.decode(ret, (bytes32)) == keccak256(bytes(keyName)),
+            string.concat("DeployR1: ", envName, " is not a ", kind, ".")
+        );
         require(
             address(ProPass(target).feeController()) == address(fees),
             string.concat("DeployR1: ", envName, " is wired to another FeeController.")
