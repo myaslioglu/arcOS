@@ -218,7 +218,8 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
   // Revokes `targets`, one transaction at a time (see ./flow and ./session). The window only starts the run and says
   // where focus goes when it ends; everything else is reported into the session store.
   function revoke(targets: Approval[]) {
-    if (busy || !client || !address) return;
+    // Only the owner's own wallet revokes: a wallet switched since this list was drawn starts nothing.
+    if (busy || !client || !address || address.toLowerCase() !== owner.toLowerCase()) return;
     const keysBefore = rowsNow.map(rowKey);
     // A target an earlier run left behind (one that ended before busy ever changed) mustn't steer this one.
     pendingFocus.current = null;
