@@ -44,6 +44,8 @@ export function approvalText(row: Pick<Approval, "kind" | "allowance" | "decimal
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const UINT = /^(0|[1-9][0-9]{0,77})$/;
+/** The largest NFT id there can be; the shell's drag decoder (`@arcos/shell`'s dnd.ts) bounds ids the same way. */
+const MAX_UINT256 = 2n ** 256n - 1n;
 const KINDS: readonly string[] = ["erc20", "erc721", "operator", "permit2"] satisfies ApprovalKind[];
 const notAnAnswer = () => new Error("Not an approvals answer.");
 
@@ -59,7 +61,9 @@ export function parseApprovalsAnswer(json: unknown): ApprovalsAnswer {
     if (typeof a.spender !== "string" || !ADDRESS.test(a.spender)) throw notAnAnswer();
     if (typeof a.allowance !== "string" || !/^\d+$/.test(a.allowance)) throw notAnAnswer();
     if (typeof a.lastApprovalBlock !== "number" || !Number.isSafeInteger(a.lastApprovalBlock)) throw notAnAnswer();
-    if (kind === "erc721" && (typeof a.tokenId !== "string" || !UINT.test(a.tokenId))) throw notAnAnswer();
+    if (kind === "erc721" && (typeof a.tokenId !== "string" || !UINT.test(a.tokenId) || BigInt(a.tokenId) > MAX_UINT256)) {
+      throw notAnAnswer();
+    }
     if (kind === "permit2" && a.expiration !== undefined && !(Number.isSafeInteger(a.expiration) && (a.expiration as number) >= 0)) {
       throw notAnAnswer();
     }

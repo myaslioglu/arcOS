@@ -456,6 +456,13 @@ describe("the other kinds of approval", () => {
     for (const value of bad) expect(() => parseApprovalsAnswer({ approvals: [value], truncated: false }), JSON.stringify(value)).toThrow();
   });
 
+  it("bounds an NFT's id by 2^256 - 1, as the shell's drag decoder does", () => {
+    const max = (2n ** 256n - 1n).toString();
+    expect(parseApprovalsAnswer({ approvals: [{ ...nft, tokenId: max }], truncated: false }).approvals[0]?.tokenId).toBe(max);
+    expect(() => parseApprovalsAnswer({ approvals: [{ ...nft, tokenId: (2n ** 256n).toString() }], truncated: false })).toThrow();
+    expect(() => parseApprovalsAnswer({ approvals: [{ ...nft, tokenId: "9".repeat(78) }], truncated: false })).toThrow();
+  });
+
   it("drops an id or an expiry on a kind that has none", () => {
     const [parsed] = parseApprovalsAnswer({ approvals: [{ ...row(), tokenId: "7", expiration: 9 }], truncated: false }).approvals;
     expect(parsed).toEqual(row());
