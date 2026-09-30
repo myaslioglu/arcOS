@@ -83,6 +83,8 @@ contract NativeRefusingOwner {
 /// real managers.
 contract PositionVaultTest is PositionTestBase {
     uint256 internal constant BPS = 10_000;
+    uint256 internal constant STIPEND = 2300; // what a call with value adds to the gas it forwards
+    uint256 internal constant ENTRY_COST = 100; // generous for the dispatch before a `receive` reads `gasleft()`
 
     // ---------------------------------------------------------------------
     // Initialisation
@@ -591,14 +593,22 @@ contract PositionVaultTest is PositionTestBase {
         assertEq(alice.balance - aliceBefore, 49);
     }
 
-    /// The same for a recipient that needs most of the budget: the vault must reserve the call's own costs on top of
-    /// the forwarded gas, or a gas limit just above the bare budget would forward too little and skip it.
-    function test_q9_theOwnerCannotStarveARecipientThatNeedsMostOfTheBudget() public {
+    /// The same for a recipient that needs all of the budget: the vault must reserve the call's own costs on top of
+    /// the forwarded gas, or a gas limit just above the bare budget would forward too little and skip it. Review M2:
+    /// the recipient refuses cheaply unless given the whole budget (`PLATFORM_CALL_GAS` plus the 2,300 stipend of a
+    /// call with value, less at most `ENTRY_COST` for its dispatch), so a short forward shows as a skip, and every
+    /// payment that goes through is checked to have been given that much. Isolated, so that each call is its own transaction and meets the recipient cold: the payment then pays the
+    /// cold-account cost (2,600) on top of the value transfer (9,000), and an overhead reserve below that forwards less
+    /// than the budget at the edge. (`vm.cool` cools only an account's storage, not the account.)
+    /// forge-config: default.isolate = true
+    function test_q9_theOwnerCannotStarveARecipientThatNeedsAllOfTheBudget() public {
         MockSwitchableReceiver r = new MockSwitchableReceiver();
         (PositionVault vault, uint256 id) = _vaultWithRecipient(payable(address(r)), true);
         r.setMode(MockSwitchableReceiver.Mode.Heavy);
         _accrueV4(id, NATIVE, 100 ether, 0);
-        _sweepGasLimits(vault, NATIVE, address(r), 2 ether);
+        uint256 minEntry = _sweepGasLimits(vault, NATIVE, address(r), 2 ether);
+        emit log_named_uint("least gas a paid recipient was given", minEntry);
+        assertGe(minEntry, vault.PLATFORM_CALL_GAS() + STIPEND - ENTRY_COST, "a payment was given less than the budget");
     }
 
     /// Deviation (part of Q9): the owner cannot keep the platform's share by sending `collect` with just too little
@@ -623,10 +633,17 @@ contract PositionVaultTest is PositionTestBase {
     /// Calls collect with every gas limit from 30,000 to 800,000 in steps of 500. Each call either pays the recipient
     /// its exact share (a skip would leave its balance unchanged), or reverts; a revert with too little gas for the
     /// whole bounded payment is `InsufficientGas`, decided before the payment is tried. The state is restored after
-    /// each call.
-    function _sweepGasLimits(PositionVault vault, address currency, address recipient, uint256 share) internal {
+    /// each call. Returns the least `entryGas` a `Heavy` recipient recorded over the paid calls (`type(uint256).max`
+    /// for any other recipient).
+    function _sweepGasLimits(PositionVault vault, address currency, address recipient, uint256 share)
+        internal
+        returns (uint256 minEntry)
+    {
         uint256 paid;
         uint256 refused;
+        minEntry = type(uint256).max;
+        bool heavy = currency == NATIVE
+            && MockSwitchableReceiver(payable(recipient)).mode() == MockSwitchableReceiver.Mode.Heavy;
         for (uint256 limit = 30_000; limit <= 800_000; limit += 500) {
             uint256 snap = vm.snapshotState();
             uint256 before = _balance(currency, recipient);
@@ -635,6 +652,10 @@ contract PositionVaultTest is PositionTestBase {
             if (ok) {
                 ++paid;
                 assertEq(_balance(currency, recipient) - before, share, "a healthy recipient was skipped");
+                if (heavy) {
+                    uint256 entry = MockSwitchableReceiver(payable(recipient)).entryGas();
+                    if (entry < minEntry) minEntry = entry;
+                }
             } else if (keccak256(ret) == keccak256(abi.encodeWithSelector(PositionVault.InsufficientGas.selector))) {
                 ++refused;
             }

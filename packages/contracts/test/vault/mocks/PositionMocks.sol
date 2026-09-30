@@ -263,19 +263,26 @@ contract MockSwitchableReceiver {
         Revert,
         BurnGas,
         ReturnBomb,
-        Heavy // needs most of the vault's budget for the platform's payment, like a multisig with a guard
+        Heavy // needs all of the vault's budget for the platform's payment, like a multisig with a guard
     }
 
-    uint256 public constant HEAVY_GAS = 95_000;
+    /// What `Heavy` needs on entry: the vault's whole budget for the payment (PositionVault.PLATFORM_CALL_GAS,
+    /// 100,000) plus the 2,300 stipend a call with value adds, less 100 for the dispatch before `receive` reads
+    /// `gasleft()` (59 with this compiler). Given any less, the vault forwarded less than its budget.
+    uint256 public constant HEAVY_GAS = 100_000 + 2300 - 100;
 
     Mode public mode;
     uint256 public received;
+    /// In `Heavy` mode, `gasleft()` as the first thing `receive` did: the gas the payment was given (the forwarded
+    /// gas plus the 2,300 stipend a call with value adds, less the few instructions of the dispatch before it).
+    uint256 public entryGas;
 
     function setMode(Mode mode_) external {
         mode = mode_;
     }
 
     receive() external payable {
+        uint256 g = gasleft();
         Mode m = mode;
         if (m == Mode.Revert) revert("cannot receive");
         if (m == Mode.BurnGas) {
@@ -288,9 +295,10 @@ contract MockSwitchableReceiver {
         }
         if (m == Mode.Heavy) {
             // Like a Safe checking that it was given the gas its transaction needs: with less it fails at once, and
-            // cheaply, so the caller keeps nearly all the gas it forwarded.
-            require(gasleft() >= HEAVY_GAS, "not enough gas");
-            uint256 stop = gasleft() - (HEAVY_GAS - 10_000);
+            // cheaply, so the caller keeps nearly all the gas it forwarded and the vault skips the share.
+            require(g >= HEAVY_GAS, "not enough gas");
+            entryGas = g;
+            uint256 stop = g - (HEAVY_GAS - 10_000);
             while (gasleft() > stop) {}
         }
         received += msg.value;
