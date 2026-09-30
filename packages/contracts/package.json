@@ -5,6 +5,7 @@
   "scripts": {
     "build": "node scripts/forge.mjs build",
     "test": "node scripts/forge.mjs test -vv",
+    "test:fork": "FOUNDRY_PROFILE=fork node scripts/forge.mjs test -vv",
     "fmt": "node scripts/forge.mjs fmt --check",
     "sizes": "node scripts/forge.mjs build --sizes",
     "abis": "node scripts/forge.mjs build && node scripts/export-abis.mjs"

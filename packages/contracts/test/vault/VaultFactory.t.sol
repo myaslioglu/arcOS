@@ -14,6 +14,7 @@ import {PositionVault} from "../../src/vault/PositionVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {VaultTestBase} from "./VaultTestBase.sol";
 import {MockReenteringRecipient, MockReenteringToken} from "./mocks/VaultMocks.sol";
+import {MockV3PositionManager} from "./mocks/PositionMocks.sol";
 
 contract VaultFactoryTest is VaultTestBase {
     // ---------------------------------------------------------------------
@@ -283,46 +284,19 @@ contract VaultFactoryTest is VaultTestBase {
     }
 
     function test_lockPosition_feeShareBound_includesTenThousand() public {
-        address manager = makeAddr("manager");
         uint64 at = uint64(block.timestamp + 1 days);
         FeeController c = _newFeeController(FLAT, FLAT_CAP, LP_BPS, LP_BPS_CAP, 10_000, 10_000);
         VaultFactory f = new VaultFactory(factoryOwner, c);
+        MockV3PositionManager v3 = new MockV3PositionManager();
         vm.prank(factoryOwner);
-        f.setManager(manager, true, PositionVault.Kind.V3);
-        // 10,000 passes the bound; the call then reaches the placeholder, which refuses.
-        vm.prank(alice);
-        vm.expectRevert(PositionVault.NotImplemented.selector);
-        f.lockPosition{value: FLAT}(manager, 1, at, alice);
-    }
-
-    /// The placeholder position vault always refuses to initialise, so a build with it cannot lock a position.
-    /// The real position vault replaces the placeholder and this test goes with it.
-    function test_lockPosition_isUnavailableUntilTheRealPositionVaultArrives() public {
-        address manager = makeAddr("manager");
-        vm.prank(factoryOwner);
-        factory.setManager(manager, true, PositionVault.Kind.V3);
-        Snap memory s = _snap(alice, address(0));
-        uint64 at = uint64(block.timestamp + 1 days);
-
-        vm.prank(alice);
-        vm.expectRevert(PositionVault.NotImplemented.selector);
-        factory.lockPosition{value: FLAT}(manager, 1, at, alice);
-
-        _assertNothingLeftBehind(s, alice, address(0));
-    }
-
-    /// The placeholder's own two refusals: it can neither be initialised nor be sent value, whoever asks. It goes with
-    /// the placeholder.
-    function test_positionVaultPlaceholder_refusesToInitialise_andToReceiveValue() public {
-        PositionVault placeholder = PositionVault(payable(factory.positionVaultImpl()));
-        vm.expectRevert(PositionVault.NotImplemented.selector);
-        placeholder.initialize(
-            alice, makeAddr("manager"), 1, uint64(block.timestamp + 1 days), PositionVault.Kind.V3, 200, payable(bob)
-        );
-
-        (bool ok,) = address(placeholder).call{value: 1}("");
-        assertFalse(ok);
-        assertEq(address(placeholder).balance, 0);
+        f.setManager(address(v3), true, PositionVault.Kind.V3);
+        uint256 id = v3.mint(alice, address(token), address(pair), 1);
+        vm.startPrank(alice);
+        v3.approve(address(f), id);
+        // 10,000 passes the bound, and the vault keeps it.
+        PositionVault vault = PositionVault(payable(f.lockPosition{value: FLAT}(address(v3), id, at, alice)));
+        vm.stopPrank();
+        assertEq(vault.feeShareBps(), 10_000);
     }
 
     // ---------------------------------------------------------------------

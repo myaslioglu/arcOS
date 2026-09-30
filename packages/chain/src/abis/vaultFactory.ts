@@ -674,7 +674,17 @@ export const vaultFactoryAbi = [
   },
   {
     "type": "error",
+    "name": "NoLiquidity",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotAToken",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "OwedNotCollected",
     "inputs": []
   },
   {
@@ -698,6 +708,11 @@ export const vaultFactoryAbi = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "PositionNotReceived",
+    "inputs": []
   },
   {
     "type": "error",
