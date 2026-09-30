@@ -252,6 +252,21 @@ export function focusTargetAfterRemoval(keysBefore: readonly string[], removedKe
 }
 
 /**
+ * Where focus goes when a revoke run ends, from the keys listed when it started and how each row came out: back to
+ * the first row that is still listed (it failed, or is still set) among those the run carried, else, for a single row
+ * that was revoked, the row now in its place (`focusTargetAfterRemoval`), else the first row the run didn't touch,
+ * else the list's own landmark.
+ */
+export function focusAfterRun(keysBefore: readonly string[], outcomes: readonly { key: string; result: string }[]): FocusTarget {
+  const stays = outcomes.find((o) => o.result !== "revoked");
+  if (stays) return { kind: "row", key: stays.key };
+  const removed = new Set(outcomes.map((o) => o.key));
+  if (removed.size === 1) return focusTargetAfterRemoval(keysBefore, [...removed][0]!);
+  const next = keysBefore.find((k) => !removed.has(k));
+  return next === undefined ? { kind: "heading" } : { kind: "row", key: next };
+}
+
+/**
  * Whether focus was lost: nothing holds it, or the page body does, which is where it lands when the element that had it
  * is removed (a revoked row) or disabled (the Revoke button that was clicked, while its revoke runs). Window.tsx moves
  * focus on when a revoke ends only then. A visitor who has moved on, to the Terminal, the lookup field or a window of

@@ -9,6 +9,7 @@ import type { Approval } from "@/lib/approvals";
 import {
   allowanceText,
   approvalText,
+  focusAfterRun,
   APPROVE_ABI,
   dragItemOf,
   rowForDrop,
@@ -303,19 +304,6 @@ describe("APPROVE_ABI", () => {
   });
 });
 
-describe("ALLOWANCE_STILL_SET", () => {
-  // A source scan, not a behavioural render test: the branch that shows this sentence only runs
-  // inside `revoke()`'s async handler, after a confirmed transaction and a live re-read — not
-  // reachable through renderToStaticMarkup (see window.test.ts's own scans for the same limitation).
-  // This checks the constant is actually wired into that branch's shown text, rather than asserting
-  // the constant equals its own literal.
-  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
-
-  it("is the failure text Window.tsx shows when a confirmed revoke's re-read allowance isn't zero", () => {
-    expect(source).toMatch(/text:\s*ALLOWANCE_STILL_SET/);
-  });
-});
-
 describe("focusTargetAfterRemoval", () => {
   it("targets the row that now sits where the removed one was", () => {
     expect(focusTargetAfterRemoval(["a", "b", "c"], "b")).toEqual({ kind: "row", key: "c" });
@@ -392,116 +380,60 @@ describe("inspectButtonLabel", () => {
   });
 });
 
-/**
- * A source scan, not a behavioural render test (see the ALLOWANCE_STILL_SET scan above for why:
- * revoke()'s async handler isn't reachable through renderToStaticMarkup, and the window.test.ts mocks
- * usePublicClient to return undefined, so revoke() always returns at its first guard there too).
- *
- * Review Important 1: a revoke could reappear after a reload within the server's 60 s cache, and
- * clicking Revoke on an already-revoked pair would simulate and send a no-op approve(spender, 0),
- * prompting the wallet and costing gas for nothing. The fix reads the allowance live, the same read
- * used after the receipt, before ever asking the wallet to sign — and returns without simulating or
- * writing when it's already zero.
- */
-describe("Window.tsx reads the allowance live before ever asking the wallet (Important 1)", () => {
-  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
-  // liveAllowance: a marker unique to the new pre-check (unlike "already", which also appears in an
-  // unrelated, earlier comment about stillLive already carrying the owner in its own key). The paid-write
-  // scan (lib/__tests__/paid-write.test.ts) already pins simulateContract → writeContractAsync(withChain(
-  // …)); this only needs to place the new live read between assertWalletOnChain and simulateContract, so
-  // it doesn't repeat that literal call-site text here too (the scan's own file-selection net would
-  // otherwise sweep this test file up as a fourth "paid write" site to check).
-  const liveCheck = source.indexOf("liveAllowance");
-  const simulate = source.indexOf("simulateContract(");
-
-  it("checks the live allowance after assertWalletOnChain and before simulateContract", () => {
-    const assertCall = source.indexOf("assertWalletOnChain(");
-    expect(assertCall).toBeGreaterThan(-1);
-    expect(liveCheck).toBeGreaterThan(assertCall);
-    expect(simulate).toBeGreaterThan(liveCheck);
+describe("focusAfterRun", () => {
+  const keys = ["a", "b", "c"];
+  it("goes back to the first row the run carried that is still listed", () => {
+    expect(focusAfterRun(keys, [{ key: "a", result: "revoked" }, { key: "b", result: "failed" }])).toEqual({ kind: "row", key: "b" });
+    expect(focusAfterRun(keys, [{ key: "c", result: "still-set" }])).toEqual({ kind: "row", key: "c" });
   });
-
-  it("returns, without reaching simulateContract, when the live read is already zero — so an already-revoked pair never prompts the wallet", () => {
-    const zeroBranch = source.slice(liveCheck, simulate);
-    expect(zeroBranch).toMatch(/===\s*0n/);
-    expect(zeroBranch).toMatch(/\breturn\b/);
-    expect(zeroBranch).toContain("markRevoked(");
+  it("moves to the row now in the place of a single revoked one", () => {
+    expect(focusAfterRun(keys, [{ key: "b", result: "revoked" }])).toEqual({ kind: "row", key: "c" });
+  });
+  it("moves to the first row a bulk revoke didn't touch, else the list", () => {
+    expect(focusAfterRun(keys, [{ key: "a", result: "revoked" }, { key: "c", result: "revoked" }])).toEqual({ kind: "row", key: "b" });
+    expect(focusAfterRun(keys, keys.map((key) => ({ key, result: "revoked" })))).toEqual({ kind: "heading" });
   });
 });
 
 /**
- * Source scans again, for the same reason (revoke()'s async handler isn't reachable through renderToStaticMarkup, and
- * there is no DOM to mount the list in). What they pin is the order things happen in, which is where these two bugs were.
+ * Source scans: there is no DOM here to mount the list in and move focus. What they pin is the order things happen
+ * in, which is where the earlier focus bugs were. The revoke itself is driven for real in flow.test.ts.
  */
-describe("Window.tsx focuses the next row only once no revoke is running", () => {
+describe("Window.tsx focuses where a run leaves off only once no revoke is running", () => {
   const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
-  const revokeBody = source.slice(source.indexOf("const revoke = async"), source.indexOf("return (\n    <div ref={listRef}"));
+  const revokeBody = source.slice(source.indexOf("function revoke("), source.indexOf("const progress ="));
 
-  // revoke() sets busy first and clears it in its `finally`, and every Revoke button is disabled={busy !== null} in
-  // between, so a .focus() from inside revoke() lands on a disabled button and does nothing.
-  it("only stores the target from inside revoke(), where every Revoke button is still disabled", () => {
-    expect(revokeBody).toContain("focusTargetAfterRemoval(");
+  // Every Revoke button is disabled while a run is under way, so a .focus() from inside revoke() or its callbacks
+  // would land on a disabled button and do nothing.
+  it("only stores the target, from the run's onEnd, which hears the outcomes before the run is cleared", () => {
+    expect(revokeBody).toMatch(/pendingFocus\.current = focusAfterRun\(keysBefore, outcomes\)/);
     expect(revokeBody).not.toMatch(/\.focus\(/);
   });
 
-  // A revoke that throws before its first await (assertWalletOnChain can) sets busy and clears it in one batch, so busy
-  // never changes and Window.tsx's effect never runs to forget the target that revoke stored. Left there, it would steer
-  // the next revoke's focus, so every revoke forgets the last one's target itself, before it sets busy.
-  it("forgets a target an earlier revoke left, before it sets busy", () => {
-    // Whole statements on a line of their own, so a comment that names them can't be mistaken for them.
+  it("forgets a target an earlier run left, before it starts this one", () => {
     const forgets = revokeBody.search(/^\s*pendingFocus\.current = null;$/m);
-    const setsBusy = revokeBody.search(/^\s*setBusy\(key\);$/m);
+    const runs = revokeBody.indexOf("revokeSession.run(");
     expect(forgets, "revoke() forgets the target").toBeGreaterThan(-1);
-    expect(setsBusy, "revoke() sets busy").toBeGreaterThan(-1);
-    expect(setsBusy).toBeGreaterThan(forgets);
+    expect(runs).toBeGreaterThan(forgets);
   });
 
-  it("focuses the stored target in an effect that waits for busy to be null, forgets it, and moves focus only if it was lost", () => {
+  it("focuses the stored target in an effect that waits for the run to end, forgets it, and moves focus only if it was lost", () => {
     const effect = source.match(/useEffect\(\(\) => \{([\s\S]*?)\}, \[busy\]\);/)?.[1] ?? "";
     expect(effect, "an effect keyed on busy").not.toBe("");
     const at = (text: string) => effect.indexOf(text);
-    // In this order: wait for busy, forget the target (one that is declined too), check that focus was lost, then focus.
-    expect(at("busy !== null")).toBeGreaterThan(-1);
-    expect(at("pendingFocus.current = null")).toBeGreaterThan(at("busy !== null"));
+    expect(at("if (busy) return;")).toBeGreaterThan(-1);
+    expect(at("pendingFocus.current = null")).toBeGreaterThan(at("if (busy) return;"));
     expect(at("focusWasLost(document.activeElement, document.body)")).toBeGreaterThan(at("pendingFocus.current = null"));
     // The guard's polarity: it returns unless focus was lost. Without the `!`, focus would move only for a visitor who
     // had moved on, which is the theft the guard is there to prevent.
     expect(effect).toMatch(/if \(!focusWasLost\(document\.activeElement, document\.body\)\) return;/);
     expect(at(".focus()")).toBeGreaterThan(at("focusWasLost("));
-    // The list's own container stands in for the heading target, and for a row that is gone by then.
     expect(effect).toMatch(/\?\?\s*listRef\.current/);
   });
 
-  // The Revoke button that was clicked is disabled while busy, so focus drops to the body. A revoke that ends without
-  // removing its row (a failure) sends focus back to that row's button through the same effect, and so the same guard.
-  it("sends focus back to the row's own button when a revoke ends without removing it", () => {
-    const ending = revokeBody.match(/finally \{([\s\S]*?)\n    \}/)?.[1] ?? "";
-    expect(ending, "revoke()'s finally").not.toBe("");
-    expect(ending).toMatch(/pendingFocus\.current === null\)\s*pendingFocus\.current = \{ kind: "row", key \}/);
-    expect(ending.indexOf("setBusy(null)")).toBeGreaterThan(ending.indexOf("pendingFocus.current"));
-  });
-});
-
-describe("Window.tsx doesn't believe a zero from a node that is behind the approval (lagging node)", () => {
-  const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
-  const assertCall = source.indexOf("assertWalletOnChain(");
-  const headRead = source.indexOf("getBlockNumber(");
-  const liveCheck = source.indexOf("liveAllowance");
-  const simulate = source.indexOf("simulateContract(");
-
-  it("reads the head live first, after assertWalletOnChain and before the allowance and simulateContract", () => {
-    expect(assertCall).toBeGreaterThan(-1);
-    expect(headRead).toBeGreaterThan(assertCall);
-    expect(liveCheck).toBeGreaterThan(headRead);
-    expect(simulate).toBeGreaterThan(liveCheck);
-    expect(source).toMatch(/getBlockNumber\(\{\s*cacheTime:\s*0\s*\}\)/);
-  });
-
-  it("reads the allowance at that head, and takes the already-zero shortcut only when the node has reached the approval", () => {
-    const readAndShortcut = source.slice(liveCheck, simulate);
-    expect(readAndShortcut).toMatch(/blockNumber:\s*head\b/);
-    expect(readAndShortcut).toMatch(/===\s*0n\s*&&\s*nodeHasSeenApproval\(head,\s*row\.lastApprovalBlock\)/);
-    expect(readAndShortcut).toContain("markRevoked(");
+  it("disables every Revoke control while any run is under way", () => {
+    expect(source).toMatch(/const busy = run !== null;/);
+    expect([...source.matchAll(/disabled=\{busy\}/g)]).toHaveLength(2);
   });
 });
 
