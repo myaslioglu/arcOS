@@ -1,4 +1,4 @@
-import { createElement, type ReactNode } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignedIn } from "../SignInGate";
@@ -38,10 +38,7 @@ function render(state: unknown): { html: string; session: SignedIn } {
     seen = useSession();
     return createElement("p", null, "the app");
   };
-  const html = renderToStaticMarkup(createElement(SignInGate, { children: createElement(Child) as ReactNode })).replaceAll(
-    "&#x27;",
-    "'",
-  );
+  const html = renderToStaticMarkup(createElement(SignInGate, null, createElement(Child))).replaceAll("&#x27;", "'");
   return { html, session: seen! };
 }
 
