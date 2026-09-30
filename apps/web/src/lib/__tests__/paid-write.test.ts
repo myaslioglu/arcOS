@@ -116,6 +116,8 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
   it("scans at least the two known paid-write files — a future move/rename must not silently drop them from the file set", () => {
     expect(matchedFiles.some((f) => f.endsWith(path.join("apps", "mint", "Window.tsx")))).toBe(true);
     expect(matchedFiles.some((f) => f.endsWith(path.join("apps", "drop", "useDrop.ts")))).toBe(true);
+    // Revoke's transactions (every kind, and Permit2's lockdown) are sent from its flow, not its window.
+    expect(matchedFiles.some((f) => f.endsWith(path.join("apps", "revoke", "flow.ts")))).toBe(true);
   });
 
   /**

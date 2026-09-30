@@ -1,7 +1,8 @@
 import { getAddress, isAddress, parseAbi, type Address } from "viem";
 import { cleanLabel } from "@arcos/inspector";
+import type { DragItem } from "@arcos/shell";
 import { formatTokenAmount } from "@/lib/amount";
-import { isUnlimited, type Approval, type ApprovalsAnswer } from "@/lib/approvals";
+import { isUnlimited, type Approval, type ApprovalKind, type ApprovalsAnswer } from "@/lib/approvals";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { shortAddress } from "@/lib/format";
 
@@ -21,14 +22,31 @@ export function revokeView(ownerParam: string | undefined, account: string | und
   return { kind: "ask" };
 }
 
-/** "Unlimited" at 2^255 or more, else the amount at the token's decimals; a token that didn't say its decimals shows raw units. */
-export function allowanceText(allowance: string, decimals: number | null): string {
+/** Half of Permit2's uint160 range: a Permit2 allowance this large or larger reads "Unlimited". */
+const PERMIT2_UNLIMITED = 2n ** 159n;
+
+/**
+ * "Unlimited" at 2^255 or more (2^159 for a Permit2 allowance, whose amounts are uint160), else the amount at the
+ * token's decimals; a token that didn't say its decimals shows raw units.
+ */
+export function allowanceText(allowance: string, decimals: number | null, kind: ApprovalKind = "erc20"): string {
   const value = BigInt(allowance);
-  if (isUnlimited(value)) return "Unlimited";
+  if (kind === "permit2" ? value >= PERMIT2_UNLIMITED : isUnlimited(value)) return "Unlimited";
   return decimals === null ? `${value.toString()} units` : formatTokenAmount(value, decimals);
 }
 
+/** What a row allows: an amount, one NFT ("NFT #7"), or a whole collection ("Every item"). */
+export function approvalText(row: Pick<Approval, "kind" | "allowance" | "decimals" | "tokenId">): string {
+  if (row.kind === "erc721") return `NFT #${row.tokenId ?? "?"}`;
+  if (row.kind === "operator") return "Every item";
+  return allowanceText(row.allowance, row.decimals, row.kind);
+}
+
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const UINT = /^(0|[1-9][0-9]{0,77})$/;
+/** The largest NFT id there can be; the shell's drag decoder (`@arcos/shell`'s dnd.ts) bounds ids the same way. */
+const MAX_UINT256 = 2n ** 256n - 1n;
+const KINDS: readonly string[] = ["erc20", "erc721", "operator", "permit2"] satisfies ApprovalKind[];
 const notAnAnswer = () => new Error("Not an approvals answer.");
 
 /** /api/approvals' answer, checked field by field, labels cleaned again; anything else throws. */
@@ -37,13 +55,22 @@ export function parseApprovalsAnswer(json: unknown): ApprovalsAnswer {
   if (!Array.isArray(o.approvals) || typeof o.truncated !== "boolean") throw notAnAnswer();
   const approvals = o.approvals.map((raw): Approval => {
     const a = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+    if (typeof a.kind !== "string" || !KINDS.includes(a.kind)) throw notAnAnswer();
+    const kind = a.kind as ApprovalKind;
     if (typeof a.token !== "string" || !ADDRESS.test(a.token)) throw notAnAnswer();
     if (typeof a.spender !== "string" || !ADDRESS.test(a.spender)) throw notAnAnswer();
     if (typeof a.allowance !== "string" || !/^\d+$/.test(a.allowance)) throw notAnAnswer();
     if (typeof a.lastApprovalBlock !== "number" || !Number.isSafeInteger(a.lastApprovalBlock)) throw notAnAnswer();
+    if (kind === "erc721" && (typeof a.tokenId !== "string" || !UINT.test(a.tokenId) || BigInt(a.tokenId) > MAX_UINT256)) {
+      throw notAnAnswer();
+    }
+    if (kind === "permit2" && a.expiration !== undefined && !(Number.isSafeInteger(a.expiration) && (a.expiration as number) >= 0)) {
+      throw notAnAnswer();
+    }
     const decimals =
       typeof a.decimals === "number" && Number.isInteger(a.decimals) && a.decimals >= 0 && a.decimals <= 255 ? a.decimals : null;
     return {
+      kind,
       token: getAddress(a.token),
       symbol: typeof a.symbol === "string" ? cleanLabel(a.symbol, 32) : null,
       name: typeof a.name === "string" ? cleanLabel(a.name, 64) : null,
@@ -51,6 +78,8 @@ export function parseApprovalsAnswer(json: unknown): ApprovalsAnswer {
       spender: getAddress(a.spender),
       spenderLabel: typeof a.spenderLabel === "string" ? a.spenderLabel : null,
       allowance: a.allowance,
+      ...(kind === "erc721" ? { tokenId: a.tokenId as string } : {}),
+      ...(kind === "permit2" && a.expiration !== undefined ? { expiration: a.expiration as number } : {}),
       lastApprovalBlock: a.lastApprovalBlock,
     };
   });
@@ -64,8 +93,38 @@ export async function fetchApprovals(owner: Address, fetchFn: typeof fetch = fet
   return parseApprovalsAnswer(await res.json());
 }
 
-/** A (token, spender) pair's key, whatever the case of its letters. */
-export const rowKey = (row: Pick<Approval, "token" | "spender">): string => `${row.token}:${row.spender}`.toLowerCase();
+/**
+ * A row's key, whatever the case of its letters: an ERC-20 pair's is `token:spender` (as it always was, so a revoke
+ * stored before the other kinds existed still counts), each other kind's starts with the kind, and an NFT's names its
+ * id instead of the spender, since the NFT has one approval at a time whoever holds it.
+ */
+export const rowKey = (row: Pick<Approval, "token" | "spender"> & Partial<Pick<Approval, "kind" | "tokenId">>): string => {
+  const kind = row.kind ?? "erc20";
+  if (kind === "erc20") return `${row.token}:${row.spender}`.toLowerCase();
+  if (kind === "erc721") return `erc721:${row.token}:${row.tokenId ?? ""}`.toLowerCase();
+  return `${kind}:${row.token}:${row.spender}`.toLowerCase();
+};
+
+/** The drag item a row is dragged as: it names the row, nothing more (see `rowForDrop`). */
+export function dragItemOf(row: Approval): DragItem {
+  return {
+    kind: "approval",
+    approval: row.kind,
+    token: row.token,
+    spender: row.spender,
+    ...(row.kind === "erc721" && row.tokenId !== undefined ? { tokenId: row.tokenId } : {}),
+  };
+}
+
+/**
+ * The listed row a dropped item names, or null. A drop can come from any page, so it is only ever a pointer into the
+ * list the window already shows: what gets revoked is that row, never a transaction built from the drag's own fields.
+ */
+export function rowForDrop(rows: readonly Approval[], item: DragItem): Approval | null {
+  if (item.kind !== "approval") return null;
+  const key = rowKey({ kind: item.approval, token: item.token as Address, spender: item.spender as Address, tokenId: item.tokenId });
+  return rows.find((r) => rowKey(r) === key && r.spender.toLowerCase() === item.spender.toLowerCase()) ?? null;
+}
 
 // Pairs revoked in this page, with the block each revoke landed in. The server keeps an owner's list for 60 s, so a
 // window reopened in that time could list a pair that is already revoked; `stillLive` hides it until a newer approval
@@ -197,6 +256,21 @@ export function focusTargetAfterRemoval(keysBefore: readonly string[], removedKe
 }
 
 /**
+ * Where focus goes when a revoke run ends, from the keys listed when it started and how each row came out: back to
+ * the first row that is still listed (it failed, or is still set) among those the run carried, else, for a single row
+ * that was revoked, the row now in its place (`focusTargetAfterRemoval`), else the first row the run didn't touch,
+ * else the list's own landmark.
+ */
+export function focusAfterRun(keysBefore: readonly string[], outcomes: readonly { key: string; result: string }[]): FocusTarget {
+  const stays = outcomes.find((o) => o.result !== "revoked");
+  if (stays) return { kind: "row", key: stays.key };
+  const removed = new Set(outcomes.map((o) => o.key));
+  if (removed.size === 1) return focusTargetAfterRemoval(keysBefore, [...removed][0]!);
+  const next = keysBefore.find((k) => !removed.has(k));
+  return next === undefined ? { kind: "heading" } : { kind: "row", key: next };
+}
+
+/**
  * Whether focus was lost: nothing holds it, or the page body does, which is where it lands when the element that had it
  * is removed (a revoked row) or disabled (the Revoke button that was clicked, while its revoke runs). Window.tsx moves
  * focus on when a revoke ends only then. A visitor who has moved on, to the Terminal, the lookup field or a window of
@@ -211,8 +285,12 @@ export function focusWasLost(active: object | null, body: object | null): boolea
  * address; the spender by its resolved label, else "spender " plus its short address, matching inspectButtonLabel's
  * own wording for one Revoke doesn't recognise.
  */
-export function revokeButtonLabel(row: Pick<Approval, "token" | "symbol" | "spender">, spenderName: string | null): string {
-  const token = row.symbol ?? shortAddress(row.token);
+export function revokeButtonLabel(
+  row: Pick<Approval, "token" | "symbol" | "spender"> & Partial<Pick<Approval, "tokenId">>,
+  spenderName: string | null,
+): string {
+  const name = row.symbol ?? shortAddress(row.token);
+  const token = row.tokenId !== undefined ? `${name} #${row.tokenId}` : name;
   const spender = spenderName ?? `spender ${shortAddress(row.spender)}`;
   return `Revoke ${token} for ${spender}`;
 }

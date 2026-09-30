@@ -5,6 +5,7 @@ import {
   acceptedKind,
   decodeDragItem,
   dndMime,
+  dragText,
   encodeDragItem,
   type DragItem,
   type DropKind,
@@ -16,7 +17,7 @@ export function dragSourceProps(item: DragItem) {
     onDragStart: (e: DragEvent) => {
       const { mime, data } = encodeDragItem(item);
       e.dataTransfer.setData(mime, data);
-      e.dataTransfer.setData("text/plain", item.address);
+      e.dataTransfer.setData("text/plain", dragText(item));
       e.dataTransfer.effectAllowed = "copy";
     },
   };
