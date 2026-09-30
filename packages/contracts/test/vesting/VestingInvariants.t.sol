@@ -237,7 +237,9 @@ contract VestingHandler is Test {
             w.released += expected;
             if (expected != 0) ++nonZeroReleases;
             if (w.wallet.released(address(token)) != w.released) _flag("released() disagrees with the ledger");
-            if (block.timestamp < uint256(w.start) + w.cliff && expected != 0) _flag("released before the cliff");
+            if (vm.getBlockTimestamp() < uint256(w.start) + w.cliff && expected != 0) {
+                _flag("released before the cliff");
+            }
             ++succeeded[this.release.selector];
         } catch {
             _flag("release reverted");
@@ -297,7 +299,7 @@ contract VestingHandler is Test {
         vm.prank(feeOwner);
         fees.setFee(KEY_VEST, value);
         (, uint64 at) = fees.pendingOf(KEY_VEST);
-        if (at != 0 && block.timestamp >= at) fees.applyPending(KEY_VEST);
+        if (at != 0 && vm.getBlockTimestamp() >= at) fees.applyPending(KEY_VEST);
         ++succeeded[this.changeFee.selector];
         _sweep();
     }
@@ -305,7 +307,7 @@ contract VestingHandler is Test {
     function warp(uint256 seed) external {
         vm.warp(block.timestamp + bound(seed, 1, 60 days));
         (, uint64 at) = fees.pendingOf(KEY_VEST);
-        if (at != 0 && block.timestamp >= at) fees.applyPending(KEY_VEST);
+        if (at != 0 && vm.getBlockTimestamp() >= at) fees.applyPending(KEY_VEST);
         ++succeeded[this.warp.selector];
         _sweep();
     }
@@ -399,7 +401,7 @@ contract VestingInvariantsTest is Test {
         uint256 n = handler.walletCount();
         for (uint256 i; i < n; ++i) {
             VestingHandler.WalletInfo memory w = handler.info(i);
-            if (block.timestamp < w.wallet.cliff()) {
+            if (vm.getBlockTimestamp() < w.wallet.cliff()) {
                 address token = address(handler.tokenAt(w.tokenIdx));
                 assertEq(w.wallet.released(token), 0, "released before the cliff");
                 assertEq(w.wallet.releasable(token), 0, "releasable before the cliff");

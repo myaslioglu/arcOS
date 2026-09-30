@@ -107,7 +107,7 @@ contract VestingFuzzTest is VestingTestBase {
             assertLe(vested, s.amount);
             assertEq(token.balanceOf(bob) - bobBefore, released, "the beneficiary did not get what was released");
             assertEq(token.balanceOf(address(w)) + released, s.amount, "tokens appeared or vanished");
-            if (block.timestamp < w.cliff()) assertEq(released, 0, "released before the cliff");
+            if (vm.getBlockTimestamp() < w.cliff()) assertEq(released, 0, "released before the cliff");
         }
         vm.warp(Math.max(block.timestamp, w.end()));
         w.release(address(token));
@@ -128,7 +128,7 @@ contract VestingFuzzTest is VestingTestBase {
         address beneficiary = zeroBeneficiary ? address(0) : bob;
         token.mint(alice, amount);
         bool valid = amount != 0 && amount <= factory.MAX_AMOUNT() && duration != 0 && duration <= MAX_DURATION
-            && cliff <= duration && start <= block.timestamp + MAX_DURATION && beneficiary != address(0);
+            && cliff <= duration && start <= vm.getBlockTimestamp() + MAX_DURATION && beneficiary != address(0);
         uint256 nonce = vm.getNonce(address(factory));
         uint256 aliceBefore = token.balanceOf(alice);
         vm.prank(alice);
