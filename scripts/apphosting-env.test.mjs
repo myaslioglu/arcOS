@@ -3,10 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildTimeEnv, parseEnv, render, run } from "./apphosting-env.mjs";
+import { buildTimeEnv, mergeEnv, parseEnv, render, run } from "./apphosting-env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const realFile = path.join(here, "..", "apps", "web", "apphosting.yaml");
+const realTestnetFile = path.join(here, "..", "apps", "web", "apphosting.testnet.yaml");
 
 describe("the real apps/web/apphosting.yaml", () => {
   const pairs = buildTimeEnv(parseEnv(fs.readFileSync(realFile, "utf8")));
@@ -26,6 +27,78 @@ describe("the real apps/web/apphosting.yaml", () => {
 
   it("leaves out the runtime-only secret", () => {
     expect(env).not.toHaveProperty("BLOCKSCOUT_API_KEY");
+  });
+});
+
+// The testnet backend's environment name is `testnet`, so App Hosting builds it with apphosting.testnet.yaml merged over
+// apphosting.yaml. These read the two real files merged the same way.
+describe("the real apps/web/apphosting.testnet.yaml, merged over apphosting.yaml", () => {
+  const merged = mergeEnv(parseEnv(fs.readFileSync(realFile, "utf8")), parseEnv(fs.readFileSync(realTestnetFile, "utf8")));
+  const env = Object.fromEntries(buildTimeEnv(merged));
+
+  it("builds the testnet bundle for https://testnet.4rcos.com", () => {
+    expect(env.NEXT_PUBLIC_ARC_NETWORK).toBe("testnet");
+    expect(env.NEXT_PUBLIC_SITE_URL).toBe("https://testnet.4rcos.com");
+  });
+
+  it("charges no platform fee: the fee recipient is not an address", () => {
+    expect(env.NEXT_PUBLIC_FEE_RECIPIENT).toBe("none");
+  });
+
+  it("keeps the base file's public WalletConnect project ID", () => {
+    const base = Object.fromEntries(buildTimeEnv(parseEnv(fs.readFileSync(realFile, "utf8"))));
+    expect(env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID).toBe(base.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID);
+  });
+
+  // A secret the merged file still names would need the testnet backend's account to have access to it. It has none.
+  it("names no secret, so the testnet backend needs access to none", () => {
+    expect(merged.filter((e) => e.secret !== undefined)).toEqual([]);
+    const key = merged.find((e) => e.variable === "BLOCKSCOUT_API_KEY");
+    expect(key).toMatchObject({ value: "none", availability: ["RUNTIME"] });
+  });
+
+  it("changes only what differs from mainnet: every other value is the base file's", () => {
+    const testnet = parseEnv(fs.readFileSync(realTestnetFile, "utf8")).map((e) => e.variable).sort();
+    expect(testnet).toEqual(["BLOCKSCOUT_API_KEY", "NEXT_PUBLIC_ARC_NETWORK", "NEXT_PUBLIC_FEE_RECIPIENT", "NEXT_PUBLIC_SITE_URL"]);
+  });
+});
+
+describe("mergeEnv", () => {
+  const base = parseEnv(
+    [
+      "env:",
+      "  - variable: NEXT_PUBLIC_A",
+      "    value: a",
+      "    availability: [BUILD, RUNTIME]",
+      "  - variable: NEXT_PUBLIC_B",
+      "    value: b",
+      "  - variable: KEY",
+      "    secret: KEY@1",
+      "    availability: [RUNTIME]",
+      "",
+    ].join("\n"),
+  );
+
+  it("replaces a base item whole by the environment's item of the same name, as App Hosting does", () => {
+    const merged = mergeEnv(base, parseEnv("env:\n  - variable: NEXT_PUBLIC_A\n    value: x\n    availability: [RUNTIME]\n"));
+    const a = merged.find((e) => e.variable === "NEXT_PUBLIC_A");
+    expect(a).toMatchObject({ value: "x", availability: ["RUNTIME"] }); // the base availability is not kept
+    expect(buildTimeEnv(merged)).toEqual([["NEXT_PUBLIC_B", "b"]]);
+  });
+
+  it("keeps base items the environment doesn't name, and adds the ones only it names", () => {
+    const merged = mergeEnv(base, parseEnv("env:\n  - variable: NEXT_PUBLIC_C\n    value: c\n"));
+    expect(merged.map((e) => e.variable).sort()).toEqual(["KEY", "NEXT_PUBLIC_A", "NEXT_PUBLIC_B", "NEXT_PUBLIC_C"]);
+  });
+
+  it("can turn a base secret into a plain value, so the environment needs no access to it", () => {
+    const merged = mergeEnv(base, parseEnv("env:\n  - variable: KEY\n    value: none\n    availability: [RUNTIME]\n"));
+    expect(merged.find((e) => e.variable === "KEY")).toMatchObject({ value: "none" });
+    expect(merged.find((e) => e.variable === "KEY")?.secret).toBeUndefined();
+  });
+
+  it("leaves the base alone when the environment has no env block", () => {
+    expect(mergeEnv(base, parseEnv("runConfig:\n  maxInstances: 1\n"))).toEqual(base);
   });
 });
 
@@ -175,6 +248,55 @@ describe("run", () => {
     expect(bad.out).toEqual([]);
     expect(bad.err.join("\n")).toMatch(/line 4/);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("merges apphosting.<environment>.yaml, from the same folder, over the file when --environment names one", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apphosting-env-"));
+    const file = path.join(dir, "apphosting.yaml");
+    fs.writeFileSync(file, "env:\n  - variable: NEXT_PUBLIC_A\n    value: mainnet\n  - variable: NEXT_PUBLIC_B\n    value: b\n");
+    fs.writeFileSync(path.join(dir, "apphosting.testnet.yaml"), "env:\n  - variable: NEXT_PUBLIC_A\n    value: testnet\n");
+    const c = capture();
+    expect(run([file, "--environment", "testnet"], c.io)).toBe(0);
+    expect(c.out.join("").split("\n").filter(Boolean).sort()).toEqual(["NEXT_PUBLIC_A=testnet", "NEXT_PUBLIC_B=b"]);
+    // An empty name is no environment, as on App Hosting: the base file alone.
+    const bare = capture();
+    expect(run([file, "--environment", ""], bare.io)).toBe(0);
+    expect(bare.out.join("")).toBe("NEXT_PUBLIC_A=mainnet\nNEXT_PUBLIC_B=b\n");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails when the environment's file is missing, since the build would silently be the base file's", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apphosting-env-"));
+    const file = path.join(dir, "apphosting.yaml");
+    fs.writeFileSync(file, "env:\n  - variable: NEXT_PUBLIC_A\n    value: mainnet\n");
+    const c = capture();
+    expect(run([file, "--environment", "testnet"], c.io)).toBe(1);
+    expect(c.out).toEqual([]);
+    expect(c.err.join("\n")).toMatch(/apphosting\.testnet\.yaml/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("names the file a bad line is in", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apphosting-env-"));
+    const file = path.join(dir, "apphosting.yaml");
+    fs.writeFileSync(file, "env:\n  - variable: NEXT_PUBLIC_A\n    value: mainnet\n");
+    fs.writeFileSync(path.join(dir, "apphosting.testnet.yaml"), "env:\n  - variable: NEXT_PUBLIC_A\n    value: x\n    surprise: 1\n");
+    const c = capture();
+    expect(run([file, "--environment", "testnet"], c.io)).toBe(1);
+    expect(c.err.join("\n")).toMatch(/apphosting\.testnet\.yaml line 4/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["a name that could leave the folder", ["--environment", "../x"]],
+    ["a name with capitals, which App Hosting's file names don't take", ["--environment", "Testnet"]],
+    ["--environment without a name", ["--environment"]],
+    ["an unknown option", ["--env", "testnet"]],
+    ["two files", ["a.yaml", "b.yaml"]],
+  ])("refuses %s", (_name, args) => {
+    const c = capture();
+    expect(run(args, c.io)).toBe(2);
+    expect(c.out).toEqual([]);
   });
 
   it("fails when the file gives the build nothing, since a bundle built without its settings would not be the site's", () => {

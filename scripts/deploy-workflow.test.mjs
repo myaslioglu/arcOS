@@ -233,6 +233,27 @@ describe("the Firebase CLI the deploy runs", () => {
   });
 });
 
+describe("firebase.json's App Hosting backends", () => {
+  const entries = () => JSON.parse(read("firebase.json")).apphosting;
+
+  it("lists the mainnet backend first and the testnet backend second, and no other", () => {
+    expect(entries().map((e) => e.backendId)).toEqual(["arcos", "arcos-testnet"]);
+  });
+
+  // The same source: the testnet backend differs only by its environment name, which picks apphosting.testnet.yaml.
+  it("gives both the same root and the same ignore list", () => {
+    const [mainnet, testnet] = entries();
+    expect(mainnet.rootDir).toBe("apps/web");
+    expect(testnet).toEqual({ ...mainnet, backendId: "arcos-testnet" });
+    for (const entry of entries()) expect(entry.ignore).toContain(".env.local");
+  });
+
+  it("keeps a settings file for the testnet environment beside the base one", () => {
+    expect(fs.existsSync(path.join(root, "apps/web/apphosting.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "apps/web/apphosting.testnet.yaml"))).toBe(true);
+  });
+});
+
 describe("the Firestore tests in CI", () => {
   const emulator = read(".github/workflows/emulator.yml");
   const install = /^ {6}- run: npm ci --ignore-scripts --prefix tools\/firebase$/m;
