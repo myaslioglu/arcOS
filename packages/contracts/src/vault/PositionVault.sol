@@ -66,6 +66,7 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
     error NativeTransferFailed();
     error UnexpectedNft();
     error InsufficientGas();
+    error NativeNotAccepted();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -165,8 +166,11 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
         return IERC721Receiver.onERC721Received.selector;
     }
 
-    /// v4 pools may pay fees in the native currency.
-    receive() external payable {}
+    /// v4 pools may pay fees in the native currency. A v3 pool never does, and value sent to a v3 vault could never
+    /// leave it (a v3 collect splits only the pool's two tokens), so a v3 vault refuses it.
+    receive() external payable {
+        if (kind != Kind.V4) revert NativeNotAccepted();
+    }
 
     function _collectV3() private {
         IV3PositionManager(manager)

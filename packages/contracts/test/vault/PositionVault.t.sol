@@ -931,4 +931,22 @@ contract PositionVaultTest is PositionTestBase {
         (bool ok,) = address(vault).call{value: 1}("");
         assertTrue(ok);
     }
+
+    /// Review M5: only a v4 vault can be paid native value (v4 pools may pay fees in it). A v3 pool never pays in the
+    /// native currency, and value sent to a v3 vault would be stuck for good, so it is refused.
+    function test_aV3Vault_refusesNativeValue() public {
+        (PositionVault vault,) = _lockedV3();
+        vm.deal(stranger, 1);
+        vm.prank(stranger);
+        (bool ok, bytes memory ret) = address(vault).call{value: 1}("");
+        assertFalse(ok);
+        assertEq(ret, abi.encodeWithSelector(PositionVault.NativeNotAccepted.selector));
+        assertEq(address(vault).balance, 0);
+
+        // A v4 vault of two ERC-20s still accepts it, as the manager may settle in native value to any v4 vault.
+        (PositionVault v4Vault,) = _lockedV4(address(tokenA), address(tokenB));
+        vm.prank(stranger);
+        (ok,) = address(v4Vault).call{value: 1}("");
+        assertTrue(ok);
+    }
 }
