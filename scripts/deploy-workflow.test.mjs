@@ -302,6 +302,21 @@ describe("the end-to-end smoke job in ci.yml", () => {
     expect(deploy).not.toMatch(/playwright/); // the deploy's own jobs never download a browser
   });
 
+  it("typechecks the suite and its config, which the workspaces' typecheck doesn't reach", () => {
+    const text = e2e();
+    expect(pkg().scripts["typecheck:e2e"]).toBe("tsc -p e2e/tsconfig.json");
+    expect(text.indexOf("run: npm run typecheck:e2e\n")).toBeGreaterThan(text.indexOf("run: npm ci\n"));
+  });
+
+  it("builds with the settings App Hosting reads, like the deploy's bundle, and never with the local Chromium path", () => {
+    const text = e2e();
+    const settings = text.indexOf('run: node scripts/apphosting-env.mjs | tee -a "$GITHUB_ENV"\n');
+    expect(settings).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("run: npm run build -w @arcos/web\n")).toBeGreaterThan(settings);
+    expect(text).not.toMatch(/^\s*NEXT_PUBLIC_[A-Z_]+:/m); // no value set by hand beside the file's
+    expect(ci).not.toMatch(/^\s*E2E_CHROMIUM_PATH:/m);
+  });
+
   it("uploads the report only when the suite fails", () => {
     const text = e2e();
     const upload = text.slice(text.indexOf("- name: Upload the Playwright report"));

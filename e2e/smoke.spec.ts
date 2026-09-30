@@ -81,6 +81,6 @@ test.describe("server-built routes", () => {
     const response = await request.get(`/badge/${USDC}`);
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toMatch(/^image\/svg\+xml\b/);
-    expect(await response.text()).toMatch(/^<svg[\s>]/);
+    expect(await response.text()).toMatch(/<svg[\s>]/); // an XML prolog may come first
   });
 });

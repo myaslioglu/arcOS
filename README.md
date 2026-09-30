@@ -71,8 +71,9 @@ it needs Java 21 or newer and no credentials. It and `@arcos/data`'s unit tests 
 CLI in `tools/firebase`, which the root install leaves out: install it once with
 `npm ci --ignore-scripts --prefix tools/firebase`.
 
-The end-to-end smoke suite (`e2e/`, Playwright in Chromium) runs against a production build: `npm run build`, then
-`npm run test:e2e`, which starts `next start` on port 3100 and stops it afterwards. It needs the browser once
+The end-to-end smoke suite (`e2e/`, Playwright in Chromium) runs against a production build: `NEXT_PUBLIC_ARC_NETWORK=mainnet npm run build` (CI builds with
+the settings in `apps/web/apphosting.yaml`), then `npm run test:e2e`, which starts `next start` on port 3100 and stops it
+afterwards. Outside CI it reuses a server already listening on 3100, so stop any `next dev` there first. It needs the browser once
 (`npx playwright install chromium`), or `E2E_CHROMIUM_PATH` set to a Chromium you already have. The `/t/<address>` and
 `/badge/<address>` cases read the chain when they run and still pass when that read fails. `npm run typecheck:e2e` checks
 the suite's types; `npm run lint` covers it too.

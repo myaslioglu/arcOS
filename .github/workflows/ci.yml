@@ -89,7 +89,7 @@ jobs:
         run: npm audit --audit-level=high --prefix tools/firebase
 
   # The end-to-end smoke suite (e2e/smoke.spec.ts) in a real browser against a production build, beside the checks
-  # above rather than after them. Built for Arc mainnet, like https://4rcos.com. The /t and /badge cases read the chain
+  # above rather than after them. Built with the settings in apps/web/apphosting.yaml, like https://4rcos.com. The /t and /badge cases read the chain
   # at request time; they hold when that read fails too, since the app then answers its degraded page and a neutral
   # badge. No explorer key here: the explorer-backed checks read "unknown", which the suite doesn't depend on.
   e2e:
@@ -97,8 +97,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    env:
-      NEXT_PUBLIC_ARC_NETWORK: mainnet
     steps:
       - uses: actions/checkout@v7
         with:
@@ -114,10 +112,19 @@ jobs:
 
       - run: npm ci
 
+      # e2e/ is not a workspace, so the ci job's typecheck doesn't reach it, and Playwright only strips types.
+      - name: Typecheck (e2e)
+        run: npm run typecheck:e2e
+
       # The browser build this @playwright/test version expects, with its system libraries. CI only: locally, run
       # it once yourself, or point E2E_CHROMIUM_PATH at a Chromium you have (see playwright.config.ts).
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
+
+      # The same settings as the deploy's bundle (deploy.yml): only NEXT_PUBLIC_ values, read from the file App
+      # Hosting reads, so this build can't drift from the site's.
+      - name: Read the build settings from apps/web/apphosting.yaml
+        run: node scripts/apphosting-env.mjs | tee -a "$GITHUB_ENV"
 
       - name: Build (web)
         run: npm run build -w @arcos/web
