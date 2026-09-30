@@ -61,6 +61,8 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
 - **Arc's USDC keeps its two views in step**, and the chain supports TSTORE/TLOAD (checked).
 - **Readers check each contract's own state.** Registries are discovery hints. `isVault` and `isVesting` are the
   only proof that a contract was made here, and `owner()` is the only truth about who controls it (Q4, Q5, Q14, V1).
+  `PositionVault.liquidity()` and `currencies()` revert for a v3 position burned after `withdraw`, so readers must
+  handle a revert.
 
 ## Past locker exploits, and what one contract per lock changes
 
@@ -78,7 +80,8 @@ contract is exposed to, and what this design does to each.
 2. **A privileged path.** An emergency withdrawal, a migration function, an upgradeable proxy or an admin key that
    can move pooled assets. Once its key is stolen or its logic is abused, it empties the pool. Here there is none:
    no admin function over a vault, no upgrade (clones of a fixed implementation whose initializer is disabled), no
-   migrate or rescue function. The ABI tests pin every function list. The VaultFactory owner can only change the
+   migrate or rescue function. `packages/chain/src/__tests__/abis.test.ts` pins the exact function lists of the vault,
+   vesting and ProPass contracts. The VaultFactory owner can only change the
    allow-list for new position locks. The FeeController owner can only change future fees within their caps.
 3. **Trusting what the caller supplies.** A shared contract that calls a token, pair, router or position manager the
    caller names can be re-entered or lied to, and a lie told to the pool's books costs everyone. Here a
@@ -97,6 +100,8 @@ Status:
 - **Decided**: a choice was made; we'd like your view.
 - **Fixed**: raised in review and changed in the code, with a test; listed so you can check the fix.
 - **By design**: accepted and documented in NatSpec; listed so you can challenge it.
+- **Decided for testnet**: accepted for the testnet deployment, to be revisited before mainnet.
+- **Open until testnet**: settled by a check after the testnet deployment.
 
 ### A. Tokens
 
@@ -147,7 +152,9 @@ guards cover state-changing entry points, not views.
 
 **V7. Tokens already at a wallet's predicted address** before creation belong to the beneficiary but are not counted
 in `VestingCreated.amount`. The same holds for a pre-funded vault address.
-- Status: by design; tested (`test_preFundedPredictedAddress_isADonation_notPartOfTheRecordedAmount`).
+- Status: by design. Tested for vaults (`vault/VaultTokens.t.sol`,
+  `test_preFundedPredictedAddress_isADonation_notPartOfTheRecordedAmount`); the vesting path uses the same
+  balance-delta code and is not tested separately.
 
 ### C. The fee recipient and the platform's share
 
@@ -156,7 +163,8 @@ in `VestingCreated.amount`. The same holds for a pre-funded vault address.
 - Current behaviour: `_split` (`PositionVault.sol` lines 200-216) makes one attempt with at most 100,000 gas and at
   most 32 bytes of return data copied. If it fails, `PlatformShareSkipped` is emitted and the owner gets the whole
   amount. There is no pull balance and no other function that moves tokens.
-- Before the attempt, `gasleft()` must cover the budget plus a 40,000 margin, or the call reverts `InsufficientGas`.
+- Before the attempt, `gasleft()` must be at least `100,000 * 64 / 63 + 40,000` (about 141,587;
+  `PositionVault.sol` line 225), or the call reverts `InsufficientGas`.
   That stops the owner from starving the attempt on purpose.
 - Why: the platform's share must never block the owner's own fees. Every failure mode has a `test_q9_*` test.
 - Alternatives we weighed: a pull balance for the recipient, or reverting the whole collect.
@@ -227,7 +235,8 @@ v3 position whose principal had been decreased into `tokensOwed` (released at th
 - Status: fixed.
 - Now: `lockPosition` reverts `NoLiquidity` for zero liquidity, `OwedNotCollected` when a v3 position has anything
   owed, and `PositionNotReceived` when the manager's `ownerOf` isn't the vault after the transfer.
-  `PositionVault.liquidity()` exposes the live liquidity (`VaultFactory.sol` lines 240-251). Unit and fork tests
+  The checks are `VaultFactory.sol` lines 240-251. `PositionVault.liquidity()` exposes the live liquidity
+  (`PositionVault.sol` lines 116-119). Unit and fork tests
   cover each case.
 
 **Q32. Griefing a v3 lock by front-running.** Anyone can `increaseLiquidity` on another's v3 position just before
@@ -338,7 +347,7 @@ releases between the cliff and the end then revert on overflow until `end()`. Th
 ### I. ProPass
 
 **V9. `subscribe` accepts `account == address(0)`.**
-- Status: no decision recorded; kept. It is only the payer's loss.
+- Status: **owner decision, open**; the current behaviour is kept. It is only the payer's loss.
 - Question: should it revert?
 
 **V10. `ProPass` has no reentrancy guard.** It writes `paidUntil` before forwarding the payment, and a re-entry can

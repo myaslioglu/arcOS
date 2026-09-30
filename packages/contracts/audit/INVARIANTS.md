@@ -56,7 +56,7 @@ recipient copied at creation, `floor(amount * feeShareBps / 10_000)`.
 | Test | Kind |
 |---|---|
 | `vault/PositionInvariants.t.sol` `invariant_noUnexpectedOutcome`: the handler predicts a refusal for every non-owner `collect` and `withdraw`, predicts the exact split, and flags anyone else being paid | invariant |
-| `vault/PositionInvariants.t.sol` `invariant_theRecipientGetsExactlyItsShares`: the recipient's receipts equal the flat fees plus the predicted shares, and no vault keeps native value | invariant |
+| `vault/PositionInvariants.t.sol` `invariant_theRecipientGetsExactlyItsShares`: the recipient's native receipts equal the flat fees plus the predicted shares, and no vault keeps native value | invariant |
 | `vault/PositionFuzz.t.sol` `testFuzz_collect_splitsExactly`, `testFuzz_nonOwnerNeverReceivesValue_ownerNeverGetsThePositionEarly` | fuzz |
 | `vault/PositionVault.t.sol` `test_collect_isOwnerOnly`, `test_withdraw_isOwnerOnly_andRefusesZero`, `test_collect_platformShareRoundsDown`, `test_collect_usesTheShareAndRecipientCopiedAtCreation` | unit |
 

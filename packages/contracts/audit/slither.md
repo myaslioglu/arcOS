@@ -18,7 +18,7 @@ From `packages/contracts`, with `forge` on `PATH` (crytic-compile reads `forge c
 
 ```sh
 python3 -m venv /tmp/slither-venv
-/tmp/slither-venv/bin/pip install slither-analyzer
+/tmp/slither-venv/bin/pip install slither-analyzer==0.11.6
 /tmp/slither-venv/bin/slither script/DeployR1.s.sol \
   --compile-force-framework solc \
   --solc "$HOME/.svm/0.8.30/solc-0.8.30" \
@@ -124,7 +124,7 @@ Line numbers are the file's own, as Slither printed them.
 | Finding | Triage |
 |---|---|
 | `VaultFactory.lockToken` writes the registries after calling the fee recipient (`_takeFlatFee`) and the new clone's `initialize` (`src/vault/VaultFactory.sol` lines 99-126) | **Justified.** `lockToken` is `nonReentrant` (transient guard), so a recipient that calls back into `lockToken` or `lockPosition` reverts (`test_lockToken_isNonReentrant_forAReenteringFeeRecipient`). The factory's only other state-changing function is `setManager`, which is `onlyOwner`. The `initialize` callee is a clone of the factory's own implementation, made in this call. The write order matters only to a reader of `isVault` or the registries during the call (THREAT-MODEL Q6). |
-| `VaultFactory.lockPosition`, the same pattern (lines 138-159) | **Justified.** The same reasons. The other calls in `lockPosition` go to an allow-listed manager, and happen after the registry writes. |
+| `VaultFactory.lockPosition`, the same pattern (lines 138-159) | **Justified.** The same reasons. The `currencies()` read and the NFT transfer in `lockPosition` go to the allow-listed manager, and the call is `nonReentrant`. |
 
 ### `timestamp` (8)
 
