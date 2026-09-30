@@ -944,7 +944,8 @@ contract PositionVaultTest is PositionTestBase {
         assertEq(ret, abi.encodeWithSelector(PositionVault.NativeNotAccepted.selector));
         assertEq(address(vault).balance, 0);
 
-        // A v4 vault of two ERC-20s still accepts it, as the manager may settle in native value to any v4 vault.
+        // A v4 vault of two ERC-20s still accepts it: `receive` checks only the kind. Value sent there is stranded, as
+        // a split sweeps only the pool's own currencies (audit Q31, by design for now).
         (PositionVault v4Vault,) = _lockedV4(address(tokenA), address(tokenB));
         vm.prank(stranger);
         (ok,) = address(v4Vault).call{value: 1}("");
