@@ -44,7 +44,10 @@ arc = "https://rpc.mainnet.arc.io"
 # The fork suite, against the real Uniswap managers on a fork of Arc mainnet at a pinned block:
 #   npm run test:fork   (FOUNDRY_PROFILE=fork node scripts/forge.mjs test -vv)
 # A profile inherits the default's settings, and an empty `no_match_path` keeps the default's, so it names a path that
-# does not exist instead.
+# does not exist instead. Its own build folders keep its partial build from hiding the default's artifacts: sharing
+# them, a filtered default run straight after a fork run finds no tests.
 [profile.fork]
 match_path = "test/fork/**"
 no_match_path = "none"
+out = "out/fork"
+cache_path = "cache/fork"
