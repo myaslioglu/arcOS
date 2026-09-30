@@ -53,8 +53,12 @@ Signing in is free and sends no transaction: the wallet signs an EIP-4361 messag
   `NEXT_PUBLIC_SITE_URL` as its domain and that site's origin as its URI (never the request's Host header), name the
   active chain, carry the site's own statement and no resources, request id or Not Before, and be inside a lifetime of
   at most 10 minutes.
-- **Signature.** viem's `verifySiweMessage` over the server's RPC client (CCIP-Read off). It covers ordinary wallets
-  and smart-contract wallets (ERC-1271, and ERC-6492 before deployment).
+- **Signature.** viem's `verifySiweMessage` over sign-in's own RPC client (CCIP-Read off). It covers ordinary wallets
+  and smart-contract wallets (ERC-1271, and ERC-6492 before deployment). That client keeps its own endpoint-health
+  record and reads an out-of-gas answer as the node's, so a signature built to burn gas costs one call at one endpoint
+  and never puts the endpoints the Inspector, `/api/pulse`, `/badge` and `/t` share on cooldown. Before the check,
+  verify reads, without consuming it, that the nonce is stored and live, so a nonce that can't sign in never reaches
+  the RPC.
 - **Session.** The cookie `arcos_session` is an HS256 JWT `{ sub: address, aud: site host, iat, exp: +7 days }`, sent
   `HttpOnly; Secure; SameSite=Lax; Path=/`, signed with `ARCOS_SESSION_SECRET` (a Secret Manager secret of 32 bytes or
   more). Each sign-in issues a new token. It also carries the wallet's session version: signing out moves the version
@@ -140,11 +144,12 @@ sends its own usage and error reports to Circle.
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
-does: the server's two clients (`serverRpcClient` and `approvalsRpcClient` in `apps/web/src/lib/server-rpc.ts`, both
-built by `inspectionClient` in `apps/web/src/lib/inspection-client.ts`, each with its own endpoint-health record) —
-`serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and `/api/pulse`; `approvalsRpcClient` behind
-`/api/approvals` alone, which reads the allowance, symbol, name and decimals of whatever token contracts an address
-has approved — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
+does: the server's three clients (`serverRpcClient`, `approvalsRpcClient` and `authRpcClient` in
+`apps/web/src/lib/server-rpc.ts`, all built by `inspectionClient` in `apps/web/src/lib/inspection-client.ts`, each with
+its own endpoint-health record) — `serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and
+`/api/pulse`; `approvalsRpcClient` behind `/api/approvals` alone, which reads the allowance, symbol, name and decimals
+of whatever token contracts an address has approved; `authRpcClient` behind `/api/auth/verify` alone, which checks
+smart-wallet signatures — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
 With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is
 a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
 Swap and Bridge only read Circle's own contracts.

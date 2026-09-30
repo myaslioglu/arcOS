@@ -2,7 +2,7 @@ import { deleteApp, getApps } from "firebase-admin/app";
 import { Timestamp } from "firebase-admin/firestore";
 import { afterAll, describe, expect, it } from "vitest";
 import { COLLECTIONS, TTL_MS, type NonceDoc, type UserDoc } from "../index";
-import { acceptSignIn, arcosDb, readSessionState, revokeSessions, storeNonce } from "../server";
+import { acceptSignIn, arcosDb, isNonceLive, readSessionState, revokeSessions, storeNonce } from "../server";
 
 // The sign-in store (design 1.4, 1.6): nonces/{nonce} with a 10-minute expiresAt, deleted in the transaction that
 // accepts it, and users/{address} with the session version that logout bumps.
@@ -39,6 +39,32 @@ describe("storeNonce", () => {
 
   it("refuses a value that is not a nonce before touching the database", async () => {
     await expect(storeNonce("not/a nonce", NOW)).rejects.toMatchObject({ code: "nonce" });
+  });
+});
+
+// Review 1, Important 1: verify asks whether a nonce is worth a signature check before it spends an RPC call on one.
+// Asking reads, never consumes: acceptSignIn's transaction stays the only authority.
+describe("isNonceLive", () => {
+  it("answers true for a stored, unexpired nonce, and leaves it for acceptSignIn", async () => {
+    const value = nonce();
+    await storeNonce(value, NOW);
+    await expect(isNonceLive(value, later(60_000))).resolves.toBe(true);
+    await expect(isNonceLive(value, later(60_000))).resolves.toBe(true);
+    expect((await arcosDb().collection(COLLECTIONS.nonces).doc(value).get()).exists).toBe(true);
+    await expect(acceptSignIn({ nonce: value, address: address(), now: later(60_000) })).resolves.toMatchObject({ ok: true });
+    await expect(isNonceLive(value, later(60_000))).resolves.toBe(false);
+  });
+
+  it("answers false for a nonce never issued, and for an expired one, which it doesn't delete", async () => {
+    await expect(isNonceLive(nonce(), NOW)).resolves.toBe(false);
+    const value = nonce();
+    await storeNonce(value, NOW);
+    await expect(isNonceLive(value, later(TTL_MS.nonces))).resolves.toBe(false);
+    expect((await arcosDb().collection(COLLECTIONS.nonces).doc(value).get()).exists).toBe(true);
+  });
+
+  it("refuses a value that is not a nonce before touching the database", async () => {
+    await expect(isNonceLive("not/a nonce", NOW)).rejects.toMatchObject({ code: "nonce" });
   });
 });
 

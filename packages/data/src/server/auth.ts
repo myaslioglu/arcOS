@@ -27,6 +27,18 @@ export async function storeNonce(nonce: string, now: Date, db: Firestore = arcos
 }
 
 /**
+ * Whether a nonce is stored and unexpired, read without consuming it. Verify asks this before it spends an RPC call on
+ * a signature, so a nonce never issued, or already used, costs one read. It decides nothing: acceptSignIn's
+ * transaction still reads and deletes the nonce, and only it lets a sign-in through.
+ */
+export async function isNonceLive(nonce: string, now: Date, db: Firestore = arcosDb()): Promise<boolean> {
+  const snap = await db.collection(COLLECTIONS.nonces).doc(nonceId(nonce)).get();
+  if (!snap.exists) return false;
+  const stored = snap.data() as Partial<NonceDoc>;
+  return stored.expiresAt !== undefined && !isExpired(stored.expiresAt, now);
+}
+
+/**
  * Accepts a sign-in whose signature the caller has already verified. In one transaction it reads the nonce, deletes it
  * (expired or not: a nonce is only ever tried once), and, when it was stored and has not expired, creates or updates
  * users/{address} and answers the user's session version. A nonce that is missing, used or expired answers

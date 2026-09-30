@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPublicClient, custom, type Hex } from "viem";
+import { parseSiweMessage } from "viem/siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { activeChain } from "@arcos/chain";
 import type { AuthDeps, AuthStore } from "@/lib/auth-server";
@@ -40,6 +41,10 @@ function memoryStore() {
     async readSessionState(address) {
       const user = users.get(address.toLowerCase());
       return user ? { sessionVersion: user.sessionVersion, telegramLinked: user.telegram } : null;
+    },
+    async isNonceLive(nonce, now) {
+      const stored = nonces.get(nonce);
+      return stored !== undefined && stored.expiresAt > now.getTime();
     },
     async revokeSessions(address) {
       const user = users.get(address.toLowerCase());
@@ -439,6 +444,74 @@ describe("the nonce's pre-auth cookie", () => {
     }
     jar = good;
     expect((await verifyPOST(postJson("/api/auth/verify", { message, signature }))).status).toBe(200);
+  });
+});
+
+// Review 1, Important 1: a signature check can cost an RPC call, so verify first asks the store, without consuming
+// anything, whether the nonce was issued and is still live. The accepting transaction stays the authority.
+describe("the nonce check before the signature", () => {
+  /** A message for `nonce`, signed, with this browser holding that nonce's pre-auth cookie. */
+  async function attempt(nonce: string) {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const message = buildSignInMessage({ address: account.address, chainId: CHAIN_ID, nonce, site: siteIdentity(SITE)!, now });
+    jar = `${NONCE_COOKIE}=${nonceHash(nonce)}`;
+    return { message, signature: await account.signMessage({ message }) };
+  }
+
+  let verifySignature: ReturnType<typeof vi.fn<AuthDeps["verifySignature"]>>;
+  beforeEach(() => {
+    verifySignature = vi.fn(deps.verifySignature);
+    deps.verifySignature = verifySignature;
+  });
+
+  it("never hands an unknown nonce to the verifier", async () => {
+    const res = await verifyPOST(postJson("/api/auth/verify", await attempt("abcdefabcdefabcdefabcdefabcdefab")));
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toMatch(/expired or was already used/);
+    expect(verifySignature).not.toHaveBeenCalled();
+  });
+
+  it("never hands a used or expired nonce to the verifier", async () => {
+    const { message, signature, res } = await signIn();
+    expect(res.status).toBe(200);
+    expect(verifySignature).toHaveBeenCalledTimes(1);
+    jar = `${NONCE_COOKIE}=${nonceHash(parseSiweMessage(message).nonce!)}`;
+    expect((await verifyPOST(postJson("/api/auth/verify", { message, signature }))).status).toBe(401);
+
+    const nonce = await getNonce();
+    now = new Date(now.getTime() + NONCE_TTL_MS);
+    expect((await verifyPOST(postJson("/api/auth/verify", await attempt(nonce)))).status).toBe(401);
+    expect(verifySignature).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads without consuming: a live nonce with a bad signature is still there for the real signer", async () => {
+    const nonce = await getNonce();
+    const { message } = await attempt(nonce);
+    const other = privateKeyToAccount(generatePrivateKey());
+    const forged = await verifyPOST(postJson("/api/auth/verify", { message, signature: await other.signMessage({ message }) }));
+    expect(forged.status).toBe(401);
+    expect(verifySignature).toHaveBeenCalledTimes(1);
+    expect(memory.nonces.has(nonce)).toBe(true);
+  });
+
+  it("answers 503 when the store can't be read, without checking the signature", async () => {
+    const nonce = await getNonce();
+    memory.store.isNonceLive = async () => {
+      throw new Error("firestore down");
+    };
+    const res = await verifyPOST(postJson("/api/auth/verify", await attempt(nonce)));
+    expect(res.status).toBe(503);
+    expect(verifySignature).not.toHaveBeenCalled();
+  });
+
+  it("still lets the accepting transaction decide: a nonce used between the check and the accept is refused", async () => {
+    const nonce = await getNonce();
+    const { message, signature } = await attempt(nonce);
+    memory.store.isNonceLive = async () => true;
+    memory.nonces.delete(nonce);
+    const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
+    expect(res.status).toBe(401);
+    expect(setCookieFor(res, "arcos_session")).toBeNull();
   });
 });
 

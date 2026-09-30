@@ -26,6 +26,8 @@ import {
 /** The sign-in store: @arcos/data/server's functions over Firestore in the app, an in-memory one in tests. */
 export type AuthStore = {
   storeNonce(nonce: string, now: Date): Promise<void>;
+  /** Whether the nonce is stored and unexpired, without consuming it. acceptSignIn alone decides. */
+  isNonceLive(nonce: string, now: Date): Promise<boolean>;
   acceptSignIn(input: { nonce: string; address: string; now: Date }): Promise<{ ok: true; sessionVersion: number } | { ok: false }>;
   readSessionState(address: string): Promise<{ sessionVersion: number; telegramLinked: boolean } | null>;
   revokeSessions(address: string): Promise<void>;
@@ -157,9 +159,10 @@ function parseVerifyBody(text: string): { message: string; signature: Hex } | nu
 /**
  * POST /api/auth/verify `{ message, signature }`: `{ address }` and a new session cookie. In order: the Origin, the
  * content type, the client's limit, the body, the message (lib/siwe.ts: this site's domain and URI from config, the
- * active chain, its lifetime), the pre-auth cookie (it must hold this nonce's hash), the signature (viem's
- * verifySiweMessage, which covers EOAs and ERC-1271/6492 smart wallets), and last the nonce, which the store accepts
- * and deletes in one transaction. A new token is issued on every sign-in, whatever cookie the request carried. Every
+ * active chain, its lifetime), the pre-auth cookie (it must hold this nonce's hash), a read that the nonce is stored and
+ * live (it consumes nothing, and spares the RPC a signature check for a nonce that can't sign in), the signature
+ * (viem's verifySiweMessage, which covers EOAs and ERC-1271/6492 smart wallets), and last the nonce, which the store
+ * accepts and deletes in one transaction. A new token is issued on every sign-in, whatever cookie the request carried. Every
  * answer clears the pre-auth cookie: the browser fetches a new nonce for its next try.
  */
 export async function verifyResponse(req: Request, deps: AuthDeps): Promise<Response> {
@@ -191,6 +194,15 @@ async function verifySignIn(req: Request, deps: AuthDeps, config: AuthConfig): P
   const checked = checkSignInMessage(body.message, { site: config.site, chainId: config.chainId, now });
   if (!checked.ok) return fail(checked.reason === "malformed" ? 400 : 401, checked.reason === "malformed" ? INVALID : WRONG_MESSAGE);
   if (!isNonceOfThisBrowser(req, checked.nonce)) return fail(401, EXPIRED);
+
+  let live: boolean;
+  try {
+    live = await deps.store.isNonceLive(checked.nonce, now);
+  } catch {
+    logFailure("read-nonce");
+    return fail(503, UNAVAILABLE);
+  }
+  if (!live) return fail(401, EXPIRED);
 
   let valid: boolean;
   try {
