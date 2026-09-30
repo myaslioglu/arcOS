@@ -559,6 +559,98 @@ contract PositionVaultTest is PositionTestBase {
         assertEq(t.balanceOf(alice), 98 ether);
     }
 
+    /// Review M3: a success must be at least a whole word holding exactly 1. A token that returns 1 to 31 bytes is a
+    /// failure. The hostile token is the pool's second currency, so the first currency's payments have just left
+    /// a word holding 1 in the memory the vault reads the answer into; a short answer overwrites only its first bytes,
+    /// and without the length rule that stale 1 would be read as success.
+    function test_q9_token_thatReturnsTooFewBytes_isSkipped() public {
+        uint256[3] memory lengths = [uint256(1), 16, 31];
+        for (uint256 i; i < lengths.length; ++i) {
+            MockHostileToken t = new MockHostileToken();
+            uint256 id = _mintV4(alice, address(tokenB), address(t));
+            PositionVault vault = _lockPosition(alice, address(v4), id, 30 days, alice);
+            t.setMode(feeRecipient, MockHostileToken.Mode.ReturnShort);
+            t.setShortLength(lengths[i]);
+            _accrueV4(id, address(tokenB), 100 ether, 100 ether);
+            uint256 bBefore = tokenB.balanceOf(feeRecipient);
+
+            vm.expectEmit(true, false, false, true, address(vault));
+            emit PositionVault.PlatformShareSkipped(address(t), 2 ether);
+            vm.prank(alice);
+            vault.collect();
+            assertEq(t.balanceOf(alice), 100 ether, "the owner gets the whole amount");
+            assertEq(t.balanceOf(feeRecipient), 0);
+            assertEq(t.balanceOf(address(vault)), 0);
+            assertEq(tokenB.balanceOf(feeRecipient) - bBefore, 2 ether, "the first currency is paid as usual");
+        }
+    }
+
+    function test_q9_token_thatReturnsAWordHoldingTwo_isSkipped() public {
+        _assertSkippedToken(MockHostileToken.Mode.ReturnTwo);
+    }
+
+    /// A token that returns more than a word, the first one true, has paid (SafeERC20 reads it the same way).
+    function test_q9_token_thatReturns64BytesStartingWithTrue_paysThePlatform() public {
+        (PositionVault vault, MockHostileToken t) = _hostileVault(MockHostileToken.Mode.ReturnTrueAndMore);
+        vm.prank(alice);
+        vault.collect();
+        assertEq(t.balanceOf(feeRecipient), 2 ether);
+        assertEq(t.balanceOf(alice), 98 ether);
+    }
+
+    /// The token's call as the vault makes it, from the vault with the vault's budget: `mode` really answers with
+    /// LARGE bytes within that gas, so the tests below meet a large answer, not an out-of-gas failure.
+    function _assertTheLargeAnswerIsAffordable(PositionVault vault, MockHostileToken t, bool succeeds) internal {
+        uint256 snap = vm.snapshotState();
+        t.mint(address(vault), 2 ether); // the fees are still in the manager until collect
+        uint256 budget = vault.PLATFORM_CALL_GAS(); // read before the prank, which the next call consumes
+        bytes memory data = abi.encodeCall(t.transfer, (feeRecipient, 2 ether));
+        vm.prank(address(vault));
+        (bool ok, bytes memory ret) = address(t).call{gas: budget}(data);
+        assertEq(ok, succeeds, "the token's answer");
+        assertEq(ret.length, t.LARGE(), "the token ran out of gas before answering");
+        vm.revertToState(snap);
+    }
+
+    /// Gas collect uses with a hostile token in `mode`, the platform share being 2 ether of its 100. Each call makes
+    /// a new token and vault; the tests that compare two of these make one first and discard it, so that the storage
+    /// every collect shares (the manager's, the other currency's) is warm for both.
+    function _collectGas(MockHostileToken.Mode mode) internal returns (uint256 used, PositionVault vault) {
+        MockHostileToken t;
+        (vault, t) = _hostileVault(mode);
+        if (mode == MockHostileToken.Mode.ReturnLarge || mode == MockHostileToken.Mode.RevertLarge) {
+            _assertTheLargeAnswerIsAffordable(vault, t, mode == MockHostileToken.Mode.ReturnLarge);
+        }
+        vm.prank(alice);
+        uint256 g = gasleft();
+        vault.collect{gas: 2_000_000}();
+        used = g - gasleft();
+        bool paid = mode == MockHostileToken.Mode.ReturnLarge || mode == MockHostileToken.Mode.ReturnTrueAndMore;
+        assertEq(t.balanceOf(feeRecipient), paid ? 2 ether : 0);
+        assertEq(t.balanceOf(alice), paid ? 98 ether : 100 ether);
+    }
+
+    /// A token that pays and answers with about 150 KB is a success, and the answer costs the owner nothing beyond the
+    /// bounded call: the vault copies one word of it.
+    function test_q9_token_thatSucceedsWithAbout150KB_paysThePlatform_atABoundedCost() public {
+        _collectGas(MockHostileToken.Mode.ReturnTrueAndMore);
+        (uint256 small, PositionVault vault) = _collectGas(MockHostileToken.Mode.ReturnTrueAndMore);
+        (uint256 large,) = _collectGas(MockHostileToken.Mode.ReturnLarge);
+        emit log_named_uint("collect gas, 64-byte answer", small);
+        emit log_named_uint("collect gas, 150 KB answer", large);
+        assertLt(large, small + vault.PLATFORM_CALL_GAS(), "the large answer cost the owner more than the bounded call");
+    }
+
+    /// A token that reverts with about 150 KB is skipped, at no more than the bounded call.
+    function test_q9_token_thatRevertsWithAbout150KB_isSkipped_atABoundedCost() public {
+        _collectGas(MockHostileToken.Mode.Revert);
+        (uint256 small, PositionVault vault) = _collectGas(MockHostileToken.Mode.Revert);
+        (uint256 large,) = _collectGas(MockHostileToken.Mode.RevertLarge);
+        emit log_named_uint("collect gas, short revert", small);
+        emit log_named_uint("collect gas, 150 KB revert", large);
+        assertLt(large, small + vault.PLATFORM_CALL_GAS(), "the large revert cost the owner more than the bounded call");
+    }
+
     /// The skip is decided per collect: a recipient that recovers is paid again next time.
     function test_q9_aRecipientThatRecovers_isPaidAgain() public {
         MockSwitchableReceiver r = new MockSwitchableReceiver();

@@ -305,8 +305,9 @@ contract MockSwitchableReceiver {
     }
 }
 
-/// An ERC-20 that misbehaves only when tokens go to `target`: it reverts, returns false, burns all gas, or reverts with a
-/// megabyte of data. Every other transfer is a plain OpenZeppelin transfer.
+/// An ERC-20 that misbehaves only when tokens go to `target`: it reverts, returns false, burns all gas, reverts with a
+/// megabyte of data, or answers in a shape SafeERC20 does not accept. Every other transfer is a plain OpenZeppelin
+/// transfer. The modes that answer with a failure move nothing; those that answer with success move the tokens.
 contract MockHostileToken is ERC20 {
     enum Mode {
         None,
@@ -314,11 +315,20 @@ contract MockHostileToken is ERC20 {
         ReturnFalse,
         BurnGas,
         ReturnBomb,
-        ReturnNothing
+        ReturnNothing,
+        ReturnShort, // moves nothing and returns `shortLength` (1 to 31) zero bytes
+        ReturnTwo, // moves nothing and returns one word holding 2
+        ReturnTrueAndMore, // moves the tokens and returns 64 bytes, the first word true
+        ReturnLarge, // moves the tokens and returns LARGE bytes, the first word true
+        RevertLarge // moves nothing and reverts with LARGE bytes
     }
+
+    /// About 150 KB: large, yet affordable inside the vault's 100,000-gas budget (its memory costs about 57,000 gas).
+    uint256 public constant LARGE = 150_000;
 
     address public target;
     Mode public mode;
+    uint256 public shortLength = 1;
 
     constructor() ERC20("Hostile", "HST") {}
 
@@ -329,6 +339,11 @@ contract MockHostileToken is ERC20 {
     function setMode(address target_, Mode mode_) external {
         target = target_;
         mode = mode_;
+    }
+
+    function setShortLength(uint256 length) external {
+        require(length != 0 && length < 32, "1 to 31 bytes");
+        shortLength = length;
     }
 
     function transfer(address to, uint256 amount) public override returns (bool) {
@@ -347,6 +362,39 @@ contract MockHostileToken is ERC20 {
                 _transfer(msg.sender, to, amount);
                 assembly {
                     return(0, 0)
+                }
+            }
+            if (mode == Mode.ReturnShort) {
+                uint256 length = shortLength;
+                assembly {
+                    mstore(0, 0)
+                    return(0, length)
+                }
+            }
+            if (mode == Mode.ReturnTwo) {
+                assembly {
+                    mstore(0, 2)
+                    return(0, 32)
+                }
+            }
+            if (mode == Mode.ReturnTrueAndMore) {
+                _transfer(msg.sender, to, amount);
+                assembly {
+                    mstore(0, 1)
+                    mstore(32, 0xdead)
+                    return(0, 64)
+                }
+            }
+            if (mode == Mode.ReturnLarge) {
+                _transfer(msg.sender, to, amount);
+                assembly {
+                    mstore(0, 1)
+                    return(0, LARGE)
+                }
+            }
+            if (mode == Mode.RevertLarge) {
+                assembly {
+                    revert(0, LARGE)
                 }
             }
         }
