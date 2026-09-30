@@ -48,6 +48,7 @@ interface IV4PositionManager {
 
     function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external payable;
     function getPoolAndPositionInfo(uint256 tokenId) external view returns (PoolKey memory, uint256 info);
+    function getPositionLiquidity(uint256 tokenId) external view returns (uint128 liquidity);
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
     function ownerOf(uint256 tokenId) external view returns (address);
 }

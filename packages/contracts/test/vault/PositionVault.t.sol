@@ -181,6 +181,20 @@ contract PositionVaultTest is PositionTestBase {
         vault.onERC721Received(alice, alice, own, "");
     }
 
+    /// `liquidity()` is the position's live liquidity, read from its manager on every call, for Inspector.
+    function test_liquidity_isTheLiveLiquidityFromTheManager() public {
+        (PositionVault a, uint256 id) = _lockedV3();
+        assertEq(a.liquidity(), LIQUIDITY);
+        (PositionVault b,) = _lockedV4(NATIVE, address(tokenB));
+        assertEq(b.liquidity(), LIQUIDITY);
+        vm.warp(a.unlockAt());
+        vm.prank(alice);
+        a.withdraw(alice);
+        vm.prank(alice);
+        v3.decreaseLiquidity(MockV3PositionManager.DecreaseLiquidityParams(id, 1, 0, 0, block.timestamp));
+        assertEq(a.liquidity(), LIQUIDITY - 1);
+    }
+
     function test_currencies_areThePoolsTwoCurrencies() public {
         (PositionVault a,) = _lockedV3();
         (address c0, address c1) = a.currencies();

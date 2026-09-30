@@ -330,6 +330,63 @@ contract PositionVaultForkTest is Test {
         factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
     }
 
+    /// `liquidity()` reads the live liquidity from the real managers, and every lock made in setUp holds some.
+    function test_liquidity_isTheRealManagersLiveLiquidity() public view {
+        PositionVault[3] memory vaults = [v3Vault, v4Vault, nativeVault];
+        for (uint256 i; i < 3; ++i) {
+            assertGt(vaults[i].liquidity(), 0);
+            assertEq(vaults[i].liquidity(), _liquidity(vaults[i]));
+        }
+        assertEq(v4Vault.liquidity(), V4_LIQUIDITY);
+    }
+
+    /// Review I1, on the real v4 manager: a position whose liquidity was all removed holds no principal, and a vault
+    /// for it could never collect; the lock is refused.
+    function test_lockPosition_refusesAV4PositionWithNoLiquidity() public {
+        uint256 id = _mintV4(erc20Key);
+        vm.startPrank(alice);
+        V4.modifyLiquidities(_decreaseAndTake(id, V4_LIQUIDITY, erc20Key, alice), block.timestamp);
+        assertEq(V4.getPositionLiquidity(id), 0);
+        V4.approve(address(factory), id);
+        vm.expectRevert(VaultFactory.NoLiquidity.selector);
+        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
+        vm.stopPrank();
+        assertEq(V4.ownerOf(id), alice);
+    }
+
+    /// Review I1, on the real v3 manager: a decrease without a collect leaves the principal in `tokensOwed`, where
+    /// the vault's first collect would release it as fees. Refused; once collected, the rest of the position locks.
+    function test_lockPosition_refusesAV3PositionDecreasedButNotCollected_thenLocksItOnceCollected() public {
+        uint256 id = _mintV3();
+        uint128 liquidity = _v3Liquidity(id);
+        vm.startPrank(alice);
+        V3.decreaseLiquidity(IArcV3PositionManager.DecreaseLiquidityParams(id, liquidity / 2, 0, 0, block.timestamp));
+        V3.approve(address(factory), id);
+        vm.expectRevert(VaultFactory.OwedNotCollected.selector);
+        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice);
+        assertEq(V3.ownerOf(id), alice);
+
+        V3.collect(IV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
+        PositionVault vault =
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice)));
+        vm.stopPrank();
+        assertEq(V3.ownerOf(id), address(vault));
+        assertEq(vault.liquidity(), liquidity - liquidity / 2);
+    }
+
+    /// And a v3 position emptied and collected is refused as having no liquidity.
+    function test_lockPosition_refusesAnEmptiedV3Position() public {
+        uint256 id = _mintV3();
+        uint128 liquidity = _v3Liquidity(id);
+        vm.startPrank(alice);
+        V3.decreaseLiquidity(IArcV3PositionManager.DecreaseLiquidityParams(id, liquidity, 0, 0, block.timestamp));
+        V3.collect(IV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
+        V3.approve(address(factory), id);
+        vm.expectRevert(VaultFactory.NoLiquidity.selector);
+        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice);
+        vm.stopPrank();
+    }
+
     // ---------------------------------------------------------------------
     // Collecting: the split, and the v4 action bytes
     // ---------------------------------------------------------------------

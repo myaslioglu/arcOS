@@ -9,7 +9,7 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IFeeController} from "../interfaces/IFeeController.sol";
-import {IV3PositionManager} from "./interfaces/IPositionManagers.sol";
+import {IV3PositionManager, IV4PositionManager} from "./interfaces/IPositionManagers.sol";
 import {LockVault} from "./LockVault.sol";
 import {PositionVault} from "./PositionVault.sol";
 
@@ -60,6 +60,9 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     error ZeroFeeController();
     error FeeOutOfRange(bytes32 key, uint256 value);
     error NotAToken();
+    error NoLiquidity();
+    error OwedNotCollected();
+    error PositionNotReceived();
 
     constructor(address owner_, IFeeController feeController_) Ownable(owner_) {
         if (address(feeController_) == address(0)) revert ZeroFeeController();
@@ -128,6 +131,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// the vault, so a later fee change never touches this lock. The vault is registered under `owner_` and under
     /// both of its pool's currencies (`address(0)` for v4's native currency).
     /// @dev The NFT is always taken from `msg.sender`: approving the factory lets nobody else lock one's position.
+    /// Once the transfer returns, the vault must own the NFT (`PositionNotReceived`), and the position must hold
+    /// principal: some liquidity (`NoLiquidity`), and on v3 nothing waiting in `tokensOwed` (`OwedNotCollected`),
+    /// where a decrease leaves principal that the first collect would release as fees. Fees waiting there look the
+    /// same, so they must be collected before the lock too.
     function lockPosition(address manager, uint256 tokenId, uint64 unlockAt, address owner_)
         external
         payable
@@ -146,6 +153,8 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         _positionVaultsForToken[currency0].push(vault);
         if (currency1 != currency0) _positionVaultsForToken[currency1].push(vault);
         IV3PositionManager(manager).safeTransferFrom(msg.sender, vault, tokenId); // same ERC-721 call on v4
+        if (IV3PositionManager(manager).ownerOf(tokenId) != vault) revert PositionNotReceived();
+        _requirePrincipal(manager, m.kind, tokenId);
         emit PositionLocked(owner_, manager, tokenId, vault, unlockAt);
     }
 
@@ -225,6 +234,20 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         // casting to 'uint16' is safe because _bps never returns more than BPS_DENOMINATOR (10,000)
         // forge-lint: disable-next-line(unsafe-typecast)
         return uint16(_bps(LOCK_FEE_SHARE_BPS));
+    }
+
+    /// @dev Refuses a position that holds no principal. See `lockPosition`.
+    function _requirePrincipal(address manager, PositionVault.Kind kind, uint256 tokenId) private view {
+        uint128 liquidity;
+        uint128 owed0;
+        uint128 owed1;
+        if (kind == PositionVault.Kind.V3) {
+            (,,,,,,, liquidity,,, owed0, owed1) = IV3PositionManager(manager).positions(tokenId);
+        } else {
+            liquidity = IV4PositionManager(manager).getPositionLiquidity(tokenId);
+        }
+        if (liquidity == 0) revert NoLiquidity();
+        if (owed0 != 0 || owed1 != 0) revert OwedNotCollected();
     }
 
     function _register(address vault, address owner_) private {

@@ -108,6 +108,13 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
         }
     }
 
+    /// @notice The position's liquidity (its principal) as its manager reports it now. The factory refuses to lock a
+    /// position with none.
+    function liquidity() external view returns (uint128 liquidity_) {
+        if (kind == Kind.V3) (,,,,,,, liquidity_,,,,) = IV3PositionManager(manager).positions(tokenId);
+        else liquidity_ = IV4PositionManager(manager).getPositionLiquidity(tokenId);
+    }
+
     /// @notice Collects accrued trading fees and splits them. Principal is untouched. Whatever the vault holds of the
     /// pool's two currencies is split the same way, since it cannot tell a donation from a fee.
     function collect() external onlyOwner nonReentrant {

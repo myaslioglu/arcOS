@@ -75,7 +75,6 @@ interface IArcV3PositionManager is IV3PositionManager {
 interface IArcV4PositionManager is IV4PositionManager {
     function poolManager() external view returns (address);
     function permit2() external view returns (address);
-    function getPositionLiquidity(uint256 tokenId) external view returns (uint128);
     function nextTokenId() external view returns (uint256);
     function approve(address to, uint256 tokenId) external;
     function getApproved(uint256 tokenId) external view returns (address);

@@ -111,12 +111,20 @@ contract MockV3PositionManager is ERC721 {
         p.liquidity -= params.liquidity;
         p.owed0 += params.liquidity;
         p.owed1 += params.liquidity;
+        MockToken(p.token0).mint(address(this), params.liquidity); // the pool pays the principal out to the manager
+        MockToken(p.token1).mint(address(this), params.liquidity);
         return (params.liquidity, params.liquidity);
     }
 
     function _onlyApproved(uint256 id) private view {
         if (!_isAuthorized(_requireOwned(id), msg.sender, id)) revert NotApproved();
     }
+}
+
+/// A buggy v3 manager whose safe transfer reports success but moves nothing: the NFT stays with its sender, and the
+/// receiver's hook is never called.
+contract MockV3ManagerThatKeepsTheNft is MockV3PositionManager {
+    function safeTransferFrom(address, address, uint256, bytes memory) public override {}
 }
 
 /// A Uniswap v4 PositionManager reduced to what matters for a lock. `modifyLiquidities` decodes the same strict

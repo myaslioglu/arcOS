@@ -5,6 +5,7 @@ import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.s
 import {PositionVault} from "../../src/vault/PositionVault.sol";
 import {VaultFactory} from "../../src/vault/VaultFactory.sol";
 import {PositionTestBase} from "./PositionTestBase.sol";
+import {MockV3ManagerThatKeepsTheNft, MockV3PositionManager} from "./mocks/PositionMocks.sol";
 
 /// `VaultFactory.lockPosition` with the real PositionVault: the NFT moves into a new vault in the same call, and the
 /// vault is registered under its owner and under both of its pool's currencies.
@@ -139,6 +140,90 @@ contract PositionFactoryTest is PositionTestBase {
         vm.prank(alice);
         vm.expectRevert(PositionVault.ZeroAddress.selector);
         factory.lockPosition{value: FLAT}(address(v3), id, at, address(0));
+    }
+
+    // ---------------------------------------------------------------------
+    // A lock must hold principal (review I1) and must hold the NFT itself (M7)
+    // ---------------------------------------------------------------------
+
+    /// A position with no liquidity has no principal to lock: an Inspector reading "locked" for it would be a lie, and
+    /// on v4 every collect would revert. Refused on both managers, and nothing is left behind.
+    function test_lockPosition_refusesAPositionWithNoLiquidity() public {
+        uint64 at = uint64(block.timestamp + 30 days);
+        uint256 id3 = v3.mint(alice, address(tokenA), address(tokenB), 0);
+        uint256 id4 = v4.mint(alice, NATIVE, address(tokenB), 0);
+        vm.startPrank(alice);
+        v3.approve(address(factory), id3);
+        v4.approve(address(factory), id4);
+        vm.expectRevert(VaultFactory.NoLiquidity.selector);
+        factory.lockPosition{value: FLAT}(address(v3), id3, at, alice);
+        vm.expectRevert(VaultFactory.NoLiquidity.selector);
+        factory.lockPosition{value: FLAT}(address(v4), id4, at, alice);
+        vm.stopPrank();
+        assertEq(v3.ownerOf(id3), alice);
+        assertEq(v4.ownerOf(id4), alice);
+        assertEq(factory.vaultsOfLength(alice), 0);
+        assertEq(factory.positionVaultsForTokenLength(address(tokenB)), 0);
+    }
+
+    /// On v3, decreasing liquidity moves principal into `tokensOwed`, where the first collect would release it as if it
+    /// were fees. A position with anything owed is refused until it is collected; then it locks.
+    function test_lockPosition_v3_refusesPrincipalWaitingInTokensOwed_untilCollected() public {
+        uint256 id = _mintV3(alice);
+        uint64 at = uint64(block.timestamp + 30 days);
+        vm.startPrank(alice);
+        v3.decreaseLiquidity(MockV3PositionManager.DecreaseLiquidityParams(id, LIQUIDITY / 2, 0, 0, block.timestamp));
+        vm.expectRevert(VaultFactory.OwedNotCollected.selector);
+        factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        assertEq(v3.ownerOf(id), alice);
+
+        v3.collect(MockV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
+        PositionVault vault = PositionVault(payable(factory.lockPosition{value: FLAT}(address(v3), id, at, alice)));
+        vm.stopPrank();
+        assertEq(v3.ownerOf(id), address(vault));
+        assertEq(vault.liquidity(), LIQUIDITY - LIQUIDITY / 2);
+    }
+
+    /// Fees waiting in `tokensOwed` cannot be told apart from principal, so they are refused the same way: one owed
+    /// side is enough.
+    function test_lockPosition_v3_refusesAnythingOwed_onEitherSide() public {
+        uint64 at = uint64(block.timestamp + 30 days);
+        for (uint256 side; side < 2; ++side) {
+            uint256 id = _mintV3(alice);
+            v3.accrue(id, side == 0 ? 1 : 0, side == 1 ? 1 : 0);
+            vm.prank(alice);
+            vm.expectRevert(VaultFactory.OwedNotCollected.selector);
+            factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        }
+    }
+
+    /// A v3 position emptied and collected has nothing left: refused as having no liquidity.
+    function test_lockPosition_v3_refusesAnEmptiedPosition() public {
+        uint256 id = _mintV3(alice);
+        uint64 at = uint64(block.timestamp + 30 days);
+        vm.startPrank(alice);
+        v3.decreaseLiquidity(MockV3PositionManager.DecreaseLiquidityParams(id, LIQUIDITY, 0, 0, block.timestamp));
+        v3.collect(MockV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
+        vm.expectRevert(VaultFactory.NoLiquidity.selector);
+        factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        vm.stopPrank();
+    }
+
+    /// Review M7: the factory checks that the vault holds the NFT once the transfer returns. A manager whose transfer
+    /// reports success but moves nothing would otherwise leave a registered vault holding nothing.
+    function test_lockPosition_refusesWhenTheManagerDidNotDeliverTheNft() public {
+        MockV3ManagerThatKeepsTheNft buggy = new MockV3ManagerThatKeepsTheNft();
+        vm.prank(factoryOwner);
+        factory.setManager(address(buggy), true, PositionVault.Kind.V3);
+        uint256 id = buggy.mint(alice, address(tokenA), address(tokenB), LIQUIDITY);
+        uint64 at = uint64(block.timestamp + 30 days);
+        vm.startPrank(alice);
+        buggy.approve(address(factory), id);
+        vm.expectRevert(VaultFactory.PositionNotReceived.selector);
+        factory.lockPosition{value: FLAT}(address(buggy), id, at, alice);
+        vm.stopPrank();
+        assertEq(buggy.ownerOf(id), alice);
+        assertEq(factory.vaultsOfLength(alice), 0);
     }
 
     /// The kind comes from the allow-list at lock time and is copied into the vault; changing it later touches only
