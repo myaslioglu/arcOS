@@ -329,14 +329,14 @@ text matches this if it happens to come up while running the rest of this sectio
 ## Revoke
 
 54. Open Revoke with no wallet connected. Expect an "Address to look up" field with a "Look" button, the sentence
-    "Connect a wallet, or paste an address to look." with an "Open Wallet" button under it, and at the bottom "Token
-    approvals only. NFT and Permit2 approvals come later." Type `nope` and click Look: `That isn't an address.` appears
-    under the field.
+    "Connect a wallet, or paste an address to look." with an "Open Wallet" button under it, and at the bottom "Lists
+    token allowances, NFT approvals and Permit2 allowances. Each revoke is a transaction your wallet confirms." Type
+    `nope` and click Look: `That isn't an address.` appears under the field.
 55. Paste the address of a wallet that has approved a token and click Look. Expect "Loading approvals…", then
     `Viewing 0x12…ab. Only its own wallet can revoke.` above one row for each live approval: the token as
     `SYMBOL · 0x12…ab` over its name, the allowance ("Unlimited", or the amount at the token's decimals), and "Spender:"
     with the spender's name (Permit2, for one) or "Unknown contract", plus its short address. A spender with no name has
-    an "Inspect" button that opens Inspector on it. There are no Revoke buttons. A wallet with none reads "No active token
+    an "Inspect" button that opens Inspector on it. There are no Revoke buttons. A wallet with none reads "No active
     approvals." A list that can't be read says "Couldn't load approvals. Try again in a minute." with a "Try again"
     button, and one that was cut short says "This list may be incomplete: some approvals couldn't be read."
 56. Connect a wallet on Arc that has an approval to spare (for a test, the allowance a Drop leaves when its second batch
