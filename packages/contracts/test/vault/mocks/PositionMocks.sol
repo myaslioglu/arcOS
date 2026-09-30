@@ -254,8 +254,11 @@ contract MockSwitchableReceiver {
         Accept,
         Revert,
         BurnGas,
-        ReturnBomb
+        ReturnBomb,
+        Heavy // needs most of the vault's budget for the platform's payment, like a multisig with a guard
     }
+
+    uint256 public constant HEAVY_GAS = 95_000;
 
     Mode public mode;
     uint256 public received;
@@ -274,6 +277,13 @@ contract MockSwitchableReceiver {
             assembly {
                 revert(0, 1000000)
             }
+        }
+        if (m == Mode.Heavy) {
+            // Like a Safe checking that it was given the gas its transaction needs: with less it fails at once, and
+            // cheaply, so the caller keeps nearly all the gas it forwarded.
+            require(gasleft() >= HEAVY_GAS, "not enough gas");
+            uint256 stop = gasleft() - (HEAVY_GAS - 10_000);
+            while (gasleft() > stop) {}
         }
         received += msg.value;
     }

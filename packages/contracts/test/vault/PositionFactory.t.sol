@@ -81,6 +81,14 @@ contract PositionFactoryTest is PositionTestBase {
         assertEq(address(uint160(uint256(vm.load(address(factory), bytes32(base + 1))))), address(b));
     }
 
+    /// No real pool pairs a currency with itself, but a vault must never be listed twice under one key.
+    function test_lockPosition_aPositionWithTheSameCurrencyTwice_isRegisteredOnce() public {
+        (PositionVault vault,) = _lockedV4(address(tokenA), address(tokenA));
+        address[] memory forA = factory.positionVaultsForToken(address(tokenA));
+        assertEq(forA.length, 1);
+        assertEq(forA[0], address(vault));
+    }
+
     function test_lockPosition_withoutApproval_revertsAndLeavesNothing() public {
         uint256 id = v3.mint(alice, address(tokenA), address(tokenB), LIQUIDITY);
         Snap memory s = _snap(alice, address(tokenA));

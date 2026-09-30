@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
+import {Vm} from "forge-std/Vm.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
@@ -35,6 +36,45 @@ contract ReenteringOwner {
                 seen = reason;
             }
         }
+    }
+}
+
+/// An owner contract that tries to collect from inside the NFT transfer its own withdraw makes.
+contract ReenteringNftOwner {
+    PositionVault public vault;
+
+    function setVault(PositionVault vault_) external {
+        vault = vault_;
+    }
+
+    function acceptOwnership() external {
+        vault.acceptOwnership();
+    }
+
+    function withdraw() external {
+        vault.withdraw(address(this));
+    }
+
+    function onERC721Received(address, address, uint256, bytes calldata) external returns (bytes4) {
+        vault.collect();
+        return this.onERC721Received.selector;
+    }
+}
+
+/// An owner contract that cannot receive native value.
+contract NativeRefusingOwner {
+    PositionVault public vault;
+
+    function setVault(PositionVault vault_) external {
+        vault = vault_;
+    }
+
+    function acceptOwnership() external {
+        vault.acceptOwnership();
+    }
+
+    function collect() external {
+        vault.collect();
     }
 }
 
@@ -314,6 +354,36 @@ contract PositionVaultTest is PositionTestBase {
         assertEq(address(o).balance, 9.8 ether);
     }
 
+    /// An owner that cannot receive native value cannot collect it: the value stays in the vault for a later collect
+    /// by an owner that can, rather than being lost or paid elsewhere.
+    function test_collect_revertsWhenTheOwnerCannotReceiveNativeValue() public {
+        NativeRefusingOwner o = new NativeRefusingOwner();
+        (PositionVault vault, uint256 id) = _lockedV4(NATIVE, address(tokenB));
+        o.setVault(vault);
+        vm.prank(alice);
+        vault.transferOwnership(address(o));
+        o.acceptOwnership();
+        _accrueV4(id, NATIVE, 10 ether, 0);
+        uint256 recipientBefore = feeRecipient.balance;
+        vm.expectRevert(PositionVault.NativeTransferFailed.selector);
+        o.collect();
+        assertEq(feeRecipient.balance, recipientBefore);
+    }
+
+    /// withdraw is guarded too: an owner contract cannot re-enter the vault from the NFT transfer withdraw makes.
+    function test_withdraw_isNotReentrant() public {
+        ReenteringNftOwner o = new ReenteringNftOwner();
+        (PositionVault vault, uint256 id) = _lockedV3();
+        o.setVault(vault);
+        vm.prank(alice);
+        vault.transferOwnership(address(o));
+        o.acceptOwnership();
+        vm.warp(vault.unlockAt());
+        vm.expectRevert(ReentrancyGuardTransient.ReentrancyGuardReentrantCall.selector);
+        o.withdraw();
+        assertEq(v3.ownerOf(id), address(vault));
+    }
+
     /// Tokens or value that reach the vault by other means leave with the next collect, split like fees. The vault can
     /// not tell them apart from fees, and it holds nothing else of those currencies.
     function test_collect_sweepsWhateverTheVaultHoldsOfThePoolsCurrencies() public {
@@ -459,6 +529,34 @@ contract PositionVaultTest is PositionTestBase {
         vm.prank(alice);
         vault.collect();
         assertEq(r.received() - before, 2 ether);
+    }
+
+    /// A share that rounds down to zero is not paid at all, so it is never "skipped" either, even for a recipient
+    /// that cannot receive.
+    function test_q9_aShareThatRoundsToZero_isNeitherPaidNorSkipped() public {
+        MockSwitchableReceiver r = new MockSwitchableReceiver();
+        (PositionVault vault, uint256 id) = _vaultWithRecipient(payable(address(r)), true);
+        r.setMode(MockSwitchableReceiver.Mode.Revert);
+        _accrueV4(id, NATIVE, 49, 0); // 49 * 200 / 10,000 rounds down to 0
+        uint256 aliceBefore = alice.balance;
+        vm.recordLogs();
+        vm.prank(alice);
+        vault.collect();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            assertTrue(logs[i].topics[0] != PositionVault.PlatformShareSkipped.selector, "a zero share was skipped");
+        }
+        assertEq(alice.balance - aliceBefore, 49);
+    }
+
+    /// The same for a recipient that needs most of the budget: the vault must reserve the call's own costs on top of
+    /// the forwarded gas, or a gas limit just above the bare budget would forward too little and skip it.
+    function test_q9_theOwnerCannotStarveARecipientThatNeedsMostOfTheBudget() public {
+        MockSwitchableReceiver r = new MockSwitchableReceiver();
+        (PositionVault vault, uint256 id) = _vaultWithRecipient(payable(address(r)), true);
+        r.setMode(MockSwitchableReceiver.Mode.Heavy);
+        _accrueV4(id, NATIVE, 100 ether, 0);
+        _sweepGasLimits(vault, NATIVE, address(r), 2 ether);
     }
 
     /// Deviation (part of Q9): the owner cannot keep the platform's share by sending `collect` with just too little
