@@ -29,6 +29,7 @@ vi.mock("@arcos/chain", async (importOriginal) => {
   return { ...real, activeChain };
 });
 
+import { PERMIT2 } from "@arcos/chain";
 import { cachedApprovals } from "../approvals-server";
 
 const APPROVAL_TOPIC = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
@@ -86,6 +87,8 @@ function approvalLogFor(owner: Address, token: Address, spender: Address, block:
 
 describe("cachedApprovals", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  /** Answers every explorer request (the lookup makes three) with the same logs, each in a Response of its own. */
+  const answerEveryRequest = (result: unknown[]) => fetchMock.mockImplementation(async () => logsResponse(result));
 
   beforeEach(() => {
     readContract.mockReset();
@@ -105,7 +108,7 @@ describe("cachedApprovals", () => {
 
   it("reads the multicall through approvalsRpcClient(), never the Inspector's shared serverRpcClient(): one aggregate3 call and no canary call for a clean lookup", async () => {
     const owner: Address = "0x1111111111111111111111111111111111111111";
-    fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
+    answerEveryRequest([approvalLog(owner)]);
     readContract.mockResolvedValue([
       { success: true, returnData: encodeAbiParameters([{ type: "uint256" }], [5n]) },
       { success: true, returnData: str("AAA") },
@@ -126,7 +129,7 @@ describe("cachedApprovals", () => {
 
   it("asks Multicall3 for the block number, on Revoke's own client and the multicall's own eth_call path, once, when the first aggregate3 call fails, and answers what it has, truncated, when that read answers (review N1 ruling)", async () => {
     const owner: Address = "0x8888888888888888888888888888888888888888";
-    fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
+    answerEveryRequest([approvalLog(owner)]);
     readContract.mockImplementation(async (args: Read) => {
       if (args.functionName === "getBlockNumber") return 1n; // the RPC answers
       throw new Error("out of gas"); // the owner's only token is poisoned
@@ -145,7 +148,7 @@ describe("cachedApprovals", () => {
 
   it("rejects, so the route answers 503, when the first aggregate3 call fails and the block number can't be read either: the RPC is down (review N1 ruling)", async () => {
     const owner: Address = "0x9999999999999999999999999999999999999999";
-    fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
+    answerEveryRequest([approvalLog(owner)]);
     readContract.mockRejectedValue(new Error("fetch failed")); // every read fails, the canary's included
 
     await expect(cachedApprovals(owner)).rejects.toMatchObject({ name: "ApprovalsUnavailable" });
@@ -158,7 +161,7 @@ describe("cachedApprovals", () => {
   it("answers 503 at once on a chain without Multicall3, sending no explorer request and no RPC read: the multicall and the canary (itself a Multicall3 read) have nothing to call", async () => {
     const owner: Address = "0xcccccccccccccccccccccccccccccccccccccccc";
     activeChain.mockReturnValueOnce({ ...activeChain(), contracts: {} });
-    fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
+    answerEveryRequest([approvalLog(owner)]);
 
     await expect(cachedApprovals(owner)).rejects.toMatchObject({ name: "ApprovalsUnavailable" });
 
@@ -170,7 +173,7 @@ describe("cachedApprovals", () => {
   it("sends no canary read once the route's 15 s deadline has aborted the lookup, even when the first aggregate3 call fails only after it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const owner: Address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    fetchMock.mockResolvedValue(logsResponse([approvalLog(owner)]));
+    answerEveryRequest([approvalLog(owner)]);
     readContract.mockImplementation(() => new Promise((_, reject) => setTimeout(() => reject(new Error("slow poison")), 16_000)));
 
     const outcome: { settled: unknown } = { settled: undefined };
@@ -192,25 +195,70 @@ describe("cachedApprovals", () => {
   it("lowercases the cache key, so a checksummed and a lowercase owner share one lookup", async () => {
     const owner = getAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(owner).not.toBe(owner.toLowerCase());
-    fetchMock.mockResolvedValue(logsResponse([]));
+    answerEveryRequest([]);
 
     const first = await cachedApprovals(owner);
     const second = await cachedApprovals(owner.toLowerCase() as Address);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // one lookup: its Approval, ApprovalForAll and Permit2 scans
     expect(second).toBe(first);
   });
 
   it("sends the explorer key only as an Authorization: Bearer header, on the logs request, never in its URL", async () => {
     const owner: Address = "0x2222222222222222222222222222222222222222";
-    fetchMock.mockResolvedValue(logsResponse([]));
+    answerEveryRequest([]);
 
     await cachedApprovals(owner);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(String(url)).not.toContain("proapi_k");
-    expect(new Headers(init.headers).get("authorization")).toBe("Bearer proapi_k");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const [url, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(String(url)).not.toContain("proapi_k");
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer proapi_k");
+    }
+  });
+
+  it("makes three explorer requests for a clean lookup: the owner's Approval events, their ApprovalForAll events, then Permit2's events naming them", async () => {
+    const owner: Address = "0x3333333333333333333333333333333333333334";
+    answerEveryRequest([]);
+
+    await cachedApprovals(owner);
+
+    const queries = (fetchMock.mock.calls as [string][]).map(([url]) => Object.fromEntries(new URL(url).searchParams));
+    expect(queries.map((q) => q.topic0 ?? q.address)).toEqual([
+      APPROVAL_TOPIC,
+      "0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31",
+      PERMIT2,
+    ]);
+    for (const q of queries) expect(q.topic1).toBe(topic(owner));
+    expect(readContract).not.toHaveBeenCalled(); // nothing to check live
+  });
+
+  it("reads a Permit2 allowance through Permit2, with the block's timestamp from Multicall3 in the same aggregate3 call", async () => {
+    const owner: Address = "0x3333333333333333333333333333333333333335";
+    const PERMIT_TOPIC = "0xc6a377bfc4eb120024a8ac08eef205be16b817020812c73223e81d1bdb9708ec";
+    fetchMock.mockImplementation(async (url: string) =>
+      logsResponse(
+        new URL(url).searchParams.get("address") === PERMIT2
+          ? [{ ...approvalLog(owner), address: PERMIT2, topics: [PERMIT_TOPIC, topic(owner), topic(TOKEN), topic(SPENDER)] }]
+          : [],
+      ),
+    );
+    readContract.mockResolvedValue([
+      { success: true, returnData: encodeAbiParameters([{ type: "uint256" }], [100n]) },
+      {
+        success: true,
+        returnData: encodeAbiParameters([{ type: "uint160" }, { type: "uint48" }, { type: "uint48" }], [5n, 200, 0]),
+      },
+      { success: true, returnData: str("AAA") },
+      { success: true, returnData: str("Token A") },
+      { success: true, returnData: encodeAbiParameters([{ type: "uint8" }], [18]) },
+    ]);
+
+    const answer = await cachedApprovals(owner);
+
+    expect(answer.approvals).toEqual([expect.objectContaining({ kind: "permit2", token: TOKEN, spender: SPENDER, allowance: "5", expiration: 200 })]);
+    const [{ args }] = aggregateCalls() as unknown as [{ args: [{ target: Address }[]] }];
+    expect(args[0].map((c) => c.target)).toEqual([multicall3(), PERMIT2, TOKEN, TOKEN, TOKEN]);
   });
 
   // Rebuilt for fix round 3 (task-8-fix-3.md), retimed for fix round 4. Faking only setTimeout/clearTimeout leaves
@@ -227,13 +275,11 @@ describe("cachedApprovals", () => {
     // MULTICALL_BUDGET = 16 attempts to exhaust. At 1.1 s an attempt, the 14th starts at 14.3 s and the 15th would
     // start at 15.4 s, after the deadline: 14 attempts with the abort check, 16 (to 17.6 s) without it, and no attempt
     // lands on the deadline's own instant, so the count never hangs on a same-instant timer tie.
-    fetchMock.mockResolvedValue(
-      logsResponse([
-        approvalLogFor(owner, TOKEN, SPENDER, 5),
-        approvalLogFor(owner, TOKEN, SPENDER_Y, 6),
-        approvalLogFor(owner, TOKEN_B, SPENDER, 7),
-      ]),
-    );
+    answerEveryRequest([
+      approvalLogFor(owner, TOKEN, SPENDER, 5),
+      approvalLogFor(owner, TOKEN, SPENDER_Y, 6),
+      approvalLogFor(owner, TOKEN_B, SPENDER, 7),
+    ]);
     readContract.mockImplementation((args: Read) =>
       args.functionName === "getBlockNumber"
         ? Promise.resolve(1n) // the canary: the RPC is up

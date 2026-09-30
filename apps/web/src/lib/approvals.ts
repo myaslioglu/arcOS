@@ -4,26 +4,43 @@ import {
   erc20Abi,
   getAddress,
   isAddress,
+  multicall3Abi,
   pad,
+  parseAbi,
   type Address,
   type Hex,
 } from "viem";
-import { ARCOS, type NetworkId } from "@arcos/chain";
+import { ARCOS, PERMIT2, UNIVERSAL_ROUTERS, type NetworkId } from "@arcos/chain";
 import { cleanLabel } from "@arcos/inspector";
 
 /**
- * Revoke's list: an owner's live ERC-20 approvals. The explorer's logs module finds every Approval event the owner
- * emitted; the pairs they name are checked live on chain in one multicall, and the ones at zero drop out. Kept free
- * of "server-only" so every rule can be tested; approvals-server.ts wires it to the explorer and the RPC client.
+ * Revoke's list: an owner's live approvals of four kinds. ERC-20 allowances and single NFTs' approvals come from the
+ * owner's Approval events (three topics and four); operators from their ApprovalForAll events (ERC-721 and ERC-1155
+ * alike); Permit2 allowances from Permit2's own Approval and Permit events. The explorer's logs module finds the
+ * events; what they name is checked live on chain in one multicall, and whatever is no longer set drops out. Kept
+ * free of "server-only" so every rule can be tested; approvals-server.ts wires it to the explorer and the RPC client.
  */
 
 /** keccak256("Approval(address,address,uint256)"): the event ERC-20 (three topics) and ERC-721 (four) both emit. */
 export const APPROVAL_TOPIC: Hex = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
+/** keccak256("ApprovalForAll(address,address,bool)"): ERC-721's and ERC-1155's operator event, the same in both. */
+export const APPROVAL_FOR_ALL_TOPIC: Hex = "0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31";
+/** keccak256("Approval(address,address,address,uint160,uint48)"): Permit2's own Approval (owner, token, spender). */
+export const PERMIT2_APPROVAL_TOPIC: Hex = "0xda9fa7c1b00402c17d0161b249b1ab8bbec047c5a52207b9c112deffd817036b";
+/** keccak256("Permit(address,address,address,uint160,uint48,uint48)"): a signed permit Permit2 accepted. */
+export const PERMIT2_PERMIT_TOPIC: Hex = "0xc6a377bfc4eb120024a8ac08eef205be16b817020812c73223e81d1bdb9708ec";
 /** The logs module answers at most this many logs a request (it has no page parameter)… */
 export const LOGS_PAGE = 1000;
-/** …and one lookup reads at most this many of them. */
+/** …and one lookup reads at most this many pages of Approval events… */
 export const MAX_PAGES = 5;
-/** One lookup checks at most this many (token, spender) pairs, the most recent first, so its multicall stays bounded. */
+/** …this many of ApprovalForAll events… */
+export const OPERATOR_PAGES = 2;
+/** …and this many of Permit2's events. */
+export const PERMIT2_PAGES = 2;
+/**
+ * One lookup checks at most this many approvals of every kind together, the most recent first, so its multicall stays
+ * bounded.
+ */
 export const MAX_PAIRS = 500;
 /**
  * One lookup's multicall makes at most this many `aggregate3` calls in total. A clean lookup makes exactly one; a
@@ -56,9 +73,6 @@ export const EXPLORER_TIME_BUDGET_MS = 6_000;
 /** An allowance this large or larger reads "Unlimited": 2^255, half of uint256's range. */
 export const UNLIMITED = 2n ** 255n;
 
-/** Permit2's canonical address, the same on every chain. */
-export const PERMIT2: Address = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
-
 /**
  * Circle App Kit's adapter contract: the spender Swap's approvals and permits name, since Swap has no router of its
  * own. From @circle-fin/app-kit 1.15.2 (ADAPTER_CONTRACT_EVM_MAINNET / ADAPTER_CONTRACT_EVM_TESTNET, used as the
@@ -78,17 +92,41 @@ export class ApprovalsUnavailable extends Error {
 }
 
 export type ExplorerLog = { address: Address; topics: Hex[]; blockNumber: number; logIndex: number; transactionHash: string };
-export type ApprovalPair = { token: Address; spender: Address; lastApprovalBlock: number };
+/**
+ * What an approval is: an ERC-20 allowance, one NFT's approval (ERC-721 `approve`), an operator over a whole
+ * collection (`setApprovalForAll`, ERC-721 or ERC-1155), or an allowance Permit2 keeps (`token` is what it moves).
+ */
+export type ApprovalKind = "erc20" | "erc721" | "operator" | "permit2";
+/**
+ * Where a candidate's latest event sits: its block, and its log index within that block. The pair functions always
+ * set the index; a candidate built without one counts as the block's first log.
+ */
+type LatestEvent = { lastApprovalBlock: number; lastApprovalLogIndex?: number };
+/** An ERC-20 (token, spender) pair the owner's Approval events name; `kind` is left out for these. */
+export type ApprovalPair = { kind?: "erc20"; token: Address; spender: Address } & LatestEvent;
+/** Something to check live: an ERC-20 pair, one NFT's approval, an operator, or a Permit2 allowance. */
+export type Candidate =
+  | ApprovalPair
+  | ({ kind: "erc721"; token: Address; spender: Address; tokenId: bigint } & LatestEvent)
+  | ({ kind: "operator" | "permit2"; token: Address; spender: Address } & LatestEvent);
 export type Approval = {
+  kind: ApprovalKind;
   token: Address;
   symbol: string | null;
   name: string | null;
   decimals: number | null;
   spender: Address;
-  /** "Permit2", "4rc.OS Multisend", "Circle swap adapter", or null for a contract Revoke doesn't know. */
+  /** "Permit2", "Uniswap Universal Router", "4rc.OS Multisend", …, or null for a contract Revoke doesn't know. */
   spenderLabel: string | null;
-  /** The live allowance, as a decimal string. */
+  /**
+   * The live allowance, as a decimal string: an amount for "erc20" and "permit2". An NFT approval and an operator
+   * carry no amount, and read "1" (it is set).
+   */
   allowance: string;
+  /** "erc721" only: the NFT's id, as a decimal string. */
+  tokenId?: string;
+  /** "permit2" only: when Permit2 stops honouring the allowance, in unix seconds. */
+  expiration?: number;
   lastApprovalBlock: number;
 };
 export type ApprovalsAnswer = { approvals: Approval[]; truncated: boolean };
@@ -96,8 +134,10 @@ export type Call = { target: Address; callData: Hex };
 export type CallResult = { success: boolean; returnData: Hex };
 /** One Multicall3 aggregate3 call, each call allowed to fail on its own. It throws only when the call itself fails. */
 export type Aggregate = (calls: readonly Call[]) => Promise<readonly CallResult[]>;
-/** One page of the owner's Approval logs, from `fromBlock` on, as the explorer sent them. */
+/** One page of the owner's logs for one scan, from `fromBlock` on, as the explorer sent them. */
 export type LogsPageReader = (fromBlock: number) => Promise<unknown[]>;
+/** The three scans a lookup makes: Approval events, ApprovalForAll events, and Permit2's events. */
+export type LogsScan = "approval" | "operator" | "permit2";
 /**
  * One cheap read on the RPC client `aggregate` uses (approvals-server.ts asks Multicall3 for the block number, an
  * eth_call like `aggregate` itself), which tells an RPC outage from a poisoned multicall. A lookup asks it at most
@@ -111,11 +151,18 @@ export type Canary = () => Promise<unknown>;
  * `performance.now()`, which, unlike `Date.now`, a wall-clock correction can't move mid-lookup.
  */
 export type ApprovalsDeps = {
+  /** The Approval scan: ERC-20 allowances and single NFTs' approvals. */
   readPage: LogsPageReader;
+  /** The ApprovalForAll scan; left out, no operator is looked for. */
+  readOperatorPage?: LogsPageReader;
+  /** The Permit2 scan; left out, no Permit2 allowance is looked for. */
+  readPermit2Page?: LogsPageReader;
   aggregate: Aggregate;
   canary: Canary;
   network: NetworkId;
   now?: () => number;
+  /** Multicall3, asked for the block's timestamp so an expired Permit2 allowance drops out; left out, none does. */
+  clock?: Address;
 };
 
 /** The default clock for both time budgets: monotonic, so a wall-clock step can neither stretch nor cut one. */
@@ -129,23 +176,30 @@ export function isUnlimited(allowance: bigint): boolean {
 export function spenderLabel(spender: string, network: NetworkId): string | null {
   const s = spender.toLowerCase();
   if (s === PERMIT2.toLowerCase()) return "Permit2";
+  if (UNIVERSAL_ROUTERS[network].some((r) => r.toLowerCase() === s)) return "Uniswap Universal Router";
   const multisend = ARCOS[network]?.multisend;
   if (multisend && s === multisend.toLowerCase()) return "4rc.OS Multisend";
   if (s === SWAP_ADAPTER[network].toLowerCase()) return "Circle swap adapter";
   return null;
 }
 
-/** One page of the logs module's getLogs: the owner's Approval events from `fromBlock` on. The key never goes in it. */
-export function logsPageUrl(apiUrl: string, owner: Address, fromBlock: number): string {
-  const query = new URLSearchParams({
-    module: "logs",
-    action: "getLogs",
-    fromBlock: String(fromBlock),
-    toBlock: "latest",
-    topic0: APPROVAL_TOPIC,
-    topic1: pad(owner.toLowerCase() as Hex, { size: 32 }),
-    topic0_1_opr: "and",
-  });
+/**
+ * One page of the logs module's getLogs, from `fromBlock` on, for one scan: the owner's Approval events, their
+ * ApprovalForAll events, or every event Permit2 emitted naming the owner first. The last asks for no topic0, so one
+ * request brings Permit2's Approval and Permit events both (`permit2Pairs` keeps those two). The key never goes in it.
+ */
+export function logsPageUrl(apiUrl: string, owner: Address, fromBlock: number, scan: LogsScan = "approval"): string {
+  const ownerTopic = pad(owner.toLowerCase() as Hex, { size: 32 });
+  const common = { module: "logs", action: "getLogs", fromBlock: String(fromBlock), toBlock: "latest" };
+  const query =
+    scan === "permit2"
+      ? new URLSearchParams({ ...common, address: PERMIT2, topic1: ownerTopic })
+      : new URLSearchParams({
+          ...common,
+          topic0: scan === "operator" ? APPROVAL_FOR_ALL_TOPIC : APPROVAL_TOPIC,
+          topic1: ownerTopic,
+          topic0_1_opr: "and",
+        });
   return `${apiUrl}?${query.toString()}`;
 }
 
@@ -227,12 +281,14 @@ export async function collectApprovalLogs(
   readPage: LogsPageReader,
   now: () => number = monotonicNow,
   start: number = now(),
+  maxPages: number = MAX_PAGES,
+  firstPageAlways = true,
 ): Promise<{ logs: ExplorerLog[]; truncated: boolean }> {
   const seen = new Set<string>();
   const logs: ExplorerLog[] = [];
   let from = 0;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    if (page > 0 && now() - start >= EXPLORER_TIME_BUDGET_MS) {
+  for (let page = 0; page < maxPages; page++) {
+    if ((page > 0 || !firstPageAlways) && now() - start >= EXPLORER_TIME_BUDGET_MS) {
       return { logs, truncated: true };
     }
     const raw = await readPage(from);
@@ -254,7 +310,17 @@ export async function collectApprovalLogs(
 }
 
 /**
- * The owner's (token, spender) pairs, each once, with its latest approval's block, newest first. Only ERC-20
+ * Chain order, newest first: by block, then by log index within the block. Every kind decides which of a key's events
+ * is the latest with it, and lists its candidates by it. The explorer's logs module answers in ascending (block, log
+ * index) order, and pages overlap by a block (`collectApprovalLogs`), but nothing relies on that order: two events of
+ * the same block, such as an NFT's approval cleared and set again, are told apart by their log index alone.
+ */
+export function newerFirst(a: LatestEvent, b: LatestEvent): number {
+  return b.lastApprovalBlock - a.lastApprovalBlock || (b.lastApprovalLogIndex ?? 0) - (a.lastApprovalLogIndex ?? 0);
+}
+
+/**
+ * The owner's (token, spender) pairs, each once, with its latest approval's block and log index, newest first. Only ERC-20
  * approvals count: exactly three topics (ERC-721's Approval carries a fourth, the token id), the Approval event, the
  * owner as the first indexed argument, and a spender topic that is an address.
  */
@@ -267,23 +333,114 @@ export function approvalPairs(owner: Address, logs: readonly ExplorerLog[]): App
     const spender = topicAddress(log.topics[2]);
     if (!spender) continue;
     const key = `${log.address.toLowerCase()}:${spender.toLowerCase()}`;
+    const pair = { token: log.address, spender, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex };
     const known = pairs.get(key);
-    if (!known || log.blockNumber > known.lastApprovalBlock) {
-      pairs.set(key, { token: log.address, spender, lastApprovalBlock: log.blockNumber });
-    }
+    if (!known || newerFirst(pair, known) < 0) pairs.set(key, pair);
   }
-  return [...pairs.values()].sort((a, b) => b.lastApprovalBlock - a.lastApprovalBlock);
+  return [...pairs.values()].sort(newerFirst);
 }
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const isOwner = (t: Hex, owner: Address) => topicAddress(t)?.toLowerCase() === owner.toLowerCase();
+
+/** Keeps, per key, the candidate from the latest event (block, then log index), and lists them newest first. */
+function latestByKey<T extends LatestEvent>(items: Iterable<[string, T]>): T[] {
+  const kept = new Map<string, T>();
+  for (const [key, item] of items) {
+    const known = kept.get(key);
+    if (!known || newerFirst(item, known) < 0) kept.set(key, item);
+  }
+  return [...kept.values()].sort(newerFirst);
+}
+
+/**
+ * The owner's single-NFT approvals: ERC-721's Approval, with four topics (the NFT's id is the fourth). One per NFT,
+ * from its latest event by (block, log index), newest first. One whose latest event approves the zero address was
+ * cleared, and drops out here rather than in the live check: every transfer out clears the approval with such an
+ * event (OpenZeppelin's ERC-721 before v5), so a wallet that has sent many NFTs would otherwise spend MAX_PAIRS slots,
+ * two reads each, on NFTs it no longer holds, and push live allowances out of the list. Nothing live is hidden by it:
+ * an approval set after the clear is a later event, and is the one kept.
+ */
+export function nftApprovalPairs(owner: Address, logs: readonly ExplorerLog[]): Candidate[] {
+  const found = function* (): Generator<[string, { kind: "erc721"; token: Address; spender: Address; tokenId: bigint; lastApprovalBlock: number; lastApprovalLogIndex: number }]> {
+    for (const log of logs) {
+      if (log.topics.length !== 4 || log.topics[0].toLowerCase() !== APPROVAL_TOPIC || !isOwner(log.topics[1], owner)) continue;
+      const spender = topicAddress(log.topics[2]);
+      if (!spender) continue;
+      const tokenId = BigInt(log.topics[3]);
+      yield [`${log.address.toLowerCase()}:${tokenId}`, { kind: "erc721", token: log.address, spender, tokenId, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex }];
+    }
+  };
+  return latestByKey(found()).filter((c) => c.spender !== ZERO_ADDRESS);
+}
+
+/** The owner's operators: ApprovalForAll events (three topics), each collection and operator once, newest first. */
+export function operatorPairs(owner: Address, logs: readonly ExplorerLog[]): Candidate[] {
+  const found = function* (): Generator<[string, { kind: "operator"; token: Address; spender: Address; lastApprovalBlock: number; lastApprovalLogIndex: number }]> {
+    for (const log of logs) {
+      if (log.topics.length !== 3 || log.topics[0].toLowerCase() !== APPROVAL_FOR_ALL_TOPIC || !isOwner(log.topics[1], owner)) continue;
+      const spender = topicAddress(log.topics[2]);
+      if (!spender) continue;
+      yield [`${log.address.toLowerCase()}:${spender.toLowerCase()}`, { kind: "operator", token: log.address, spender, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex }];
+    }
+  };
+  return latestByKey(found());
+}
+
+/**
+ * The owner's Permit2 allowances: Permit2's own Approval and Permit events (owner, token and spender are the three
+ * indexed topics), each (token, spender) once, newest first. Only logs Permit2 itself emitted count: anyone can emit
+ * an event with the same topics from a contract of their own.
+ */
+export function permit2Pairs(owner: Address, logs: readonly ExplorerLog[]): Candidate[] {
+  const found = function* (): Generator<[string, { kind: "permit2"; token: Address; spender: Address; lastApprovalBlock: number; lastApprovalLogIndex: number }]> {
+    for (const log of logs) {
+      if (log.address.toLowerCase() !== PERMIT2.toLowerCase() || log.topics.length !== 4) continue;
+      const event = log.topics[0].toLowerCase();
+      if (event !== PERMIT2_APPROVAL_TOPIC && event !== PERMIT2_PERMIT_TOPIC) continue;
+      if (!isOwner(log.topics[1], owner)) continue;
+      const token = topicAddress(log.topics[2]);
+      const spender = topicAddress(log.topics[3]);
+      if (!token || !spender) continue;
+      yield [`${token.toLowerCase()}:${spender.toLowerCase()}`, { kind: "permit2", token, spender, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex }];
+    }
+  };
+  return latestByKey(found());
+}
+
+/** The reads an NFT approval and an operator are checked with. */
+export const NFT_ABI = parseAbi([
+  "function getApproved(uint256 tokenId) view returns (address)",
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function isApprovedForAll(address owner, address operator) view returns (bool)",
+]);
+/** Permit2's allowance read, and `lockdown`, which sets each named allowance to zero in one transaction. */
+export const PERMIT2_ABI = parseAbi([
+  "function allowance(address owner, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)",
+  "function lockdown((address token, address spender)[] approvals)",
+]);
 
 const SYMBOL = encodeFunctionData({ abi: erc20Abi, functionName: "symbol" });
 const NAME = encodeFunctionData({ abi: erc20Abi, functionName: "name" });
 const DECIMALS = encodeFunctionData({ abi: erc20Abi, functionName: "decimals" });
 
+const READ_ABIS = {
+  erc20: erc20Abi,
+  nft: NFT_ABI,
+  permit2: PERMIT2_ABI,
+  multicall3: multicall3Abi,
+} as const;
+type ReadFunction =
+  | ["erc20", "allowance" | "symbol" | "name" | "decimals"]
+  | ["nft", "getApproved" | "ownerOf" | "isApprovedForAll"]
+  | ["permit2", "allowance"]
+  | ["multicall3", "getCurrentBlockTimestamp"];
+
 /** A call's decoded answer, or undefined when it failed, answered nothing, or answered something that doesn't decode. */
-function decoded(result: CallResult | undefined, functionName: "allowance" | "symbol" | "name" | "decimals"): unknown {
+function decoded(result: CallResult | undefined, ...[abi, functionName]: ReadFunction): unknown {
   if (!result?.success || result.returnData === "0x") return undefined;
   try {
-    return decodeFunctionResult({ abi: erc20Abi, functionName, data: result.returnData });
+    return decodeFunctionResult({ abi: READ_ABIS[abi] as readonly unknown[], functionName, data: result.returnData } as never);
   } catch {
     return undefined;
   }
@@ -421,19 +578,60 @@ async function resilientAggregate(
   return { results, anyUnresolved };
 }
 
-/** One call in `liveApprovals`'s multicall, and what it answers: a pair's allowance, or one token's metadata. */
-type CallInfo = { kind: "allowance"; pair: ApprovalPair } | { kind: "symbol" | "name" | "decimals"; token: Address };
+/** One call in `liveApprovals`'s multicall, and what it answers: a candidate's live state, a token's metadata, or the clock. */
+type CallInfo =
+  | { kind: "check"; candidate: Candidate; read: "allowance" | "getApproved" | "ownerOf" | "isApprovedForAll" | "permit2" }
+  | { kind: "symbol" | "name" | "decimals"; token: Address }
+  | { kind: "clock" };
+
+/** A candidate's own checks: the calls that say whether it is still set. */
+function checksOf(owner: Address, c: Candidate): { call: Call; read: Extract<CallInfo, { kind: "check" }>["read"] }[] {
+  switch (c.kind) {
+    case "erc721":
+      return [
+        { call: { target: c.token, callData: encodeFunctionData({ abi: NFT_ABI, functionName: "getApproved", args: [c.tokenId] }) }, read: "getApproved" },
+        { call: { target: c.token, callData: encodeFunctionData({ abi: NFT_ABI, functionName: "ownerOf", args: [c.tokenId] }) }, read: "ownerOf" },
+      ];
+    case "operator":
+      return [
+        {
+          call: { target: c.token, callData: encodeFunctionData({ abi: NFT_ABI, functionName: "isApprovedForAll", args: [owner, c.spender] }) },
+          read: "isApprovedForAll",
+        },
+      ];
+    case "permit2":
+      return [
+        {
+          call: { target: PERMIT2, callData: encodeFunctionData({ abi: PERMIT2_ABI, functionName: "allowance", args: [owner, c.token, c.spender] }) },
+          read: "permit2",
+        },
+      ];
+    default:
+      return [
+        { call: { target: c.token, callData: encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [owner, c.spender] }) }, read: "allowance" },
+      ];
+  }
+}
+
+const CLOCK = encodeFunctionData({ abi: multicall3Abi, functionName: "getCurrentBlockTimestamp" });
 
 /**
- * The pairs still live: every pair's `allowance(owner, spender)` and each token's symbol, name and decimals, in one
- * multicall, its calls ordered token by token — each token's own allowance call(s) next to its own symbol, name and
- * decimals calls — so a poisoned token's calls stay together for `resilientAggregate` to isolate in one split.
- * Grouped by the token address **lowercased**, not by the address as each pair happens to spell it, so the same
- * contract's calls stay contiguous even if one Approval event's address arrived cased differently from another's.
- * The tokens go oldest first, by each one's latest approval block: a spoofed Approval event is fresh, so its token
+ * The candidates still set, in one multicall, its calls ordered token by token — each token's own checks next to its
+ * own symbol, name and decimals calls — so a poisoned token's calls stay together for `resilientAggregate` to
+ * isolate in one split. What each kind is checked with:
+ * - an ERC-20 pair: `allowance(owner, spender)`, kept above zero;
+ * - one NFT's approval: `getApproved(id)` and `ownerOf(id)`, kept while the owner still holds it and someone is
+ *   approved (whoever is approved now is the row's spender);
+ * - an operator: `isApprovedForAll(owner, operator)`, kept while true;
+ * - a Permit2 allowance: Permit2's `allowance(owner, token, spender)`, kept above zero and, when `clock` (Multicall3)
+ *   is given, until its expiry by the block's own timestamp, read once in the same multicall. When the timestamp
+ *   can't be read, no allowance is dropped for its expiry: a live one is never hidden.
+ * Grouped by the token address **lowercased**, not by the address as each candidate happens to spell it, so the same
+ * contract's calls stay contiguous even if one event's address arrived cased differently from another's.
+ * The tokens go oldest first, by each one's latest approval block: a spoofed event is fresh, so its token
  * sits at the end of the list, and at every level of the halving the older half, which holds the long-lived
  * approvals, is attempted before it. The answer keeps the order `pairs` came in, whatever order the calls went in.
- * A pair at zero drops out, and so does one whose allowance can't be read, or came back unresolved. Labels come from
+ * A candidate whose check can't be read, or came back unresolved, drops out. Labels come from
  * contracts anyone can deploy, so they are cleaned (`cleanLabel`); a label or decimals that can't be read is null.
  * `truncated` is true only when some call came back unresolved — a pair legitimately reading zero, or a plain
  * revert from a well-behaved multicall, is not truncation. When the first multicall call fails, `canary` decides
@@ -444,15 +642,16 @@ type CallInfo = { kind: "allowance"; pair: ApprovalPair } | { kind: "symbol" | "
  */
 export async function liveApprovals(
   owner: Address,
-  pairs: readonly ApprovalPair[],
+  pairs: readonly Candidate[],
   aggregate: Aggregate,
   canary: Canary,
   network: NetworkId,
   now: () => number = monotonicNow,
   start: number = now(),
+  clock?: Address,
 ): Promise<{ approvals: Approval[]; truncated: boolean }> {
   if (pairs.length === 0) return { approvals: [], truncated: false };
-  const pairsByToken = new Map<string, ApprovalPair[]>();
+  const pairsByToken = new Map<string, Candidate[]>();
   for (const p of pairs) {
     const key = p.token.toLowerCase();
     const list = pairsByToken.get(key);
@@ -466,14 +665,18 @@ export async function liveApprovals(
     .map(({ group }) => group);
   const calls: Call[] = [];
   const info: CallInfo[] = [];
+  // The clock first: it takes no argument anyone chose, so nothing can poison it.
+  if (clock && pairs.some((p) => p.kind === "permit2")) {
+    calls.push({ target: clock, callData: CLOCK });
+    info.push({ kind: "clock" });
+  }
   for (const group of tokensOldestFirst) {
     const token = group[0]!.token;
     for (const p of group) {
-      calls.push({
-        target: p.token,
-        callData: encodeFunctionData({ abi: erc20Abi, functionName: "allowance", args: [owner, p.spender] }),
-      });
-      info.push({ kind: "allowance", pair: p });
+      for (const { call, read } of checksOf(owner, p)) {
+        calls.push(call);
+        info.push({ kind: "check", candidate: p, read });
+      }
     }
     calls.push({ target: token, callData: SYMBOL });
     info.push({ kind: "symbol", token });
@@ -484,41 +687,55 @@ export async function liveApprovals(
   }
   const { results, anyUnresolved } = await resilientAggregate(calls, aggregate, canary, { left: MULTICALL_BUDGET }, now, start);
   const meta = new Map<string, { symbol: string | null; name: string | null; decimals: number | null }>();
-  const allowanceByPair = new Map<ApprovalPair, bigint | undefined>();
+  const checks = new Map<Candidate, Partial<Record<Extract<CallInfo, { kind: "check" }>["read"], unknown>>>();
+  let blockTime: bigint | undefined;
   for (let i = 0; i < calls.length; i++) {
     const inf = info[i]!;
-    if (inf.kind === "allowance") {
-      const allowance = decoded(results[i], "allowance");
-      allowanceByPair.set(inf.pair, typeof allowance === "bigint" ? allowance : undefined);
+    if (inf.kind === "clock") {
+      const t = decoded(results[i], "multicall3", "getCurrentBlockTimestamp");
+      blockTime = typeof t === "bigint" ? t : undefined;
+      continue;
+    }
+    if (inf.kind === "check") {
+      const answer =
+        inf.read === "allowance"
+          ? decoded(results[i], "erc20", "allowance")
+          : inf.read === "permit2"
+            ? decoded(results[i], "permit2", "allowance")
+            : decoded(results[i], "nft", inf.read);
+      checks.set(inf.candidate, { ...checks.get(inf.candidate), [inf.read]: answer });
       continue;
     }
     const key = inf.token.toLowerCase();
     const current = meta.get(key) ?? { symbol: null, name: null, decimals: null };
     if (inf.kind === "symbol") {
-      const symbol = decoded(results[i], "symbol");
+      const symbol = decoded(results[i], "erc20", "symbol");
       current.symbol = typeof symbol === "string" ? cleanLabel(symbol, 32) : null;
     } else if (inf.kind === "name") {
-      const name = decoded(results[i], "name");
+      const name = decoded(results[i], "erc20", "name");
       current.name = typeof name === "string" ? cleanLabel(name, 64) : null;
     } else {
-      const decimals = decoded(results[i], "decimals");
+      const decimals = decoded(results[i], "erc20", "decimals");
       current.decimals = typeof decimals === "number" && Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : null;
     }
     meta.set(key, current);
   }
-  const approvals = pairs.flatMap((p) => {
-    const allowance = allowanceByPair.get(p);
-    if (allowance === undefined || allowance === 0n) return [];
+  const approvals = pairs.flatMap((p): Approval[] => {
+    const live = stillSet(owner, p, checks.get(p) ?? {}, blockTime);
+    if (!live) return [];
     const m = meta.get(p.token.toLowerCase()) ?? { symbol: null, name: null, decimals: null };
     return [
       {
+        kind: p.kind ?? "erc20",
         token: p.token,
         symbol: m.symbol,
         name: m.name,
         decimals: m.decimals,
-        spender: p.spender,
-        spenderLabel: spenderLabel(p.spender, network),
-        allowance: allowance.toString(),
+        spender: live.spender,
+        spenderLabel: spenderLabel(live.spender, network),
+        allowance: live.allowance,
+        ...(p.kind === "erc721" ? { tokenId: p.tokenId.toString() } : {}),
+        ...(live.expiration !== undefined ? { expiration: live.expiration } : {}),
         lastApprovalBlock: p.lastApprovalBlock,
       },
     ];
@@ -526,17 +743,87 @@ export async function liveApprovals(
   return { approvals, truncated: anyUnresolved };
 }
 
+/** Whether a candidate is still set by its checks' answers, and what its row says if so; null when it isn't. */
+function stillSet(
+  owner: Address,
+  c: Candidate,
+  answers: Partial<Record<Extract<CallInfo, { kind: "check" }>["read"], unknown>>,
+  blockTime: bigint | undefined,
+): { spender: Address; allowance: string; expiration?: number } | null {
+  switch (c.kind) {
+    case "erc721": {
+      const approved = answers.getApproved;
+      const holder = answers.ownerOf;
+      if (typeof approved !== "string" || typeof holder !== "string") return null;
+      if (approved.toLowerCase() === ZERO_ADDRESS || holder.toLowerCase() !== owner.toLowerCase()) return null;
+      return { spender: getAddress(approved), allowance: "1" };
+    }
+    case "operator":
+      return answers.isApprovedForAll === true ? { spender: c.spender, allowance: "1" } : null;
+    case "permit2": {
+      const answer = answers.permit2;
+      if (!Array.isArray(answer)) return null;
+      const [amount, expiration] = answer as [unknown, unknown];
+      if (typeof amount !== "bigint" || typeof expiration !== "number" || amount === 0n) return null;
+      if (blockTime !== undefined && BigInt(expiration) < blockTime) return null;
+      return { spender: c.spender, allowance: amount.toString(), expiration };
+    }
+    default: {
+      const allowance = answers.allowance;
+      return typeof allowance === "bigint" && allowance !== 0n ? { spender: c.spender, allowance: allowance.toString() } : null;
+    }
+  }
+}
+
+/** Whether `e` means the lookup was cancelled, which no partial answer may swallow. */
+const cancelled = (e: unknown) => isAbortError(e) || (e instanceof Error && e.name === "AbortError");
+
 /**
- * The whole lookup: the explorer's logs, their pairs (at most MAX_PAIRS, the most recent), and what is still live.
- * One clock, `deps.now` (default `performance.now()`), is recorded once here, before the explorer phase, and passed
- * down to both `collectApprovalLogs`'s EXPLORER_TIME_BUDGET_MS and `liveApprovals`'s MULTICALL_TIME_BUDGET_MS, so a
- * slow explorer phase counts against the multicall's own budget rather than each phase keeping its own separate clock.
+ * The whole lookup: the explorer's logs, then what they name (at most MAX_PAIRS, the most recent), then what is still
+ * live. The scans run one after another, each page waited on before the next: Approval events (MAX_PAGES), then
+ * ApprovalForAll events (OPERATOR_PAGES), then Permit2's (PERMIT2_PAGES). A clean lookup whose pages are all short
+ * makes three explorer requests. One clock, `deps.now` (default `performance.now()`), is recorded once here, before
+ * the explorer phase, and passed down to every scan's EXPLORER_TIME_BUDGET_MS and to `liveApprovals`'s
+ * MULTICALL_TIME_BUDGET_MS, so a slow explorer phase counts against the multicall's own budget rather than each phase
+ * keeping its own separate clock. Only the lookup's very first page is exempt from the time budget; a later scan
+ * that finds it spent is skipped, and the answer is marked `truncated`. A later scan that fails does the same (the
+ * Approval scan's list is still worth showing), while a failed Approval scan fails the lookup, and a cancellation
+ * always propagates.
  */
 export async function loadApprovals(owner: Address, deps: ApprovalsDeps): Promise<ApprovalsAnswer> {
   const now = deps.now ?? monotonicNow;
   const start = now();
   const { logs, truncated: pagesTruncated } = await collectApprovalLogs(deps.readPage, now, start);
-  const pairs = approvalPairs(owner, logs);
-  const live = await liveApprovals(owner, pairs.slice(0, MAX_PAIRS), deps.aggregate, deps.canary, deps.network, now, start);
-  return { approvals: live.approvals, truncated: pagesTruncated || pairs.length > MAX_PAIRS || live.truncated };
+  let scansTruncated = pagesTruncated;
+  const later = async (readPage: LogsPageReader | undefined, maxPages: number): Promise<ExplorerLog[]> => {
+    if (!readPage) return [];
+    try {
+      const scan = await collectApprovalLogs(readPage, now, start, maxPages, false);
+      if (scan.truncated) scansTruncated = true;
+      return scan.logs;
+    } catch (e) {
+      if (cancelled(e)) throw e;
+      scansTruncated = true;
+      return [];
+    }
+  };
+  const operatorLogs = await later(deps.readOperatorPage, OPERATOR_PAGES);
+  const permit2Logs = await later(deps.readPermit2Page, PERMIT2_PAGES);
+  const candidates: Candidate[] = [
+    ...approvalPairs(owner, logs),
+    ...nftApprovalPairs(owner, logs),
+    ...operatorPairs(owner, operatorLogs),
+    ...permit2Pairs(owner, permit2Logs),
+  ].sort(newerFirst);
+  const live = await liveApprovals(
+    owner,
+    candidates.slice(0, MAX_PAIRS),
+    deps.aggregate,
+    deps.canary,
+    deps.network,
+    now,
+    start,
+    deps.clock,
+  );
+  return { approvals: live.approvals, truncated: scansTruncated || candidates.length > MAX_PAIRS || live.truncated };
 }

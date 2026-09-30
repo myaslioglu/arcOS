@@ -40,6 +40,23 @@ export const DEX: Record<NetworkId, DexConfig | null> = {
   testnet: null,
 };
 
+/**
+ * Uniswap's Permit2, at its canonical address, the same on every chain. On Arc it has 9,152 bytes of code on both
+ * networks, and `DOMAIN_SEPARATOR()` and `allowance(address,address,address)` answer (read 2026-09-30 from
+ * rpc.mainnet.arc.io and rpc.testnet.arc.io).
+ */
+export const PERMIT2: Address = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+
+/**
+ * Uniswap's Universal Routers on Arc: the spenders a swap's approvals and Permit2 allowances name. Checked 2026-09-30:
+ * each has code (24,546 and 24,380 bytes) and its `poolManager()` returns the v4 PoolManager
+ * `0x8366a39CC670B4001A1121B8F6A443A643e40951`. The second has no code on testnet.
+ */
+export const UNIVERSAL_ROUTERS: Record<NetworkId, Address[]> = {
+  mainnet: ["0x4fcA4a51Ab4F23A7447b3284fBd7D73289A89Fb1", "0x8702463e73f74d0b6765aBceb314Ef07aCb92650"],
+  testnet: ["0x4fcA4a51Ab4F23A7447b3284fBd7D73289A89Fb1"],
+};
+
 /** Lock contracts whose token holdings count as locked. 4rc.OS Vault joins this list in R2. */
 export const KNOWN_LOCKERS: Record<NetworkId, Address[]> = { mainnet: [], testnet: [] };
 

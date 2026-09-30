@@ -175,11 +175,13 @@ but does have privileged functions, both the ownership and privileges findings r
 - Drop approves exactly the total a run needs, but a run that stops early (a refused signature, an
   unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until a
   later run uses it or you revoke it in Revoke.
-- Revoke lists ERC-20 approvals only: NFT approvals and Permit2's own allowances come later, and it
-  revokes one approval at a time.
-- Revoke's list reads at most 5 pages of 1,000 approval logs and considers at most 500 (token,
-  spender) pairs, the most recent first; a wallet with more history than that may not see its oldest
-  approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
+- Revoke lists ERC-20 allowances, single NFTs' approvals, operators (ERC-721 and ERC-1155
+  `setApprovalForAll`) and Permit2 allowances. "Revoke all" sends one transaction per approval, one
+  after another, and every Permit2 pair in a single `lockdown`; it stops at the first one that fails.
+- Revoke's list reads at most 5 pages of 1,000 Approval logs, 2 pages of ApprovalForAll logs and 2
+  pages of Permit2's logs (three explorer requests for most wallets), and considers at most 500
+  approvals of every kind together, the most recent first; a wallet with more history than that may
+  not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
 - Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
