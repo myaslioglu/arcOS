@@ -164,6 +164,19 @@ export const positionVaultAbi = [
   },
   {
     "type": "function",
+    "name": "liquidity",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "liquidity_",
+        "type": "uint128",
+        "internalType": "uint128"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "manager",
     "inputs": [],
     "outputs": [
@@ -426,6 +439,11 @@ export const positionVaultAbi = [
   {
     "type": "error",
     "name": "InvalidInitialization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NativeNotAccepted",
     "inputs": []
   },
   {

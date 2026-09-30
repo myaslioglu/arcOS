@@ -120,6 +120,7 @@ describe("abis", () => {
         "feeShareBps",
         "initialize",
         "kind",
+        "liquidity",
         "manager",
         "onERC721Received",
         "owner",
@@ -150,12 +151,15 @@ describe("abis", () => {
     expect(inputNames(findItem(positionVaultAbi, "event", "PlatformShareSkipped"))).toEqual(["currency", "amount"]);
     const errors = names(positionVaultAbi, "error");
     for (const name of [
+      "BadFeeShare",
       "BadUnlockTime",
       "InsufficientGas",
+      "NativeNotAccepted",
       "NativeTransferFailed",
       "NotOwner",
       "NotPendingOwner",
       "StillLocked",
+      "UnexpectedNft",
       "ZeroAddress",
     ]) {
       expect(errors).toContain(name);
@@ -221,7 +225,17 @@ describe("abis", () => {
 
   it("vaultFactoryAbi has the errors the Vault app decodes", () => {
     const errors = names(vaultFactoryAbi, "error");
-    for (const name of ["WrongFee", "FeeTransferFailed", "FeeOutOfRange", "ManagerNotAllowed", "NotAToken", "ZeroAmount"]) {
+    for (const name of [
+      "WrongFee",
+      "FeeTransferFailed",
+      "FeeOutOfRange",
+      "ManagerNotAllowed",
+      "NotAToken",
+      "ZeroAmount",
+      "NoLiquidity",
+      "OwedNotCollected",
+      "PositionNotReceived",
+    ]) {
       expect(errors).toContain(name);
     }
   });
