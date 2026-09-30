@@ -276,7 +276,9 @@ describe("deploy.yml, the two sites", () => {
     expect(mainnet).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_MAINNET == 'true' \}\}$/m);
     expect(testnet).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_TESTNET == 'true' \}\}$/m);
     const list = steps("deploy");
-    expect(list.indexOf(testnet)).toBe(list.indexOf(mainnet) + 1);
+    const guard = list.find((s) => /environment name must be testnet/.test(s));
+    expect(list.indexOf(guard)).toBe(list.indexOf(mainnet) + 1);
+    expect(list.indexOf(testnet)).toBe(list.indexOf(guard) + 1);
     // Nothing lets a step run after a failure, or a failure pass: the testnet step runs only while every step before it
     // has succeeded, and a failed deploy fails the job.
     for (const step of list) {
@@ -285,12 +287,23 @@ describe("deploy.yml, the two sites", () => {
     expect(job("deploy")).not.toMatch(/continue-on-error/);
   });
 
+  // Without the environment name, App Hosting builds arcos-testnet from apphosting.yaml alone: 4rc.OS under another name.
+  it("reads the testnet backend's environment name before deploying it, and stops unless it is testnet", () => {
+    const guard = steps("deploy").find((s) => /environment name must be testnet/.test(s));
+    expect(guard).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_TESTNET == 'true' \}\}$/m);
+    const [read, check] = runScripts(guard)[0].split("\n");
+    expect(read).toBe(
+      `name="$(tools/firebase/node_modules/.bin/firebase apphosting:backends:get "$APPHOSTING_TESTNET_BACKEND" --project "$FIREBASE_PROJECT" --non-interactive --json | jq -r '.result.environment // ""')"`,
+    );
+    expect(check).toMatch(/^if \[ "\$name" != testnet \]; then echo "::error::.*"; exit 1; fi$/);
+  });
+
   it("stays under the hour of the CLI's access token in each deploy step", () => {
     for (const id of ["deploy-mainnet", "deploy-testnet"]) expect(deployStep(id)).toMatch(/^ {8}timeout-minutes: 40$/m);
   });
 
   it("deploys each backend by name, never every backend in firebase.json at once", () => {
-    const deploys = runScripts(job("deploy")).filter((r) => /\bdeploy\b/.test(r) && /firebase/.test(r));
+    const deploys = runScripts(job("deploy")).filter((r) => /firebase deploy/.test(r));
     expect(deploys).toHaveLength(2);
     for (const r of deploys) expect(r).toMatch(/--only "apphosting:\$\{APPHOSTING(_TESTNET)?_BACKEND\}"/);
     expect(deployCode).not.toMatch(/--only "?apphosting"?(\s|$)/);

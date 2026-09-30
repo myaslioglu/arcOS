@@ -223,6 +223,15 @@ jobs:
         timeout-minutes: 40
         run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
 
+      # App Hosting picks a backend's settings by its environment name. Without `testnet`, arcos-testnet would be built
+      # from apphosting.yaml alone: a copy of 4rc.OS, its fee recipient included. So the testnet deploy reads it first
+      # (nothing written), after the mainnet deploy, so this check can only ever stop the testnet one.
+      - name: The testnet backend's environment name must be testnet
+        if: ${{ !inputs.dry_run && env.DEPLOY_TESTNET == 'true' }}
+        run: |
+          name="$(tools/firebase/node_modules/.bin/firebase apphosting:backends:get "$APPHOSTING_TESTNET_BACKEND" --project "$FIREBASE_PROJECT" --non-interactive --json | jq -r '.result.environment // ""')"
+          if [ "$name" != testnet ]; then echo "::error::$APPHOSTING_TESTNET_BACKEND has the environment name '$name', not 'testnet' (docs/DEPLOYING.md, The testnet site)"; exit 1; fi
+
       # After the mainnet deploy, and only once it has succeeded (or wasn't asked for): a step after a failed one doesn't
       # run. Its own upload of the same source, built by App Hosting with apps/web/apphosting.testnet.yaml merged in.
       - name: Deploy the testnet site to App Hosting
