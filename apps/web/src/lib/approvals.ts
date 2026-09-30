@@ -357,7 +357,7 @@ function latestByKey<T extends LatestEvent>(items: Iterable<[string, T]>): T[] {
  * The owner's single-NFT approvals: ERC-721's Approval, with four topics (the NFT's id is the fourth). One per NFT,
  * from its latest event by (block, log index), newest first. One whose latest event approves the zero address was
  * cleared, and drops out here rather than in the live check: every transfer out clears the approval with such an
- * event (OpenZeppelin's ERC-721 before v5), so a wallet that has sent many NFTs would otherwise spend MAX_PAIRS slots,
+ * event (OpenZeppelin's ERC-721 before 4.8.0), so a wallet that has sent many NFTs would otherwise spend MAX_PAIRS slots,
  * two reads each, on NFTs it no longer holds, and push live allowances out of the list. Nothing live is hidden by it:
  * an approval set after the clear is a later event, and is the one kept.
  */

@@ -92,8 +92,8 @@ export function classifySwapFailure(err: unknown): string {
 }
 
 /** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake
- * instead of depending on jsdom (this workspace's vitest runs `environment: "node"`, so there's no
- * real `window` to exercise this against otherwise). */
+ * instead of depending on jsdom (this workspace's vitest runs `environment: "node"` unless a file opts
+ * into jsdom, so there's no real `window` to exercise this against otherwise). */
 export type BeforeUnloadTarget = {
   addEventListener(type: "beforeunload", listener: (e: BeforeUnloadEvent) => void): void;
   removeEventListener(type: "beforeunload", listener: (e: BeforeUnloadEvent) => void): void;
@@ -106,7 +106,7 @@ function beforeUnloadGuard(e: BeforeUnloadEvent): void {
 
 /**
  * Factory behind the module-level `session` singleton below, pulled out so tests can construct an
- * isolated instance against a fake `BeforeUnloadTarget` instead of the real (jsdom-only) `window`.
+ * isolated instance against a fake `BeforeUnloadTarget` instead of the real `window`.
  * The production singleton is the one export that matters at runtime: at most one Swap session per
  * page, independent of any single window's lifetime — see apps/drop/session.ts for the full
  * rationale (closing the window unmounts the form, which must not orphan a signed transaction the

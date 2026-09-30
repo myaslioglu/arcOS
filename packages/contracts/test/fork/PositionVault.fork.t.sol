@@ -48,7 +48,7 @@ contract PositionVaultForkTest is Test {
     uint128 internal constant V4_LIQUIDITY = 1_000 ether;
     uint256 internal constant SWAP = 100 ether; // per direction, per pool
     uint256 internal constant INTRINSIC = 21_000;
-    // The v3 manager's ERC-721 (OpenZeppelin 3) refuses a transfer by anyone but the owner or an approved address so.
+    // The v3 manager's ERC-721 (OpenZeppelin 3) refuses a transfer by anyone but the owner or an approved address.
     string internal constant V3_NOT_APPROVED = "ERC721: transfer caller is not owner nor approved";
 
     IArcV3PositionManager internal constant V3 = IArcV3PositionManager(ArcUniswap.V3_POSITION_MANAGER);

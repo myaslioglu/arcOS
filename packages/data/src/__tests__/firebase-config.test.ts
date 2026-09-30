@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DATABASE_ID } from "../names";
 import { databasesDeployedBy, firebaseJsonProblems } from "./helpers/firebase-tools";
-import { FUNCTIONS_ENTRY, checkFunctions, scanExports } from "./helpers/functions-guard";
+import { FUNCTIONS_ENTRY, FUNCTIONS_SOURCE, checkFunctions, scanExports } from "./helpers/functions-guard";
 
 const ROOT = path.resolve(import.meta.dirname, "../../../..");
 const config = JSON.parse(readFileSync(path.join(ROOT, "firebase.json"), "utf8")) as {
@@ -69,6 +69,20 @@ describe("firebase.json: functions", () => {
       expect(checkFunctions({ functions: [{ ...arcos, codebase: "other" }] }, exports())).toHaveLength(1);
       expect(checkFunctions({ functions: [{ source: "functions/deploy" }] }, exports())).toHaveLength(1);
       expect(checkFunctions({ functions: [arcos, arcos] }, exports())).toHaveLength(1);
+    });
+
+    it("rejects an entry whose source isn't the bundle built from the scanned entry file (design 1.3)", () => {
+      // The names checked are read from FUNCTIONS_ENTRY; a deploy from any other source would ship names never read.
+      expect(checkFunctions({ functions: [{ ...arcos, source: "functions" }] }, exports("arcosIndexer"))).toEqual([
+        `functions[0].source must be "${FUNCTIONS_SOURCE}", not "functions"`,
+      ]);
+      expect(checkFunctions({ functions: { ...arcos, source: "functions/src" } }, exports("arcosIndexer"))).toEqual([
+        `functions[0].source must be "${FUNCTIONS_SOURCE}", not "functions/src"`,
+      ]);
+      expect(checkFunctions({ functions: [{ codebase: "arcos" }] }, exports("arcosIndexer"))).toEqual([
+        `functions[0].source must be "${FUNCTIONS_SOURCE}", not undefined`,
+      ]);
+      expect(checkFunctions({ functions: [{ ...arcos, source: "./functions/deploy" }] }, exports())).toHaveLength(1);
     });
 
     it("rejects an exported name without the prefix, case included", () => {

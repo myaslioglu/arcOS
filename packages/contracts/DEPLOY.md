@@ -25,8 +25,8 @@ needs to change.
 the batch, including rows that go on to fail (and get refunded, for native; left with the sender, for
 ERC-20) — it is not reduced or refunded for failed rows.
 
-One question about a blocklisted recipient in a native drop (`Multisend.sendNative`) is still open. It is the first
-entry under "Open questions", at the end of this file.
+One question about a blocklisted recipient in a native drop (`Multisend.sendNative`) is still open. It is recorded
+under "Open questions", at the end of this file, as the entry about a blocklisted native-value recipient.
 
 ## Alternative: sign in a browser wallet (no key export)
 

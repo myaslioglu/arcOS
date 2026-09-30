@@ -33,7 +33,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 /** The directive's name: the first word of what a browser sent, when that is shaped like one. */
 export function directiveOf(value: unknown): string {
   if (typeof value !== "string") return "unknown";
-  const first = value.trim().split(/\s+/)[0]!.toLowerCase();
+  const first = value.trim().split(/\s+/, 1)[0]!.toLowerCase();
   return DIRECTIVE.test(first) ? first : "unknown";
 }
 

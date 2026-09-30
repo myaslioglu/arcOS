@@ -43,10 +43,10 @@ describe("assertWalletOnChain", () => {
 });
 
 /**
- * A plain source-text scan, not a component/integration test — this workspace has no jsdom harness
- * (see AGENTS.md / the wave E brief), so there is no way to render Window.tsx and click Submit. This
- * is the next best guard against the exact regression wave C introduced: it fails loudly the moment
- * any future edit adds an unguarded paid write, instead of silently shipping it.
+ * A plain source-text scan, not a component/integration test: a render test (jsdom, opted into per
+ * file with `// @vitest-environment jsdom`) covers one window's Submit, while this scan covers every
+ * file that could make a paid write. It guards against the exact regression wave C introduced: it
+ * fails loudly the moment any future edit adds an unguarded paid write, instead of silently shipping it.
  *
  * Wave G, N3: the original version of this scan hard-coded two file paths. That missed any THIRD
  * file that might one day make a paid write, and — worse — it trusted the literal identifier
