@@ -339,6 +339,24 @@ describe("a remounted window picks up the revoke where it is", () => {
     await done;
   });
 
+  it("says it is waiting for confirmation once the wallet has signed", async () => {
+    state.address = OWNER;
+    listing([row(), second()]);
+    let sent: () => void = () => undefined;
+    let settle: (o: RowOutcome[]) => void = () => undefined;
+    const done = revokeSession.run(OWNER as `0x${string}`, [[row()]], (_rows, onSent) => {
+      sent = onSent;
+      return new Promise<RowOutcome[]>((s) => (settle = s));
+    })!;
+    expect(render()).toContain(">Waiting for your wallet…</button>");
+    sent();
+    const html = render();
+    expect(html).toContain(">Waiting for confirmation…</button>");
+    expect(html).not.toContain("Waiting for your wallet…");
+    settle([]);
+    await done;
+  });
+
   it("offers no Stop for a single-transaction run", async () => {
     state.address = OWNER;
     listing([row(), second()]);

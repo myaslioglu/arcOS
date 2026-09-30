@@ -141,3 +141,26 @@ describe("Revoke's window wiring", () => {
     expect(revokeStep).not.toHaveBeenCalled();
   });
 });
+
+describe("Revoke's window wiring, once the wallet has signed", () => {
+  it("passes the flow a way to say so, and the row's button then waits for confirmation", async () => {
+    let signed: (() => void) | undefined;
+    let finish: (() => void) | undefined;
+    revokeStep.mockImplementationOnce(async (...args: unknown[]) => {
+      signed = (args[1] as { onSent?: () => void }).onSent;
+      await new Promise<void>((r) => (finish = r));
+      return [];
+    });
+    await mount();
+    await act(async () => button("Revoke all (2)").click());
+    await settle();
+    expect(button("Waiting for your wallet…")).toBeDefined();
+    expect(signed).toBeTypeOf("function");
+    await act(async () => signed!());
+    expect(button("Waiting for confirmation…")).toBeDefined();
+    expect(button("Waiting for your wallet…")).toBeUndefined();
+    await act(async () => revokeSession.stop());
+    finish!();
+    await settle();
+  });
+});

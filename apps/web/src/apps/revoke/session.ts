@@ -22,6 +22,8 @@ export type RevokeRun = {
   current: string[];
   /** Asked to stop after the current transaction. */
   stopping: boolean;
+  /** The wallet has signed the current transaction; its receipt is awaited. */
+  sent: boolean;
 };
 export type OwnerState = { failures: Readonly<Record<string, Failure>>; left: Readonly<Record<string, string>> };
 export type RevokeSessionState = { run: RevokeRun | null; owners: Readonly<Record<string, OwnerState>> };
@@ -65,7 +67,8 @@ function beforeUnloadGuard(e: BeforeUnloadEvent): void {
 const goOn = (outcomes: readonly RowOutcome[]) => !outcomes.some((o) => o.result === "failed") && !state.run?.stopping;
 
 /**
- * Runs `steps` one transaction at a time through `execute` (flow.ts's `revokeStep`), and resolves with every row's
+ * Runs `steps` one transaction at a time through `execute` (flow.ts's `revokeStep`, which calls the `onSent` it is
+ * handed once the wallet has signed, so the run can say it is waiting for the receipt), and resolves with every row's
  * outcome. Refuses, returning null and changing nothing, while another run is under way, from this window or any
  * other. It stops at the first failure (the wallet refused, or a transaction didn't confirm: the next one shouldn't
  * be asked for until the visitor has seen why) or when `stop` was called, after the current transaction. The rows'
@@ -76,24 +79,29 @@ const goOn = (outcomes: readonly RowOutcome[]) => !outcomes.some((o) => o.result
 function run(
   owner: Address,
   steps: readonly Approval[][],
-  execute: (rows: Approval[]) => Promise<RowOutcome[]>,
+  execute: (rows: Approval[], onSent: () => void) => Promise<RowOutcome[]>,
   onEnd?: (outcomes: RowOutcome[]) => void,
 ): Promise<RowOutcome[]> | null {
   if (state.run !== null || steps.length === 0) return null;
   const keys = new Set(steps.flat().map(rowKey));
   const drop = <T>(record: Readonly<Record<string, T>>) => Object.fromEntries(Object.entries(record).filter(([k]) => !keys.has(k)));
   updateOwner(owner, (o) => ({ failures: drop(o.failures), left: drop(o.left) }));
-  set({ ...state, run: { owner: owner.toLowerCase(), step: 1, steps: steps.length, current: steps[0]!.map(rowKey), stopping: false } });
+  set({ ...state, run: { owner: owner.toLowerCase(), step: 1, steps: steps.length, current: steps[0]!.map(rowKey), stopping: false, sent: false } });
   if (typeof window !== "undefined") window.addEventListener("beforeunload", beforeUnloadGuard);
   return (async () => {
     const all: RowOutcome[] = [];
     try {
       for (let i = 0; i < steps.length; i++) {
         const rows = steps[i]!;
-        if (i > 0) set({ ...state, run: { ...state.run!, step: i + 1, current: rows.map(rowKey) } });
+        if (i > 0) set({ ...state, run: { ...state.run!, step: i + 1, current: rows.map(rowKey), sent: false } });
+        const step = i + 1;
+        // Marks this step's transaction sent; a call that comes late, once the run has moved on or ended, is ignored.
+        const onSent = () => {
+          if (state.run?.step === step && !state.run.sent) set({ ...state, run: { ...state.run, sent: true } });
+        };
         let outcomes: RowOutcome[];
         try {
-          outcomes = await execute(rows);
+          outcomes = await execute(rows, onSent);
         } catch {
           // revokeStep reports its own failures; this is only for one that throws anyway.
           outcomes = rows.map((r) => ({ key: rowKey(r), result: "failed", text: "Something went wrong. Reopen Revoke to check this approval." }));

@@ -29,6 +29,8 @@ export type RevokeDeps = {
   walletChainId: number | undefined;
   /** wagmi's writeContractAsync. The flow calls it only through `withChain`, which pins the transaction's chain. */
   writeContractAsync: (request: never) => Promise<Hex>;
+  /** Hears the hash once the wallet has signed and sent, before the receipt is awaited (the window's label changes). */
+  onSent?: (hash: Hex) => void;
 };
 
 /** How one row came out: revoked (at a block), confirmed but still set (and what is left), or failed. */
@@ -44,7 +46,8 @@ export type RowOutcome =
  *    revoked already; one that reads cleared from a node that has reached its approval's block is marked revoked
  *    with no transaction. A node behind that block may not have seen the approval yet, so its "cleared" isn't
  *    believed and the row goes on to the wallet: a costly no-op at worst, never a live approval hidden as revoked;
- * 3. the rest are simulated, then sent through `withChain`, and the receipt is awaited. A revert throws;
+ * 3. the rest are simulated, then sent through `withChain` (`onSent` hears the hash), and the receipt is awaited. A
+ *    revert throws;
  * 4. each is read again at the receipt's block: cleared is revoked, anything else is still set.
  * A revoke is counted (`revoke_success`) once per confirmed transaction that cleared something. Every failure lands on
  * each row the transaction carried, with the sentence for how far it got (`revokeFailure`) and its hash once sent.
@@ -73,6 +76,7 @@ export async function revokeStep(rows: readonly Approval[], deps: RevokeDeps): P
     const { request } = await client.simulateContract({ ...revokeWrite(pending), account: deps.account });
     hash = await deps.writeContractAsync(withChain(request, deps.chainId) as never);
     stage = "sent";
+    deps.onSent?.(hash);
     const receipt = await client.waitForTransactionReceipt({ hash });
     if (receipt.status === "reverted") throw new UserFacingError("The revoke reverted. The approval is unchanged.");
     stage = "confirmed";

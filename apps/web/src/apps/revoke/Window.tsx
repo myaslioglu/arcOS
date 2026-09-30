@@ -234,7 +234,7 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     void revokeSession.run(
       owner,
       revokeSteps(targets),
-      (step) => revokeStep(step, deps),
+      (step, onSent) => revokeStep(step, { ...deps, onSent }),
       (outcomes: RowOutcome[]) => {
         pendingFocus.current = focusAfterRun(keysBefore, outcomes);
       },
@@ -352,7 +352,7 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
                       }}
                       onClick={() => revoke([row])}
                     >
-                      {waiting ? "Waiting for your wallet…" : "Revoke"}
+                      {waiting ? (mine?.sent ? "Waiting for confirmation…" : "Waiting for your wallet…") : "Revoke"}
                     </button>
                   )}
                 </div>

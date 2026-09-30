@@ -205,6 +205,25 @@ describe("revokeStep", () => {
     ]);
   });
 
+  it("says the wallet has signed, with the hash, before it waits for the receipt, and never when the wallet refused", async () => {
+    const { deps, log } = fakeChain({ before: () => 100n, after: () => 0n });
+    const onSent = vi.fn((hash: Hex) => log.push(["sent", hash]));
+    await revokeStep([row()], { ...deps, onSent });
+    expect(onSent).toHaveBeenCalledTimes(1);
+    expect(log.map(([what]) => what)).toEqual(["getBlockNumber", "read", "simulate", "write", "sent", "receipt", "read"]);
+    expect(log.find(([what]) => what === "sent")).toEqual(["sent", HASH]);
+
+    const refused = fakeChain({
+      before: () => 100n,
+      send: async () => {
+        throw Object.assign(new Error("User rejected the request."), { name: "UserRejectedRequestError" });
+      },
+    });
+    const never = vi.fn();
+    await revokeStep([row()], { ...refused.deps, onSent: never });
+    expect(never).not.toHaveBeenCalled();
+  });
+
   it("describes a wallet's refusal, with no hash, since nothing was sent", async () => {
     const { deps } = fakeChain({
       before: () => 100n,

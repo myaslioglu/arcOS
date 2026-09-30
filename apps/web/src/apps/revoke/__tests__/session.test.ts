@@ -38,6 +38,24 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 afterEach(() => revokeSession.forget());
 
 describe("revokeSession", () => {
+  it("marks the current transaction sent when its step says the wallet signed, and starts each step unsent", async () => {
+    const pending: { settle: (o: RowOutcome[]) => void; onSent: () => void }[] = [];
+    const done = revokeSession.run(OWNER, [[A], [B]], (_rows, onSent) => new Promise<RowOutcome[]>((settle) => pending.push({ settle, onSent })));
+    expect(revokeSession.getSnapshot().run).toMatchObject({ step: 1, sent: false });
+    pending[0]!.onSent();
+    expect(revokeSession.getSnapshot().run).toMatchObject({ step: 1, sent: true });
+    pending[0]!.settle([{ key: rowKey(A), result: "revoked", block: 5 }]);
+    await flush();
+    expect(revokeSession.getSnapshot().run).toMatchObject({ step: 2, sent: false });
+    pending[1]!.onSent();
+    expect(revokeSession.getSnapshot().run).toMatchObject({ step: 2, sent: true });
+    pending[1]!.settle([{ key: rowKey(B), result: "revoked", block: 6 }]);
+    await done;
+    // A late call, after the run ended, changes nothing.
+    pending[0]!.onSent();
+    expect(revokeSession.getSnapshot().run).toBeNull();
+  });
+
   it("keeps a running revoke's progress in the store, so a window mounted mid-revoke shows it, and clears it when it ends", async () => {
     const { pending, execute } = manual();
     const listener = vi.fn();
@@ -47,7 +65,7 @@ describe("revokeSession", () => {
 
     // The window that started it is gone (it unsubscribed); the store doesn't care.
     unsubscribe();
-    expect(revokeSession.getSnapshot().run).toEqual({ owner: OWNER.toLowerCase(), step: 1, steps: 2, current: [rowKey(A)], stopping: false });
+    expect(revokeSession.getSnapshot().run).toEqual({ owner: OWNER.toLowerCase(), step: 1, steps: 2, current: [rowKey(A)], stopping: false, sent: false });
 
     pending[0]!.settle([{ key: rowKey(A), result: "revoked", block: 5 }]);
     await flush();
