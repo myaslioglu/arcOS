@@ -7,7 +7,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {FeeController} from "../src/FeeController.sol";
 import {IFeeController} from "../src/interfaces/IFeeController.sol";
 import {ProPass} from "../src/ProPass.sol";
-import {MockRevertingReceiver} from "./vault/mocks/VaultMocks.sol";
+import {MockRevertingReceiver, MockToken} from "./vault/mocks/VaultMocks.sol";
 
 contract ProPassTest is Test {
     using SafeCast for uint256;
@@ -235,5 +235,67 @@ contract ProPassTest is Test {
         vm.expectRevert(ProPass.BadMonths.selector);
         vm.prank(alice);
         pass.subscribe{value: 0}(alice, months);
+    }
+}
+
+/// The gas of `subscribe`, measured as `test/vault/VaultGas.t.sol` does: state from `setUp`, so storage is cold; the
+/// 21,000 intrinsic gas and the calldata are added unless the run is `--isolate`.
+contract ProPassGasTest is Test {
+    uint256 internal constant INTRINSIC = 21_000;
+    bytes32 internal constant KEY = keccak256("PRO_MONTHLY");
+
+    FeeController internal fees;
+    ProPass internal pass;
+    address internal payer = makeAddr("payer");
+    address internal renewing = makeAddr("renewing"); // already Pro
+    MockToken internal probeToken;
+
+    function setUp() public {
+        vm.warp(1_800_000_000);
+        fees = new FeeController(makeAddr("feeOwner"), payable(makeAddr("feeRecipient")));
+        vm.prank(makeAddr("feeOwner"));
+        fees.addKey(KEY, 9 ether, 29 ether);
+        pass = new ProPass(fees);
+        probeToken = new MockToken();
+        vm.deal(payer, 1_000 ether);
+        vm.prank(payer);
+        pass.subscribe{value: 9 ether}(renewing, 1);
+    }
+
+    /// A trivial state-changing call is a transaction of its own (at least 21,000 gas) only under `--isolate`.
+    function _isolated() internal returns (bool) {
+        probeToken.mint(address(this), 0);
+        return vm.lastCallGas().gasTotalUsed >= INTRINSIC;
+    }
+
+    function _measure(string memory name, bytes memory data, uint256 value, uint256 ceiling) internal {
+        bool isolated = _isolated();
+        assertGt(address(pass).code.length, 0); // the transaction's target is warm
+        vm.prank(payer);
+        (bool ok,) = address(pass).call{value: value}(data);
+        assertTrue(ok, "the measured call reverted");
+        uint256 measured = vm.lastCallGas().gasTotalUsed;
+        uint256 calldataGas;
+        for (uint256 i; i < data.length; ++i) {
+            calldataGas += data[i] == 0 ? 4 : 16;
+        }
+        uint256 txGas = isolated ? measured : measured + INTRINSIC + calldataGas;
+        emit log_named_uint(string.concat(name, ": transaction gas"), txGas);
+        assertLt(txGas, ceiling, string.concat("over its ceiling: ", name));
+    }
+
+    function test_gas_subscribe_aNewAccount() public {
+        _measure(
+            "ProPass.subscribe, a new account, 12 months",
+            abi.encodeCall(ProPass.subscribe, (makeAddr("new"), 12)),
+            108 ether,
+            80_000
+        );
+    }
+
+    function test_gas_subscribe_renewal() public {
+        _measure(
+            "ProPass.subscribe, a renewal, 1 month", abi.encodeCall(ProPass.subscribe, (renewing, 1)), 9 ether, 60_000
+        );
     }
 }
