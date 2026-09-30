@@ -304,7 +304,8 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
 
    Leave out the line of a contract that was not created; never set a variable to an empty value. In this mode a key
    that exists with the same fee and cap and no pending change is kept (`key already set`); a key with another fee or
-   cap, or with a pending change, stops the run. Each address given must be the contract its variable names (checked
+   cap, or with a pending change, stops the run (let the change take effect after its 48-hour notice with
+   `applyPending`, or set the fee back with `setFee`, then run again). Each address given must be the contract its variable names (checked
    through the contract's own key constant, so swapped addresses are refused), wired to this FeeController, and for the
    VaultFactory owned by the sender. A contract not given is deployed, and `setManager` is sent only if the manager is
    not allowed yet. With everything in place it sends nothing, so the same dry run is also a check that the deployment
@@ -433,6 +434,11 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
    Deployments table below. `checkArcosAddresses` then checks their shape. The ABIs the app uses are already in
    `packages/chain/src/abis/` (`npm run abis` regenerates them; they match this source), and the five keys are in
    `FEE_KEYS` in `@arcos/chain`.
+
+   Then clear what these steps exported, so a later `forge` or `cast` in the same terminal doesn't pick up the testnet
+   RPC or these addresses:
+
+       unset ETH_RPC_URL FEES PROJECT V4_PM VAULTS VESTINGS PASS U START ARCOS_FEE_CONTROLLER ARCOS_V4_POSITION_MANAGER
 
 ### R1 notes
 
