@@ -54,7 +54,10 @@ site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)
      while the testnet build is broken, run the workflow with `targets: mainnet`.
    - 4rc.OS deploys first. If its deploy fails, the testnet deploy doesn't start.
    - If the testnet deploy fails (or its environment name check does), 4rc.OS is already live and its smoke checks still
-     run; the run is marked failed for the testnet site only. Fix it and re-run with `targets: testnet`.
+     run; the run is marked failed for the testnet site only. Fix it and start a new manual run with
+     `targets: testnet`; "Re-run failed jobs" would re-run the whole deploy job, 4rc.OS included. The first time a
+     testnet deploy fails, check that the smoke job still ran: it reads an output of the deploy job, which GitHub is
+     expected to publish from a failed job too.
    The testnet site has no smoke job: `scripts/smoke.mjs` reads mainnet data. After a testnet deploy, open
    https://testnet.4rcos.com (the menu bar shows "Testnet") and check that
    `curl -sI https://testnet.4rcos.com | grep -i x-robots-tag` answers `noindex, nofollow`.
@@ -64,8 +67,8 @@ site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)
      setup below. It proves the sign-in and the read access to App Hosting; the upload to Cloud Storage is first
      exercised by a real deploy. Its table should list `arcos` and `arcos-testnet`.
    - *Rolling back:* in the Firebase console open App Hosting, the `arcos` backend (or `arcos-testnet`), its Rollouts
-     tab, and choose "Roll back to this build" on an earlier build. This is instant and does not rebuild. To go back in git as well, revert the
-     commit and merge the revert; that goes through the same approval.
+     tab, and choose "Roll back to this build" on an earlier build. This is instant and does not rebuild. To go back
+     in git as well, revert the commit and merge the revert; that goes through the same approval.
 
 ## What the setup holds
 
@@ -152,8 +155,8 @@ export TESTNET_SA="arcos-testnet-web@${PROJECT_ID}.iam.gserviceaccount.com"
    ```
 
 2. **The backend.** `--non-interactive` makes it a backend deployed from source, like `arcos`: in interactive mode the
-   CLI links a GitHub repository instead. Without `--app` it creates or reuses a Firebase web app named after the
-   backend; add `--app <the web app ID of arcos>` to share that one.
+   CLI links a GitHub repository instead. Without `--app` it creates a new Firebase web app named after the backend
+   (with a suffix if the name is taken); add `--app <the web app ID of arcos>` to share that one instead.
 
    ```sh
    firebase apphosting:backends:create --backend arcos-testnet --primary-region europe-west4 --root-dir apps/web \
