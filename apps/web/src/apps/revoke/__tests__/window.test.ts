@@ -397,9 +397,9 @@ describe("a remounted window picks up the revoke where it is", () => {
  * tree persists between calls), so the bug this guards against — React reusing ApprovalList's mounted `busy` /
  * `failures` / `left` state across a live wallet switch (same window, same component position, only the `owner`
  * prop changes) — can't be reproduced by rendering twice with different params; both calls already start clean
- * regardless of whether the fix is applied. This mirrors why apps/web/src/lib/__tests__/paid-write.test.ts scans
- * source text instead of rendering: there is no jsdom harness here to mount a component, change its props, and
- * watch what state survives.
+ * regardless of whether the fix is applied. This file renders to static markup only; mounting the window in jsdom
+ * (as window-wiring.test.ts does) and switching the account would be the render-level check, and this scan pins the
+ * key that makes it hold.
  */
 describe("ApprovalList remounts per owner (a wallet switch must not carry the previous owner's state)", () => {
   const source = readFileSync(path.resolve(import.meta.dirname, "..", "Window.tsx"), "utf8");
