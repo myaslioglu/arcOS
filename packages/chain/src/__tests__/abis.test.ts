@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { keccak256, toBytes, toHex } from "viem";
 import {
@@ -265,6 +266,46 @@ describe("abis", () => {
     it("DROP_MIN", () => {
       expect(keccak256(toBytes("DROP_MIN"))).toBe("0x3133bb54d476009314a9f209461af209ce01747eddd6f95a3dc60b73f245f8bb");
       expect(FEE_KEYS.DROP_MIN).toBe("0x3133bb54d476009314a9f209461af209ce01747eddd6f95a3dc60b73f245f8bb");
+    });
+
+    // R1's keys. Each literal is `cast keccak <NAME>`, run once and pasted here.
+    it.each([
+      ["LOCK_FLAT", "0x7f6534e5b7e63a14053fe50ab178b0b5a6a3905a0f03063b6c81c954d92859a1"],
+      ["LOCK_LP_BPS", "0x7845732ac970c27fd86c4baf126ef31f0ce4aab91894a4a7b0c52d9c2c033bdb"],
+      ["LOCK_FEE_SHARE_BPS", "0x890adb7f667c6b358d88c7020de2d0f074841e43edb5911d652f0d2b68a8afce"],
+      ["VEST_FLAT", "0xd751d2ecf456fe05af1fe9d1c74cbb86e4b55fcf1aa7228bac6c72cb730ad78a"],
+      ["PRO_MONTHLY", "0xda10eb5019b51b732f5e01ed3db2b679b770e78c0762cc503d5433b31dec171e"],
+    ] as const)("%s", (name, literal) => {
+      expect(keccak256(toBytes(name))).toBe(literal);
+      expect(FEE_KEYS[name]).toBe(literal);
+    });
+  });
+
+  // The other half of "must match the contracts": each key is declared in its contract's source exactly as
+  // `bytes32 public constant <NAME> = keccak256("<NAME>");`, so the contract probes and charges the key named here.
+  describe("FEE_KEYS equal the contracts' constants", () => {
+    const contractsSrc = new URL("../../../contracts/src/", import.meta.url);
+    const declares = (file: string, name: string) =>
+      readFileSync(new URL(file, contractsSrc), "utf8").includes(`bytes32 public constant ${name} = keccak256("${name}");`);
+
+    it.each([
+      ["TokenFactory.sol", "MINT_FLAT"],
+      ["Multisend.sol", "DROP_PER_RECIPIENT"],
+      ["Multisend.sol", "DROP_MIN"],
+      ["vault/VaultFactory.sol", "LOCK_FLAT"],
+      ["vault/VaultFactory.sol", "LOCK_LP_BPS"],
+      ["vault/VaultFactory.sol", "LOCK_FEE_SHARE_BPS"],
+      ["vesting/VestingFactory.sol", "VEST_FLAT"],
+      ["ProPass.sol", "PRO_MONTHLY"],
+    ] as const)("%s declares %s", (file, name) => {
+      expect(declares(file, name)).toBe(true);
+      expect(FEE_KEYS[name]).toBe(keccak256(toBytes(name)));
+    });
+
+    it("covers every key in FEE_KEYS", () => {
+      expect(Object.keys(FEE_KEYS).sort()).toEqual(
+        ["DROP_MIN", "DROP_PER_RECIPIENT", "LOCK_FEE_SHARE_BPS", "LOCK_FLAT", "LOCK_LP_BPS", "MINT_FLAT", "PRO_MONTHLY", "VEST_FLAT"],
+      );
     });
   });
 });
