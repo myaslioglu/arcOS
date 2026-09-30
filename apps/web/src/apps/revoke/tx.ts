@@ -17,6 +17,15 @@ const ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
 
 export type ContractCall = { address: Address; abi: Abi; functionName: string; args: readonly unknown[] };
 
+/**
+ * An NFT row's id. One without a decimal id throws: `BigInt("")` is 0n, and a transaction must never approve the
+ * zero address for NFT #0 in place of the NFT the row names. (The answer parser already refuses such a row.)
+ */
+function nftId(row: Approval): bigint {
+  if (typeof row.tokenId !== "string" || !/^\d+$/.test(row.tokenId)) throw new Error("This NFT approval has no id.");
+  return BigInt(row.tokenId);
+}
+
 /** The one transaction that revokes `rows`: a single row of any kind, or any number of Permit2 pairs together. */
 export function revokeWrite(rows: readonly Approval[]): ContractCall {
   const [first] = rows;
@@ -26,7 +35,7 @@ export function revokeWrite(rows: readonly Approval[]): ContractCall {
     case "erc20":
       return { address: first.token, abi: APPROVE_ABI, functionName: "approve", args: [first.spender, 0n] };
     case "erc721":
-      return { address: first.token, abi: APPROVE_ABI, functionName: "approve", args: [ZERO_ADDRESS, BigInt(first.tokenId ?? "")] };
+      return { address: first.token, abi: APPROVE_ABI, functionName: "approve", args: [ZERO_ADDRESS, nftId(first)] };
     case "operator":
       return { address: first.token, abi: SET_APPROVAL_FOR_ALL_ABI, functionName: "setApprovalForAll", args: [first.spender, false] };
     case "permit2":
@@ -45,7 +54,7 @@ export function liveRead(owner: Address, row: Approval): ContractCall {
     case "erc20":
       return { address: row.token, abi: erc20Abi, functionName: "allowance", args: [owner, row.spender] };
     case "erc721":
-      return { address: row.token, abi: NFT_ABI, functionName: "getApproved", args: [BigInt(row.tokenId ?? "")] };
+      return { address: row.token, abi: NFT_ABI, functionName: "getApproved", args: [nftId(row)] };
     case "operator":
       return { address: row.token, abi: NFT_ABI, functionName: "isApprovedForAll", args: [owner, row.spender] };
     case "permit2":

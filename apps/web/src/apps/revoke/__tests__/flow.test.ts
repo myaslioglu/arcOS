@@ -122,6 +122,14 @@ describe("tx: what each kind is revoked and read with", () => {
     expect(liveRead(OWNER, permit2(TOKEN))).toMatchObject({ address: PERMIT2, functionName: "allowance", args: [OWNER, TOKEN, SPENDER] });
   });
 
+  it("refuses an NFT row without a usable id, rather than revoke NFT #0", () => {
+    for (const tokenId of [undefined, "", " ", "0x7", "-1"]) {
+      const bad = { ...nft, tokenId };
+      expect(() => revokeWrite([bad]), String(tokenId)).toThrow();
+      expect(() => liveRead(OWNER, bad), String(tokenId)).toThrow();
+    }
+  });
+
   it("refuses to put anything but Permit2 pairs in one transaction", () => {
     expect(() => revokeWrite([row(), nft])).toThrow();
     expect(() => revokeWrite([])).toThrow();
