@@ -13,7 +13,7 @@ import {MockFeeOnTransferToken, MockToken} from "../vault/mocks/VaultMocks.sol";
 /// ownership transfers, fee changes and time passing, and keeps an exact ledger of every wallet: what it was funded
 /// with, what it has released, and what its schedule says must have vested.
 ///
-/// `fail_on_revert` is on (foundry.toml), so the handler catches every call into the contracts under test; a revert
+/// `fail_on_revert` is on (inline below, and in foundry.toml), so the handler catches every call into the contracts under test; a revert
 /// that reaches the fuzzer is a bug in the handler itself. Every action predicts its own outcome and sets a flag
 /// that never clears when the real outcome differs.
 contract VestingHandler is Test {

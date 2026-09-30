@@ -238,7 +238,7 @@ contract VestingFactoryTest is VestingTestBase {
             [nowTs, uint64(100 days), uint64(100 days + 1)], // cliff past the end
             [nowTs + MAX_DURATION + 1, uint64(100 days), uint64(0)], // starts too far out
             [type(uint64).max, uint64(100 days), uint64(1)], // would overflow the cliff time
-            [type(uint64).max - 1 days, uint64(1 days), uint64(0)] // would overflow the end time
+            [type(uint64).max - 1 days, uint64(1 days), uint64(0)] // starts too far out (near uint64 max)
         ];
         for (uint256 i; i < bad.length; ++i) {
             Snap memory s = _snap(bob, address(token));

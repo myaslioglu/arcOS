@@ -204,7 +204,7 @@ export const arcVestingAbi = [
     "name": "vestedAmount",
     "inputs": [
       {
-        "name": "timestamp",
+        "name": "",
         "type": "uint64",
         "internalType": "uint64"
       }
@@ -216,7 +216,7 @@ export const arcVestingAbi = [
         "internalType": "uint256"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "pure"
   },
   {
     "type": "function",

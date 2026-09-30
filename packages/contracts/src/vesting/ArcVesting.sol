@@ -13,18 +13,21 @@ import {VestingWalletCliff} from "@openzeppelin/contracts/finance/VestingWalletC
 /// with two views (native, 18 decimals, and ERC-20 at 0x3600..., 6 decimals), so USDC vested through its ERC-20 view
 /// is also this wallet's native balance. OpenZeppelin keeps separate books for the two views, and its own NatSpec
 /// warns that on such a chain the beneficiary can release the same asset through both and take more than has
-/// vested. So `receive` refuses value, `release()` always reverts and `releasable()` is always zero. Native value that
+/// vested. So `receive` refuses value, `release()` always reverts, and `releasable()` and the native
+/// `vestedAmount(uint64)` are always zero. Native value that
 /// arrives anyway (USDC's ERC-20 view, `selfdestruct`) is released through `release(token)` in its ERC-20 view.
 ///
 /// WARNING (OpenZeppelin's own): the wallet is `Ownable(beneficiary)` and ownership moves in one step, so the
 /// beneficiary can transfer, and so sell, the wallet with its unvested tokens. Readers must treat `owner()` as the
-/// beneficiary, not the address the wallet was created for. `renounceOwnership` leaves no one to pay, and every
-/// later release then reverts: the tokens stay in the wallet for good.
+/// beneficiary, not the address the wallet was created for. `renounceOwnership` leaves no one to pay: later releases
+/// then revert (the tokens stay in the wallet for good), or burn them for a token that accepts the zero address.
 ///
 /// What has vested is computed from the wallet's live balance plus what it has released, so tokens sent after
 /// creation follow the same schedule. A token that rebases down after a release can make that total smaller than
-/// what was released; `releasable` then reverts until the balance recovers or the schedule ends. A token that takes
-/// a cut on transfer takes it on the way out too.
+/// what was released; `releasable` then reverts until the balance recovers or the schedule ends. Deposits after
+/// creation, or a token that rebases up, can push that total past the factory's `MAX_AMOUNT`; for a token with a
+/// supply that large, releases between the cliff and the end then revert on overflow and work again at `end()`.
+/// A token that takes a cut on transfer takes it on the way out too.
 contract ArcVesting is VestingWalletCliff {
     error NativeValueNotSupported();
 
@@ -47,6 +50,12 @@ contract ArcVesting is VestingWalletCliff {
 
     /// @notice Always zero: nothing is releasable as native value.
     function releasable() public pure override returns (uint256) {
+        return 0;
+    }
+
+    /// @notice Always zero: native value never vests here. OpenZeppelin's version would report this wallet's native
+    /// balance, which on Arc is the same USDC its ERC-20 view vests, so a reader adding the two would count it twice.
+    function vestedAmount(uint64) public pure override returns (uint256) {
         return 0;
     }
 }

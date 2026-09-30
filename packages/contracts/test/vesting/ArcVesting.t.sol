@@ -212,6 +212,7 @@ contract ArcVestingTest is VestingTestBase {
         usdc.approve(address(factory), type(uint256).max);
         ArcVesting w = _create(alice, IERC20(address(usdc)), bob, amount, uint64(block.timestamp), 100 days, 0);
         assertEq(address(w).balance, amount * 1e12, "the ERC-20 view's tokens are the wallet's native balance");
+        assertEq(w.vestedAmount(uint64(block.timestamp + 100 days)), 0, "the native view reports nothing as vested");
 
         vm.warp(w.start() + 50 days);
         uint256 bobBefore = usdc.balanceOf(bob);

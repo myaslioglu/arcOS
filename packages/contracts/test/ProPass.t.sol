@@ -105,6 +105,14 @@ contract ProPassTest is Test {
         assertEq(pass.paidUntil(alice), block.timestamp + MONTH, "lapsed time is not paid back");
     }
 
+    function test_subscribe_oneSecondBeforePaidUntil_extendsFromPaidUntil() public {
+        _subscribe(alice, alice, 1);
+        uint64 first = pass.paidUntil(alice);
+        vm.warp(first - 1);
+        _subscribe(alice, alice, 1);
+        assertEq(pass.paidUntil(alice), first + MONTH, "the last paid second is kept");
+    }
+
     function test_subscribe_exactlyAtPaidUntil_extendsFromNow() public {
         _subscribe(alice, alice, 1);
         vm.warp(pass.paidUntil(alice));
