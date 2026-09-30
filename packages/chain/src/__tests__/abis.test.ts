@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { keccak256, toBytes, toHex } from "viem";
-import { FEE_KEYS, feeControllerAbi, lockVaultAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi } from "../abis";
+import {
+  FEE_KEYS,
+  feeControllerAbi,
+  lockVaultAbi,
+  multisendAbi,
+  positionVaultAbi,
+  tokenFactoryAbi,
+  vaultFactoryAbi,
+} from "../abis";
 
 type AbiInput = { name?: string };
 type AbiItem = { type: string; name?: string; inputs?: readonly AbiInput[] };
@@ -92,6 +100,64 @@ describe("abis", () => {
     );
     const errors = names(lockVaultAbi, "error");
     for (const name of ["BadUnlockTime", "NotOwner", "NotPendingOwner", "StillLocked", "ZeroAddress"]) {
+      expect(errors).toContain(name);
+    }
+  });
+
+  // PositionVault holds a user's position NFT. Its only function that moves anything before the unlock time is
+  // `collect` (the fees, to the owner and the platform); `withdraw` moves the NFT, to the owner's choice, at or after it.
+  // Its `receive` takes v4's native-currency fees.
+  it("positionVaultAbi has exactly these functions, a receive and no fallback", () => {
+    expect(names(positionVaultAbi, "function").sort()).toEqual(
+      [
+        "MAX_DURATION",
+        "PLATFORM_CALL_GAS",
+        "acceptOwnership",
+        "collect",
+        "currencies",
+        "extend",
+        "feeRecipient",
+        "feeShareBps",
+        "initialize",
+        "kind",
+        "manager",
+        "onERC721Received",
+        "owner",
+        "pendingOwner",
+        "tokenId",
+        "transferOwnership",
+        "unlockAt",
+        "withdraw",
+      ].sort(),
+    );
+    expect(hasType(positionVaultAbi, "receive")).toBe(true);
+    expect(hasType(positionVaultAbi, "fallback")).toBe(false);
+  });
+
+  it("positionVaultAbi has exactly these events, and the errors the Vault app decodes", () => {
+    expect(names(positionVaultAbi, "event").sort()).toEqual(
+      [
+        "Collected",
+        "Extended",
+        "Initialized",
+        "OwnershipTransferStarted",
+        "OwnershipTransferred",
+        "PlatformShareSkipped",
+        "Withdrawn",
+      ].sort(),
+    );
+    expect(inputNames(findItem(positionVaultAbi, "event", "Collected"))).toEqual(["currency", "toOwner", "toPlatform"]);
+    expect(inputNames(findItem(positionVaultAbi, "event", "PlatformShareSkipped"))).toEqual(["currency", "amount"]);
+    const errors = names(positionVaultAbi, "error");
+    for (const name of [
+      "BadUnlockTime",
+      "InsufficientGas",
+      "NativeTransferFailed",
+      "NotOwner",
+      "NotPendingOwner",
+      "StillLocked",
+      "ZeroAddress",
+    ]) {
       expect(errors).toContain(name);
     }
   });

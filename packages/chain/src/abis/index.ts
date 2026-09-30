@@ -5,6 +5,7 @@ export { tokenFactoryAbi } from "./tokenFactory";
 export { multisendAbi } from "./multisend";
 export { lockVaultAbi } from "./lockVault";
 export { vaultFactoryAbi } from "./vaultFactory";
+export { positionVaultAbi } from "./positionVault";
 
 const key = (name: string) => keccak256(toHex(name));
 

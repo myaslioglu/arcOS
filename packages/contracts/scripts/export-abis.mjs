@@ -8,6 +8,7 @@ const CONTRACTS = {
   Multisend: "multisend",
   LockVault: "lockVault",
   VaultFactory: "vaultFactory",
+  PositionVault: "positionVault",
 };
 
 mkdirSync(DEST, { recursive: true });
