@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { keccak256, toBytes, toHex } from "viem";
 import { FEE_KEYS, feeControllerAbi, lockVaultAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi } from "../abis";
+import { arcVestingAbi, proPassAbi, vestingFactoryAbi } from "../abis";
 
 type AbiInput = { name?: string };
 type AbiItem = { type: string; name?: string; inputs?: readonly AbiInput[] };
@@ -185,5 +186,108 @@ describe("abis", () => {
       expect(keccak256(toBytes("DROP_MIN"))).toBe("0x3133bb54d476009314a9f209461af209ce01747eddd6f95a3dc60b73f245f8bb");
       expect(FEE_KEYS.DROP_MIN).toBe("0x3133bb54d476009314a9f209461af209ce01747eddd6f95a3dc60b73f245f8bb");
     });
+  });
+});
+
+// Vesting and ProPass. Each ABI is pinned to its exact function list, like the vault ABIs above: a wallet holds a
+// beneficiary's tokens and the factory and ProPass take payments, so any new function, an admin power included, makes
+// these tests fail until the new list is reviewed and pasted in deliberately.
+describe("vesting and ProPass abis", () => {
+  it("arcVestingAbi has exactly OpenZeppelin's vesting wallet functions, and its receive refuses value", () => {
+    expect(names(arcVestingAbi, "function").sort()).toEqual(
+      [
+        "cliff",
+        "duration",
+        "end",
+        "owner",
+        "releasable", // releasable(): always 0
+        "releasable", // releasable(token)
+        "release", // release(): always reverts
+        "release", // release(token)
+        "released",
+        "released",
+        "renounceOwnership",
+        "start",
+        "transferOwnership",
+        "vestedAmount",
+        "vestedAmount",
+      ].sort(),
+    );
+    expect(hasType(arcVestingAbi, "receive")).toBe(true);
+    expect(hasType(arcVestingAbi, "fallback")).toBe(false);
+    expect(names(arcVestingAbi, "event").sort()).toEqual(["ERC20Released", "EtherReleased", "OwnershipTransferred"]);
+    const errors = names(arcVestingAbi, "error");
+    for (const name of ["NativeValueNotSupported", "InvalidCliffDuration", "OwnableUnauthorizedAccount"]) {
+      expect(errors).toContain(name);
+    }
+  });
+
+  it("vestingFactoryAbi has exactly these functions: creation and the registries with bounded reads, no owner", () => {
+    expect(names(vestingFactoryAbi, "function").sort()).toEqual(
+      [
+        "MAX_AMOUNT",
+        "MAX_DURATION",
+        "VEST_FLAT",
+        "createVesting",
+        "feeController",
+        "isVesting",
+        "vestingsForToken",
+        "vestingsForTokenLength",
+        "vestingsForTokenSlice",
+        "vestingsOf",
+        "vestingsOfLength",
+        "vestingsOfSlice",
+      ].sort(),
+    );
+    expect(hasType(vestingFactoryAbi, "receive") || hasType(vestingFactoryAbi, "fallback")).toBe(false);
+    for (const name of ["vestingsOfSlice", "vestingsForTokenSlice"]) {
+      expect(inputNames(findItem(vestingFactoryAbi, "function", name)).slice(1)).toEqual(["start", "count"]);
+    }
+    expect(inputNames(findItem(vestingFactoryAbi, "function", "createVesting"))).toEqual([
+      "token",
+      "beneficiary",
+      "amount",
+      "start",
+      "duration",
+      "cliff",
+    ]);
+  });
+
+  it("vestingFactoryAbi's VestingCreated event carries what Inspector reads, and the errors the Vesting app decodes", () => {
+    expect(names(vestingFactoryAbi, "event")).toEqual(["VestingCreated"]);
+    expect(inputNames(findItem(vestingFactoryAbi, "event", "VestingCreated"))).toEqual([
+      "creator",
+      "token",
+      "beneficiary",
+      "vesting",
+      "amount",
+      "start",
+      "duration",
+      "cliff",
+    ]);
+    const errors = names(vestingFactoryAbi, "error");
+    for (const name of [
+      "WrongFee",
+      "FeeTransferFailed",
+      "BadSchedule",
+      "ZeroAmount",
+      "AmountTooLarge",
+      "NotAToken",
+      "ZeroFeeController",
+    ]) {
+      expect(errors).toContain(name);
+    }
+  });
+
+  it("proPassAbi has exactly these functions, no receive, and the errors the Pro panel decodes", () => {
+    expect(names(proPassAbi, "function").sort()).toEqual(
+      ["MAX_MONTHS", "MONTH", "PRO_MONTHLY", "feeController", "isPro", "paidUntil", "subscribe"].sort(),
+    );
+    expect(hasType(proPassAbi, "receive") || hasType(proPassAbi, "fallback")).toBe(false);
+    expect(inputNames(findItem(proPassAbi, "event", "Subscribed"))).toEqual(["account", "payer", "months", "paidUntil"]);
+    const errors = names(proPassAbi, "error");
+    for (const name of ["BadMonths", "WrongFee", "FeeTransferFailed", "ZeroFeeController"]) {
+      expect(errors).toContain(name);
+    }
   });
 });
