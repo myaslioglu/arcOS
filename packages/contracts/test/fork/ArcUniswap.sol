@@ -73,6 +73,9 @@ interface IArcV3PositionManager is IV3PositionManager {
 }
 
 interface IArcV4PositionManager is IV4PositionManager {
+    error NotApproved(address caller); // the caller may not modify or burn the position
+    error Unauthorized(); // the caller may not approve for the position
+
     function poolManager() external view returns (address);
     function permit2() external view returns (address);
     function nextTokenId() external view returns (uint256);

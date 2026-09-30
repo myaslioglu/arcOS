@@ -48,6 +48,8 @@ contract PositionVaultForkTest is Test {
     uint128 internal constant V4_LIQUIDITY = 1_000 ether;
     uint256 internal constant SWAP = 100 ether; // per direction, per pool
     uint256 internal constant INTRINSIC = 21_000;
+    // The v3 manager's ERC-721 (OpenZeppelin 3) refuses a transfer by anyone but the owner or an approved address so.
+    string internal constant V3_NOT_APPROVED = "ERC721: transfer caller is not owner nor approved";
 
     IArcV3PositionManager internal constant V3 = IArcV3PositionManager(ArcUniswap.V3_POSITION_MANAGER);
     IArcV4PositionManager internal constant V4 = IArcV4PositionManager(ArcUniswap.V4_POSITION_MANAGER);
@@ -322,11 +324,11 @@ contract PositionVaultForkTest is Test {
     function test_lockPosition_withoutApprovalOfTheFactory_reverts() public {
         uint256 id = _mintV3();
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(bytes(V3_NOT_APPROVED));
         factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice);
         id = _mintV4(erc20Key);
         vm.prank(alice);
-        vm.expectRevert();
+        vm.expectRevert(bytes("NOT_AUTHORIZED"));
         factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
     }
 
@@ -444,19 +446,21 @@ contract PositionVaultForkTest is Test {
         V3.collect(IV3PositionManager.CollectParams(v3Id, alice, type(uint128).max, type(uint128).max));
         vm.expectRevert(bytes("Not approved"));
         V3.burn(v3Id);
-        vm.expectRevert();
+        vm.expectRevert(bytes(V3_NOT_APPROVED));
         V3.transferFrom(address(v3Vault), alice, v3Id);
-        vm.expectRevert();
+        vm.expectRevert(bytes(V3_NOT_APPROVED));
         V3.safeTransferFrom(address(v3Vault), alice, v3Id);
-        vm.expectRevert();
+        vm.expectRevert(bytes("ERC721: approve caller is not owner nor approved for all"));
         V3.approve(alice, v3Id);
         V3.setApprovalForAll(bob, true); // an operator for alice's own NFTs, not the vault's
         vm.stopPrank();
         vm.prank(bob);
-        vm.expectRevert();
+        vm.expectRevert(bytes(V3_NOT_APPROVED));
         V3.transferFrom(address(v3Vault), bob, v3Id);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(aliceWallet, keccak256("any digest"));
-        vm.expectRevert(); // the vault is the owner, and it signs nothing (no ERC-1271)
+        // The vault is the owner, and it signs nothing: the manager's ERC-1271 call hits no function and no fallback,
+        // and reverts without data.
+        vm.expectRevert(bytes(""));
         V3.permit(alice, v3Id, block.timestamp, v, r, s);
 
         assertEq(V3.ownerOf(v3Id), address(v3Vault));
@@ -464,9 +468,15 @@ contract PositionVaultForkTest is Test {
         assertEq(_v3Liquidity(v3Id), liquidity);
 
         _withdrawAtUnlock(v3Vault);
-        vm.prank(alice);
+        vm.startPrank(alice);
         V3.decreaseLiquidity(IArcV3PositionManager.DecreaseLiquidityParams(v3Id, liquidity, 0, 0, block.timestamp));
         assertEq(_v3Liquidity(v3Id), 0);
+        // The positive control for the refused burn: the same call works for the owner of an emptied position.
+        V3.collect(IV3PositionManager.CollectParams(v3Id, alice, type(uint128).max, type(uint128).max));
+        V3.burn(v3Id);
+        vm.stopPrank();
+        vm.expectRevert(bytes("ERC721: owner query for nonexistent token"));
+        V3.ownerOf(v3Id);
     }
 
     function test_v4_everyEarlyExitFails_thenTheOwnerWithdrawsAWorkingPosition() public {
@@ -482,30 +492,33 @@ contract PositionVaultForkTest is Test {
         uint128 liquidity = V4.getPositionLiquidity(id);
         _assertTheVaultRefusesEarlyExits(vault);
 
+        bytes memory notApproved = abi.encodeWithSelector(IArcV4PositionManager.NotApproved.selector, alice);
         vm.startPrank(alice);
-        vm.expectRevert(); // decrease the principal, to herself
+        vm.expectRevert(notApproved); // decrease the principal, to herself
         V4.modifyLiquidities(_decreaseAndTake(id, liquidity, key, alice), block.timestamp);
-        vm.expectRevert(); // collect the fees around the vault, to herself
+        vm.expectRevert(notApproved); // collect the fees around the vault, to herself
         V4.modifyLiquidities(_decreaseAndTake(id, 0, key, alice), block.timestamp);
-        vm.expectRevert(); // burn
+        vm.expectRevert(notApproved); // burn
         V4.modifyLiquidities(_burn(id, key, alice), block.timestamp);
-        vm.expectRevert();
+        vm.expectRevert(bytes("NOT_AUTHORIZED"));
         V4.transferFrom(address(vault), alice, id);
-        vm.expectRevert();
+        vm.expectRevert(bytes("NOT_AUTHORIZED"));
         V4.safeTransferFrom(address(vault), alice, id);
-        vm.expectRevert();
+        vm.expectRevert(IArcV4PositionManager.Unauthorized.selector);
         V4.approve(alice, id);
         V4.setApprovalForAll(bob, true); // an operator for alice's own NFTs, not the vault's
         vm.stopPrank();
         vm.prank(bob);
-        vm.expectRevert();
+        vm.expectRevert(bytes("NOT_AUTHORIZED"));
         V4.transferFrom(address(vault), bob, id);
         bytes memory signature;
         {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(aliceWallet, keccak256("any digest"));
             signature = abi.encodePacked(r, s, v);
         }
-        vm.expectRevert(); // the vault is the owner, and it signs nothing (no ERC-1271)
+        // The vault is the owner, and it signs nothing: the manager's ERC-1271 call hits no function and no fallback,
+        // and reverts without data.
+        vm.expectRevert(bytes(""));
         V4.permit(alice, id, block.timestamp, 0, signature);
 
         assertEq(V4.ownerOf(id), address(vault));
@@ -513,9 +526,15 @@ contract PositionVaultForkTest is Test {
         assertEq(V4.getPositionLiquidity(id), liquidity);
 
         _withdrawAtUnlock(vault);
-        vm.prank(alice);
+        vm.startPrank(alice);
         V4.modifyLiquidities(_decreaseAndTake(id, liquidity, key, alice), block.timestamp);
         assertEq(V4.getPositionLiquidity(id), 0);
+        // The positive control for the refused burn: the same payload works for the position's owner, so the refusal
+        // above was the manager's NotApproved, not a malformed action.
+        V4.modifyLiquidities(_burn(id, key, alice), block.timestamp);
+        vm.stopPrank();
+        vm.expectRevert(bytes("NOT_MINTED"));
+        V4.ownerOf(id);
     }
 
     /// The vault's own guards, for the owner and for anyone else; then the lock still holds.
