@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSiweMessage } from "viem/siwe";
+import { createSiweMessage, parseSiweMessage } from "viem/siwe";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import {
   MAX_MESSAGE_LENGTH,
@@ -115,8 +115,6 @@ describe("checkSignInMessage", () => {
     expect(check(long)).toEqual({ ok: false, reason: "time" });
     const noExpiry = build().replace(/\nExpiration Time: .*/, "");
     expect(check(noExpiry)).toEqual({ ok: false, reason: "malformed" });
-    const notYet = `${build()}\nNot Before: ${at(60_000).toISOString()}`;
-    expect(check(notYet)).toEqual({ ok: false, reason: "time" });
   });
 
   it("tolerates a wallet clock a little ahead of the server's", () => {
@@ -145,5 +143,42 @@ describe("checkSignInMessage", () => {
     for (const value of bad) {
       expect(check(value), JSON.stringify(value)?.slice(0, 80)).toMatchObject({ ok: false });
     }
+  });
+
+  // Review 1, Minor 2: only our own statement, and none of the optional fields our messages never carry.
+  describe("fields our messages never carry", () => {
+    const fields = {
+      address: ACCOUNT.address,
+      chainId: CHAIN_ID,
+      domain: SITE.domain,
+      uri: SITE.uri,
+      version: "1" as const,
+      nonce: NONCE,
+      statement: SIGN_IN_STATEMENT,
+      issuedAt: NOW,
+      expirationTime: at(SIGN_IN_TTL_MS),
+    };
+
+    it("accepts the canonical message with our statement (the baseline the refusals below differ from)", () => {
+      expect(createSiweMessage(fields)).toBe(build());
+      expect(check(createSiweMessage(fields))).toMatchObject({ ok: true });
+    });
+
+    it("refuses another statement, or none", () => {
+      const other = createSiweMessage({ ...fields, statement: "Approve everything." });
+      expect(check(other)).toEqual({ ok: false, reason: "fields" });
+      const none = createSiweMessage({ ...fields, statement: undefined });
+      expect(check(none)).toEqual({ ok: false, reason: "fields" });
+    });
+
+    it("refuses resources, a request id and a Not Before", () => {
+      const cases = [
+        createSiweMessage({ ...fields, resources: ["https://evil.example/grant"] }),
+        createSiweMessage({ ...fields, requestId: "request-1" }),
+        createSiweMessage({ ...fields, notBefore: NOW }),
+        createSiweMessage({ ...fields, notBefore: at(60_000) }),
+      ];
+      for (const message of cases) expect(check(message), message).toEqual({ ok: false, reason: "fields" });
+    });
   });
 });

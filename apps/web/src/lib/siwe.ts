@@ -59,16 +59,17 @@ export function buildSignInMessage(input: {
   });
 }
 
-export type SignInRefusal = "malformed" | "domain" | "uri" | "chain" | "time";
+export type SignInRefusal = "malformed" | "fields" | "domain" | "uri" | "chain" | "time";
 export type SignInCheck = { ok: true; address: Address; nonce: string } | { ok: false; reason: SignInRefusal };
 
 const refuse = (reason: SignInRefusal): SignInCheck => ({ ok: false, reason });
 
 /**
  * Checks a message a client says it signed, before its signature is looked at. It must be exactly the EIP-4361 text
- * viem would write for its own fields (so nothing can hide in it), name this site's domain and URI and the active
- * chain, carry a nonce, and be inside its lifetime: issued no later than a few minutes from now, not expired, not
- * before its Not Before, and living no longer than 10 minutes. The answer carries the lowercase address and the nonce,
+ * viem would write for its own fields (so nothing can hide in it), carry our statement and none of the optional fields
+ * our messages never have (resources, a request id, a Not Before), name this site's domain and URI and the active
+ * chain, carry a nonce, and be inside its lifetime: issued no later than a few minutes from now, not expired, and
+ * living no longer than 10 minutes. The answer carries the lowercase address and the nonce,
  * which the caller still has to accept exactly once.
  */
 export function checkSignInMessage(
@@ -93,6 +94,11 @@ export function checkSignInMessage(
   } catch {
     return refuse("malformed");
   }
+
+  // Only what buildSignInMessage writes: a wallet shows the statement and resources to the user, and a message that
+  // says something else, or grants something more, was not made by this site.
+  if (fields.statement !== SIGN_IN_STATEMENT) return refuse("fields");
+  if (fields.resources !== undefined || fields.requestId !== undefined || fields.notBefore !== undefined) return refuse("fields");
 
   if (domain !== expected.site.domain) return refuse("domain");
   if (fields.scheme !== undefined && fields.scheme !== expected.site.scheme) return refuse("domain");

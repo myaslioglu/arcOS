@@ -48,7 +48,8 @@ Signing in is free and sends no transaction: the wallet signs an EIP-4361 messag
   the wallet in, and its expiry is checked in code as well as by the TTL policy.
 - **Message.** It must be exactly the canonical EIP-4361 text of its own fields, name the host of
   `NEXT_PUBLIC_SITE_URL` as its domain and that site's origin as its URI (never the request's Host header), name the
-  active chain, and be inside a lifetime of at most 10 minutes.
+  active chain, carry the site's own statement and no resources, request id or Not Before, and be inside a lifetime of
+  at most 10 minutes.
 - **Signature.** viem's `verifySiweMessage` over the server's RPC client (CCIP-Read off). It covers ordinary wallets
   and smart-contract wallets (ERC-1271, and ERC-6492 before deployment).
 - **Session.** The cookie `arcos_session` is an HS256 JWT `{ sub: address, aud: site host, iat, exp: +7 days }`, sent
