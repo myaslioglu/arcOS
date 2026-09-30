@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { UserRejectedRequestError, type Hex } from "viem";
 import { parseSiweMessage } from "viem/siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { SIGN_IN_UNAVAILABLE, fetchSession, signInWithWallet, signOut } from "../sign-in-client";
+import { SIGN_IN_UNAVAILABLE, SIGN_OUT_FAILED, fetchSession, signInWithWallet, signOut } from "../sign-in-client";
 
 const ACCOUNT = privateKeyToAccount(generatePrivateKey());
 const NONCE = "0123456789abcdef0123456789abcdef";
@@ -120,9 +120,30 @@ describe("fetchSession and signOut", () => {
     await expect(fetchSession(down as unknown as typeof fetch)).resolves.toBe("unavailable");
   });
 
-  it("signs out with a POST", async () => {
+  it("signs out with a POST, and says it did", async () => {
     const fetchImpl = fakeFetch({ "POST /api/auth/logout": () => new Response(null, { status: 204 }) });
-    await signOut(fetchImpl as unknown as typeof fetch);
+    await expect(signOut(fetchImpl as unknown as typeof fetch)).resolves.toEqual({ ok: true });
     expect(fetchImpl).toHaveBeenCalledWith("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  });
+
+  // Review 1, Minor 4: a sign-out that didn't happen is reported, never silent.
+  it("counts a 401 as signed out: there was no session, and the server cleared the cookie", async () => {
+    const fetchImpl = fakeFetch({ "POST /api/auth/logout": () => json(401, { error: "Not signed in." }) });
+    await expect(signOut(fetchImpl as unknown as typeof fetch)).resolves.toEqual({ ok: true });
+  });
+
+  it("says it failed when the server refuses or can't be reached, and never throws", async () => {
+    for (const status of [403, 429, 500, 503]) {
+      const fetchImpl = fakeFetch({ "POST /api/auth/logout": () => json(status, { error: "x" }) });
+      await expect(signOut(fetchImpl as unknown as typeof fetch), String(status)).resolves.toEqual({
+        ok: false,
+        error: SIGN_OUT_FAILED,
+      });
+    }
+    const down = vi.fn(async () => {
+      throw new TypeError("network");
+    });
+    await expect(signOut(down as unknown as typeof fetch)).resolves.toEqual({ ok: false, error: SIGN_OUT_FAILED });
+    expect(SIGN_OUT_FAILED).toBe("Couldn't sign out. Try again.");
   });
 });

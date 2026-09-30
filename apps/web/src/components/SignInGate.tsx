@@ -3,15 +3,18 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useAccount, useSignMessage } from "wagmi";
 import { activeChain } from "@arcos/chain";
-import { fetchSession, signInWithWallet, signOut, type SessionInfo } from "@/lib/sign-in-client";
+import { fetchSession, signInWithWallet, signOut, type SessionInfo, type SignOutOutcome } from "@/lib/sign-in-client";
 
 // Apps that need a signed-in wallet (alerts, Telegram) render inside this, and this inside <ConnectGate>, so the wallet
 // is connected and on Arc by the time it asks for a signature. It lives here rather than in @arcos/shell's ui, which
 // never imports wagmi (AGENTS.md).
 
 export type SignedIn = SessionInfo & {
-  /** Ends every session of this wallet and returns to the sign-in prompt. */
-  signOut: () => Promise<void>;
+  /**
+   * Ends every session of this wallet and returns to the sign-in prompt. When that fails, the wallet stays signed in,
+   * the gate shows "Couldn't sign out. Try again." above the app, and the result says so.
+   */
+  signOut: () => Promise<SignOutOutcome>;
   /** Reads the session again, after something changed it (a Telegram link, say). */
   refresh: () => Promise<void>;
 };
@@ -29,7 +32,7 @@ type State =
   | { kind: "loading" }
   | { kind: "signed-out"; error: string | null; busy: boolean }
   | { kind: "unavailable" }
-  | { kind: "signed-in"; session: SessionInfo };
+  | { kind: "signed-in"; session: SessionInfo; signOutError?: string };
 
 /** A session for another wallet than the one connected doesn't count here: the user signs in with this one. */
 function stateFor(session: SessionInfo | null | "unavailable", address: string | undefined): State {
@@ -94,16 +97,25 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const { session } = state;
   const value: SignedIn = {
-    ...state.session,
+    ...session,
     signOut: async () => {
-      try {
-        await signOut();
-      } finally {
-        await load();
-      }
+      const outcome = await signOut();
+      if (outcome.ok) await load();
+      else setState({ kind: "signed-in", session, signOutError: outcome.error });
+      return outcome;
     },
     refresh: load,
   };
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>
+      {state.signOutError && (
+        <p role="alert" className="px-3 py-1.5 text-center text-xs text-accent-3-text">
+          {state.signOutError}
+        </p>
+      )}
+      {children}
+    </SessionContext.Provider>
+  );
 }

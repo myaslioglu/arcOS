@@ -97,6 +97,18 @@ export async function fetchSession(request: typeof fetch = fetch): Promise<Sessi
   }
 }
 
-export async function signOut(request: typeof fetch = fetch): Promise<void> {
-  await request("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+export const SIGN_OUT_FAILED = "Couldn't sign out. Try again.";
+export type SignOutOutcome = { ok: true } | { ok: false; error: string };
+
+/**
+ * Ends every session of the signed-in wallet. A 401 counts as signed out: there was no session, and the server cleared
+ * the cookie anyway. Any other refusal, or no answer at all, is a failure the caller shows. It never throws.
+ */
+export async function signOut(request: typeof fetch = fetch): Promise<SignOutOutcome> {
+  try {
+    const res = await request("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+    return res.ok || res.status === 401 ? { ok: true } : { ok: false, error: SIGN_OUT_FAILED };
+  } catch {
+    return { ok: false, error: SIGN_OUT_FAILED };
+  }
 }
