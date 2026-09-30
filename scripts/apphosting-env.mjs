@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 // Prints the values App Hosting gives the build, read from apps/web/apphosting.yaml, as NAME=value lines, so the deploy
-// workflow can build the same mainnet bundle the site is built from without copying any of them into the workflow:
+// workflow can build the same bundle a backend is built from without copying any of them into the workflow:
 //
-//   node scripts/apphosting-env.mjs [apps/web/apphosting.yaml] >> "$GITHUB_ENV"
+//   node scripts/apphosting-env.mjs [apps/web/apphosting.yaml] [--environment <name>] >> "$GITHUB_ENV"
+//
+// With --environment, it reads apphosting.<name>.yaml from the same folder and merges it over the base file the way App
+// Hosting does for a backend whose environment name is <name> (https://firebase.google.com/docs/app-hosting/multiple-environments):
+// an item of the environment's file replaces the base item of the same variable whole (its value or secret and its
+// availability), base items it doesn't name are kept, and items only it names are added. Unlike App Hosting, which falls
+// back to the base file when the environment's file is missing, this fails: a bundle built without it would be another
+// site's. An empty name means no environment, as on App Hosting.
 //
 // It reads only the shape that file has (an `env:` list of variable / value or secret / availability items) and
 // refuses anything else, by line, rather than guessing. A variable is a build-time one when its availability lists
@@ -10,19 +17,22 @@
 // NEXT_PUBLIC_ one: the lines go into a job that later holds a deploy credential, so a name like NODE_OPTIONS or
 // LD_PRELOAD is not something a settings file may set there.
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_FILE = "apps/web/apphosting.yaml";
 const KEYS = new Set(["variable", "value", "secret", "availability"]);
 const AVAILABILITY = new Set(["BUILD", "RUNTIME"]);
 const BUILD_NAME = /^NEXT_PUBLIC_[A-Z0-9_]+$/;
+/** The environment names whose apphosting.<name>.yaml the Firebase CLI recognises (APPHOSTING_YAML_FILE_REGEX). */
+const ENVIRONMENT_NAME = /^[a-z0-9_]+$/;
 
-function fail(line, message) {
-  throw new Error(`apphosting.yaml line ${line}: ${message}`);
+function failIn(file, line, message) {
+  throw new Error(`${file} line ${line}: ${message}`);
 }
 
 /** One YAML scalar: double-quoted, single-quoted, or plain text that YAML would read as a string. */
-function parseScalar(raw, line) {
+function parseScalar(raw, line, fail) {
   const text = raw.trim();
   if (text === "") fail(line, "missing value");
   const quote = text[0];
@@ -57,8 +67,12 @@ function parseScalar(raw, line) {
   return plain;
 }
 
-/** The env items of an apphosting.yaml, in file order: { line, variable, value?, secret?, availability? }. */
-export function parseEnv(text) {
+/**
+ * The env items of an apphosting.yaml, in file order: { line, file, variable, value?, secret?, availability? }. `name`
+ * is the file's name, which errors give with the line.
+ */
+export function parseEnv(text, name = "apphosting.yaml") {
+  const fail = (line, message) => failIn(name, line, message);
   const lines = String(text).split(/\r?\n/);
   const entries = [];
   let inEnv = false;
@@ -85,7 +99,7 @@ export function parseEnv(text) {
         fail(line, "availability must be a list");
       }
     } else {
-      current[key] = parseScalar(rest, line);
+      current[key] = parseScalar(rest, line, fail);
     }
   };
 
@@ -107,14 +121,14 @@ export function parseEnv(text) {
     }
     if (!inEnv) return; // another block, such as runConfig: not read
     if (inAvailability && current && body.startsWith("- ") && indent > itemIndent + 2) {
-      current.availability.push(parseScalar(body.slice(2), line));
+      current.availability.push(parseScalar(body.slice(2), line, fail));
       return;
     }
     const item = body.match(/^- ([A-Za-z]+):(.*)$/);
     if (item) {
       if (itemIndent === null) itemIndent = indent;
       else if (indent !== itemIndent) fail(line, "list items must line up");
-      current = { line };
+      current = { line, file: name };
       entries.push(current);
       setKey(item[1], item[2], line);
       return;
@@ -140,6 +154,16 @@ export function parseEnv(text) {
   return entries;
 }
 
+/**
+ * The base file's items with an environment's merged over them, as App Hosting merges apphosting.<environment>.yaml
+ * over apphosting.yaml: an environment item replaces the base item of the same variable whole, and the others of both
+ * are kept. In App Hosting's order: the environment's items, then the base items it doesn't name.
+ */
+export function mergeEnv(base, environment) {
+  const named = new Set(environment.map((e) => e.variable));
+  return [...environment, ...base.filter((e) => !named.has(e.variable))];
+}
+
 const atBuild = (e) => !e.availability || e.availability.includes("BUILD");
 
 /** [name, value] for each literal value the build gets. Secrets are left out; a name other than NEXT_PUBLIC_* throws. */
@@ -148,7 +172,7 @@ export function buildTimeEnv(entries) {
   for (const e of entries) {
     if (!atBuild(e) || e.secret !== undefined) continue;
     if (!BUILD_NAME.test(e.variable)) {
-      fail(e.line, `${e.variable} is set at build time but is not NEXT_PUBLIC_*; it would go into the deploy job's environment, so this script refuses it (extend it on purpose if it is needed)`);
+      failIn(e.file ?? "apphosting.yaml", e.line, `${e.variable} is set at build time but is not NEXT_PUBLIC_*; it would go into the deploy job's environment, so this script refuses it (extend it on purpose if it is needed)`);
     }
     pairs.push([e.variable, e.value]);
   }
@@ -165,22 +189,59 @@ export function render(pairs) {
     .join("");
 }
 
-/** @param {string[]} argv @param {{ write: (s: string) => void, error: (s: string) => void }} io */
+/** The file and the environment name of a command line, or an error for one this script doesn't take. */
+function parseArgs(argv) {
+  let file;
+  let environment = "";
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--environment") {
+      if (i + 1 >= argv.length) return { error: "--environment needs a name (an empty one for none)" };
+      environment = argv[i + 1];
+      i += 1;
+    } else if (arg.startsWith("--")) {
+      return { error: `unknown option ${arg}` };
+    } else if (file === undefined) {
+      file = arg;
+    } else {
+      return { error: "one settings file only" };
+    }
+  }
+  if (environment !== "" && !ENVIRONMENT_NAME.test(environment)) {
+    return { error: "an environment name is lower-case letters, digits and _ only, as in apphosting.<name>.yaml" };
+  }
+  return { file: file ?? DEFAULT_FILE, environment };
+}
+
+/**
+ * @param {string[]} argv
+ * @param {{ write: (s: string) => void, error: (s: string) => void }} io
+ * @returns {number} 0 printed, 1 a file can't be read or understood, 2 a bad command line
+ */
 export function run(argv, io) {
-  const file = argv[0] ?? DEFAULT_FILE;
-  let text;
-  try {
-    text = fs.readFileSync(file, "utf8");
-  } catch {
-    io.error(`cannot read ${file}`);
-    return 1;
+  const args = parseArgs(argv);
+  if (args.error) {
+    io.error(`${args.error}\nusage: node scripts/apphosting-env.mjs [apphosting.yaml] [--environment <name>]`);
+    return 2;
+  }
+  const files = [args.file];
+  if (args.environment) files.push(path.join(path.dirname(args.file), `apphosting.${args.environment}.yaml`));
+  const texts = [];
+  for (const file of files) {
+    try {
+      texts.push(fs.readFileSync(file, "utf8"));
+    } catch {
+      io.error(`cannot read ${file}`);
+      return 1;
+    }
   }
   let output;
   try {
-    const entries = parseEnv(text);
+    const [base, environment] = texts.map((text, i) => parseEnv(text, path.basename(files[i])));
+    const entries = environment ? mergeEnv(base, environment) : base;
     const pairs = buildTimeEnv(entries);
     if (pairs.length === 0) {
-      io.error(`no build-time values in ${file}: a bundle built without the site's settings would not be the site's`);
+      io.error(`no build-time values in ${files.join(" and ")}: a bundle built without the site's settings would not be the site's`);
       return 1;
     }
     output = render(pairs);

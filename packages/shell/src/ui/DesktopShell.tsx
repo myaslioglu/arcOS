@@ -35,6 +35,8 @@ import { Wallpaper } from "./Wallpaper";
 type Props = {
   apps: AppManifest[];
   brand: string;
+  /** A short label beside the brand in the menu bar, such as "Testnet". Empty or missing: none. */
+  badge?: string;
   /** App opened by "About …". */
   aboutAppId?: string;
   /** Right side of the menu bar: network, wallet, balance. */
@@ -68,6 +70,7 @@ function stageSize(): { w: number; h: number } {
 export function DesktopShell({
   apps,
   brand,
+  badge,
   aboutAppId = "about",
   statusSlot,
   quickActions,
@@ -205,10 +208,11 @@ export function DesktopShell({
       <RegistryProvider value={registry}>
         <DesktopProvider value={api}>
           <main className="os-root" onContextMenu={onContextMenu}>
-            <h1 className="sr-only">{brand}</h1>
+            <h1 className="sr-only">{badge ? `${brand} ${badge}` : brand}</h1>
             <Wallpaper>{wallpaperSlot}</Wallpaper>
             <MenuBar
               brand={brand}
+              badge={badge}
               windows={state.windows}
               activeId={state.activeId}
               touch={touch}

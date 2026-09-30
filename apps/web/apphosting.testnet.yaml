@@ -1,0 +1,38 @@
+# Firebase App Hosting settings for the testnet site, https://testnet.4rcos.com: the backend `arcos-testnet`, whose
+# environment name is `testnet` (docs/DEPLOYING.md, "The testnet site"). App Hosting merges this file over
+# apphosting.yaml when it builds that backend: an item here replaces the item of the same variable there whole (value
+# or secret, and availability), and every item not named here is taken from apphosting.yaml as it is (the WalletConnect
+# project ID, runConfig). The backend `arcos` has no environment name, so it never reads this file.
+# Source: https://firebase.google.com/docs/app-hosting/multiple-environments, and the merge in App Hosting's buildpack
+# (MergeEnvVars in GoogleCloudPlatform/buildpacks, pkg/firebase/apphostingschema). scripts/apphosting-env.mjs
+# --environment testnet merges the two files the same way for the deploy workflow's testnet bundle.
+#
+# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the two mainnet-only items
+# are replaced by the value `none`:
+# - NEXT_PUBLIC_FEE_RECIPIENT: `none` is not an address, so Swap and Bridge add no platform fee (feeRecipient() in
+#   src/lib/appkit.ts).
+# - BLOCKSCOUT_API_KEY: a secret in apphosting.yaml. Named there, the backend's account would need access to it; replaced
+#   by a plain `none`, it needs none, and the server reads the testnet explorer's public API, which answers servers
+#   (proExplorerApi() in src/lib/inspect-input.ts). RUNTIME only, as in apphosting.yaml.
+# Public values only: nothing here is a secret.
+
+env:
+  - variable: NEXT_PUBLIC_ARC_NETWORK
+    value: testnet
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_SITE_URL
+    value: https://testnet.4rcos.com
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FEE_RECIPIENT
+    value: none
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: BLOCKSCOUT_API_KEY
+    value: none
+    availability:
+      - RUNTIME

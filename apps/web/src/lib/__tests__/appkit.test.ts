@@ -23,6 +23,8 @@ describe("feeRecipient", () => {
     expect(feeRecipient()).toBe("0x000000000000000000000000000000000000dEaD");
     vi.stubEnv("NEXT_PUBLIC_FEE_RECIPIENT", "nope");
     expect(feeRecipient()).toBeNull();
+    vi.stubEnv("NEXT_PUBLIC_FEE_RECIPIENT", "none"); // the testnet site's setting (apphosting.testnet.yaml)
+    expect(feeRecipient()).toBeNull();
   });
 });
 

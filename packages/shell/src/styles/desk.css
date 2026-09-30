@@ -295,6 +295,14 @@
   font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--fg);
 }
 @media (max-width: 479px) { .os-app-name { display: none; } }
+/* A label beside the brand, such as "Testnet": the "Soon" tag's amber, and shown on every screen size. */
+.os-network-badge {
+  flex: none; padding: 0 6px; border-radius: 5px;
+  border: 1px solid color-mix(in oklab, var(--accent-3) 40%, transparent);
+  background: color-mix(in oklab, var(--accent-3) 10%, transparent);
+  font-family: var(--font-mono); font-size: 10px; line-height: 16px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent-3-text); white-space: nowrap;
+}
 
 /* The search pill: a glyph and the shortcut, opening the launcher. Touch has the home's search box instead, and a
    44px control wouldn't fit the 40px bar. */

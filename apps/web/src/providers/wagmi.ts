@@ -5,16 +5,33 @@ import { lazyWalletConnect } from "./lazyWalletConnect";
 
 const { mainnet, testnet } = CHAINS;
 
+/** The site a build without a usable NEXT_PUBLIC_SITE_URL names: the mainnet one, as before the testnet site existed. */
+const DEFAULT_SITE = "https://4rcos.com";
+
 /**
- * How wallets show 4rc.OS when a phone pairs through WalletConnect. Wallets fetch the icon themselves, so it is an absolute
- * URL, and the 180px PNG the app already serves as its home-screen icon (app/apple-icon.tsx) rather than the SVG favicon.
+ * How wallets show 4rc.OS when a phone pairs through WalletConnect. The url is the site's own origin, from
+ * NEXT_PUBLIC_SITE_URL (https://4rcos.com on mainnet, https://testnet.4rcos.com on testnet): wallets show it, and
+ * WalletConnect's verify service checks it against the page's origin. Wallets fetch the icon themselves, so it is an
+ * absolute URL on the same origin, and the 180px PNG the app already serves as its home-screen icon (app/apple-icon.tsx)
+ * rather than the SVG favicon.
  */
-export const WALLETCONNECT_METADATA = {
-  name: "4rc.OS",
-  description: "Small token tools on Arc, as a desktop.",
-  url: "https://4rcos.com",
-  icons: ["https://4rcos.com/apple-icon"],
-};
+export function walletConnectMetadata(siteUrl: string | undefined) {
+  let origin = DEFAULT_SITE;
+  try {
+    const url = new URL(siteUrl?.trim() ?? "");
+    if (url.protocol === "https:" || url.protocol === "http:") origin = url.origin;
+  } catch {
+    // unset or not a URL: the default
+  }
+  return {
+    name: "4rc.OS",
+    description: "Small token tools on Arc, as a desktop.",
+    url: origin,
+    icons: [`${origin}/apple-icon`],
+  };
+}
+
+export const WALLETCONNECT_METADATA = walletConnectMetadata(process.env.NEXT_PUBLIC_SITE_URL);
 
 // A public Reown project ID, which Next inlines where this module is built: a client identifier that ships in the browser
 // bundle, not a secret. The domain allowlist in the Reown dashboard is what limits its use. Unset (or blank), WalletConnect

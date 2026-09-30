@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { metadata } from "@/app/layout";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Metadata } from "next";
 
 // A build replaces next/font/google with the font's files; run bare, it throws. The layout only needs the class names.
 vi.mock("next/font/google", () => ({
@@ -7,10 +7,24 @@ vi.mock("next/font/google", () => ({
   Geist_Mono: () => ({ variable: "font-geist-mono" }),
 }));
 
-describe("the page metadata", () => {
-  const description = String(metadata.description);
+/** The layout's metadata as a build for `network` has it: Next inlines NEXT_PUBLIC_ARC_NETWORK where the module is built. */
+async function metadataFor(network: "mainnet" | "testnet"): Promise<Metadata> {
+  vi.resetModules();
+  vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+  return (await import("@/app/layout")).metadata;
+}
 
-  it("is titled 4rc.OS", () => {
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("the page metadata", () => {
+  let metadata: Metadata;
+  let description = "";
+
+  it("is titled 4rc.OS on mainnet", async () => {
+    metadata = await metadataFor("mainnet");
+    description = String(metadata.description);
     expect(metadata.title).toBe("4rc.OS");
   });
 
@@ -23,5 +37,19 @@ describe("the page metadata", () => {
 
   it("is short enough that a search result shows all of it", () => {
     expect(description.length).toBeLessThanOrEqual(160);
+  });
+});
+
+describe("the page metadata per network", () => {
+  it("leaves robots unset on mainnet, as before: indexable", async () => {
+    const metadata = await metadataFor("mainnet");
+    expect(metadata).not.toHaveProperty("robots");
+  });
+
+  it("asks search engines to leave the testnet site out, and titles it as the testnet", async () => {
+    const metadata = await metadataFor("testnet");
+    expect(metadata.robots).toEqual({ index: false, follow: false });
+    expect(metadata.title).toBe("4rc.OS Testnet");
+    expect(String(metadata.description)).toBe(String((await metadataFor("mainnet")).description));
   });
 });
