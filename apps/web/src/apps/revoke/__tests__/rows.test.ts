@@ -4,10 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAddress } from "viem";
 import { UserFacingError } from "@/lib/contract-error";
 import { shortAddress } from "@/lib/format";
+import type { DragItem } from "@arcos/shell";
 import type { Approval } from "@/lib/approvals";
 import {
   allowanceText,
+  approvalText,
   APPROVE_ABI,
+  dragItemOf,
+  rowForDrop,
   fetchApprovals,
   focusTargetAfterRemoval,
   focusWasLost,
@@ -29,6 +33,7 @@ const MIXED = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const TOKEN = "0x3333333333333333333333333333333333333333";
 const SPENDER = "0x5555555555555555555555555555555555555555";
 const row = (over: Partial<Approval> = {}): Approval => ({
+  kind: "erc20",
   token: TOKEN,
   symbol: "AAA",
   name: "Token A",
@@ -497,5 +502,64 @@ describe("Window.tsx doesn't believe a zero from a node that is behind the appro
     expect(readAndShortcut).toMatch(/blockNumber:\s*head\b/);
     expect(readAndShortcut).toMatch(/===\s*0n\s*&&\s*nodeHasSeenApproval\(head,\s*row\.lastApprovalBlock\)/);
     expect(readAndShortcut).toContain("markRevoked(");
+  });
+});
+
+describe("the other kinds of approval", () => {
+  const nft = row({ kind: "erc721", symbol: "PUNK", decimals: null, allowance: "1", tokenId: "7" });
+  const operator = row({ kind: "operator", symbol: "PUNK", decimals: null, allowance: "1" });
+  const permit2 = row({ kind: "permit2", allowance: "5000000000000000000", expiration: 1_900_000_000 });
+
+  it("parses each kind, with an NFT's id and a Permit2 expiry, and refuses a kind it doesn't know or a field that doesn't fit", () => {
+    expect(parseApprovalsAnswer({ approvals: [nft, operator, permit2], truncated: false }).approvals).toEqual([nft, operator, permit2]);
+    const bad: unknown[] = [
+      { ...row(), kind: "erc1155" },
+      { ...row(), kind: undefined },
+      { ...nft, tokenId: undefined },
+      { ...nft, tokenId: "0x7" },
+      { ...nft, tokenId: "-7" },
+      { ...permit2, expiration: "soon" },
+      { ...permit2, expiration: -1 },
+    ];
+    for (const value of bad) expect(() => parseApprovalsAnswer({ approvals: [value], truncated: false }), JSON.stringify(value)).toThrow();
+  });
+
+  it("drops an id or an expiry on a kind that has none", () => {
+    const [parsed] = parseApprovalsAnswer({ approvals: [{ ...row(), tokenId: "7", expiration: 9 }], truncated: false }).approvals;
+    expect(parsed).toEqual(row());
+  });
+
+  it("keys an ERC-20 pair as before, and each other kind apart from it, an NFT by its id", () => {
+    expect(rowKey(row())).toBe(`${TOKEN}:${SPENDER}`.toLowerCase());
+    expect(new Set([row(), nft, operator, permit2].map(rowKey)).size).toBe(4);
+    expect(rowKey(nft)).toBe(`erc721:${TOKEN.toLowerCase()}:7`);
+    expect(rowKey({ ...nft, spender: OTHER })).toBe(rowKey(nft));
+  });
+
+  it("says what each kind allows", () => {
+    expect(approvalText(row())).toBe("1.5");
+    expect(approvalText(nft)).toBe("NFT #7");
+    expect(approvalText(operator)).toBe("Every item");
+    expect(approvalText({ ...permit2, allowance: (2n ** 160n - 1n).toString(), decimals: 18 })).toBe("Unlimited");
+    expect(approvalText(permit2)).toBe("5");
+  });
+
+  it("reads Permit2's maximum, 2^160 - 1, as Unlimited", () => {
+    expect(allowanceText((2n ** 160n - 1n).toString(), 18, "permit2")).toBe("Unlimited");
+    expect(allowanceText((2n ** 160n - 1n).toString(), 18)).not.toBe("Unlimited");
+  });
+
+  it("names the NFT in the Revoke button", () => {
+    expect(revokeButtonLabel(nft, "Permit2")).toBe("Revoke PUNK #7 for Permit2");
+  });
+
+  it("drags a row as an approval item, and finds the row a dropped item names, never one it doesn't", () => {
+    expect(dragItemOf(row())).toEqual({ kind: "approval", approval: "erc20", token: TOKEN, spender: SPENDER });
+    expect(dragItemOf(nft)).toEqual({ kind: "approval", approval: "erc721", token: TOKEN, spender: SPENDER, tokenId: "7" });
+    const rows = [row(), nft, operator, permit2];
+    for (const r of rows) expect(rowForDrop(rows, dragItemOf(r))).toBe(r);
+    expect(rowForDrop(rows, { ...(dragItemOf(row()) as Extract<DragItem, { kind: "approval" }>), token: OTHER })).toBeNull();
+    expect(rowForDrop([row()], dragItemOf(permit2))).toBeNull();
+    expect(rowForDrop(rows, { kind: "token", address: TOKEN, symbol: "AAA", decimals: 18 })).toBeNull();
   });
 });

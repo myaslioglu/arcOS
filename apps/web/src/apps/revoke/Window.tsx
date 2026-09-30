@@ -190,7 +190,8 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
 
   // key={owner} on this component (see RevokeWindow) means every state hook above starts fresh for a new owner —
   // there is no per-owner overlay to filter here beyond stillLive, which already carries the owner in its own key.
-  const rows = stillLive(owner, query.data.approvals);
+  // Only ERC-20 rows until this window can revoke the other kinds.
+  const rows = stillLive(owner, query.data.approvals).filter((r) => r.kind === "erc20");
 
   // One revoke at a time: a live allowance check first (below), then approve(spender, 0), simulated,
   // confirmed in the wallet, then the pair is read again at the block the revoke landed in.

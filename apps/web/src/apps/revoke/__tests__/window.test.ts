@@ -43,6 +43,7 @@ const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const NOTE = "Token approvals only. NFT and Permit2 approvals come later.";
 
 const row = (over: Partial<Approval> = {}): Approval => ({
+  kind: "erc20",
   token: TOKEN,
   symbol: "AAA",
   name: "Token A",
