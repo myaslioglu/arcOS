@@ -15,11 +15,11 @@ const deployCode = deploy
   .filter((line) => !/^\s*#/.test(line))
   .join("\n");
 
-/** The text of one top-level job of deploy.yml, from its key to the next job's key. */
-function job(name) {
-  const start = deploy.search(new RegExp(`^  ${name}:\\s*$`, "m"));
+/** The text of one top-level job of a workflow (deploy.yml unless another is given), from its key to the next job's key. */
+function job(name, workflow = deploy) {
+  const start = workflow.search(new RegExp(`^  ${name}:\\s*$`, "m"));
   expect(start, `job ${name} exists`).toBeGreaterThanOrEqual(0);
-  const rest = deploy.slice(start + 1);
+  const rest = workflow.slice(start + 1);
   const next = rest.search(/^  [a-z][a-z-]*:\s*$/m);
   return next === -1 ? rest : rest.slice(0, next);
 }
@@ -261,5 +261,67 @@ describe("the Firestore tests in CI", () => {
     for (const text of [ci, emulator]) {
       expect(text).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false\n/);
     }
+  });
+});
+
+describe("the end-to-end smoke job in ci.yml", () => {
+  const e2e = () => job("e2e", ci);
+  const pkg = () => JSON.parse(read("package.json"));
+
+  it("runs beside the checks with read access only, no credential and no secret", () => {
+    const text = e2e();
+    expect(text).not.toMatch(/^ {4}needs:/m);
+    expect(text).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}[a-z]/m); // that permission alone
+    expect(text).not.toMatch(/secrets\.|vars\.|GITHUB_TOKEN|id-token|google-github-actions|BLOCKSCOUT_API_KEY/);
+    expect(text).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false\n/);
+  });
+
+  it("leaves no GitHub token in any checkout of ci.yml", () => {
+    const checkouts = ci.match(/uses: actions\/checkout@/g) ?? [];
+    expect(checkouts.length).toBeGreaterThan(1);
+    expect(ci.match(/uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false\n/g)).toHaveLength(checkouts.length);
+  });
+
+  it("installs from the lockfile with the ci job's Node and npm, then a browser, then builds and runs the suite", () => {
+    const text = e2e();
+    const at = (needle) => text.indexOf(needle);
+    expect(text).toMatch(/node-version-file: \.nvmrc$/m);
+    expect(at("run: npm install -g npm@11.19.1")).toBeGreaterThanOrEqual(0);
+    expect(ci.match(/run: npm install -g npm@\S+/g)).toEqual(["run: npm install -g npm@11.19.1", "run: npm install -g npm@11.19.1"]);
+    expect(at("run: npm ci\n")).toBeGreaterThan(at("run: npm install -g npm@11.19.1"));
+    expect(at("run: npx playwright install --with-deps chromium\n")).toBeGreaterThan(at("run: npm ci\n"));
+    expect(at("run: npm run build -w @arcos/web\n")).toBeGreaterThan(at("run: npx playwright install --with-deps chromium\n"));
+    expect(at("run: npm run test:e2e\n")).toBeGreaterThan(at("run: npm run build -w @arcos/web\n"));
+  });
+
+  it("pins Playwright to one exact version, and downloads browsers in CI only, never from an npm script", () => {
+    expect(pkg().devDependencies["@playwright/test"]).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const [name, script] of Object.entries(pkg().scripts)) {
+      expect(script, `script ${name}`).not.toMatch(/playwright install/);
+    }
+    expect(deploy).not.toMatch(/playwright/); // the deploy's own jobs never download a browser
+  });
+
+  it("typechecks the suite and its config, which the workspaces' typecheck doesn't reach", () => {
+    const text = e2e();
+    expect(pkg().scripts["typecheck:e2e"]).toBe("tsc -p e2e/tsconfig.json");
+    expect(text.indexOf("run: npm run typecheck:e2e\n")).toBeGreaterThan(text.indexOf("run: npm ci\n"));
+  });
+
+  it("builds with the settings App Hosting reads, like the deploy's bundle, and never with the local Chromium path", () => {
+    const text = e2e();
+    const settings = text.indexOf('run: node scripts/apphosting-env.mjs | tee -a "$GITHUB_ENV"\n');
+    expect(settings).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("run: npm run build -w @arcos/web\n")).toBeGreaterThan(settings);
+    expect(text).not.toMatch(/^\s*NEXT_PUBLIC_[A-Z_]+:/m); // no value set by hand beside the file's
+    expect(ci).not.toMatch(/^\s*E2E_CHROMIUM_PATH:/m);
+  });
+
+  it("uploads the report only when the suite fails", () => {
+    const text = e2e();
+    const upload = text.slice(text.indexOf("- name: Upload the Playwright report"));
+    expect(upload).toMatch(/if: failure\(\)/);
+    expect(upload).toMatch(/uses: actions\/upload-artifact@v\d+$/m);
+    expect(upload).toMatch(/path: playwright-report\/$/m);
   });
 });
