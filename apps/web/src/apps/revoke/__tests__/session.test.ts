@@ -56,6 +56,24 @@ describe("revokeSession", () => {
     expect(revokeSession.getSnapshot().run).toBeNull();
   });
 
+  it("ignores a late onSent from an earlier run once a new run has started at the same step", async () => {
+    const pending: { settle: (o: RowOutcome[]) => void; onSent: () => void }[] = [];
+    const execute = (_rows: Approval[], onSent: () => void) => new Promise<RowOutcome[]>((settle) => pending.push({ settle, onSent }));
+    const first = revokeSession.run(OWNER, [[A]], execute);
+    pending[0]!.settle([{ key: rowKey(A), result: "revoked", block: 5 }]);
+    await first;
+    const second = revokeSession.run(OWNER, [[B]], execute);
+    const before = revokeSession.getSnapshot();
+    expect(before.run).toMatchObject({ step: 1, sent: false });
+    // The first run's step 1 reports a signature only now, while the second run is at its own step 1.
+    pending[0]!.onSent();
+    expect(revokeSession.getSnapshot()).toBe(before);
+    pending[1]!.onSent();
+    expect(revokeSession.getSnapshot().run).toMatchObject({ step: 1, sent: true });
+    pending[1]!.settle([{ key: rowKey(B), result: "revoked", block: 6 }]);
+    await second;
+  });
+
   it("keeps a running revoke's progress in the store, so a window mounted mid-revoke shows it, and clears it when it ends", async () => {
     const { pending, execute } = manual();
     const listener = vi.fn();

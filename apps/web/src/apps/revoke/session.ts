@@ -32,6 +32,8 @@ const EMPTY_OWNER: OwnerState = { failures: {}, left: {} };
 const initial: RevokeSessionState = { run: null, owners: {} };
 
 let state: RevokeSessionState = initial;
+/** The run under way, as a token of its own: a step number alone can't tell one run's step 1 from the next run's. */
+let currentRun: object | null = null;
 const listeners = new Set<() => void>();
 
 function set(next: RevokeSessionState): void {
@@ -83,6 +85,8 @@ function run(
   onEnd?: (outcomes: RowOutcome[]) => void,
 ): Promise<RowOutcome[]> | null {
   if (state.run !== null || steps.length === 0) return null;
+  const token = {};
+  currentRun = token;
   const keys = new Set(steps.flat().map(rowKey));
   const drop = <T>(record: Readonly<Record<string, T>>) => Object.fromEntries(Object.entries(record).filter(([k]) => !keys.has(k)));
   updateOwner(owner, (o) => ({ failures: drop(o.failures), left: drop(o.left) }));
@@ -95,9 +99,10 @@ function run(
         const rows = steps[i]!;
         if (i > 0) set({ ...state, run: { ...state.run!, step: i + 1, current: rows.map(rowKey), sent: false } });
         const step = i + 1;
-        // Marks this step's transaction sent; a call that comes late, once the run has moved on or ended, is ignored.
+        // Marks this step's transaction sent; a call that comes late, once the run has moved on or ended (even when a
+        // new run has reached the same step), is ignored.
         const onSent = () => {
-          if (state.run?.step === step && !state.run.sent) set({ ...state, run: { ...state.run, sent: true } });
+          if (currentRun === token && state.run?.step === step && !state.run.sent) set({ ...state, run: { ...state.run, sent: true } });
         };
         let outcomes: RowOutcome[];
         try {
@@ -114,6 +119,7 @@ function run(
       if (typeof window !== "undefined") window.removeEventListener("beforeunload", beforeUnloadGuard);
       // Before the run is cleared, so a window that is waiting for it to end already knows what ended.
       onEnd?.(all);
+      if (currentRun === token) currentRun = null;
       set({ ...state, run: null });
     }
     return all;
@@ -142,6 +148,7 @@ function stop(): void {
 
 /** Forgets everything (for tests). */
 function forget(): void {
+  currentRun = null;
   set(initial);
 }
 
