@@ -45,7 +45,10 @@ Signing in is free and sends no transaction: the wallet signs an EIP-4361 messag
 
 - **Nonce.** `GET /api/auth/nonce` makes 16 random bytes with the server's CSPRNG and stores them in the Firestore
   database `arcos` for 10 minutes. A nonce is accepted once: it is read and deleted in the same transaction that signs
-  the wallet in, and its expiry is checked in code as well as by the TTL policy.
+  the wallet in, and its expiry is checked in code as well as by the TTL policy. It is bound to the browser that
+  fetched it: the same answer sets `__Host-arcos_nonce` (`HttpOnly; Secure; SameSite=Lax; Path=/`, 10 minutes) to the
+  nonce's SHA-256, and verify refuses a message whose nonce doesn't match that cookie (compared in constant time),
+  then clears it.
 - **Message.** It must be exactly the canonical EIP-4361 text of its own fields, name the host of
   `NEXT_PUBLIC_SITE_URL` as its domain and that site's origin as its URI (never the request's Host header), name the
   active chain, carry the site's own statement and no resources, request id or Not Before, and be inside a lifetime of

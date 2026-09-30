@@ -1,5 +1,5 @@
 import "server-only";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { isHex, type Client, type Hex } from "viem";
 import { verifySiweMessage } from "viem/siwe";
 import { activeChain } from "@arcos/chain";
@@ -7,7 +7,10 @@ import { clientKey, rateLimiter } from "./rate-limit";
 import { readBodyCapped } from "./read-body";
 import { checkSignInMessage, siteIdentity, type SiteIdentity } from "./siwe";
 import {
+  clearedNonceCookie,
   clearedSessionCookie,
+  nonceCookie,
+  readNonceCookie,
   readSession,
   readSessionCookie,
   sessionCookie,
@@ -102,7 +105,22 @@ function isSiteOrigin(req: Request, site: SiteIdentity): boolean {
 /** A 32-character hex nonce from the operating system's CSPRNG (viem's generateSiweNonce uses Math.random). */
 const newNonce = () => randomBytes(16).toString("hex");
 
-/** GET /api/auth/nonce: `{ nonce }`, stored for 10 minutes. */
+/** What the pre-auth cookie holds: the nonce's SHA-256, base64url. The nonce itself never goes in a cookie. */
+const nonceHash = (nonce: string) => createHash("sha256").update(nonce).digest("base64url");
+
+/**
+ * Whether the request carries the pre-auth cookie of `nonce`, the one GET /api/auth/nonce set in this browser. It is
+ * compared in constant time. So a nonce fetched in one browser can't sign in another.
+ */
+function isNonceOfThisBrowser(req: Request, nonce: string): boolean {
+  const cookie = readNonceCookie(req.headers.get("cookie"));
+  if (!cookie) return false;
+  const given = Buffer.from(cookie);
+  const expected = Buffer.from(nonceHash(nonce));
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+/** GET /api/auth/nonce: `{ nonce }`, stored for 10 minutes, and its hash in the pre-auth cookie for as long. */
 export async function nonceResponse(req: Request, deps: AuthDeps): Promise<Response> {
   const config = authConfig(deps.env);
   if (!config) return fail(503, UNAVAILABLE);
@@ -118,7 +136,7 @@ export async function nonceResponse(req: Request, deps: AuthDeps): Promise<Respo
     logFailure("store-nonce");
     return fail(503, UNAVAILABLE);
   }
-  return answer(200, { nonce });
+  return answer(200, { nonce }, { "set-cookie": nonceCookie(nonceHash(nonce)) });
 }
 
 /** The body of POST /api/auth/verify, or null. */
@@ -139,13 +157,20 @@ function parseVerifyBody(text: string): { message: string; signature: Hex } | nu
 /**
  * POST /api/auth/verify `{ message, signature }`: `{ address }` and a new session cookie. In order: the Origin, the
  * content type, the client's limit, the body, the message (lib/siwe.ts: this site's domain and URI from config, the
- * active chain, its lifetime), the signature (viem's verifySiweMessage, which covers EOAs and ERC-1271/6492 smart
- * wallets), and last the nonce, which the store accepts and deletes in one transaction. A new token is issued on every
- * sign-in, whatever cookie the request carried.
+ * active chain, its lifetime), the pre-auth cookie (it must hold this nonce's hash), the signature (viem's
+ * verifySiweMessage, which covers EOAs and ERC-1271/6492 smart wallets), and last the nonce, which the store accepts
+ * and deletes in one transaction. A new token is issued on every sign-in, whatever cookie the request carried. Every
+ * answer clears the pre-auth cookie: the browser fetches a new nonce for its next try.
  */
 export async function verifyResponse(req: Request, deps: AuthDeps): Promise<Response> {
   const config = authConfig(deps.env);
   if (!config) return fail(503, UNAVAILABLE);
+  const res = await verifySignIn(req, deps, config);
+  res.headers.append("set-cookie", clearedNonceCookie());
+  return res;
+}
+
+async function verifySignIn(req: Request, deps: AuthDeps, config: AuthConfig): Promise<Response> {
   if (!isSiteOrigin(req, config.site)) return fail(403, FOREIGN);
   const type = req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   if (type !== "application/json") return fail(415, INVALID);
@@ -165,6 +190,7 @@ export async function verifyResponse(req: Request, deps: AuthDeps): Promise<Resp
   const now = deps.now();
   const checked = checkSignInMessage(body.message, { site: config.site, chainId: config.chainId, now });
   if (!checked.ok) return fail(checked.reason === "malformed" ? 400 : 401, checked.reason === "malformed" ? INVALID : WRONG_MESSAGE);
+  if (!isNonceOfThisBrowser(req, checked.nonce)) return fail(401, EXPIRED);
 
   let valid: boolean;
   try {

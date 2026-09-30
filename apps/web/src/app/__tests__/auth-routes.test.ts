@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPublicClient, custom, type Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -82,22 +83,36 @@ let clients = 0;
 const freshIp = () => `203.0.113.${(clients += 1) % 250}`;
 let ip: string;
 
+/**
+ * The browser's pre-auth cookie (review 1, Minor 1): the last one GET /api/auth/nonce set, sent with every request
+ * the way a browser would. A test sets it to null to send none.
+ */
+let jar: string | null = null;
+
 const request = (path: string, init: RequestInit & { origin?: string | null; cookie?: string } = {}) => {
   const { origin = SITE, cookie, headers, ...rest } = init;
+  const cookies = [cookie, jar].filter(Boolean).join("; ");
   return new Request(`${SITE}${path}`, {
     ...rest,
     headers: {
       "x-real-ip": ip,
       ...(origin === null ? {} : { origin }),
-      ...(cookie ? { cookie } : {}),
+      ...(cookies ? { cookie: cookies } : {}),
       ...(headers as Record<string, string> | undefined),
     },
   });
 };
 
+const NONCE_COOKIE = "__Host-arcos_nonce";
+const nonceHash = (nonce: string) => createHash("sha256").update(nonce).digest("base64url");
+/** Every Set-Cookie of a response, and the one that names `name`, if any. */
+const setCookies = (res: Response) => res.headers.getSetCookie();
+const setCookieFor = (res: Response, name: string) => setCookies(res).find((c) => c.startsWith(`${name}=`)) ?? null;
+
 async function getNonce(): Promise<string> {
   const res = await nonceGET(request("/api/auth/nonce", { origin: null }));
   expect(res.status).toBe(200);
+  jar = setCookieFor(res, NONCE_COOKIE)?.split(";")[0] ?? null;
   return ((await res.json()) as { nonce: string }).nonce;
 }
 
@@ -110,7 +125,7 @@ const postJson = (path: string, body: unknown, init: { origin?: string | null; c
     headers: { "content-type": init.contentType ?? "application/json" },
   });
 
-const cookieOf = (res: Response) => res.headers.get("set-cookie")?.split(";")[0] ?? null;
+const cookieOf = (res: Response) => setCookieFor(res, "arcos_session")?.split(";")[0] ?? null;
 
 async function signIn(account = privateKeyToAccount(generatePrivateKey()), messageNow = now) {
   const nonce = await getNonce();
@@ -138,6 +153,7 @@ beforeEach(() => {
   rpcCalls.length = 0;
   deps = { store: memory.store, verifySignature: signatureVerifier(client), now: () => now, env };
   ip = freshIp();
+  jar = null;
   log = vi.spyOn(console, "log").mockImplementation(() => {});
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -207,7 +223,7 @@ describe("POST /api/auth/verify", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ address: account.address.toLowerCase() });
-    const setCookie = res.headers.get("set-cookie")!;
+    const setCookie = setCookieFor(res, "arcos_session")!;
     expect(setCookie).toMatch(/^arcos_session=[\w-]+\.[\w-]+\.[\w-]+; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax$/);
     expect(memory.nonces.has(nonce)).toBe(false);
     expect(memory.users.has(account.address.toLowerCase())).toBe(true);
@@ -218,7 +234,7 @@ describe("POST /api/auth/verify", () => {
     expect(res.status).toBe(200);
     const again = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
     expect(again.status).toBe(401);
-    expect(again.headers.get("set-cookie")).toBeNull();
+    expect(setCookieFor(again, "arcos_session")).toBeNull();
   });
 
   it("refuses a nonce the server never issued", async () => {
@@ -250,7 +266,7 @@ describe("POST /api/auth/verify", () => {
     const message = buildSignInMessage({ address: account.address, chainId: CHAIN_ID, nonce, site: siteIdentity(SITE)!, now });
     const forged = await verifyPOST(postJson("/api/auth/verify", { message, signature: await other.signMessage({ message }) }));
     expect(forged.status).toBe(401);
-    expect(forged.headers.get("set-cookie")).toBeNull();
+    expect(setCookieFor(forged, "arcos_session")).toBeNull();
     const real = await verifyPOST(postJson("/api/auth/verify", { message, signature: await account.signMessage({ message }) }));
     expect(real.status).toBe(200);
   });
@@ -351,6 +367,78 @@ describe("POST /api/auth/verify", () => {
     expect(logged).not.toContain(signature.slice(2, 40).toLowerCase());
     expect(logged).not.toContain(message.slice(0, 30).toLowerCase());
     expect(logged).not.toContain(SECRET.toLowerCase());
+  });
+});
+
+// Review 1, Minor 1: a nonce counts only in the browser that fetched it. GET /api/auth/nonce sets a short-lived
+// __Host- cookie holding the nonce's SHA-256; verify requires it to match the message's nonce, and clears it.
+describe("the nonce's pre-auth cookie", () => {
+  const CLEARED = `${NONCE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+
+  async function signed(nonce: string) {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const message = buildSignInMessage({ address: account.address, chainId: CHAIN_ID, nonce, site: siteIdentity(SITE)!, now });
+    return { account, message, signature: await account.signMessage({ message }) };
+  }
+
+  it("is set with the nonce: its SHA-256, HttpOnly, Secure, SameSite=Lax, Path=/, for 10 minutes", async () => {
+    const res = await nonceGET(request("/api/auth/nonce", { origin: null }));
+    const { nonce } = (await res.json()) as { nonce: string };
+    expect(setCookies(res)).toEqual([
+      `${NONCE_COOKIE}=${nonceHash(nonce)}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax`,
+    ]);
+    expect(setCookies(res)[0]).not.toContain(nonce);
+    expect(setCookies(res)[0]).not.toMatch(/domain=/i);
+  });
+
+  it("signs in with the matching cookie, and clears it", async () => {
+    const nonce = await getNonce();
+    const { account, message, signature } = await signed(nonce);
+    const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ address: account.address.toLowerCase() });
+    expect(setCookieFor(res, "arcos_session")).toMatch(/^arcos_session=[\w-]+\.[\w-]+\.[\w-]+; /);
+    expect(setCookieFor(res, NONCE_COOKIE)).toBe(CLEARED);
+  });
+
+  it("refuses a message without the cookie before checking the signature, keeps the nonce, and clears it", async () => {
+    const verifySignature = vi.fn(deps.verifySignature);
+    deps.verifySignature = verifySignature;
+    const nonce = await getNonce();
+    const { message, signature } = await signed(nonce);
+    jar = null;
+    const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
+    expect(res.status).toBe(401);
+    expect(setCookieFor(res, "arcos_session")).toBeNull();
+    expect(setCookieFor(res, NONCE_COOKIE)).toBe(CLEARED);
+    expect(verifySignature).not.toHaveBeenCalled();
+    expect(memory.nonces.has(nonce)).toBe(true);
+  });
+
+  it("refuses a nonce another browser fetched: the cookie is for a different nonce", async () => {
+    const verifySignature = vi.fn(deps.verifySignature);
+    deps.verifySignature = verifySignature;
+    const victims = await getNonce();
+    await getNonce(); // the attacker's browser holds the cookie of its own nonce
+    const { message, signature } = await signed(victims);
+    const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
+    expect(res.status).toBe(401);
+    expect(setCookieFor(res, "arcos_session")).toBeNull();
+    expect(verifySignature).not.toHaveBeenCalled();
+    expect(memory.nonces.has(victims)).toBe(true);
+  });
+
+  it("refuses a cookie that isn't the hash, and two cookies of that name", async () => {
+    const nonce = await getNonce();
+    const { message, signature } = await signed(nonce);
+    const good = jar!;
+    for (const cookies of [`${NONCE_COOKIE}=${nonce}`, `${NONCE_COOKIE}=`, `${good}; ${good}`, `${good}; ${NONCE_COOKIE}=x`]) {
+      jar = cookies;
+      const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
+      expect(res.status, cookies).toBe(401);
+    }
+    jar = good;
+    expect((await verifyPOST(postJson("/api/auth/verify", { message, signature }))).status).toBe(200);
   });
 });
 

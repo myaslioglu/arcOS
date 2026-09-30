@@ -84,16 +84,38 @@ export const sessionCookie = (token: string): string =>
 export const clearedSessionCookie = (): string => `${SESSION_COOKIE}=; ${ATTRIBUTES.replace("%d", "0")}`;
 
 /**
- * The session cookie's value from a Cookie header, or null when it is missing or empty. Two cookies of that name (a
- * sibling subdomain can set one for the parent domain) are ambiguous, and neither is read.
+ * The pre-auth cookie that binds a nonce to the browser that fetched it: GET /api/auth/nonce sets it to the nonce's
+ * hash, and verify requires it to match the message's nonce. `__Host-` makes the browser refuse it unless it is
+ * Secure, Path=/ and without a Domain, so no sibling subdomain can plant one.
  */
-export function readSessionCookie(header: string | null): string | null {
+export const NONCE_COOKIE = "__Host-arcos_nonce";
+/** As long as the nonce itself lives. */
+export const NONCE_COOKIE_TTL_S = 10 * 60;
+
+/** The Set-Cookie value that stores a nonce's hash: HttpOnly, Secure, SameSite=Lax, Path=/, for 10 minutes. */
+export const nonceCookie = (hash: string): string =>
+  `${NONCE_COOKIE}=${hash}; ${ATTRIBUTES.replace("%d", String(NONCE_COOKIE_TTL_S))}`;
+
+/** The Set-Cookie value that removes it. */
+export const clearedNonceCookie = (): string => `${NONCE_COOKIE}=; ${ATTRIBUTES.replace("%d", "0")}`;
+
+/**
+ * The value of the cookie `name` from a Cookie header, or null when it is missing or empty. Two cookies of that name
+ * (a sibling subdomain can set one for the parent domain) are ambiguous, and neither is read.
+ */
+function readCookie(header: string | null, name: string): string | null {
   if (!header) return null;
   const values = header
     .split(";")
     .map((part) => part.trim())
-    .filter((part) => part.startsWith(`${SESSION_COOKIE}=`))
-    .map((part) => part.slice(SESSION_COOKIE.length + 1));
+    .filter((part) => part.startsWith(`${name}=`))
+    .map((part) => part.slice(name.length + 1));
   if (values.length !== 1 || values[0] === "") return null;
   return values[0]!;
 }
+
+/** The session cookie's value from a Cookie header, or null (missing, empty or ambiguous). */
+export const readSessionCookie = (header: string | null): string | null => readCookie(header, SESSION_COOKIE);
+
+/** The nonce cookie's value from a Cookie header, or null (missing, empty or ambiguous). */
+export const readNonceCookie = (header: string | null): string | null => readCookie(header, NONCE_COOKIE);
