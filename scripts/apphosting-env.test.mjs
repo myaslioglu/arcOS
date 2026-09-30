@@ -24,8 +24,9 @@ describe("the real apps/web/apphosting.yaml", () => {
     }
   });
 
-  it("leaves out the runtime-only secret", () => {
+  it("leaves out the runtime-only secrets", () => {
     expect(env).not.toHaveProperty("BLOCKSCOUT_API_KEY");
+    expect(env).not.toHaveProperty("ARCOS_SESSION_SECRET");
   });
 });
 
