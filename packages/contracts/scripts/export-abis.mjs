@@ -9,6 +9,9 @@ const CONTRACTS = {
   LockVault: "lockVault",
   VaultFactory: "vaultFactory",
   PositionVault: "positionVault",
+  ArcVesting: "arcVesting",
+  VestingFactory: "vestingFactory",
+  ProPass: "proPass",
 };
 
 mkdirSync(DEST, { recursive: true });

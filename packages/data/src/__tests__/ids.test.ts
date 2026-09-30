@@ -1,6 +1,5 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { DataError } from "../errors";
 import {
   deliveryId,
   normalizeAddress,
@@ -13,22 +12,12 @@ import {
   watchId,
 } from "../ids";
 import { RADAR_FEED_FILTERS } from "../names";
+import { refusal } from "./helpers/refusal";
 
 const ADDR_MIXED = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01";
 const ADDR = "0xabcdef0123456789abcdef0123456789abcdef01";
 const USDC = "0x3600000000000000000000000000000000000000";
 const POOL32 = `0x${"ab".repeat(32)}`;
-
-/** What a call refused with; fails the test when it throws anything but a DataError, or does not throw. */
-function refusal(run: () => unknown): { code: string; message: string } {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(DataError);
-    return { code: (error as DataError).code, message: (error as DataError).message };
-  }
-  throw new Error("expected the call to throw");
-}
 
 describe("normalizeAddress", () => {
   it("lowercases a checksummed address and leaves a lowercase one alone", () => {

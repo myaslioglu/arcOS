@@ -77,51 +77,31 @@
       "collectionGroup": "nonces",
       "fieldPath": "expiresAt",
       "ttl": true,
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" },
-        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
-      ]
+      "indexes": []
     },
     {
       "collectionGroup": "linkCodes",
       "fieldPath": "expiresAt",
       "ttl": true,
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" },
-        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
-      ]
+      "indexes": []
     },
     {
       "collectionGroup": "alerts",
       "fieldPath": "expiresAt",
       "ttl": true,
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" },
-        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
-      ]
+      "indexes": []
     },
     {
       "collectionGroup": "deliveries",
       "fieldPath": "expiresAt",
       "ttl": true,
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" },
-        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
-      ]
+      "indexes": []
     },
     {
       "collectionGroup": "reports",
       "fieldPath": "expiresAt",
       "ttl": true,
-      "indexes": [
-        { "order": "ASCENDING", "queryScope": "COLLECTION" },
-        { "order": "DESCENDING", "queryScope": "COLLECTION" },
-        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" }
-      ]
+      "indexes": []
     },
     { "collectionGroup": "reports", "fieldPath": "report", "indexes": [] },
     { "collectionGroup": "alerts", "fieldPath": "detail", "indexes": [] },
