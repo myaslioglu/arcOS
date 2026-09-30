@@ -60,7 +60,15 @@ export const UNIVERSAL_ROUTERS: Record<NetworkId, Address[]> = {
 /** Lock contracts whose token holdings count as locked. 4rc.OS Vault joins this list in R2. */
 export const KNOWN_LOCKERS: Record<NetworkId, Address[]> = { mainnet: [], testnet: [] };
 
-export type ArcosContracts = { feeController: Address; tokenFactory: Address; multisend: Address };
+export type ArcosContracts = {
+  feeController: Address;
+  tokenFactory: Address;
+  multisend: Address;
+  /** R1 (packages/contracts/script/DeployR1.s.sol). Absent or null until deployed on that network. */
+  vaultFactory?: Address | null;
+  vestingFactory?: Address | null;
+  proPass?: Address | null;
+};
 
 /**
  * Our own deployments. null until deployed on that network.
@@ -69,16 +77,24 @@ export type ArcosContracts = { feeController: Address; tokenFactory: Address; mu
  * Mainnet: deployed 2026-09-25 from 8b9eb2a; each contract's `feeController()` was read back on chain and matches, and
  * the runtime bytecode equals that commit's build (immutables masked).
  * Testnet: deployed 2026-09-22; each contract's `feeController()` was read back on chain and matches.
+ * R1's contracts (vaultFactory, vestingFactory, proPass) go on testnet first, through DeployR1 (DEPLOY.md, "R1"); they
+ * stay null until then, and null on mainnet.
  */
 export const ARCOS: Record<NetworkId, ArcosContracts | null> = {
   mainnet: {
     feeController: "0x2B37F9a9443B2DfaE6B7C7063586935a574B5699",
     tokenFactory: "0xa68edD822048C00dC816d93005B72F8a50234a24",
     multisend: "0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47",
+    vaultFactory: null,
+    vestingFactory: null,
+    proPass: null,
   },
   testnet: {
     feeController: "0xC470753e83c151a6A4A360869270291A6ED70d99",
     tokenFactory: "0x41FaFc54ED3be1545695B82af4aA490607447884",
     multisend: "0x113f3864C94ff6a14310a789bD671de5b78D6CBf",
+    vaultFactory: null,
+    vestingFactory: null,
+    proPass: null,
   },
 };

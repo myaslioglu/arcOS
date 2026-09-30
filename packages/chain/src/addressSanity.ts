@@ -15,6 +15,9 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
  * different contracts can never legitimately share one address). Reports every problem found, not
  * just the first.
  *
+ * R1's optional contracts (`vaultFactory`, `vestingFactory`, `proPass`) are skipped while absent or null, and get the
+ * same checks, distinctness included, once set.
+ *
  * This is the OFF-CHAIN half of the address sanity check the brief asks for. The other half —
  * confirming `tokenFactory.feeController()` and `multisend.feeController()` both actually equal this
  * `feeController` on chain — needs a live read and is documented as a `cast call` sequence in
@@ -23,7 +26,9 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 export function checkArcosAddresses(contracts: ArcosContracts | null): AddressSanityResult {
   if (contracts === null) return { status: "not-deployed" };
 
-  const entries = Object.entries(contracts) as [keyof ArcosContracts, string][];
+  const entries = (Object.entries(contracts) as [keyof ArcosContracts, string | null | undefined][]).filter(
+    (entry): entry is [keyof ArcosContracts, string] => entry[1] != null,
+  );
   const issues: string[] = [];
 
   for (const [name, address] of entries) {
@@ -42,7 +47,7 @@ export function checkArcosAddresses(contracts: ArcosContracts | null): AddressSa
 
   const lower = entries.map(([, address]) => address.toLowerCase());
   if (new Set(lower).size !== lower.length) {
-    issues.push("feeController, tokenFactory and multisend must be distinct addresses");
+    issues.push(`${entries.map(([name]) => name).join(", ")} must be distinct addresses`);
   }
 
   return issues.length > 0 ? { status: "invalid", issues } : { status: "ok" };
