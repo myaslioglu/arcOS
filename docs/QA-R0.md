@@ -342,11 +342,12 @@ text matches this if it happens to come up while running the rest of this sectio
     approvals." A list that can't be read says "Couldn't load approvals. Try again in a minute." with a "Try again"
     button, and one that was cut short says "This list may be incomplete: some approvals couldn't be read."
 56. Connect a wallet on Arc that has an approval to spare (for a test, the allowance a Drop leaves when its second batch
-    is rejected, item 27), and open Revoke, or click "My wallet". The list is the wallet's own, with no "Viewing" line and
-    a "Revoke" button on each row. Click one: the button reads "Waiting for your wallet…", every Revoke button is
+    is rejected, item 27), and open Revoke, or click "My wallet". The list is the wallet's own, with no "Viewing" line
+    and a "Revoke" button on each row. Click one: the button reads "Waiting for your wallet…", every Revoke button is
     disabled, and the wallet shows one transaction, `approve(spender, 0)` on that token, of no value. Confirm it: the
-    button reads "Waiting for confirmation…" until the transaction is mined. Expect the row to disappear and, if focus was lost, keyboard focus on the next row's Revoke button (on the list itself when
-    none is left). A reload of the tab doesn't bring the row back.
+    button reads "Waiting for confirmation…" until the transaction is mined. Expect the row to disappear and, if focus
+    was lost, keyboard focus on the next row's Revoke button (on the list itself when none is left). A reload of the tab
+    doesn't bring the row back.
 57. Refuse a revoke in the wallet: the row stays, `You cancelled the request in your wallet.` appears under it, and its
     button works again. With the wallet on another network Revoke shows "Your wallet is on another network." and a
     "Switch to Arc" button ("Switch to Arc Testnet" on testnet) in place of the list, and nothing is sent.
@@ -365,10 +366,10 @@ text matches this if it happens to come up while running the rest of this sectio
 60. Stop: during Revoke all, click "Stop after this one". The progress line ends "… Stopping after this
     one.", the button is disabled, the transaction under way finishes, and the wallet asks for nothing more. The button
     stays while the run has steps to go, even once the list is down to one row.
-61. The trash area: under "Revoke all", "Drop an approval here to revoke it." Drag a row onto it: the area is
-    outlined while the row is over it, and the drop does what the row's Revoke button does (the same wallet prompt,
-    the same row). While viewing another address there is no trash area, and a row dropped from another Revoke window
-    starts nothing unless this list shows it.
+61. The trash area: with one row or more, "Drop an approval here to revoke it." shows above the list (under "Revoke
+    all" when that shows). Drag a row onto it: the area is outlined while the row is over it, and the drop does what
+    the row's Revoke button does (the same wallet prompt, the same row). While viewing another address there is no
+    trash area, and a row dropped from another Revoke window starts nothing unless this list shows it.
 
 ## Terminal
 
