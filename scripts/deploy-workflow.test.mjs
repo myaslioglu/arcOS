@@ -24,6 +24,28 @@ function job(name, workflow = deploy) {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+/**
+ * The shell each `run:` of a text runs: a one-line run, or the lines of a `run: |` block (those indented deeper than
+ * the key), joined.
+ */
+function runScripts(text) {
+  const lines = text.split("\n");
+  const scripts = [];
+  lines.forEach((line, i) => {
+    const m = line.match(/^(\s*)(?:- )?run:\s*(.*)$/);
+    if (!m) return;
+    if (m[2] !== "|") {
+      scripts.push(m[2]);
+      return;
+    }
+    const block = [];
+    for (let j = i + 1; j < lines.length && (lines[j].trim() === "" || lines[j].search(/\S/) > m[1].length); j += 1) block.push(lines[j].trim());
+    while (block.at(-1) === "") block.pop();
+    scripts.push(block.join("\n"));
+  });
+  return scripts;
+}
+
 /** The steps of one job, each as its text from its "- " line to the next step's. */
 function steps(name) {
   const text = job(name);
@@ -57,7 +79,7 @@ describe("deploy.yml", () => {
   it("waits in the production environment, which the Google Cloud condition and the approval rule both name", () => {
     expect(job("deploy")).toMatch(/^ {4}environment:\n {6}name: production\n {6}url: https:\/\/4rcos\.com$/m);
     expect(deploy.match(/^ {4}environment:/gm)).toHaveLength(1); // the bundle and smoke jobs have none, so neither is a second way in
-    expect(job("bundle")).not.toMatch(/environment/);
+    expect(job("bundle")).not.toMatch(/^\s*environment:/m);
     expect(job("deploy")).toMatch(/^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
   });
 
@@ -120,30 +142,42 @@ describe("deploy.yml", () => {
       for (const line of text.split("\n").filter((l) => /\bnpm (ci|install)\b/.test(l))) {
         expect(line, "an install in the deploy job is of the CLI's own folder only").toMatch(/--prefix tools\/firebase/);
       }
-      const commands = text.split("\n").filter((l) => /^\s*(?:- )?run:/.test(l));
-      const scripts = commands.flatMap((l) => [...l.matchAll(/\bnode (\S+)/g)].map((m) => m[1].replace(/"/g, "")));
+      const scripts = runScripts(text).flatMap((l) => [...l.matchAll(/\bnode (\S+)/g)].map((m) => m[1].replace(/"/g, "")));
       expect(scripts).toEqual(["scripts/scan-bundle.mjs"]);
     });
 
-    it("hands the bundle over as data, through an artifact that holds build output only", () => {
+    it("hands each bundle over as data, through an artifact that holds build output only", () => {
       const up = steps("bundle").find((s) => /actions\/upload-artifact@/.test(s));
-      const down = steps("deploy").find((s) => /actions\/download-artifact@/.test(s));
+      const downs = steps("deploy").filter((s) => /actions\/download-artifact@/.test(s));
       expect(up, "the bundle job uploads").toBeDefined();
-      expect(down, "the deploy job downloads").toBeDefined();
+      expect(downs, "the deploy job downloads one bundle per site").toHaveLength(2);
       expect(up).toMatch(/apps\/web\/\.next\/static\n/);
       expect(up).toMatch(/apps\/web\/\.next\/server\n/);
       expect(up).not.toMatch(/scripts|\.github/); // scripts/ always comes from the deploy job's own checkout
       expect(up).toMatch(/retention-days: 1$/m);
       expect(up).toMatch(/if-no-files-found: error/);
       expect(up).toMatch(/include-hidden-files: true/); // the scan must see every file the build made
-      expect(up.match(/^ {10}name: (\S+)$/m)?.[1]).toBe("bundle"); // the artifact's name, not the step's
-      expect(down.match(/^ {10}name: (\S+)$/m)?.[1]).toBe("bundle");
+      expect(up.match(/^ {10}name: (.+)$/m)?.[1]).toBe("bundle-${{ matrix.site }}"); // the artifact's name, not the step's
+      // By name, never by pattern: a missing bundle fails its download rather than being skipped.
+      expect(downs.map((d) => d.match(/^ {10}name: (.+)$/m)?.[1])).toEqual(["bundle-mainnet", "bundle-testnet"]);
+      for (const d of downs) expect(d).not.toMatch(/pattern:/);
     });
 
-    it("downloads the bundle outside the workspace, which the CLI uploads as source", () => {
-      const down = steps("deploy").find((s) => /actions\/download-artifact@/.test(s));
-      expect(down).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle$/m);
-      expect(job("deploy")).toMatch(/node scripts\/scan-bundle\.mjs "\$RUNNER_TEMP\/bundle\/static" "\$RUNNER_TEMP\/bundle\/server"$/m);
+    it("downloads each bundle outside the workspace, which the CLI uploads as source, and scans both halves of each", () => {
+      const downs = steps("deploy").filter((s) => /actions\/download-artifact@/.test(s));
+      expect(downs[0]).toMatch(/^ {8}if: env\.DEPLOY_MAINNET == 'true'$/m);
+      expect(downs[0]).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle-mainnet$/m);
+      expect(downs[1]).toMatch(/^ {8}if: env\.DEPLOY_TESTNET == 'true'$/m);
+      expect(downs[1]).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle-testnet$/m);
+      const scan = runScripts(job("deploy")).find((r) => /scan-bundle/.test(r));
+      expect(scan).toBe(
+        [
+          "dirs=()",
+          'if [ "$DEPLOY_MAINNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-mainnet/static" "$RUNNER_TEMP/bundle-mainnet/server"); fi',
+          'if [ "$DEPLOY_TESTNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-testnet/static" "$RUNNER_TEMP/bundle-testnet/server"); fi',
+          'node scripts/scan-bundle.mjs "${dirs[@]}"',
+        ].join("\n"),
+      );
     });
 
     it("gives the patterns to the scan step and to no other", () => {
@@ -167,11 +201,12 @@ describe("deploy.yml", () => {
     const at = (needle) => text.indexOf(needle); // needles are the lines that act, so a comment naming a step can't match
     expect(at("uses: actions/checkout@")).toBeGreaterThanOrEqual(0);
     expect(at("uses: actions/download-artifact@")).toBeGreaterThan(at("uses: actions/checkout@"));
-    expect(at("run: node scripts/scan-bundle.mjs")).toBeGreaterThan(at("uses: actions/download-artifact@"));
-    expect(at("run: npm ci --ignore-scripts --prefix tools/firebase")).toBeGreaterThan(at("run: node scripts/scan-bundle.mjs"));
+    expect(at("node scripts/scan-bundle.mjs")).toBeGreaterThan(text.lastIndexOf("uses: actions/download-artifact@"));
+    expect(at("run: npm ci --ignore-scripts --prefix tools/firebase")).toBeGreaterThan(at("node scripts/scan-bundle.mjs"));
     expect(at("uses: google-github-actions/auth@")).toBeGreaterThan(at("run: npm ci --ignore-scripts --prefix tools/firebase"));
     expect(at("run: git check-ignore")).toBeGreaterThan(at("uses: google-github-actions/auth@"));
     expect(at("deploy --only")).toBeGreaterThan(at("run: git check-ignore"));
+    expect(at('deploy --only "apphosting:${APPHOSTING_TESTNET_BACKEND}"')).toBeGreaterThan(at('deploy --only "apphosting:${APPHOSTING_BACKEND}"'));
     expect(text).toMatch(/BUNDLE_DENY_PATTERNS: \$\{\{ secrets\.BUNDLE_DENY_PATTERNS \}\}/);
   });
 
@@ -182,8 +217,87 @@ describe("deploy.yml", () => {
 
   it("skips the smoke job on a dry run and gives it no credentials", () => {
     const text = job("smoke");
-    expect(text).toMatch(/if: \$\{\{ !inputs\.dry_run \}\}/);
+    expect(text).toMatch(/^ {4}if: \$\{\{ !cancelled\(\) && !inputs\.dry_run && needs\.deploy\.outputs\.mainnet == 'success' \}\}$/m);
     expect(text).not.toMatch(/google-github-actions|GOOGLE_|firebase-tools|secrets\./);
+  });
+});
+
+// Both sites ship from one commit under one approval: 4rc.OS (backend arcos) first, the testnet site (arcos-testnet) only
+// after it. The testnet deploy must never be able to break 4rc.OS's, or stop it in a way nobody chose.
+describe("deploy.yml, the two sites", () => {
+  const MATRIX = `\${{ fromJSON(inputs.targets == 'mainnet' && '["mainnet"]' || inputs.targets == 'testnet' && '["testnet"]' || '["mainnet", "testnet"]') }}`;
+  const deployStep = (id) => steps("deploy").find((s) => new RegExp(`^ {8}id: ${id}$`, "m").test(s));
+
+  it("lets a manual run pick the sites, both by default, and a push has no choice: both", () => {
+    const triggers = deploy.slice(deploy.indexOf("\non:"), deploy.indexOf("\nconcurrency:"));
+    expect(triggers).toMatch(/ {6}targets:\n {8}description: .+\n {8}type: choice\n {8}options:\n {10}- both\n {10}- mainnet\n {10}- testnet\n {8}default: both\n/);
+  });
+
+  it("names the testnet backend as firebase.json does", () => {
+    expect(deploy).toMatch(/^ {2}APPHOSTING_BACKEND: arcos$/m);
+    expect(deploy).toMatch(/^ {2}APPHOSTING_TESTNET_BACKEND: arcos-testnet$/m);
+    expect(JSON.parse(read("firebase.json")).apphosting.map((e) => e.backendId)).toEqual(["arcos", "arcos-testnet"]);
+  });
+
+  it("builds one bundle per chosen site, and lets neither build cancel the other", () => {
+    const text = job("bundle");
+    expect(text).toMatch(/^ {4}strategy:\n {6}fail-fast: false\n {6}matrix:\n {8}site: (.+)$/m);
+    expect(text.match(/^ {8}site: (.+)$/m)?.[1]).toBe(MATRIX);
+  });
+
+  it("deploys what it built: the deploy job's choice of sites is the matrix's", () => {
+    // inputs.targets is '', 'both', 'mainnet' or 'testnet'. Each evaluates the same way in both places.
+    const text = job("deploy");
+    expect(text).toMatch(/^ {6}DEPLOY_MAINNET: \$\{\{ inputs\.targets != 'testnet' \}\}$/m);
+    expect(text).toMatch(/^ {6}DEPLOY_TESTNET: \$\{\{ inputs\.targets != 'mainnet' \}\}$/m);
+    const sites = (targets) => (targets === "mainnet" ? ["mainnet"] : targets === "testnet" ? ["testnet"] : ["mainnet", "testnet"]);
+    for (const targets of ["", "both", "mainnet", "testnet"]) {
+      const deployed = [...(targets !== "testnet" ? ["mainnet"] : []), ...(targets !== "mainnet" ? ["testnet"] : [])];
+      expect(deployed, targets).toEqual(sites(targets));
+    }
+  });
+
+  it("builds the testnet bundle with apphosting.testnet.yaml merged in, and checks each bundle's network", () => {
+    const list = steps("bundle");
+    const settings = list.findIndex((s) => /apphosting-env\.mjs/.test(s));
+    const guard = list.findIndex((s) => /test "\$NEXT_PUBLIC_ARC_NETWORK" = "\$SITE"/.test(s));
+    const build = list.findIndex((s) => /run: npm run build -w @arcos\/web$/m.test(s));
+    expect(list[settings]).toMatch(/^ {10}APPHOSTING_ENVIRONMENT: \$\{\{ matrix\.site == 'testnet' && 'testnet' \|\| '' \}\}$/m);
+    expect(list[settings]).toMatch(/^ {8}run: node scripts\/apphosting-env\.mjs --environment "\$APPHOSTING_ENVIRONMENT" \| tee -a "\$GITHUB_ENV"$/m);
+    expect(list[guard]).toMatch(/^ {10}SITE: \$\{\{ matrix\.site \}\}$/m);
+    expect(settings).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeGreaterThan(settings);
+    expect(build).toBeGreaterThan(guard);
+  });
+
+  it("deploys 4rc.OS first, and the testnet site only after 4rc.OS's deploy has succeeded or wasn't asked for", () => {
+    const mainnet = deployStep("deploy-mainnet");
+    const testnet = deployStep("deploy-testnet");
+    expect(mainnet).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_MAINNET == 'true' \}\}$/m);
+    expect(testnet).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_TESTNET == 'true' \}\}$/m);
+    const list = steps("deploy");
+    expect(list.indexOf(testnet)).toBe(list.indexOf(mainnet) + 1);
+    // Nothing lets a step run after a failure, or a failure pass: the testnet step runs only while every step before it
+    // has succeeded, and a failed deploy fails the job.
+    for (const step of list) {
+      expect(step).not.toMatch(/always\(\)|failure\(\)|continue-on-error/);
+    }
+    expect(job("deploy")).not.toMatch(/continue-on-error/);
+  });
+
+  it("stays under the hour of the CLI's access token in each deploy step", () => {
+    for (const id of ["deploy-mainnet", "deploy-testnet"]) expect(deployStep(id)).toMatch(/^ {8}timeout-minutes: 40$/m);
+  });
+
+  it("deploys each backend by name, never every backend in firebase.json at once", () => {
+    const deploys = runScripts(job("deploy")).filter((r) => /\bdeploy\b/.test(r) && /firebase/.test(r));
+    expect(deploys).toHaveLength(2);
+    for (const r of deploys) expect(r).toMatch(/--only "apphosting:\$\{APPHOSTING(_TESTNET)?_BACKEND\}"/);
+    expect(deployCode).not.toMatch(/--only "?apphosting"?(\s|$)/);
+  });
+
+  it("tells the smoke job whether 4rc.OS's deploy succeeded, so a testnet failure after it doesn't skip its checks", () => {
+    expect(job("deploy")).toMatch(/^ {4}outputs:\n {6}mainnet: \$\{\{ steps\.deploy-mainnet\.outcome \}\}$/m);
   });
 });
 
@@ -219,6 +333,7 @@ describe("the Firebase CLI the deploy runs", () => {
     expect(deployCode).not.toMatch(/\bnpx\b/); // npx would resolve the CLI's whole tree afresh on every run
     expect(deployCode).not.toMatch(/FIREBASE_TOOLS_VERSION|firebase-tools@/);
     expect(text).toMatch(new RegExp(`^ {8}run: ${cli} deploy --only "apphosting:\\$\\{APPHOSTING_BACKEND\\}" --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
+    expect(text).toMatch(new RegExp(`^ {8}run: ${cli} deploy --only "apphosting:\\$\\{APPHOSTING_TESTNET_BACKEND\\}" --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
     expect(text).toMatch(new RegExp(`^ {8}run: ${cli} apphosting:backends:list --project "\\$FIREBASE_PROJECT" --non-interactive$`, "m"));
   });
 
