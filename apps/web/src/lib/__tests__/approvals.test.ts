@@ -233,7 +233,7 @@ describe("approvalPairs", () => {
   it("keeps ERC-20 approvals only: exactly three topics", () => {
     const erc721 = logOf(rawLog(TOKEN_B, SPENDER_Y, 11, 0, [pad("0x07", { size: 32 })]));
     expect(approvalPairs(OWNER, [logOf(rawLog(TOKEN_A, SPENDER_X, 10)), erc721])).toEqual([
-      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -245,8 +245,8 @@ describe("approvalPairs", () => {
       rawLog(TOKEN_B, SPENDER_Y, 15),
     ].map(logOf);
     expect(approvalPairs(OWNER, logs)).toEqual([
-      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 30 },
-      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 15 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 30, lastApprovalLogIndex: 1 },
+      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 15, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -712,5 +712,15 @@ describe("loadApprovals", () => {
     } finally {
       dateNow.mockRestore();
     }
+  });
+});
+
+describe("approvalPairs within one block", () => {
+  it("keeps each pair's latest log index, and lists pairs from the same block newest first by log index", () => {
+    const logs = [rawLog(TOKEN_A, SPENDER_X, 10, 2), rawLog(TOKEN_B, SPENDER_Y, 10, 3), rawLog(TOKEN_A, SPENDER_X, 10, 1)].map(logOf);
+    expect(approvalPairs(OWNER, logs)).toEqual([
+      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 10, lastApprovalLogIndex: 3 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10, lastApprovalLogIndex: 2 },
+    ]);
   });
 });

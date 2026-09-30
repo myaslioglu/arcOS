@@ -198,8 +198,8 @@ describe("nftApprovalPairs", () => {
       ),
     );
     expect(found).toEqual([
-      { kind: "erc721", token: NFT, spender: SPENDER_Y, tokenId: 7n, lastApprovalBlock: 12 },
-      { kind: "erc721", token: NFT, spender: SPENDER_X, tokenId: 8n, lastApprovalBlock: 11 },
+      { kind: "erc721", token: NFT, spender: SPENDER_Y, tokenId: 7n, lastApprovalBlock: 12, lastApprovalLogIndex: 0 },
+      { kind: "erc721", token: NFT, spender: SPENDER_X, tokenId: 8n, lastApprovalBlock: 11, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -221,8 +221,8 @@ describe("operatorPairs", () => {
       logs(operatorLog(NFT, SPENDER_X, 10), operatorLog(NFT, SPENDER_X, 14), operatorLog(TOKEN, SPENDER_Y, 12), operatorLog(NFT, SPENDER_Y, 15, STRANGER)),
     );
     expect(found).toEqual([
-      { kind: "operator", token: NFT, spender: SPENDER_X, lastApprovalBlock: 14 },
-      { kind: "operator", token: TOKEN, spender: SPENDER_Y, lastApprovalBlock: 12 },
+      { kind: "operator", token: NFT, spender: SPENDER_X, lastApprovalBlock: 14, lastApprovalLogIndex: 0 },
+      { kind: "operator", token: TOKEN, spender: SPENDER_Y, lastApprovalBlock: 12, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -242,8 +242,8 @@ describe("permit2Pairs", () => {
       ),
     );
     expect(found).toEqual([
-      { kind: "permit2", token: TOKEN, spender: SPENDER_X, lastApprovalBlock: 20 },
-      { kind: "permit2", token: NFT, spender: SPENDER_Y, lastApprovalBlock: 15 },
+      { kind: "permit2", token: TOKEN, spender: SPENDER_X, lastApprovalBlock: 20, lastApprovalLogIndex: 0 },
+      { kind: "permit2", token: NFT, spender: SPENDER_Y, lastApprovalBlock: 15, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -478,5 +478,52 @@ describe("loadApprovals with all three scans", () => {
     await expect(
       loadApprovals(OWNER, { network: "mainnet", readPage: page([]), readOperatorPage: aborted, aggregate, canary: rpcUp() }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("events in the same block", () => {
+  // Blockscout's logs module answers in ascending (block, log index) order, but nothing here relies on it: every
+  // kind orders its events by (blockNumber, logIndex) itself, so the order the logs arrive in doesn't matter.
+  const both = (...raws: ReturnType<typeof raw>[]) => [logs(...raws), logs(...raws).reverse()];
+
+  it("keeps an NFT approved again after being cleared in the same block, whatever order the logs arrive in", () => {
+    for (const found of both(nftApproval(ZERO, 7n, 10, OWNER, 1), nftApproval(SPENDER_X, 7n, 10, OWNER, 2))) {
+      expect(nftApprovalPairs(OWNER, found)).toEqual([
+        { kind: "erc721", token: NFT, spender: SPENDER_X, tokenId: 7n, lastApprovalBlock: 10, lastApprovalLogIndex: 2 },
+      ]);
+    }
+  });
+
+  it("keeps nothing for an NFT approved and then cleared in the same block, whatever order the logs arrive in", () => {
+    for (const found of both(nftApproval(SPENDER_X, 7n, 10, OWNER, 1), nftApproval(ZERO, 7n, 10, OWNER, 2))) {
+      expect(nftApprovalPairs(OWNER, found)).toEqual([]);
+    }
+  });
+
+  it("lists operators and Permit2 allowances newest first by log index within a block", () => {
+    const ops = logs(raw(NFT, [APPROVAL_FOR_ALL_TOPIC, topic(OWNER), topic(SPENDER_X)], 10, 1), raw(TOKEN, [APPROVAL_FOR_ALL_TOPIC, topic(OWNER), topic(SPENDER_Y)], 10, 4));
+    expect(operatorPairs(OWNER, ops).map((c) => [c.token, c.lastApprovalLogIndex])).toEqual([
+      [TOKEN, 4],
+      [NFT, 1],
+    ]);
+    const p2 = logs(
+      raw(PERMIT2, [PERMIT2_PERMIT_TOPIC, topic(OWNER), topic(NFT), topic(SPENDER_X)], 10, 5),
+      raw(PERMIT2, [PERMIT2_APPROVAL_TOPIC, topic(OWNER), topic(TOKEN), topic(SPENDER_Y)], 10, 2),
+    );
+    expect(permit2Pairs(OWNER, p2).map((c) => [c.token, c.lastApprovalLogIndex])).toEqual([
+      [NFT, 5],
+      [TOKEN, 2],
+    ]);
+  });
+
+  it("shows the live row through loadApprovals when the NFT's clear and new approval share a block", async () => {
+    const run = async (items: ReturnType<typeof raw>[], approved: Address) => {
+      const { aggregate } = stubChain({ getApproved: () => approved, ownerOf: () => OWNER });
+      return loadApprovals(OWNER, { network: "mainnet", readPage: vi.fn(async () => items), aggregate, canary: rpcUp() });
+    };
+    const kept = await run([nftApproval(ZERO, 7n, 10, OWNER, 1), nftApproval(SPENDER_X, 7n, 10, OWNER, 2)], SPENDER_X);
+    expect(kept.approvals.map((a) => [a.kind, a.tokenId, a.spender])).toEqual([["erc721", "7", SPENDER_X]]);
+    const cleared = await run([nftApproval(SPENDER_X, 7n, 10, OWNER, 1), nftApproval(ZERO, 7n, 10, OWNER, 2)], ZERO);
+    expect(cleared.approvals).toEqual([]);
   });
 });

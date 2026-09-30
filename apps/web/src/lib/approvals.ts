@@ -97,13 +97,18 @@ export type ExplorerLog = { address: Address; topics: Hex[]; blockNumber: number
  * collection (`setApprovalForAll`, ERC-721 or ERC-1155), or an allowance Permit2 keeps (`token` is what it moves).
  */
 export type ApprovalKind = "erc20" | "erc721" | "operator" | "permit2";
+/**
+ * Where a candidate's latest event sits: its block, and its log index within that block. The pair functions always
+ * set the index; a candidate built without one counts as the block's first log.
+ */
+type LatestEvent = { lastApprovalBlock: number; lastApprovalLogIndex?: number };
 /** An ERC-20 (token, spender) pair the owner's Approval events name; `kind` is left out for these. */
-export type ApprovalPair = { kind?: "erc20"; token: Address; spender: Address; lastApprovalBlock: number };
+export type ApprovalPair = { kind?: "erc20"; token: Address; spender: Address } & LatestEvent;
 /** Something to check live: an ERC-20 pair, one NFT's approval, an operator, or a Permit2 allowance. */
 export type Candidate =
   | ApprovalPair
-  | { kind: "erc721"; token: Address; spender: Address; tokenId: bigint; lastApprovalBlock: number }
-  | { kind: "operator" | "permit2"; token: Address; spender: Address; lastApprovalBlock: number };
+  | ({ kind: "erc721"; token: Address; spender: Address; tokenId: bigint } & LatestEvent)
+  | ({ kind: "operator" | "permit2"; token: Address; spender: Address } & LatestEvent);
 export type Approval = {
   kind: ApprovalKind;
   token: Address;
@@ -305,7 +310,17 @@ export async function collectApprovalLogs(
 }
 
 /**
- * The owner's (token, spender) pairs, each once, with its latest approval's block, newest first. Only ERC-20
+ * Chain order, newest first: by block, then by log index within the block. Every kind decides which of a key's events
+ * is the latest with it, and lists its candidates by it. The explorer's logs module answers in ascending (block, log
+ * index) order, and pages overlap by a block (`collectApprovalLogs`), but nothing relies on that order: two events of
+ * the same block, such as an NFT's approval cleared and set again, are told apart by their log index alone.
+ */
+export function newerFirst(a: LatestEvent, b: LatestEvent): number {
+  return b.lastApprovalBlock - a.lastApprovalBlock || (b.lastApprovalLogIndex ?? 0) - (a.lastApprovalLogIndex ?? 0);
+}
+
+/**
+ * The owner's (token, spender) pairs, each once, with its latest approval's block and log index, newest first. Only ERC-20
  * approvals count: exactly three topics (ERC-721's Approval carries a fourth, the token id), the Approval event, the
  * owner as the first indexed argument, and a spender topic that is an address.
  */
@@ -318,39 +333,42 @@ export function approvalPairs(owner: Address, logs: readonly ExplorerLog[]): App
     const spender = topicAddress(log.topics[2]);
     if (!spender) continue;
     const key = `${log.address.toLowerCase()}:${spender.toLowerCase()}`;
+    const pair = { token: log.address, spender, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex };
     const known = pairs.get(key);
-    if (!known || log.blockNumber > known.lastApprovalBlock) {
-      pairs.set(key, { token: log.address, spender, lastApprovalBlock: log.blockNumber });
-    }
+    if (!known || newerFirst(pair, known) < 0) pairs.set(key, pair);
   }
-  return [...pairs.values()].sort((a, b) => b.lastApprovalBlock - a.lastApprovalBlock);
+  return [...pairs.values()].sort(newerFirst);
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const isOwner = (t: Hex, owner: Address) => topicAddress(t)?.toLowerCase() === owner.toLowerCase();
 
-/** Keeps, per key, the candidate from the latest block, and lists them newest first. */
-function latestByKey<T extends { lastApprovalBlock: number }>(items: Iterable<[string, T]>): T[] {
+/** Keeps, per key, the candidate from the latest event (block, then log index), and lists them newest first. */
+function latestByKey<T extends LatestEvent>(items: Iterable<[string, T]>): T[] {
   const kept = new Map<string, T>();
   for (const [key, item] of items) {
     const known = kept.get(key);
-    if (!known || item.lastApprovalBlock > known.lastApprovalBlock) kept.set(key, item);
+    if (!known || newerFirst(item, known) < 0) kept.set(key, item);
   }
-  return [...kept.values()].sort((a, b) => b.lastApprovalBlock - a.lastApprovalBlock);
+  return [...kept.values()].sort(newerFirst);
 }
 
 /**
  * The owner's single-NFT approvals: ERC-721's Approval, with four topics (the NFT's id is the fourth). One per NFT,
- * from its latest event, newest first. One whose latest event approves the zero address was cleared, and drops out.
+ * from its latest event by (block, log index), newest first. One whose latest event approves the zero address was
+ * cleared, and drops out here rather than in the live check: every transfer out clears the approval with such an
+ * event (OpenZeppelin's ERC-721 before v5), so a wallet that has sent many NFTs would otherwise spend MAX_PAIRS slots,
+ * two reads each, on NFTs it no longer holds, and push live allowances out of the list. Nothing live is hidden by it:
+ * an approval set after the clear is a later event, and is the one kept.
  */
 export function nftApprovalPairs(owner: Address, logs: readonly ExplorerLog[]): Candidate[] {
-  const found = function* (): Generator<[string, { kind: "erc721"; token: Address; spender: Address; tokenId: bigint; lastApprovalBlock: number }]> {
+  const found = function* (): Generator<[string, { kind: "erc721"; token: Address; spender: Address; tokenId: bigint; lastApprovalBlock: number; lastApprovalLogIndex: number }]> {
     for (const log of logs) {
       if (log.topics.length !== 4 || log.topics[0].toLowerCase() !== APPROVAL_TOPIC || !isOwner(log.topics[1], owner)) continue;
       const spender = topicAddress(log.topics[2]);
       if (!spender) continue;
       const tokenId = BigInt(log.topics[3]);
-      yield [`${log.address.toLowerCase()}:${tokenId}`, { kind: "erc721", token: log.address, spender, tokenId, lastApprovalBlock: log.blockNumber }];
+      yield [`${log.address.toLowerCase()}:${tokenId}`, { kind: "erc721", token: log.address, spender, tokenId, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex }];
     }
   };
   return latestByKey(found()).filter((c) => c.spender !== ZERO_ADDRESS);
@@ -358,12 +376,12 @@ export function nftApprovalPairs(owner: Address, logs: readonly ExplorerLog[]): 
 
 /** The owner's operators: ApprovalForAll events (three topics), each collection and operator once, newest first. */
 export function operatorPairs(owner: Address, logs: readonly ExplorerLog[]): Candidate[] {
-  const found = function* (): Generator<[string, { kind: "operator"; token: Address; spender: Address; lastApprovalBlock: number }]> {
+  const found = function* (): Generator<[string, { kind: "operator"; token: Address; spender: Address; lastApprovalBlock: number; lastApprovalLogIndex: number }]> {
     for (const log of logs) {
       if (log.topics.length !== 3 || log.topics[0].toLowerCase() !== APPROVAL_FOR_ALL_TOPIC || !isOwner(log.topics[1], owner)) continue;
       const spender = topicAddress(log.topics[2]);
       if (!spender) continue;
-      yield [`${log.address.toLowerCase()}:${spender.toLowerCase()}`, { kind: "operator", token: log.address, spender, lastApprovalBlock: log.blockNumber }];
+      yield [`${log.address.toLowerCase()}:${spender.toLowerCase()}`, { kind: "operator", token: log.address, spender, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex }];
     }
   };
   return latestByKey(found());
@@ -375,7 +393,7 @@ export function operatorPairs(owner: Address, logs: readonly ExplorerLog[]): Can
  * an event with the same topics from a contract of their own.
  */
 export function permit2Pairs(owner: Address, logs: readonly ExplorerLog[]): Candidate[] {
-  const found = function* (): Generator<[string, { kind: "permit2"; token: Address; spender: Address; lastApprovalBlock: number }]> {
+  const found = function* (): Generator<[string, { kind: "permit2"; token: Address; spender: Address; lastApprovalBlock: number; lastApprovalLogIndex: number }]> {
     for (const log of logs) {
       if (log.address.toLowerCase() !== PERMIT2.toLowerCase() || log.topics.length !== 4) continue;
       const event = log.topics[0].toLowerCase();
@@ -384,7 +402,7 @@ export function permit2Pairs(owner: Address, logs: readonly ExplorerLog[]): Cand
       const token = topicAddress(log.topics[2]);
       const spender = topicAddress(log.topics[3]);
       if (!token || !spender) continue;
-      yield [`${token.toLowerCase()}:${spender.toLowerCase()}`, { kind: "permit2", token, spender, lastApprovalBlock: log.blockNumber }];
+      yield [`${token.toLowerCase()}:${spender.toLowerCase()}`, { kind: "permit2", token, spender, lastApprovalBlock: log.blockNumber, lastApprovalLogIndex: log.logIndex }];
     }
   };
   return latestByKey(found());
@@ -796,7 +814,7 @@ export async function loadApprovals(owner: Address, deps: ApprovalsDeps): Promis
     ...nftApprovalPairs(owner, logs),
     ...operatorPairs(owner, operatorLogs),
     ...permit2Pairs(owner, permit2Logs),
-  ].sort((a, b) => b.lastApprovalBlock - a.lastApprovalBlock);
+  ].sort(newerFirst);
   const live = await liveApprovals(
     owner,
     candidates.slice(0, MAX_PAIRS),
