@@ -3,14 +3,16 @@ import { describe, expect, it } from "vitest";
 import { keccak256, toBytes, toHex } from "viem";
 import {
   FEE_KEYS,
+  arcVestingAbi,
   feeControllerAbi,
   lockVaultAbi,
   multisendAbi,
   positionVaultAbi,
+  proPassAbi,
   tokenFactoryAbi,
   vaultFactoryAbi,
+  vestingFactoryAbi,
 } from "../abis";
-import { arcVestingAbi, proPassAbi, vestingFactoryAbi } from "../abis";
 
 type AbiInput = { name?: string };
 type AbiItem = { type: string; name?: string; inputs?: readonly AbiInput[] };
