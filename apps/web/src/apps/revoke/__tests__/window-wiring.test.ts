@@ -11,14 +11,18 @@ import type { Approval, ApprovalsAnswer } from "@/lib/approvals";
  */
 
 const state = vi.hoisted(() => ({
-  /** What useAccount answers, call by call; `address` once the list is used up. */
-  accounts: [] as (string | undefined)[],
+  /** What useAccount answers to the window itself and to its approval list; each falls back to `address`. */
+  accounts: {} as { window?: string; list?: string },
   address: undefined as string | undefined,
   data: undefined as ApprovalsAnswer | undefined,
   drop: undefined as ((item: unknown) => void) | undefined,
 }));
 vi.mock("wagmi", () => ({
-  useAccount: () => ({ address: state.accounts.length > 0 ? state.accounts.shift() : state.address, chainId: 1 }),
+  useAccount: () => {
+    // The caller, read off the stack: the approval list is the only component in Window.tsx named ApprovalList.
+    const caller = /\bApprovalList\b/.test(new Error().stack ?? "") ? "list" : "window";
+    return { address: caller in state.accounts ? state.accounts[caller] : state.address, chainId: 1 };
+  },
   usePublicClient: () => ({ fake: "client" }),
   useWriteContract: () => ({ writeContractAsync: async () => "0x" }),
 }));
@@ -75,7 +79,7 @@ const button = (text: string) => [...host.querySelectorAll("button")].find((b) =
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 
 beforeEach(() => {
-  state.accounts = [];
+  state.accounts = {};
   state.address = OWNER;
   state.data = { approvals: [erc20, nft], truncated: false };
   state.drop = undefined;
@@ -132,8 +136,7 @@ describe("Revoke's window wiring", () => {
 
   it("starts nothing when the connected wallet isn't the owner whose list is shown", async () => {
     // The window decides the list is the owner's own; the list then finds another wallet connected.
-    state.accounts = [OWNER, OTHER];
-    state.address = OTHER;
+    state.accounts = { window: OWNER, list: OTHER };
     await mount();
     await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent === "Revoke")!.click());
     await act(async () => state.drop?.({ kind: "approval", approval: "erc20", token: TOKEN, spender: SPENDER }));
