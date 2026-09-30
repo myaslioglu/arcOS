@@ -689,9 +689,10 @@ contract PositionVaultTest is PositionTestBase {
     /// the forwarded gas, or a gas limit just above the bare budget would forward too little and skip it. Review M2:
     /// the recipient refuses cheaply unless given the whole budget (`PLATFORM_CALL_GAS` plus the 2,300 stipend of a
     /// call with value, less at most `ENTRY_COST` for its dispatch), so a short forward shows as a skip, and every
-    /// payment that goes through is checked to have been given that much. Isolated, so that each call is its own transaction and meets the recipient cold: the payment then pays the
-    /// cold-account cost (2,600) on top of the value transfer (9,000), and an overhead reserve below that forwards less
-    /// than the budget at the edge. (`vm.cool` cools only an account's storage, not the account.)
+    /// payment that goes through is checked to have been given that much. Isolated, so that each call is its own
+    /// transaction and meets the recipient cold: the payment then pays the cold-account cost (2,600) on top of the value
+    /// transfer (9,000), and an overhead reserve below that forwards less than the budget at the edge. (`vm.cool` cools
+    /// only an account's storage, not the account.)
     /// forge-config: default.isolate = true
     function test_q9_theOwnerCannotStarveARecipientThatNeedsAllOfTheBudget() public {
         MockSwitchableReceiver r = new MockSwitchableReceiver();

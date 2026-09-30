@@ -14,10 +14,11 @@ import {IV3PositionManager, IV4PositionManager} from "./interfaces/IPositionMana
 /// collect the position's trading fees; the principal can't move. The platform's share is taken from
 /// collected fees only, at a rate and to a recipient fixed when the lock was made.
 /// @dev The vault never calls decreaseLiquidity with a non-zero amount and never transfers the NFT before
-/// `unlockAt`. Those two facts are the whole security argument; the tests and INVARIANTS.md pin them down. There is
-/// no admin and no upgrade path: the owner alone can collect, extend, hand the vault over, and withdraw after
-/// `unlockAt`. One clone per lock; `initialize` runs once per clone (the factory calls it in the transaction that
-/// creates the clone) and never on the implementation.
+/// `unlockAt`. Those two facts are the whole security argument; they are among the invariants the audit package will
+/// list, and the unit, fuzz, invariant and fork tests pin them down. There is no admin and no upgrade path: the owner
+/// alone can collect, extend, hand the vault over, and withdraw after `unlockAt`. One clone per lock; `initialize`
+/// runs once per clone (the factory calls it in the transaction that creates the clone) and never on the
+/// implementation.
 /// The platform's share never blocks the owner (Q9, decided 2026-09-29, reversible): when paying the fee recipient
 /// fails, the share is skipped, the owner receives the whole amount, and `PlatformShareSkipped` records it. There is
 /// no pull balance and no other function that moves tokens.
@@ -137,6 +138,9 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
     }
 
     /// @notice Sends the position NFT to `to`. Owner only, at or after `unlockAt`.
+    /// @dev Only the NFT leaves. Whatever reached the vault of the pool's currencies since the last `collect` (a
+    /// donation, say) stays here after `withdraw`, and no call can move it any more, since `collect` needs the position
+    /// (threat-model Q27): `collect` just before.
     function withdraw(address to) external onlyOwner nonReentrant {
         // validator clock drift is a matter of seconds and is immaterial against a lock measured in days
         // forge-lint: disable-next-line(block-timestamp)
@@ -185,6 +189,7 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
         bytes memory actions = abi.encodePacked(DECREASE_LIQUIDITY, TAKE_PAIR);
         bytes[] memory params = new bytes[](2);
         // A zero-liquidity decrease settles accrued fees without touching principal.
+        // DECREASE_LIQUIDITY by 0 is Uniswap's documented way to collect a v4 position's fees (Q23).
         params[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), bytes(""));
         params[1] = abi.encode(c0, c1, address(this));
         IV4PositionManager(manager).modifyLiquidities(abi.encode(actions, params), block.timestamp);
@@ -214,7 +219,8 @@ contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiv
     /// copied, so a recipient (or a token acting for it) can neither burn the owner's gas nor make it pay for a large
     /// revert. The whole bounded gas must be available first: otherwise the owner could send just too little gas for
     /// the payment and keep the platform's share, so the call reverts instead. An ERC-20 payment succeeds as SafeERC20
-    /// defines it: the call succeeds and returns nothing (from a contract) or returns true.
+    /// defines it: the call succeeds and returns nothing (from a contract) or returns true, that is at least one word
+    /// whose first word is 1 (a shorter answer is a failure).
     function _tryPayPlatform(address currency, uint256 amount) private returns (bool ok) {
         if (gasleft() < (PLATFORM_CALL_GAS * 64) / 63 + CALL_OVERHEAD) revert InsufficientGas();
         address to = feeRecipient;
