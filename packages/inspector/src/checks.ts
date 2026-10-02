@@ -73,7 +73,7 @@ import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { NATIVE, readV4Pools, type V4Quote } from "./v4";
-import { MIN_DEPTH, STATUS, buyDidNotTrade, orderDepth, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type TradeAttempt } from "./simulate";
+import { MIN_DEPTH, STATUS, buyDidNotTrade, orderDepth, v2Out, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type TradeAttempt } from "./simulate";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -370,9 +370,6 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     const [r0, r1] = [BigInt(reserves[0]), BigInt(reserves[1])];
     return lower(token0) === lower(quote) ? { quote: r0, token: r1 } : { quote: r1, token: r0 };
   };
-  /** What a v2 pair pays out, at its 0.3% fee, for `amountIn` of the quote. */
-  const v2Out = (amountIn: bigint, reserveIn: bigint, reserveOut: bigint): bigint =>
-    (amountIn * 997n * reserveOut) / (reserveIn * 1000n + amountIn * 997n);
   const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }, fee?: number): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
     if (version === "v2") {
@@ -382,7 +379,7 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
       // nothing for the test amount is still traded against, and its buy reverting caps the finding (see `checkTrade`).
       const tradable = reserves.token > 0n;
       const liquid = depth >= MIN_DEPTH && tradable && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
-      return { address: pool as Address, version, quote: quote.symbol, depth, liquid, tradable };
+      return { address: pool as Address, version, quote: quote.symbol, depth, liquid, tradable, tokenReserve: reserves.token };
     }
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
     return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
@@ -1004,21 +1001,22 @@ function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label:
 }
 
 /**
- * Check 10: buy the token with USDC and sell it straight back, in every USDC pool discovery found liquid (up to four), each in
- * its own eth_call, or, when none is liquid, in the deepest USDC pool it can trade against (see simulate.ts). Each round trip
- * is judged on its own (`attemptFinding`): a buy that can't trade, a leg out of gas, an RPC that didn't run it or answer in
- * time: `unknown`; a sell that reverted: `fail` (see `sellRevertedFinding` for a pool that can refuse a sell itself); a buy
- * the pool paid out for with nothing arriving: `fail`; otherwise the measured loss, a `warn` above the pool's fees plus 3%
- * (5% where the fee can change). The finding is the worst of them, naming its pool: any `fail` is the finding; `unknown`
- * only when every pool was. A `pass` needs every round trip to pass, and none of these, each of which caps it at `warn`:
- * a liquid pool that read `unknown`, more liquid pools than were tried, no liquid pool (a thin pool measured), another pool
- * of the scan that is liquid or undecided and wasn't traded against (hooked, against EURC), or a pool deeper than one
- * measured that wasn't. No DEX, no pool scan or no USDC pool: `unknown`.
+ * Check 10: buy the token with USDC and sell it straight back, in every USDC pool discovery found liquid and then every
+ * hookless one it didn't where the token could still trade, up to six, each in its own eth_call (see `tradeCandidates` and
+ * `simulateTrade`). Each round trip is judged on its own (`attemptFinding`): a buy that can't trade, a leg out of gas, an
+ * RPC that didn't run it or answer in time: `unknown`; a sell that reverted: `fail` (see `sellRevertedFinding` for a pool
+ * that can refuse a sell itself); a buy the pool paid out for with nothing arriving: `fail`; otherwise the measured loss, a
+ * `warn` above the pool's fees plus 3% (5% where the fee can change). A buy that can't trade in a pool that isn't liquid
+ * is left out. The finding is the worst of the rest, naming its pool: any `fail` is the finding; `unknown` only when every
+ * pool counted was. A `pass` needs every round trip counted to pass, one of them in a liquid pool, and none of these, each
+ * of which caps it at `warn`: a pool counted that read `unknown`, more pools to try than were tried, another pool of the
+ * scan that is liquid or undecided and wasn't traded against (hooked, against EURC), or a pool deeper than one measured
+ * that wasn't (a v2 pair with no tokens aside). No DEX, no pool scan or no USDC pool: `unknown`.
  */
 export async function checkTrade(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
   if (!input.dex) return finding("trade", "unknown", "Trades aren't simulated on this network", "No DEX registry is configured here.");
   if (scan === null) return finding("trade", "unknown", TRADE_UNKNOWN, "The network didn't answer the pool lookup.");
-  const run = await simulateTrade(input.reader, input.address, scan);
+  const run = await simulateTrade(input.reader, input.address, scan, input.deadlineAt);
   if (run.kind === "no-pool") {
     const why = !scan.factoriesAnswered ? FACTORIES_SILENT : (silentNote(scan) ?? "No USDC pool was found to trade against.");
     return finding("trade", "unknown", TRADE_UNKNOWN, why);
@@ -1030,14 +1028,24 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
     const f = attemptFinding(input, attempt, poolLabel(attempt.pool, scan));
     return { attempt, f: many ? { ...f, detail: `${poolName(attempt.pool)}: ${f.detail}` } : f };
   });
+  // A buy that can't trade in a pool discovery didn't find liquid (a dust pool, a pool with no liquidity in range) is left
+  // out: it says nothing about the token, and anyone can make such a pool. Everything else such a pool shows counts, a
+  // sell it blocks above all.
+  const ignored = each.filter((e) => e.attempt.pool.liquid !== true && buyDidNotTrade(e.attempt));
+  const counted = each.filter((e) => !ignored.includes(e));
+  const ignoredNote =
+    ignored.length > 0
+      ? ` Buying in ${listWith("and", ignored.map((e) => poolName(e.attempt.pool)))}, which ${ignored.length === 1 ? "isn't" : "aren't"} liquid, couldn't trade, so ${ignored.length === 1 ? "it doesn't" : "they don't"} count.`
+      : "";
+  if (counted.length === 0) return { ...each[0]!.f, detail: `${each[0]!.f.detail}${many ? ignoredNote : ""}` };
 
   // The worst round trip decides: any fail is the finding. Otherwise the worst of the rest, a sell refused by one pool
   // before a loss, the larger loss first; unknowns only when nothing else was measured.
-  const fail = each.find((e) => e.f.status === "fail");
-  if (fail) return many ? { ...fail.f, detail: `${fail.f.detail} It is the worst of the round trips in ${attempts.length} liquid pools.` } : fail.f;
-  const known = each.filter((e) => e.f.status !== "unknown");
-  const unknown = each.filter((e) => e.f.status === "unknown");
-  if (known.length === 0) return unknown[0]!.f;
+  const fail = counted.find((e) => e.f.status === "fail");
+  if (fail) return many ? { ...fail.f, detail: `${fail.f.detail} It is the worst of the round trips in ${attempts.length} pools.` } : fail.f;
+  const known = counted.filter((e) => e.f.status !== "unknown");
+  const unknown = counted.filter((e) => e.f.status === "unknown");
+  if (known.length === 0) return { ...unknown[0]!.f, detail: `${unknown[0]!.f.detail}${ignoredNote}` };
   const rank = (e: (typeof each)[number]): bigint => (e.f.status === "warn" ? (lossOf(e.attempt) ?? 10n ** 9n) + 10n ** 7n : (lossOf(e.attempt) ?? 0n));
   const worst = known.reduce((x, y) => (rank(y) > rank(x) ? y : x));
   const f = worst.f;
@@ -1045,20 +1053,24 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
     unknown.length > 0
       ? ` ${capitalized(listWith("and", unknown.map((e) => poolName(e.attempt.pool))))} couldn't be measured (${listWith("and", unknown.map((e) => lowerFirst(e.f.detail.replace(/^[^:]*: /, "").replace(/\.$/, ""))))}).`
       : "";
-  const allNote = many && f.status === "pass" && unknown.length === 0 ? ` Round trips in all ${attempts.length} liquid pools went through; the worst is shown.` : "";
+  const allNote = many && f.status === "pass" && unknown.length === 0 ? ` Round trips in all ${counted.length} pools counted went through; the worst is shown.` : "";
 
-  // What keeps a measured round trip from a pass, whatever it measured: a liquid pool that couldn't be measured, more
-  // liquid pools than were tried, a measured pool that isn't liquid, any other pool the scan found that is liquid or of
-  // undecided liquidity (hooked, against EURC), or a pool deeper than one measured that wasn't. Each caps at a warning.
-  const thin = attempts[0]!.pool.liquid !== true ? attempts[0]!.pool : null;
+  // What keeps a measured round trip from a pass, whatever it measured: a pool counted that couldn't be measured, more pools
+  // than were tried, no liquid pool among those measured, any other pool the scan found that is liquid or of undecided
+  // liquidity (hooked, against EURC), or a pool deeper than one measured that wasn't (a v2 pair with no tokens aside).
+  // Each caps at a warning.
+  const liquidMeasured = counted.filter((e) => e.attempt.pool.liquid === true).map((e) => e.attempt.pool);
+  const thin = liquidMeasured.length === 0 ? counted[0]!.attempt.pool : null;
+  const tooMany = run.candidates > attempts.length;
   const otherLive = scan.pools.filter((p) => !measured.has(p) && (p.liquid === true || p.liquid === null));
-  const shallowest = attempts.reduce((m, a) => (orderDepth(a.pool) < m ? orderDepth(a.pool) : m), orderDepth(attempts[0]!.pool));
-  const deeper = scan.pools.filter((p) => !measured.has(p) && !otherLive.includes(p) && orderDepth(p) > shallowest);
+  const reference = liquidMeasured.length > 0 ? liquidMeasured : counted.map((e) => e.attempt.pool);
+  const shallowest = reference.reduce((m, p) => (orderDepth(p) < m ? orderDepth(p) : m), orderDepth(reference[0]!));
+  const deeper = scan.pools.filter((p) => !measured.has(p) && !otherLive.includes(p) && p.tradable !== false && orderDepth(p) > shallowest);
   const notes = [
     thin
       ? ` It was measured on ${thin.liquid === null ? "a pool whose liquidity is undecided" : "a thin pool"} (${poolName(thin)}, ${usdcAmount(thin.depth)} ${thin.quote}${thin.version === "v4" ? " in range" : ""}).`
       : "",
-    run.liquidCount > attempts.length && !thin ? ` It has ${run.liquidCount} liquid USDC pools; ${attempts.length} were tried.` : "",
+    tooMany ? ` It has ${run.candidates} pools to try; ${attempts.length} were tried.` : "",
     otherLive.length > 0
       ? ` ${capitalized(listWith("and", otherLive.map((p) => `${untriedName(p)} (${p.liquid === true ? "liquid" : "liquidity undecided"})`)))} ${otherLive.length === 1 ? "wasn't" : "weren't"} traded against.`
       : "",
@@ -1068,15 +1080,15 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   ].join("");
   if (f.status === "pass" && (unknown.length > 0 || notes !== "")) {
     const title =
-      unknown.length > 0 ? "A liquid pool couldn't be measured"
-      : run.liquidCount > attempts.length && !thin ? `${run.liquidCount} liquid pools; ${attempts.length} were tried`
+      unknown.length > 0 ? "A pool couldn't be measured"
+      : tooMany ? `${run.candidates} pools; ${attempts.length} were tried`
       : thin ? (thin.liquid === null ? "Measured on a pool of undecided liquidity" : "Measured on a thin pool")
       : otherLive.length > 0 ? (otherLive.some((p) => p.liquid === true) ? "Another liquid pool wasn't measured" : "A pool of undecided liquidity wasn't measured")
       : "A deeper pool wasn't traded against";
-    const why = " A pass needs a round trip that went through in every liquid pool, and no other liquid or undecided pool beside them.";
-    return { ...f, status: "warn", title, detail: `${f.detail}${unknownNote}${notes}${why}` };
+    const why = " A pass needs a round trip that went through in a liquid pool and in every other pool tried, and no liquid or undecided pool left untried.";
+    return { ...f, status: "warn", title, detail: `${f.detail}${unknownNote}${ignoredNote}${notes}${why}` };
   }
-  return { ...f, detail: `${f.detail}${allNote}${unknownNote}${notes}` };
+  return { ...f, detail: `${f.detail}${allNote}${unknownNote}${ignoredNote}${notes}` };
 }
 
 /** `text` with its first letter in lower case. */

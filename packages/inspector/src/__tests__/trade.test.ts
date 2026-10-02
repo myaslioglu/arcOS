@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AERODROME, EURC as EURC_TOKEN, UNISWAP_V4, USDC, tradeSimulatorRuntime, type DexConfig } from "@arcos/chain";
 import { checkTrade } from "../checks";
 import { inspect } from "../inspect";
-import { POOL_DEADLINE_MS, TRADE_GAS, isOrdinaryAddress, randomAddress, simulatorAddresses } from "../simulate";
+import { DEFAULT_TRADE_MS, TRADE_GAS, isOrdinaryAddress, randomAddress, simulatorAddresses, tradeAmount } from "../simulate";
 import type { InspectInput, Pool, PoolScan } from "../types";
 import { NATIVE, v4PoolId, v4PoolKey } from "../v4";
 import { fakeChain, v2PairReads, type FakeChain, type FakeReader, type FakeSimulation, type SimResult } from "./fixtures/chain-fake";
@@ -294,12 +294,13 @@ describe("trade simulation: a sell the pool itself can refuse", () => {
 
   it("never retries in a pool that can't trade: an empty or thin v2 pair", async () => {
     // Anyone can create a pair for nothing; its buy reverting must not turn the v3 pool's sell revert into a warning. (A
-    // hookless v4 pool found liquid counts as 1,000 USDC whatever is in range, so it is retried in.)
+    // hookless v4 pool found liquid counts as 1,000 USDC whatever is in range, so it is retried in.) The thin pair gets a
+    // round trip of its own, as every non-liquid pool with USDC does, but is never the retry.
     const empty = v2Pool(0n);
     const thin = v2Pool(900n * USDC_UNITS);
-    for (const other of [empty, thin]) {
+    for (const [other, tried] of [[empty, [POOL]], [thin, [POOL, PAIR]]] as const) {
       const { f, chain } = await run(byPool(POOL, withStatus(1)), deepV3, other);
-      expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL]);
+      expect(chain.simulations.map((s) => s.trade.pool)).toEqual(tried);
       expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
     }
   });
@@ -357,7 +358,7 @@ describe("trade simulation: a round trip in every liquid pool", () => {
     expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL, PAIR]);
     expect(new Set(chain.simulations.map((s) => lower(s.call.from))).size).toBe(2);
     expect(f).toMatchObject({ status: "pass", title: "Bought and sold back in a simulation" });
-    expect(f.detail).toMatch(/Round trips in all 2 liquid pools went through; the worst is shown\./);
+    expect(f.detail).toMatch(/Round trips in all 2 pools counted went through; the worst is shown\./);
   });
 
   it("fails a honeypot whose sells are blocked only in its second liquid pool", async () => {
@@ -374,24 +375,24 @@ describe("trade simulation: a round trip in every liquid pool", () => {
 
   it("warns, naming it, when one liquid pool couldn't be measured: a buy reverting there may be the token's doing", async () => {
     const { f } = await run(at(POOL, withStatus(1), roundTrip(TEN, 9_940_000n)), liquidV3, liquidV2);
-    expect(f).toMatchObject({ status: "warn", title: "A liquid pool couldn't be measured", evidenceUrl: `https://explorer.test/address/${PAIR}` });
+    expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured", evidenceUrl: `https://explorer.test/address/${PAIR}` });
     expect(f.detail).toMatch(/Uniswap v3 0x7777…7777 couldn't be measured \(buying with 10 USDC on Uniswap v3 reverted, so selling couldn't be tried\)/);
   });
 
   it("warns on a donated v3 decoy, liquid by its balance, whose buy the pool paid nothing for", async () => {
     const decoy = at(POOL, withStatus(0, { spent: 0n, paidOut: 0n, bought: 0n, sold: 0n, received: 0n }), roundTrip(5n * USDC_UNITS, 4_970_000n));
-    expect((await run(decoy, liquidV3, liquidV2)).f).toMatchObject({ status: "warn", title: "A liquid pool couldn't be measured" });
+    expect((await run(decoy, liquidV3, liquidV2)).f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
   });
 
-  it("warns, never passes, with more than four liquid pools: it says how many were tried", async () => {
-    const { f, chain } = await run(roundTrip(TEN, 9_940_000n), ...pools(5));
-    expect(chain.simulations).toHaveLength(4);
-    expect(f).toMatchObject({ status: "warn", title: "5 liquid pools; 4 were tried" });
+  it("warns, never passes, with more pools to try than the six it tries: it says how many were tried", async () => {
+    const { f, chain } = await run(roundTrip(TEN, 9_940_000n), ...pools(7));
+    expect(chain.simulations).toHaveLength(6);
+    expect(f).toMatchObject({ status: "warn", title: "7 pools; 6 were tried" });
   });
 
-  it("passes with exactly four liquid pools, every round trip having gone through", async () => {
-    const { f, chain } = await run(roundTrip(TEN, 9_940_000n), ...pools(4));
-    expect(chain.simulations).toHaveLength(4);
+  it("passes with exactly six liquid pools, every round trip having gone through", async () => {
+    const { f, chain } = await run(roundTrip(TEN, 9_940_000n), ...pools(6));
+    expect(chain.simulations).toHaveLength(6);
     expect(f.status).toBe("pass");
   });
 
@@ -410,12 +411,18 @@ describe("trade simulation: a round trip in every liquid pool", () => {
     expect(f.detail).toMatch(/Uniswap v2 0x8888…8888 \(EURC\) \(liquid\) wasn't traded against\./);
   });
 
-  it("warns when a pool deeper than one measured wasn't traded against: a v2 pair with USDC synced in and no tokens", async () => {
+  it("never counts a v2 pair with USDC synced in and no tokens as a deeper pool: it can't be traded against", async () => {
     const synced = v2Pool(90_000n * USDC_UNITS, { liquid: false, tradable: false });
     const { f, chain } = await run(roundTrip(TEN, 9_940_000n), synced, v3Pool(5_000n * USDC_UNITS, 3000));
     expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL]);
+    expect(f.status).toBe("pass");
+  });
+
+  it("warns when a pool deeper than one measured wasn't traded against: a non-liquid EURC pool", async () => {
+    const eurc: Pool = { address: EURC_POOL, version: "v3", quote: "EURC", depth: 90_000n * USDC_UNITS, liquid: false, fee: 3000 };
+    const { f } = await run(roundTrip(TEN, 9_940_000n), v3Pool(5_000n * USDC_UNITS, 3000), eurc);
     expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't traded against" });
-    expect(f.detail).toMatch(/Uniswap v2 0x4444…4444, deeper than a pool measured, was never traded against\./);
+    expect(f.detail).toMatch(/Uniswap v3 0x8888…8888 \(EURC\), deeper than a pool measured, was never traded against\./);
   });
 
   it("is unknown when no liquid pool could be measured", async () => {
@@ -431,9 +438,9 @@ describe("trade simulation: a round trip in every liquid pool", () => {
       // The first pool's call never answers; the second's does.
       const slow: FakeReader = { ...chain, callWithOverride: (call, overrides) => (calls++ === 0 ? new Promise<never>(() => {}) : chain.callWithOverride(call, overrides)) };
       const pending = checkTrade(input(slow), scanOf(liquidV3, liquidV2));
-      await vi.advanceTimersByTimeAsync(POOL_DEADLINE_MS + 1);
+      await vi.advanceTimersByTimeAsync(DEFAULT_TRADE_MS + 1);
       const f = await pending;
-      expect(f).toMatchObject({ status: "warn", title: "A liquid pool couldn't be measured" });
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
       expect(f.detail).toMatch(/didn't answer in time/);
     } finally {
       vi.useRealTimers();
@@ -447,11 +454,11 @@ describe("trade simulation: a round trip in every liquid pool", () => {
       expect(f.detail).toMatch(/It was measured on a thin pool \(Uniswap v2 0x4444…4444, 27 USDC\)\./);
     });
 
-    it("tries a liquid hookless v4 pool with next to nothing in range instead of a 27-USDC pair", async () => {
-      // Its quote paid out 1,000 USDC: it is liquid, counts as 1,000 USDC, and the pair isn't measured in its place.
+    it("tries a liquid hookless v4 pool with next to nothing in range before a 27-USDC pair", async () => {
+      // Its quote paid out 1,000 USDC: it is liquid, counts as 1,000 USDC, and is tried first; the pair is tried after it.
       const v4 = v4Pool(1n, USDC, 3000, 60);
       const { f, chain } = await run(roundTrip(1_000_000n, 994_000n), smallPair, v4);
-      expect(chain.simulations.map((s) => s.trade.pool)).toEqual([UNISWAP_V4.poolManager]);
+      expect(chain.simulations.map((s) => s.trade.pool)).toEqual([UNISWAP_V4.poolManager, PAIR]);
       expect(f).toMatchObject({ status: "pass", evidenceUrl: `https://explorer.test/address/${UNISWAP_V4.poolManager}` });
     });
 
@@ -482,6 +489,108 @@ describe("trade simulation: a round trip in every liquid pool", () => {
   it("passes on a single liquid v3 pool, as before", async () => {
     const { f } = await run(roundTrip(TEN, 9_940_000n), liquidV3);
     expect(f).toMatchObject({ status: "pass", title: "Bought and sold back in a simulation" });
+  });
+});
+
+describe("trade simulation: a liquid decoy can't hide a thinner real pool", () => {
+  // A deployer can open a liquid pool that lets sells through and keep the real market in a pool discovery doesn't call
+  // liquid. Every such pool gets a round trip too; only a buy there that can't trade is left out.
+  const decoy = v2Pool(5_000n * USDC_UNITS);
+  const DUST = "0x9999999999999999999999999999999999999999";
+  const run = async (simulation: FakeChain["simulation"], ...pools: Pool[]) => {
+    const chain = fakeChain({ simulation });
+    return { f: await checkTrade(input(chain), scanOf(...pools)), chain };
+  };
+  const blockedIn = (where: string) => (trade: { pool: string }) => (lower(trade.pool) === lower(where) ? withStatus(3) : roundTrip(TEN, 9_940_000n));
+
+  it("fails a honeypot behind a decoy whose real pool is a single-sided hookless v4 launch pool (quote can't pay, nothing in range)", async () => {
+    const launch: Pool = { ...v4Pool(0n, USDC, 10_000, 200), liquid: false };
+    const { f, chain } = await run(blockedIn(UNISWAP_V4.poolManager), decoy, launch);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR, UNISWAP_V4.poolManager]);
+    expect(chain.simulations[1]!.trade.amount).toBe(10_000n);
+    expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+  });
+
+  it("never passes a honeypot behind a decoy whose real pool is a v3 pool under 1,000 USDC", async () => {
+    const thinV3: Pool = { ...v3Pool(500n * USDC_UNITS, 10_000), liquid: false };
+    const { f, chain } = await run(blockedIn(POOL), decoy, thinV3);
+    expect(chain.simulations.map((s) => s.trade.pool).sort()).toEqual([PAIR, PAIR, POOL].sort());
+    // The v3 pool can refuse a sell itself, so the decoy is where it is tried again; that sell going through is a warning.
+    expect(f.status).not.toBe("pass");
+    expect(f).toMatchObject({ status: "warn" });
+  });
+
+  it("fails a honeypot behind a decoy whose real pool is a v2 pair with a dust token reserve that quotes nothing at the test amount", async () => {
+    // 30 USDC against 5 raw units: 0.03 USDC buys nothing, about 7.52 USDC buys one unit.
+    const dust = v2Pool(30n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 5n });
+    expect(tradeAmount(dust)).toBe(7_522_568n);
+    const { f, chain } = await run(blockedIn(DUST), decoy, dust);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR, DUST]);
+    expect(chain.simulations[1]!.trade.amount).toBe(7_522_568n);
+    expect(f).toMatchObject({ status: "fail", title: "Can't be sold", evidenceUrl: `https://explorer.test/address/${DUST}` });
+  });
+
+  it("still passes an honest token next to dust pools whose buys can't trade: they don't count", async () => {
+    const dust = v2Pool(30n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 5n });
+    const launch: Pool = { ...v4Pool(0n, USDC, 10_000, 200), liquid: false };
+    const sim = (trade: { pool: string }) =>
+      lower(trade.pool) === lower(DUST) ? withStatus(1)
+      : lower(trade.pool) === lower(UNISWAP_V4.poolManager) ? withStatus(0, { paidOut: 0n, bought: 0n, sold: 0n, received: 0n })
+      : roundTrip(TEN, 9_940_000n);
+    const { f, chain } = await run(sim, v3Pool(50_000n * USDC_UNITS, 3000), dust, launch);
+    expect(chain.simulations).toHaveLength(3);
+    expect(f).toMatchObject({ status: "pass" });
+    expect(f.detail).toMatch(/which aren't liquid, couldn't trade, so they don't count\./);
+  });
+
+  it("never tries a pair whose one raw unit costs more than 20 USDC", async () => {
+    const pricey = v2Pool(1_000n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 5n });
+    expect(tradeAmount(pricey)).toBeNull();
+    const { chain } = await run(roundTrip(TEN, 9_940_000n), decoy, pricey);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR]);
+  });
+
+  it("uses the test amount in a pair that quotes something for it", () => {
+    expect(tradeAmount(v2Pool(5_000n * USDC_UNITS, { tokenReserve: 10n ** 24n }))).toBe(5n * USDC_UNITS);
+  });
+});
+
+describe("trade simulation: its deadline", () => {
+  it("reads unknown for every pool, sending nothing, when the inspection's deadline leaves it no time", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const f = await checkTrade({ ...input(chain), deadlineAt: Date.now() + 500 }, scanOf(v2Pool(5_000n * USDC_UNITS)));
+    expect(f.status).toBe("unknown");
+    expect(chain.simulations).toHaveLength(0);
+  });
+
+  it("gives up on a gas price read that doesn't answer before the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+      const stuck: FakeReader = { ...chain, gasPrice: () => new Promise<never>(() => {}) };
+      const pending = checkTrade({ ...input(stuck), deadlineAt: Date.now() + 3_000 }, scanOf(v2Pool(5_000n * USDC_UNITS)));
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect((await pending).status).toBe("unknown");
+      expect(chain.simulations).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives each pool what is left of the inspection's deadline, less a margin", async () => {
+    vi.useFakeTimers();
+    try {
+      const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+      let calls = 0;
+      const slow: FakeReader = { ...chain, callWithOverride: (call, overrides) => (calls++ === 0 ? new Promise<never>(() => {}) : chain.callWithOverride(call, overrides)) };
+      const pending = checkTrade({ ...input(slow), deadlineAt: Date.now() + 4_000 }, scanOf(v3Pool(50_000n * USDC_UNITS, 3000), v2Pool(5_000n * USDC_UNITS)));
+      await vi.advanceTimersByTimeAsync(3_001);
+      const f = await pending;
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+      expect(f.detail).toMatch(/didn't answer in time/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -9,6 +9,8 @@ export function inspectInput(
   explorerApi?: ExplorerApi,
   /** The index's pools for this token (indexed-pools.ts), read besides the ones discovery finds. */
   extraPools?: ExtraPool[],
+  /** When the caller stops waiting (ms since the epoch): the trade check fits its eth_calls inside it. */
+  deadlineAt?: number,
 ): InspectInput {
   const network = activeNetwork();
   const explorer = activeChain().blockExplorers?.default;
@@ -25,5 +27,6 @@ export function inspectInput(
     // A token our own TokenFactory made counts as source-verified through the factory (see checkVerified).
     arcosTokenFactory: ARCOS[network]?.tokenFactory ?? null,
     ...(extraPools && extraPools.length > 0 ? { extraPools } : {}),
+    ...(deadlineAt === undefined ? {} : { deadlineAt }),
   };
 }

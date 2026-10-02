@@ -122,11 +122,20 @@ const byDepth = (pools: Pool[]): Pool[] =>
     return db > da ? 1 : db < da ? -1 : 0;
   });
 
-/** The most liquid pools a round trip is run in, each its own eth_call (and a second one when its sell is refused). */
-export const MAX_LIQUID_POOLS = 4;
+/**
+ * The most pools a round trip is run in, liquid ones first, each its own eth_call (and a second one when its sell is
+ * refused): at most 12 eth_calls.
+ */
+export const MAX_POOLS = 6;
 
-/** How long one pool's round trip (with its retry) may take before it counts as unanswered: `unknown` for that pool. */
-export const POOL_DEADLINE_MS = 8_000;
+/** The trade check's time when the caller gave it no deadline: its gas price read and every pool's round trips in it. */
+export const DEFAULT_TRADE_MS = 8_000;
+
+/** Kept back from the inspection's deadline for the rest of the report, so the trade check ends before the caller stops waiting. */
+export const DEADLINE_MARGIN_MS = 1_000;
+
+/** The most USDC a buy of one raw unit may take in a pair that quotes nothing for the test amount (20 USDC, 6 decimals). */
+export const MAX_UNIT_BUY = 20_000_000n;
 
 /**
  * The pools to trade against, in the order they are tried: those that trade USDC, the only currency the override can fund,
@@ -192,6 +201,24 @@ export function testAmount(pool: Pool): bigint {
   return testAmountFor(pool.depth);
 }
 
+/** What a v2 pair pays out, at its 0.3% fee, for `amountIn`. */
+export const v2Out = (amountIn: bigint, reserveIn: bigint, reserveOut: bigint): bigint =>
+  amountIn === 0n ? 0n : (amountIn * 997n * reserveOut) / (reserveIn * 1000n + amountIn * 997n);
+
+/**
+ * What the round trip in `pool` buys with: `testAmount`, except in a v2 pair that pays nothing for it (a dust raw reserve,
+ * or a token whose one raw unit is worth more), where it is what buys one raw unit, if that is at most `MAX_UNIT_BUY`.
+ * `null` when no such amount exists: a buy there can't trade, and the pool isn't tried.
+ */
+export function tradeAmount(pool: Pool): bigint | null {
+  const amount = testAmount(pool);
+  if (pool.version !== "v2" || pool.tokenReserve === undefined) return amount;
+  if (v2Out(amount, pool.depth, pool.tokenReserve) > 0n) return amount;
+  if (pool.tokenReserve <= 1n) return null;
+  const one = (pool.depth * 1000n) / ((pool.tokenReserve - 1n) * 997n) + 1n;
+  return one > MAX_UNIT_BUY ? null : one < MIN_TEST_AMOUNT ? MIN_TEST_AMOUNT : one;
+}
+
 /** `testAmount` for a pool `depth` deep. */
 export function testAmountFor(depth: bigint): bigint {
   const share = depth / 1000n;
@@ -222,7 +249,7 @@ export type SimulatorResult = { status: number; spent: bigint; paidOut: bigint; 
 
 /** One round trip against one pool. */
 export type TradeAttempt =
-  /** It didn't finish within `POOL_DEADLINE_MS`. */
+  /** It didn't finish by the trade check's deadline (see `simulateTrade`). */
   | { kind: "timed-out"; pool: Pool; amount: bigint }
   /** The call reverted or ran out of its gas: the node's answer, but none about the token. */
   | { kind: "call-reverted"; pool: Pool; amount: bigint }
@@ -238,35 +265,76 @@ export type TradeAttempt =
   | { kind: "ran"; pool: Pool; amount: bigint; decimals: 6 | 18; result: SimulatorResult; second?: TradeAttempt };
 
 /**
- * What `simulateTrade` measured. `attempts` are the round trips, one per pool, in the order of `tradePools`: one in every
- * liquid USDC pool without a hook, up to `MAX_LIQUID_POOLS`; or, when there is no liquid one, a single one in the deepest
- * pool it can trade against. `liquidCount` is how many liquid USDC pools without a hook there are, tried or not.
+ * What `simulateTrade` measured. `attempts` are the round trips, one per pool tried (`tradeCandidates`, up to `MAX_POOLS`),
+ * in order. `candidates` is how many pools it would have tried without that cap.
  */
-export type TradeRun = { kind: "no-pool" } | { kind: "measured"; attempts: TradeAttempt[]; liquidCount: number };
+export type TradeRun = { kind: "no-pool" } | { kind: "measured"; attempts: TradeAttempt[]; candidates: number };
 
 /**
- * Runs the round trips: one in every USDC pool discovery found liquid (none has a hook: a hooked pool is never found
- * liquid), up to `MAX_LIQUID_POOLS`, each its own eth_call from fresh S and R addresses, in parallel, at the network's gas
- * price; or, when there is no liquid pool, one in the deepest pool it can trade against. When a sell reverts in a pool that
- * can refuse a sell on its own account, that pool's round trip is tried again in the deepest Uniswap v2 or hookless v4 USDC
- * pool that can trade, if there is one. Each pool's round trips are given `POOL_DEADLINE_MS`; one that takes longer is
- * `timed-out`. Nothing else is read. Every failure is returned as what it is; a rejection never escapes.
- *
- * At most: one eth_gasPrice and 2 * `MAX_LIQUID_POOLS` eth_calls (8).
+ * The pools a round trip is run in, in order: every USDC pool without a hook that discovery found liquid, by `orderDepth`;
+ * then every one it didn't that could still be where the token trades, by depth: a v2 pair with tokens in its reserves
+ * and a `tradeAmount`, a v3 or Aerodrome pool holding any USDC, and any hookless v4 pool that exists (a single-sided launch
+ * pool has no USDC in range and a quote that can't pay, yet sells into it). A liquid decoy then can't hide a thinner real
+ * pool. When there is none of those, the deepest pool `tradePools` gives, hooked or not.
  */
-export async function simulateTrade(reader: ChainReader, token: Address, scan: PoolScan): Promise<TradeRun> {
+export function tradeCandidates(scan: PoolScan, token: Address): Pool[] {
   const all = tradePools(scan, token);
-  if (all.length === 0) return { kind: "no-pool" };
-  const liquid = all.filter((p) => p.liquid === true && !hooked(p));
-  const pools = liquid.length > 0 ? liquid.slice(0, MAX_LIQUID_POOLS) : [all[0]!];
+  const hookless = all.filter((p) => !hooked(p));
+  const liquid = hookless.filter((p) => p.liquid === true);
+  const thin = hookless
+    .filter((p) => p.liquid !== true && (p.version === "v4" || p.depth > 0n || (p.tokenReserve ?? 0n) > 0n) && tradeAmount(p) !== null)
+    .sort((x, y) => (y.depth > x.depth ? 1 : y.depth < x.depth ? -1 : 0));
+  const candidates = [...liquid, ...thin];
+  return candidates.length > 0 ? candidates : all.slice(0, 1);
+}
+
+/**
+ * Runs the round trips: one in each of the first `MAX_POOLS` of `tradeCandidates`, each its own eth_call from fresh S and R
+ * addresses, in parallel, at the network's gas price. When a sell reverts in a pool that can refuse a sell on its own
+ * account, that pool's round trip is tried again in the deepest liquid Uniswap v2 or hookless v4 USDC pool, if there is
+ * one. The gas price read and every pool's round trips must end by `deadlineAt` (ms since the epoch, the inspection's
+ * deadline less `DEADLINE_MARGIN_MS`), or within `DEFAULT_TRADE_MS` without one: a gas price read that doesn't is
+ * `call-failed` for every pool, a pool whose round trips don't is `timed-out`. Nothing else is read. Every failure is
+ * returned as what it is; a rejection never escapes.
+ *
+ * At most: one eth_gasPrice and 2 * `MAX_POOLS` eth_calls (12).
+ */
+export async function simulateTrade(reader: ChainReader, token: Address, scan: PoolScan, deadlineAt?: number): Promise<TradeRun> {
+  const candidates = tradeCandidates(scan, token);
+  if (candidates.length === 0) return { kind: "no-pool" };
+  const pools = candidates.slice(0, MAX_POOLS);
+  const end = deadlineAt === undefined ? Date.now() + DEFAULT_TRADE_MS : deadlineAt - DEADLINE_MARGIN_MS;
+  const failed = (kind: "call-failed" | "timed-out"): TradeRun => ({
+    kind: "measured",
+    attempts: pools.map((pool) => ({ kind, pool, amount: tradeAmount(pool) ?? testAmount(pool) })),
+    candidates: candidates.length,
+  });
+  if (end <= Date.now()) return failed("timed-out");
   let gasPrice: bigint;
   try {
-    gasPrice = await reader.gasPrice();
+    gasPrice = await within(reader.gasPrice(), end);
   } catch {
-    return { kind: "measured", attempts: pools.map((pool) => ({ kind: "call-failed", pool, amount: testAmount(pool) })), liquidCount: liquid.length };
+    return failed("call-failed");
   }
-  const attempts = await Promise.all(pools.map((pool) => withPoolDeadline(pool, poolRoundTrips(reader, token, scan, pool, gasPrice))));
-  return { kind: "measured", attempts, liquidCount: liquid.length };
+  const attempts = await Promise.all(pools.map((pool) => withPoolDeadline(pool, poolRoundTrips(reader, token, scan, pool, gasPrice), end)));
+  return { kind: "measured", attempts, candidates: candidates.length };
+}
+
+/** `p`, or a rejection once `end` (ms since the epoch) has passed. */
+function within<T>(p: Promise<T>, end: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("deadline")), Math.max(0, end - Date.now()));
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e: unknown) => {
+        clearTimeout(timer);
+        reject(e as Error);
+      },
+    );
+  });
 }
 
 /** A pool's round trip, and the retry in another pool when its sell was refused there. */
@@ -277,21 +345,12 @@ async function poolRoundTrips(reader: ChainReader, token: Address, scan: PoolSca
   return other ? { ...first, second: await roundTrip(reader, token, other, gasPrice) } : first;
 }
 
-/** `attempt`, or `timed-out` for `pool` once `POOL_DEADLINE_MS` has passed. */
-function withPoolDeadline(pool: Pool, attempt: Promise<TradeAttempt>): Promise<TradeAttempt> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ kind: "timed-out", pool, amount: testAmount(pool) }), POOL_DEADLINE_MS);
-    attempt.then(
-      (a) => {
-        clearTimeout(timer);
-        resolve(a);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve({ kind: "call-failed", pool, amount: testAmount(pool) });
-      },
-    );
-  });
+/** `attempt`, or `timed-out` for `pool` once `end` (ms since the epoch) has passed. */
+function withPoolDeadline(pool: Pool, attempt: Promise<TradeAttempt>, end: number): Promise<TradeAttempt> {
+  const amount = tradeAmount(pool) ?? testAmount(pool);
+  return within(attempt, end).catch((e: unknown) =>
+    e instanceof Error && e.message === "deadline" ? { kind: "timed-out" as const, pool, amount } : { kind: "call-failed" as const, pool, amount },
+  );
 }
 
 /**
@@ -300,7 +359,7 @@ function withPoolDeadline(pool: Pool, attempt: Promise<TradeAttempt>): Promise<T
  * changes, so what is prepaid never shows in the result.
  */
 async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPrice: bigint): Promise<TradeAttempt> {
-  const amount = testAmount(pool);
+  const amount = tradeAmount(pool) ?? testAmount(pool);
   const usdc = usdcOf(pool, token)!;
   const native = lower(usdc) === lower(NATIVE);
   const decimals = native ? 18 : 6;

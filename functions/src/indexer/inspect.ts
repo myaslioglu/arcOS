@@ -74,6 +74,8 @@ export function liveInspector(options: { network: NetworkId; apiKey?: string; cl
         explorerBase: chain.blockExplorers?.default.url ?? "",
         arcosTokenFactory: ARCOS[network]?.tokenFactory ?? null,
         extraPools,
+        // The trade check fits its round trips inside the same deadline.
+        deadlineAt: Date.now() + INSPECTION_MS,
         onPools: (found) => {
           scan = found;
         },

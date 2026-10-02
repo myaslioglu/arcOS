@@ -118,6 +118,8 @@ export type Pool = {
    * quote.
    */
   tradable?: boolean;
+  /** v2 only: the token's reserve, in its raw units, next to `depth`, the USDC (or EURC) reserve. */
+  tokenReserve?: bigint;
   /** v3 only: the fee tier the factory was asked for, in hundredths of a bip (3000 is 0.3%). */
   fee?: number;
   /** v4 only. */
@@ -162,4 +164,9 @@ export type InspectInput = {
    */
   onPools?: (scan: PoolScan | null) => void;
   now?: () => Date;
+  /**
+   * When the caller stops waiting for the report (ms since the epoch, on `Date.now()`'s clock): the inspection's own
+   * deadline. The trade check fits its eth_calls inside it (see simulate.ts). Absent: it gives itself a fixed time.
+   */
+  deadlineAt?: number;
 };
