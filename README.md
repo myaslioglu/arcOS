@@ -192,15 +192,19 @@ but does have privileged functions, both the ownership and privileges findings r
   deepest pool reverts, takes no USDC, or gets nothing because the pool paid nothing out, the check
   moves on, but only to the next deepest pool that discovery found liquid (never a thinner one a
   deployer could seed with dust), up to three pools in all, and the finding names each pool passed
-  over and why; when none of them can trade the result is "unknown". Only a pool that paid nothing
-  out, which the token can't bring about, is passed over freely. Any other reason caps the result at
-  a warning, because the token may have refused or undone the buy (rejecting a recipient with code,
-  say, or refunding the USDC) in the pool it blocks sells into: "Buying with 10 USDC in its deepest
-  pool (Uniswap v3 0x…) reverted; a round trip on Uniswap v2 0x… went through". So does a pool
-  deeper than the one measured that was never tried. A fail stays a fail. The cost of this rule: a
-  decoy whose buy reverts, such as a v3 pool that was never initialized with USDC sent to it, can
-  turn an honest token's pass into a warning. That griefing costs the USDC sent and errs on the safe
-  side.
+  over and why; when none of them can trade the result is "unknown". Only a pool without a hook that
+  paid nothing out, which the token can't bring about there, is passed over freely (a hooked pool is
+  never moved on to). Any other reason caps the result at a warning, because the token may have
+  refused or undone the buy (rejecting a recipient with code, say, or refunding the USDC) in the pool
+  it blocks sells into: "Buying with 10 USDC in its deepest pool (Uniswap v3 0x…) reverted; a round
+  trip on Uniswap v2 0x… went through". So does any pool the scan found deeper than the one measured
+  that wasn't traded against, whether or not anything was passed over: a hooked v4 pool, a pool
+  against EURC (its depth compared as about USD), one that isn't liquid, or a v2 pair with USDC
+  `sync`ed in and no tokens; the finding names it. A fail stays a fail. The cost of these rules: an
+  honest token loses its pass to a warning when an indexed hooked pool or an EURC pool is deeper than
+  its USDC pool, or when someone donates USDC to make a decoy deepest (a v3 pool never initialized,
+  say, or a pair synced with no tokens). That errs on the safe side, and the donation costs whoever
+  sends it.
 - How the round trip is judged: a buy the pool paid out for and of which no tokens arrived is a fail
   ("Buying delivers no tokens"). A sell that reverts after the buy went through is a fail ("Can't be
   sold") in a Uniswap v2 pair or a hookless v4 pool, where only the token can refuse it. A Uniswap v3
@@ -257,6 +261,10 @@ but does have privileged functions, both the ownership and privileges findings r
 - A Uniswap v3 or Aerodrome pool's depth is still read from its USDC balance, which anyone can raise
   by sending it USDC, so a pool with no liquidity can come first in the trade check's order; it is
   passed over when its buy can't trade, but it can push a real pool past the three the check tries.
+- The trade check never trades against a hooked v4 pool when a pool without a hook trades USDC, nor
+  against a pool whose quote isn't USDC (EURC): the override can fund only USDC, and a hook runs
+  inside the swap. Those pools only count for the cap above: one deeper than the pool measured
+  makes a pass a warning.
 - Inspector's trade simulation (check 10) can still be told from a real trade. S and R are fresh
   random addresses and the call carries the network's gas price, but: `tx.origin` (S) has code, which
   a wallet's address doesn't; S and R are addresses the token has never seen, and R is no router it

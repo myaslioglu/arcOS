@@ -231,7 +231,8 @@ function skipCause(attempt: Extract<TradeAttempt, { kind: "ran" }>): SkipCause {
 
 /**
  * What `simulateTrade` found. `skipped` are the deeper pools tried first, in order, whose buy couldn't trade
- * (`buyDidNotTrade`): this attempt is against the next one.
+ * (`buyDidNotTrade`): this attempt is against the next one. `untriedDeeper` are the pools of the whole scan, whatever they
+ * trade against and hooked or not, that are deeper than the pool measured and were never tried.
  */
 export type TradeRun = { kind: "no-pool" } | (TradeAttempt & { skipped?: SkippedPool[]; untriedDeeper?: Pool[] });
 
@@ -263,11 +264,12 @@ export async function simulateTrade(reader: ChainReader, token: Address, scan: P
     skipped.push({ pool: first.pool, amount: first.amount, cause, tokenMayHaveCaused: cause !== "pool-paid-nothing" });
     first = await roundTrip(reader, token, next, gasPrice);
   }
-  // After moving on, the pools deeper than the one measured that were never tried (not liquid, or past the cap): a pool
-  // left out that way could be where the token's real trading is, so it caps the finding as a refused buy does.
+  // Every pool the scan found that is deeper than the one measured and wasn't tried: a hooked v4 pool, a pool against
+  // another quote (EURC, its depth compared as about USD: every depth is in the quote's 6-decimal units), one that isn't
+  // liquid, or one past the cap. The token's real trading could be there, so it caps the finding as a refused buy does.
   const measured = first.pool;
   const tried = new Set<Pool>([...skipped.map((s) => s.pool), measured]);
-  const untriedDeeper = skipped.length > 0 ? all.filter((p) => !tried.has(p) && p.depth > measured.depth) : [];
+  const untriedDeeper = scan.pools.filter((p) => !tried.has(p) && p.depth > measured.depth);
   const extra = { ...(skipped.length > 0 ? { skipped } : {}), ...(untriedDeeper.length > 0 ? { untriedDeeper } : {}) };
   const run: TradeRun = { ...first, ...extra };
   if (first.kind !== "ran" || first.result.status !== STATUS.sellReverted || !poolCanRefuseSell(first.pool)) return run;

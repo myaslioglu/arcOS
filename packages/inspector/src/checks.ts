@@ -955,8 +955,9 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
   if (!poolCanRefuseSell(pool)) {
     return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${VENUE[pool.version]} went through. ${capitalized(SOLD_BACK_REVERTED)}.`, at);
   }
-  const deepestPool = run.skipped?.length ? `the deepest pool it could be bought from (${poolName(pool)})` : `its deepest pool (${poolName(pool)})`;
-  const warnTitle = run.skipped?.length ? "Can't be sold into the deepest pool it could be bought from" : "Can't be sold into its deepest pool";
+  const label = run.skipped?.length ? "the deepest pool it could be bought from" : deepestLabel(run);
+  const deepestPool = `${label} (${poolName(pool)})`;
+  const warnTitle = `Can't be sold into ${label}`;
   const first = `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool)}`;
   const second = run.second;
   const fail = (detail: string, title = "Can't be sold") => finding("trade", "fail", title, detail, at);
@@ -1007,8 +1008,10 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
  * A pool whose buy can't trade (it reverted, took nothing, or paid nothing out; depth alone can be faked) is passed over for
  * the next deepest liquid pool, up to `MAX_TRADE_POOLS`, and the finding names the pools passed over and why. Only a pool
  * that paid nothing out (which the token can't cause) is passed over freely; any other cause (a revert, a buy that took no
- * USDC though the pool paid out) may be the token refusing or undoing a buy it can tell is simulated, and so does a deeper
- * pool never tried: either caps the finding at `warn`, never `pass` (a `fail` stays one). Only what was measured is evidence:
+ * USDC though the pool paid out) may be the token refusing or undoing a buy it can tell is simulated. So does any pool of
+ * the scan deeper than the one measured that wasn't traded against (hooked, against EURC, not liquid, or past the cap),
+ * skipped or not: either caps the finding at `warn`, never `pass` (a `fail` stays one), and is named. Only what was measured
+ * is evidence:
  * - no pool tried could trade, or either leg ran out of the gas it was given: `unknown`, since neither says anything about
  *   selling;
  * - the buy went through and the sell reverted: `fail`, "Can't be sold", unless the pool can refuse a sell on its own account
@@ -1026,38 +1029,57 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   if (scan === null) return finding("trade", "unknown", TRADE_UNKNOWN, "The network didn't answer the pool lookup.");
   const run = await simulateTrade(input.reader, input.address, scan);
   const f = tradeFinding(input, scan, run);
-  if (run.kind === "no-pool" || !run.skipped?.length) return f;
-  const { skipped } = run;
+  if (run.kind === "no-pool") return f;
+  const skipped = run.skipped ?? [];
   const untried = run.untriedDeeper ?? [];
-  const passedOver = listWith("and", skipped.map((s) => `${poolName(s.pool)} (${SKIP_NOTE[s.cause]})`));
+  if (skipped.length === 0 && untried.length === 0) return f;
+  const deepest = deepestLabel(run);
   const capping = skipped.find((s) => s.tokenMayHaveCaused);
+  const untriedNote =
+    untried.length > 0
+      ? ` ${capitalized(listWith("and", untried.map(untriedName)))}, deeper than the pool measured, ${untried.length === 1 ? "was" : "were"} never traded against: Inspector trades only against USDC pools, without a hook first.`
+      : "";
   // A buy the token may have refused or undone (one it can tell is simulated, from a buyer with code, say), or a deeper
-  // pool never tried, leaves a round trip measured elsewhere short of a pass: it is capped at a warning.
+  // pool never traded against, where the token's real trading could be, leaves a round trip measured elsewhere short of a
+  // pass: it is capped at a warning.
   if ((capping || untried.length > 0) && f.status === "pass") {
-    const where = (p: Pool) => (p === skipped[0]!.pool ? `its deepest pool (${poolName(p)})` : `a deeper pool (${poolName(p)})`);
+    const where = (p: Pool) => (p === skipped[0]?.pool ? `${deepest} (${poolName(p)})` : `a deeper pool (${poolName(p)})`);
     const title = capping
-      ? `Buying in ${capping.pool === skipped[0]!.pool ? "its deepest pool" : "a deeper pool"} ${SKIP_TITLE[capping.cause]}`
-      : "A deeper pool wasn't tried";
+      ? `Buying in ${capping.pool === skipped[0]!.pool ? deepest : "a deeper pool"} ${SKIP_TITLE[capping.cause]}`
+      : "A deeper pool wasn't traded against";
     const lead = capping
-      ? `Buying with ${usdcAmount(capping.amount)} USDC in ${where(capping.pool)} ${SKIP_VERB[capping.cause]}`
-      : `Buying in ${listWith("and", skipped.map((s) => where(s.pool)))} couldn't trade (${listWith("and", skipped.map((s) => SKIP_NOTE[s.cause]))})`;
-    const untriedNote = untried.length > 0 ? ` ${listWith("and", untried.map(poolName))}, deeper than that, ${untried.length === 1 ? "wasn't" : "weren't"} tried.` : "";
-    return {
-      ...f,
-      status: "warn",
-      title,
-      detail: `${lead}; a round trip on ${poolName(run.pool)} went through. ${f.detail}${untriedNote} A token can refuse or undo a buy it can tell is simulated, so a round trip measured elsewhere after that is never a pass.`,
-    };
+      ? `Buying with ${usdcAmount(capping.amount)} USDC in ${where(capping.pool)} ${SKIP_VERB[capping.cause]}; a round trip on ${poolName(run.pool)} went through. `
+      : skipped.length > 0
+        ? `Buying in ${listWith("and", skipped.map((s) => where(s.pool)))} couldn't trade (${listWith("and", skipped.map((s) => SKIP_NOTE[s.cause]))}); a round trip on ${poolName(run.pool)} went through. `
+        : "";
+    const why = capping
+      ? " A token can refuse or undo a buy it can tell is simulated, so a round trip measured elsewhere after that is never a pass."
+      : " The token's real trading may be in a pool that wasn't traded against, so this is never a pass.";
+    return { ...f, status: "warn", title, detail: `${lead}${f.detail}${untriedNote}${why}` };
   }
-  const deeper = `the deeper ${skipped.length === 1 ? "pool" : "pools"} ${passedOver}`;
-  const untriedNote = untried.length > 0 ? ` ${listWith("and", untried.map(poolName))}, deeper than the pool measured, ${untried.length === 1 ? "wasn't" : "weren't"} tried.` : "";
+  if (skipped.length === 0) return { ...f, detail: `${f.detail}${untriedNote}` };
+  const deeper = `the deeper ${skipped.length === 1 ? "pool" : "pools"} ${listWith("and", skipped.map((s) => `${poolName(s.pool)} (${SKIP_NOTE[s.cause]})`))}`;
   const note =
     run.kind === "ran" && buyDidNotTrade(run)
       ? ` Buying in ${deeper} couldn't trade either.`
       : run.kind === "ran"
-        ? ` Buying in ${deeper} couldn't trade, so this was measured on the next one.${untriedNote}`
+        ? ` Buying in ${deeper} couldn't trade, so this was measured on the next one.`
         : ` Buying in ${deeper} couldn't trade, and the next one wasn't measured either.`;
-  return { ...f, detail: `${f.detail}${note}` };
+  return { ...f, detail: `${f.detail}${note}${untriedNote}` };
+}
+
+/** A pool never traded against, with what it trades against when that isn't USDC: "Uniswap v3 0x1234…abcd (EURC)". */
+const untriedName = (p: Pool): string => (p.quote === "USDC" ? poolName(p) : `${poolName(p)} (${p.quote})`);
+
+/**
+ * What to call the first pool the trade check tried: "its deepest pool", unless the scan found a deeper one it doesn't
+ * trade against (hooked, or against EURC), when it is "its deepest USDC pool without a hook" (or "its deepest USDC pool"
+ * when that one has a hook itself).
+ */
+function deepestLabel(run: Exclude<TradeRun, { kind: "no-pool" }>): string {
+  const first = run.skipped?.[0]?.pool ?? run.pool;
+  if (!(run.untriedDeeper ?? []).some((p) => p.depth > first.depth)) return "its deepest pool";
+  return first.version === "v4" && first.key && BigInt(first.key.hooks) !== 0n ? "its deepest USDC pool" : "its deepest USDC pool without a hook";
 }
 
 /** Why a pool was passed over, as a note ("its buy reverted") and in a title ("Buying in its deepest pool reverted"). */

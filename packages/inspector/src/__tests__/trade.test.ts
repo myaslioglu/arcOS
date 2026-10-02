@@ -402,8 +402,8 @@ describe("trade simulation: a deepest pool that can't trade", () => {
       lower(trade.pool) === lower(POOL) ? withStatus(0, { spent: 0n, paidOut: 0n, bought: 0n }) : roundTrip(TEN, 9_940_000n);
     const { f, chain } = await run(sim, decoyV3, quotesNothing, shallow);
     expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL, UNISWAP_V4.poolManager]);
-    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't tried" });
-    expect(f.detail).toMatch(/Uniswap v2 0x4444…4444, deeper than that, wasn't tried\./);
+    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't traded against" });
+    expect(f.detail).toMatch(/Uniswap v2 0x4444…4444, deeper than the pool measured, was never traded against/);
   });
 
   it("never measures a pool discovery didn't find liquid in place of the deepest: a deployer could seed one with dust", async () => {
@@ -414,11 +414,46 @@ describe("trade simulation: a deepest pool that can't trade", () => {
     expect(f.status).toBe("unknown");
   });
 
-  it("never trades against a v2 pair whose reserves can't serve a buy (USDC synced in, no tokens)", async () => {
+  it("never trades against a v2 pair whose reserves hold no tokens (USDC synced in), but counts it as deeper: a warning", async () => {
+    // The donation costs an honest token its pass; that errs on the safe side.
     const synced = v2Pool(90_000n * USDC_UNITS, { liquid: false, tradable: false });
     const { f, chain } = await run(roundTrip(TEN, 9_940_000n), synced, v3Pool(5_000n * USDC_UNITS, 3000));
     expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL]);
-    expect(f.status).toBe("pass");
+    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't traded against" });
+  });
+
+  describe("a deeper pool the check doesn't trade against, next to a 27-USDC v2 pair", () => {
+    const smallPair = v2Pool(27n * USDC_UNITS);
+    const passes = roundTrip(27_000n, 26_838n);
+
+    it("warns, naming it, when the deeper pool is a hooked v4 USDC pool", async () => {
+      const hookedPool = v4Pool(50_000n * USDC_UNITS, USDC, 3000, 60, HOOK);
+      const { f, chain } = await run(passes, smallPair, hookedPool);
+      expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR]);
+      expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't traded against" });
+      expect(f.detail).toMatch(/Hooked Uniswap v4 pool 0x[0-9a-f]{4}…[0-9a-f]{4}, deeper than the pool measured, was never traded against/);
+    });
+
+    it("warns, naming it, when the deeper pool trades against EURC", async () => {
+      const eurc: Pool = { address: EURC_POOL, version: "v3", quote: "EURC", depth: 20_000n * USDC_UNITS, liquid: true, fee: 3000 };
+      const { f, chain } = await run(passes, smallPair, eurc);
+      expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR]);
+      expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't traded against" });
+      expect(f.detail).toMatch(/Uniswap v3 0x8888…8888 \(EURC\), deeper than the pool measured, was never traded against/);
+    });
+
+    it("still passes when every other pool is shallower than the one measured", async () => {
+      const eurc: Pool = { address: EURC_POOL, version: "v3", quote: "EURC", depth: 10n * USDC_UNITS, liquid: false, fee: 3000 };
+      expect((await run(passes, smallPair, eurc)).f.status).toBe("pass");
+    });
+
+    it("says its deepest USDC pool without a hook when the sell reverts there and a deeper hooked pool exists", async () => {
+      const v3 = v3Pool(5_000n * USDC_UNITS, 3000);
+      const hookedPool = v4Pool(50_000n * USDC_UNITS, USDC, 3000, 60, HOOK);
+      const { f } = await run(withStatus(3), v3, hookedPool);
+      expect(f.status).toBe("fail");
+      expect(f.detail).toMatch(/from its deepest USDC pool without a hook \(Uniswap v3 0x7777…7777\)/);
+    });
   });
 
   it("doesn't say the next pool was measured when its call never ran", async () => {
