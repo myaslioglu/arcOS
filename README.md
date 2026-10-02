@@ -66,9 +66,12 @@ Revoke's list (`/api/approvals`) reads approval events through the same key; wit
 public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
-build`. `npm run test:emulator -w @arcos/data` runs the Firestore suite against the local emulator;
-it needs Java 21 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase
-CLI in `tools/firebase`, which the root install leaves out: install it once with
+build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
+and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the
+network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
+test:emulator -w @arcos/data` runs the Firestore suite against the local emulator; it needs Java 21
+or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase CLI in
+`tools/firebase`, which the root install leaves out: install it once with
 `npm ci --ignore-scripts --prefix tools/firebase`.
 
 The end-to-end smoke suite (`e2e/`, Playwright in Chromium) runs against a production build: `NEXT_PUBLIC_ARC_NETWORK=mainnet npm run build` (CI builds with
@@ -156,9 +159,18 @@ but does have privileged functions, both the ownership and privileges findings r
   clone is not followed.
 - Privileged functions are recognised by selector and by verified-ABI name; one whose name and
   signature appear in neither list isn't detected.
+- A Uniswap v4 pool counts as liquid when the v4 quoter can pay out 1,000 units of the quote
+  currency, USDC or EURC, from it, each quote within a gas limit of its own. It counts as thin only
+  when the quoter says the pool itself hasn't enough liquidity; a quote that fails any other way reads
+  "unknown". A pool with a hook reads "unknown" too, until a trade simulation can judge it: the hook
+  runs inside the swap, so it could make a quote say either. Next to that, Inspector shows what
+  is "in range": what the pool's active liquidity holds between the current price and the edge of its
+  current tick range. That is an exact figure for that range and no more, so it is often far less than
+  what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts as liquid from 1,000 units of
+  USDC or EURC in the pool.
 - Holder figures are only as complete as the explorer's index, and exclude burn addresses, known
-  pools and lock contracts. A list the explorer won't confirm is complete gives a floor, not a
-  concentration.
+  pools (Uniswap v4's PoolManager among them) and lock contracts. A list the explorer won't confirm
+  is complete gives a floor, not a concentration.
 - The name and symbol are chosen by whoever deployed the contract and can imitate another token.
 - A token made by this network's 4rc.OS TokenFactory passes source verification through the factory:
   `isArcosToken(token)` is on-chain evidence that its code is one of the factory's four fixed
@@ -170,8 +182,10 @@ but does have privileged functions, both the ownership and privileges findings r
 - The mainnet block explorer's API answers non-browser clients with a Cloudflare challenge, so a
   server-side inspection (the proof page, the badge) can resolve fewer checks there than the same
   inspection run in a browser tab.
-- Liquidity and lock checks cover Uniswap v2 and v3 pools against USDC and EURC only. Uniswap v4
-  and Aerodrome aren't scanned yet.
+- Liquidity checks read Uniswap v2, v3 and v4 and Aerodrome pools against USDC and EURC (testnet has
+  Uniswap v4 only). A v4 pool is found by probing the standard hookless pool keys, at fees of 0.01%,
+  0.05%, 0.25%, 0.3% and 1% against USDC, EURC and native USDC, so a pool with a hook or an unusual
+  fee can be missed until an index lists it.
 - Drop approves exactly the total a run needs, but a run that stops early (a refused signature, an
   unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until a
   later run uses it or you revoke it in Revoke.
@@ -184,8 +198,9 @@ but does have privileged functions, both the ownership and privileges findings r
   not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
-- Liquidity lock detection only reads Uniswap v2 LP token balances; a v3 position's lock needs an
-  indexer, which arrives with Radar.
+- Liquidity lock detection only reads Uniswap v2 LP token balances. Positions in v3, v4 and Aerodrome
+  pools can't be read without an index yet, so a token with only those pools reads "unknown" for it,
+  and so does a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
   Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
   the name.

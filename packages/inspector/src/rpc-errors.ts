@@ -85,3 +85,33 @@ export function isDecodeFailure(e: unknown): boolean {
   const links = chain(e);
   return links.some((l) => named(l, "ContractFunctionExecutionError")) && !links.some((l) => named(l, "CallExecutionError")) && !endpointFailed(links);
 }
+
+/** Arc's code and text for an eth_call that ran out of gas mid-execution (not -32000 "intrinsic gas too low"). */
+const OUT_OF_GAS_CODE = -32003;
+const OUT_OF_GAS_TEXT = /^out of gas/i;
+
+/**
+ * The node said the call ran out of gas during execution: Arc's -32003 "out of gas: gas required exceeds: N", anywhere in
+ * viem's cause chain, with no HTTP failure or timeout in it. Not a revert, and not read as one by `isRevert`: it only means
+ * "the node answered" for a call that set its own gas limit (a v4 quote), where the same call gets the same answer anywhere.
+ */
+export function isOutOfGas(e: unknown): boolean {
+  const links = chain(e);
+  return !endpointFailed(links) && links.some((l) => l.code === OUT_OF_GAS_CODE && OUT_OF_GAS_TEXT.test(nodeText(l)));
+}
+
+/**
+ * What a reverted call reverted with: the error selector and its arguments, from whichever link of viem's cause chain holds
+ * them (the node's `data`, or a `ContractFunctionRevertedError`'s `raw`). `null` when there is none, or the node sent a bare
+ * `0x`. Only meaningful for an error that `isRevert`.
+ */
+export function revertPayload(e: unknown): `0x${string}` | null {
+  const hex = (v: unknown): `0x${string}` | null => (typeof v === "string" && /^0x([0-9a-f]{2})+$/i.test(v) ? (v as `0x${string}`) : null);
+  for (const l of chain(e)) {
+    const found =
+      (named(l, "ContractFunctionRevertedError") ? hex(l.raw) : null) ??
+      (typeof l.code === "number" ? hex(l.data) ?? (typeof l.data === "object" && l.data !== null ? hex((l.data as { data?: unknown }).data) : null) : null);
+    if (found) return found;
+  }
+  return null;
+}
