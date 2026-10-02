@@ -1,11 +1,15 @@
 import { SignJWT, jwtVerify } from "jose";
 
-// The session cookie of design 1.4: `arcos_session`, an HS256 JWT { sub: lowercase address, aud: site host, iat,
-// exp: +7 days }, keyed with ARCOS_SESSION_SECRET. It also carries `ver`, the user's session version when it was
+// The session cookie of design 1.4: `__Host-arcos_session`, an HS256 JWT { sub: lowercase address, aud: site host,
+// iat, exp: +7 days }, keyed with ARCOS_SESSION_SECRET. It also carries `ver`, the user's session version when it was
 // signed (users/{address}.sessionVersion), so signing out ends every cookie issued before, and a `jti`, so each
 // sign-in gets a new token. Pure: the secret and the clock are passed in, and nothing here logs.
 
-export const SESSION_COOKIE = "arcos_session";
+/**
+ * `__Host-` makes the browser refuse the cookie unless it is Secure, Path=/ and without a Domain, so no sibling
+ * subdomain can plant or overwrite a session. Both the set and the clear carry those attributes.
+ */
+export const SESSION_COOKIE = "__Host-arcos_session";
 export const SESSION_TTL_S = 7 * 24 * 60 * 60;
 /** The secret is 32 random bytes or more (design 1.8). A shorter one turns sign-in off rather than weakening it. */
 export const MIN_SECRET_BYTES = 32;

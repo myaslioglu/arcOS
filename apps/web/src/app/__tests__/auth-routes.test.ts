@@ -130,7 +130,7 @@ const postJson = (path: string, body: unknown, init: { origin?: string | null; c
     headers: { "content-type": init.contentType ?? "application/json" },
   });
 
-const cookieOf = (res: Response) => setCookieFor(res, "arcos_session")?.split(";")[0] ?? null;
+const cookieOf = (res: Response) => setCookieFor(res, "__Host-arcos_session")?.split(";")[0] ?? null;
 
 async function signIn(account = privateKeyToAccount(generatePrivateKey()), messageNow = now) {
   const nonce = await getNonce();
@@ -228,8 +228,8 @@ describe("POST /api/auth/verify", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ address: account.address.toLowerCase() });
-    const setCookie = setCookieFor(res, "arcos_session")!;
-    expect(setCookie).toMatch(/^arcos_session=[\w-]+\.[\w-]+\.[\w-]+; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax$/);
+    const setCookie = setCookieFor(res, "__Host-arcos_session")!;
+    expect(setCookie).toMatch(/^__Host-arcos_session=[\w-]+\.[\w-]+\.[\w-]+; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax$/);
     expect(memory.nonces.has(nonce)).toBe(false);
     expect(memory.users.has(account.address.toLowerCase())).toBe(true);
   });
@@ -239,7 +239,7 @@ describe("POST /api/auth/verify", () => {
     expect(res.status).toBe(200);
     const again = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
     expect(again.status).toBe(401);
-    expect(setCookieFor(again, "arcos_session")).toBeNull();
+    expect(setCookieFor(again, "__Host-arcos_session")).toBeNull();
   });
 
   it("refuses a nonce the server never issued", async () => {
@@ -271,7 +271,7 @@ describe("POST /api/auth/verify", () => {
     const message = buildSignInMessage({ address: account.address, chainId: CHAIN_ID, nonce, site: siteIdentity(SITE)!, now });
     const forged = await verifyPOST(postJson("/api/auth/verify", { message, signature: await other.signMessage({ message }) }));
     expect(forged.status).toBe(401);
-    expect(setCookieFor(forged, "arcos_session")).toBeNull();
+    expect(setCookieFor(forged, "__Host-arcos_session")).toBeNull();
     const real = await verifyPOST(postJson("/api/auth/verify", { message, signature: await account.signMessage({ message }) }));
     expect(real.status).toBe(200);
   });
@@ -402,7 +402,7 @@ describe("the nonce's pre-auth cookie", () => {
     const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ address: account.address.toLowerCase() });
-    expect(setCookieFor(res, "arcos_session")).toMatch(/^arcos_session=[\w-]+\.[\w-]+\.[\w-]+; /);
+    expect(setCookieFor(res, "__Host-arcos_session")).toMatch(/^__Host-arcos_session=[\w-]+\.[\w-]+\.[\w-]+; /);
     expect(setCookieFor(res, NONCE_COOKIE)).toBe(CLEARED);
   });
 
@@ -414,7 +414,7 @@ describe("the nonce's pre-auth cookie", () => {
     jar = null;
     const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
     expect(res.status).toBe(401);
-    expect(setCookieFor(res, "arcos_session")).toBeNull();
+    expect(setCookieFor(res, "__Host-arcos_session")).toBeNull();
     expect(setCookieFor(res, NONCE_COOKIE)).toBe(CLEARED);
     expect(verifySignature).not.toHaveBeenCalled();
     expect(memory.nonces.has(nonce)).toBe(true);
@@ -428,7 +428,7 @@ describe("the nonce's pre-auth cookie", () => {
     const { message, signature } = await signed(victims);
     const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
     expect(res.status).toBe(401);
-    expect(setCookieFor(res, "arcos_session")).toBeNull();
+    expect(setCookieFor(res, "__Host-arcos_session")).toBeNull();
     expect(verifySignature).not.toHaveBeenCalled();
     expect(memory.nonces.has(victims)).toBe(true);
   });
@@ -511,7 +511,7 @@ describe("the nonce check before the signature", () => {
     memory.nonces.delete(nonce);
     const res = await verifyPOST(postJson("/api/auth/verify", { message, signature }));
     expect(res.status).toBe(401);
-    expect(setCookieFor(res, "arcos_session")).toBeNull();
+    expect(setCookieFor(res, "__Host-arcos_session")).toBeNull();
   });
 });
 
@@ -530,7 +530,7 @@ describe("GET /api/auth/me", () => {
 
   it("answers 401 without a cookie, with a forged one, or after seven days", async () => {
     expect((await meGET(request("/api/auth/me", { origin: null }))).status).toBe(401);
-    expect((await meGET(request("/api/auth/me", { origin: null, cookie: "arcos_session=a.b.c" }))).status).toBe(401);
+    expect((await meGET(request("/api/auth/me", { origin: null, cookie: "__Host-arcos_session=a.b.c" }))).status).toBe(401);
     const { res } = await signIn();
     now = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
     expect((await meGET(request("/api/auth/me", { origin: null, cookie: cookieOf(res)! }))).status).toBe(401);
@@ -555,7 +555,7 @@ describe("POST /api/auth/logout", () => {
     const cookie = cookieOf(res)!;
     const out = await logoutPOST(request("/api/auth/logout", { method: "POST", cookie }));
     expect(out.status).toBe(204);
-    expect(out.headers.get("set-cookie")).toBe("arcos_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+    expect(out.headers.get("set-cookie")).toBe("__Host-arcos_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
     // A copy of the cookie kept by someone else is dead too.
     expect((await meGET(request("/api/auth/me", { origin: null, cookie }))).status).toBe(401);
     expect(await getSession(request("/api/auth/me", { cookie }), deps)).toBeNull();
@@ -584,7 +584,7 @@ describe("POST /api/auth/logout", () => {
   it("answers 401 without a session, and still clears the cookie", async () => {
     const out = await logoutPOST(request("/api/auth/logout", { method: "POST" }));
     expect(out.status).toBe(401);
-    expect(out.headers.get("set-cookie")).toMatch(/^arcos_session=; /);
+    expect(out.headers.get("set-cookie")).toMatch(/^__Host-arcos_session=; /);
   });
 });
 

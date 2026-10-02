@@ -129,28 +129,44 @@ describe("signSession and readSession", () => {
 });
 
 describe("the session cookie", () => {
-  it("is arcos_session, HttpOnly, Secure, SameSite=Lax, on Path=/, for 7 days", () => {
-    expect(SESSION_COOKIE).toBe("arcos_session");
-    expect(sessionCookie("t.o.k")).toBe("arcos_session=t.o.k; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax");
+  it("is __Host-arcos_session, HttpOnly, Secure, SameSite=Lax, on Path=/, for 7 days", () => {
+    expect(SESSION_COOKIE).toBe("__Host-arcos_session");
+    expect(sessionCookie("t.o.k")).toBe(
+      "__Host-arcos_session=t.o.k; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax",
+    );
   });
 
   it("is cleared with the same attributes and Max-Age=0", () => {
-    expect(clearedSessionCookie()).toBe("arcos_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+    expect(clearedSessionCookie()).toBe("__Host-arcos_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+  });
+
+  // A browser drops a __Host- cookie unless it is Secure, on Path=/ and has no Domain, on the set and the clear alike.
+  it("meets the __Host- prefix rules when set and when cleared", () => {
+    for (const header of [sessionCookie("t.o.k"), clearedSessionCookie()]) {
+      const [pair, ...attributes] = header.split("; ");
+      expect(pair!.startsWith("__Host-")).toBe(true);
+      expect(attributes).toContain("Secure");
+      expect(attributes).toContain("Path=/");
+      expect(attributes.filter((a) => a.toLowerCase().startsWith("domain"))).toEqual([]);
+      expect(attributes.filter((a) => a.toLowerCase().startsWith("path="))).toEqual(["Path=/"]);
+    }
   });
 
   it("is read from a Cookie header", () => {
-    expect(readSessionCookie("arcos_session=a.b.c")).toBe("a.b.c");
-    expect(readSessionCookie("theme=dark; arcos_session=a.b.c; other=1")).toBe("a.b.c");
-    expect(readSessionCookie("theme=dark;arcos_session=a.b.c")).toBe("a.b.c");
+    expect(readSessionCookie("__Host-arcos_session=a.b.c")).toBe("a.b.c");
+    expect(readSessionCookie("theme=dark; __Host-arcos_session=a.b.c; other=1")).toBe("a.b.c");
+    expect(readSessionCookie("theme=dark;__Host-arcos_session=a.b.c")).toBe("a.b.c");
   });
 
-  it("reads nothing when it is missing, empty, or sent twice", () => {
+  it("reads nothing when it is missing, empty, unprefixed, or sent twice", () => {
     expect(readSessionCookie(null)).toBeNull();
     expect(readSessionCookie("")).toBeNull();
     expect(readSessionCookie("theme=dark")).toBeNull();
-    expect(readSessionCookie("arcos_session=")).toBeNull();
-    expect(readSessionCookie("xarcos_session=a.b.c")).toBeNull();
-    // Two cookies of the same name (one could come from a sibling subdomain): neither is trusted.
-    expect(readSessionCookie("arcos_session=a.b.c; arcos_session=d.e.f")).toBeNull();
+    expect(readSessionCookie("__Host-arcos_session=")).toBeNull();
+    expect(readSessionCookie("x__Host-arcos_session=a.b.c")).toBeNull();
+    // The unprefixed name carries no __Host- guarantee (any subdomain could set it), so it is not a session.
+    expect(readSessionCookie("arcos_session=a.b.c")).toBeNull();
+    // Two cookies of the same name: neither is trusted.
+    expect(readSessionCookie("__Host-arcos_session=a.b.c; __Host-arcos_session=d.e.f")).toBeNull();
   });
 });

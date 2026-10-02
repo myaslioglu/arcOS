@@ -59,11 +59,13 @@ Signing in is free and sends no transaction: the wallet signs an EIP-4361 messag
   and never puts the endpoints the Inspector, `/api/pulse`, `/badge` and `/t` share on cooldown. Before the check,
   verify reads, without consuming it, that the nonce is stored and live, so a nonce that can't sign in never reaches
   the RPC.
-- **Session.** The cookie `arcos_session` is an HS256 JWT `{ sub: address, aud: site host, iat, exp: +7 days }`, sent
-  `HttpOnly; Secure; SameSite=Lax; Path=/`, signed with `ARCOS_SESSION_SECRET` (a Secret Manager secret of 32 bytes or
-  more). Each sign-in issues a new token. It also carries the wallet's session version: signing out moves the version
-  on, so every earlier cookie of that wallet, anywhere, stops counting. Rotating the secret signs everyone out. Without
-  the secret, sign-in answers 503; there is no fallback key.
+- **Session.** The cookie `__Host-arcos_session` is an HS256 JWT `{ sub: address, aud: site host, iat, exp: +7 days }`,
+  signed with `ARCOS_SESSION_SECRET` (a Secret Manager secret of 32 bytes or more) and sent
+  `HttpOnly; Secure; SameSite=Lax; Path=/` with no `Domain`, as the `__Host-` prefix requires, so a sibling subdomain can
+  neither plant nor overwrite it. A request that carries it twice is treated as signed out. Each sign-in issues a new
+  token. It also carries the wallet's session version: signing out moves the version on, so every earlier cookie of
+  that wallet, anywhere, stops counting. Rotating the secret signs everyone out. Without the secret, sign-in answers
+  503; there is no fallback key.
 - **CSRF.** `POST /api/auth/verify` and `POST /api/auth/logout` require an `Origin` equal to the site's own; the verify
   body must be `application/json`. Every auth route is rate-limited per client and answers `no-store`.
 - **Logs.** No address, message, signature, cookie or secret reaches a log line; a failure logs the name of the step.
