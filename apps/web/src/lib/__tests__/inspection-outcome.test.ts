@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NotAContract } from "@arcos/inspector";
-import { InspectionTimeout } from "../deadline";
+import { InspectionTimeout } from "@arcos/inspector";
 import { isBusy, isNotAContract } from "../inspection-outcome";
 
 /** The same error, as another bundled copy of its module would throw it: a different class with the same name. */

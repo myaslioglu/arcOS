@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeErrorResult, parseAbi } from "viem";
 import { CHAINS } from "@arcos/chain";
-import { CallReverted, inspect, viemReader } from "@arcos/inspector";
+import { inspect } from "../inspect";
+import { viemReader } from "../reader";
+import { CallReverted } from "../types";
 import { inspectionClient } from "../inspection-client";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";

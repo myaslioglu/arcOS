@@ -114,7 +114,7 @@ sends its own usage and error reports to Circle.
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
 does: the server's two clients (`serverRpcClient` and `approvalsRpcClient` in `apps/web/src/lib/server-rpc.ts`, both
-built by `inspectionClient` in `apps/web/src/lib/inspection-client.ts`, each with its own endpoint-health record) —
+built by `inspectionClient` in `packages/inspector/src/inspection-client.ts`, each with its own endpoint-health record) —
 `serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and `/api/pulse`; `approvalsRpcClient` behind
 `/api/approvals` alone, which reads the allowance, symbol, name and decimals of whatever token contracts an address
 has approved — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
