@@ -59,11 +59,12 @@ the Inspector reads that as "no indexed pools".
    back if it is still this run's.
 
 Once the window phase (steps 2 to 4) is over, steps 6 and 7 run whatever fails in step 5, and a failure in step 6
-doesn't stop step 7; the error's name is in the run's log line (`error`). Before that, they don't: a run that can't read
-the head, halts, or fails to write a window's pools, tokens or cursor ends there, with no feed update and no
-`lastRunAt`. It has spent no explorer call yet, so the day's count loses nothing, and the next run reads the window
-again. Such a run gives the lease back on its way out (best effort), and a run that died holding it leaves a lease that
-expires on its own.
+doesn't stop step 7; the error's name is in the run's log line (`error`), with its `code` when it has one, and, for a
+Firestore error, its `details` with URLs and addresses masked, cut to 200 characters (never the message, which could
+carry a node's URL). Before that, they don't: a run that can't read the head, halts, or fails to write a window's pools,
+tokens or cursor ends there, with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's
+count loses nothing, and the next run reads the window again. Such a run gives the lease back on its way out (best
+effort), and a run that died holding it leaves a lease that expires on its own.
 
 The indexer records pools, not their depth: `pools.depthUsdc` and `pools.sampledAt` stay `null` in R1. A token's best
 pool and its depth come from its inspection (`tokens.bestPool`).
@@ -136,9 +137,13 @@ again.
 
 ## Setting it up
 
-Once, before `ARCOS_FUNCTIONS_READY` is set. The deployer is `arcos-deployer@arcos-c80cf.iam.gserviceaccount.com`
-([DEPLOYING.md](DEPLOYING.md)). Its roles below come from what the pinned Firebase CLI (`tools/firebase`) calls when it
-deploys a scheduled 2nd-gen function; the files named are under `tools/firebase/node_modules/firebase-tools/lib`.
+Once, before the first functions deploy. The deploy workflow refuses `targets: functions` until the repository
+variable `ARCOS_FUNCTIONS_READY` is `true`, so the variable is set (step 7) before that deploy (step 8). The deployer is
+`arcos-deployer@arcos-c80cf.iam.gserviceaccount.com` ([DEPLOYING.md](DEPLOYING.md)). Its roles below come from what the
+pinned Firebase CLI (`tools/firebase`) calls when it deploys a scheduled 2nd-gen function, and from what the first
+functions deploy (2026-10-02) was refused; the files named are under `tools/firebase/node_modules/firebase-tools/lib`.
+The deployer doesn't hold `roles/editor`: the owner granted it for a while to get the first deploy through, then
+removed it, and every later deploy must work with the roles below alone.
 
 1. The database `arcos` exists, with its rules and indexes deployed once (the Firestore foundation's steps).
 2. A budget alert on the billing account: `arcos` pays from its first operation.
@@ -147,6 +152,13 @@ deploys a scheduled 2nd-gen function; the files named are under `tools/firebase/
      `resource.name=="projects/arcos-c80cf/databases/arcos"`, so it reaches no other database;
    - `roles/logging.logWriter` on the project;
    - `roles/secretmanager.secretAccessor` on the secret `BLOCKSCOUT_API_KEY` (a binding on the secret, not the project).
+
+   To see the last one (it should list `arcos-jobs@` under `roles/secretmanager.secretAccessor`):
+
+   ```bash
+   gcloud secrets get-iam-policy BLOCKSCOUT_API_KEY --project arcos-c80cf
+   ```
+
 4. The APIs, enabled by the owner. Before every functions deploy the CLI checks each API it needs and enables one that
    is off (`deploy/functions/prepare.js`); the deployer holds only `roles/serviceusage.serviceUsageConsumer`, which can
    check an API but not enable one, so a missing API stops the deploy:
@@ -161,73 +173,143 @@ deploys a scheduled 2nd-gen function; the files named are under `tools/firebase/
    - `roles/cloudfunctions.developer` and `roles/cloudscheduler.admin` on the project: the function and its Scheduler
      job;
    - `roles/iam.serviceAccountUser` on `arcos-jobs@` only: the function and the job run as it;
-   - a custom role holding `secretmanager.versions.get` and `secretmanager.secrets.getIamPolicy`, bound on the secret
-     `BLOCKSCOUT_API_KEY` only. The CLI resolves the secret's latest version before every deploy
-     (`deploy/functions/validate.js`, `validateSecretVersions`: `versions.get`), and on the first deploy, when
-     `arcos-jobs@` is new to the secret, it reads the secret's IAM policy to make sure that account can read it
-     (`deploy/functions/ensure.js` `secretsAccessDelta`, lines 90-108; `release/fabricator.js` lines 158-164;
-     `gcp/secretManager.js` lines 224-244). `roles/secretmanager.viewer` has no `getIamPolicy`, so it isn't enough.
-     The CLI writes the policy (`setIamPolicy`) only when the `secretAccessor` binding of step 3 is missing; the
-     deployer can't, so step 3 comes first.
+   - `roles/iam.serviceAccountUser` on the App Engine default account `arcos-c80cf@appspot.gserviceaccount.com` only.
+     Before any functions deploy, `commands/deploy.js` runs `checkServiceAccountIam`
+     (`deploy/functions/checkIam.js`), which stops the deploy unless the deployer has `iam.serviceAccounts.actAs` on
+     that account, whatever account the function runs as. It is safe: the deploy job's manifest check (Deploying,
+     above) stops any manifest whose function runs as an account other than `arcos-jobs@`, so the workflow never
+     deploys a function that runs as the default account.
+
+     ```bash
+     gcloud iam service-accounts add-iam-policy-binding arcos-c80cf@appspot.gserviceaccount.com --project arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" --role roles/iam.serviceAccountUser
+     ```
+
+   - `roles/firebase.viewer` on the project. Every functions deploy reads the project's Admin SDK config
+     (`firebase.googleapis.com/v1beta1/projects/arcos-c80cf/adminSdkConfig`, `functionsConfig.js`
+     `getFirebaseConfig`, called from `deploy/functions/prepare.js`), which needs `firebase.projects.get`.
+
+     ```bash
+     gcloud projects add-iam-policy-binding arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" --role roles/firebase.viewer \
+       --condition=None
+     ```
+
+   - a custom role holding `secretmanager.secrets.get`, `secretmanager.versions.get` and
+     `secretmanager.secrets.getIamPolicy`, bound on the secret `BLOCKSCOUT_API_KEY` only. Before every deploy the CLI
+     reads the secret and its latest version (`deploy/functions/params.js` `ensureSecret`, through
+     `gcp/secretManager.js` `getSecretMetadata`: `secrets.get`, then `versions.get`; the first deploy was refused there
+     with a 403 on `GET secrets/BLOCKSCOUT_API_KEY`), and resolves the latest version again
+     (`deploy/functions/validate.js`, `validateSecretVersions`: `versions.get`). When `arcos-jobs@` is new to the
+     secret (the first deploy, or a function created again), it reads the secret's IAM policy to make sure that account
+     can read it (`deploy/functions/ensure.js` `secretsAccessDelta`; `release/fabricator.js` calling `ensure.js`
+     `grantSecretAccess`; `gcp/secretManager.js` `ensureServiceAgentRole`). `roles/secretmanager.viewer` has no
+     `getIamPolicy`, so it isn't enough. The CLI writes the policy (`setIamPolicy`) only when the `secretAccessor`
+     binding of step 3 is missing; the deployer can't, so step 3 comes first.
 
      ```bash
      gcloud iam roles create arcosSecretDeployReader --project arcos-c80cf \
        --title "arcos: resolve a function secret" \
-       --permissions secretmanager.versions.get,secretmanager.secrets.getIamPolicy --stage GA
+       --permissions secretmanager.secrets.get,secretmanager.versions.get,secretmanager.secrets.getIamPolicy --stage GA
      gcloud secrets add-iam-policy-binding BLOCKSCOUT_API_KEY --project arcos-c80cf \
        --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
        --role projects/arcos-c80cf/roles/arcosSecretDeployReader
      ```
 
+     Where the role already exists without `secrets.get`:
+
+     ```bash
+     gcloud iam roles update arcosSecretDeployReader --project arcos-c80cf --add-permissions secretmanager.secrets.get
+     ```
+
    - `roles/datastore.indexAdmin` on the project, with the same `arcos` condition as above: the indexes;
-   - a custom role holding `run.services.getIamPolicy` and `run.services.setIamPolicy`, bound on the project with an IAM
-     condition that limits it to the Cloud Run services whose names start with `arcos` (the function's service is
-     `arcosindexer`). The CLI lets `arcos-jobs@` invoke the function by writing the `roles/run.invoker` binding on that
-     service: a create sets the service's policy (`run.services.setIamPolicy`, `deploy/functions/release/fabricator.js`
-     around lines 507-513), and an update reads it and then sets it (`fabricator.js` around lines 625-628,
-     `gcp/run.js` lines 130-153). Not `roles/run.admin` on the project: that would let the deployer change every Cloud
-     Run service of the other services in the project.
+   - a custom role holding `run.services.getIamPolicy` and `run.services.setIamPolicy`, bound on the function's Cloud
+     Run service `arcosindexer` itself, never on the project. The CLI lets `arcos-jobs@` invoke the function through
+     the `roles/run.invoker` binding on that service: a create sets the service's policy (`run.services.setIamPolicy`,
+     `deploy/functions/release/fabricator.js` `createV2Function`, `gcp/run.js` `setInvokerCreate`), and an update reads
+     it and sets it only when the binding differs (`fabricator.js` `updateV2Function`, `gcp/run.js`
+     `setInvokerUpdate`). Not `roles/run.admin` on the project: that would let the deployer change every Cloud Run
+     service in the project. A project binding limited by an IAM condition on the service's name
+     (`resource.name.startsWith(".../services/arcos")`) was tried and did not match: the first deploy was refused with
+     "Failed to set the IAM Policy on the Service
+     projects/arcos-c80cf/locations/europe-west4/services/arcosindexer". The binding on the service replaces it.
 
      ```bash
      gcloud iam roles create arcosRunInvokerAdmin --project arcos-c80cf \
        --title "arcos: Cloud Run invoker bindings" \
        --permissions run.services.getIamPolicy,run.services.setIamPolicy --stage GA
-     gcloud projects add-iam-policy-binding arcos-c80cf \
+     ```
+
+     The service exists only once the function does, so its two bindings come after the first deploy (step 8).
+
+     Optional cleanup, for a setup that made the earlier conditional project binding of this role: remove it, if it
+     exists.
+
+     ```bash
+     gcloud projects remove-iam-policy-binding arcos-c80cf \
        --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
        --role projects/arcos-c80cf/roles/arcosRunInvokerAdmin \
        --condition 'expression=resource.name.startsWith("projects/arcos-c80cf/locations/europe-west4/services/arcos"),title=arcos Cloud Run services only'
      ```
 
-     The condition is verified on the first deploy. If it doesn't match, the deploy fails at "set invoker" with a
-     permission error on `run.services.setIamPolicy`, after the function itself was created: `arcosIndexer` then
-     exists with no `roles/run.invoker` binding, and every Scheduler call to it is refused (HTTP 403 in the job's
-     log), so nothing runs. The first thing to try is the project-number form of the name, which Cloud Run may use in
-     place of the project id:
-     `resource.name.startsWith("projects/<project number>/locations/europe-west4/services/arcos")` (the number is in
-     the console's project settings, or `gcloud projects describe arcos-c80cf --format='value(projectNumber)'`). If
-     neither form matches, read the name from the error or the audit log. Fix the condition and deploy again: with
-     `--only functions:arcos` the function is updated, never skipped as unchanged, and the update writes the binding.
-     Never drop the condition.
    - No Artifact Registry role (see step 6).
-6. The cleanup policy of the functions' image repository, set by the owner:
+6. The cleanup policy of the functions' image repository, set by the owner. In Cloud Shell, which has no
+   `tools/firebase`, run the CLI at the version pinned in `tools/firebase/package.json`:
 
    ```bash
-   tools/firebase/node_modules/.bin/firebase functions:artifacts:setpolicy --location europe-west4 --project arcos-c80cf
+   npx -y firebase-tools@15.32.0 functions:artifacts:setpolicy --location europe-west4 --project arcos-c80cf
    ```
+
+   npx pins the CLI's version but not its dependency tree (that is what `tools/firebase/package-lock.json` does for the
+   workflow), which is fine for a one-off command the owner runs.
 
    After a deploy, the CLI reads the `gcf-artifacts` repository of `europe-west4` to check its cleanup policy
    (`deploy/functions/release/index.js`, `setupArtifactCleanupPolicies`). The deployer can't read it, so that check
-   fails quietly and the deploy goes on; the policy is never set by the deploy. Without it, old images pile up and are
-   billed. The repository is created by the first functions build: if the command says it doesn't exist yet, run it
-   again right after the first deploy.
+   fails quietly and the deploy goes on; the policy is never set by the deploy. (A deployer that could read the
+   repository, as under `roles/editor`, would find no policy and, non-interactive, stop the deploy with an error.)
+   Without it, old images pile up and are billed. The repository is created by the first functions build: if the
+   command says it doesn't exist yet, run it again right after the first deploy.
 7. The repository variable `ARCOS_FUNCTIONS_READY` set to `true`.
+8. The first deploy, in two runs (Actions, Deploy, Run workflow, `targets: functions`):
+   1. The first run creates the function and then fails at "set invoker": the deployer has no binding on a service that
+      didn't exist a moment before. `arcosIndexer` then exists with no `roles/run.invoker` binding and no Scheduler job
+      (the CLI creates the job after the function's create step, which didn't finish), so nothing runs. Until the
+      owner adds the bindings below, a push to `main` also deploys the functions (after the sites) and fails at "set
+      invoker" the same way.
+   2. The owner adds the two bindings on the service: the deployer's custom role, and `roles/run.invoker` for
+      `arcos-jobs@`:
 
-To check on the first run: every 2nd-gen functions deploy asks Service Usage to generate the service identities of
-Pub/Sub and Eventarc (`services/<service>:generateServiceIdentity`, `deploy/functions/prepare.js` around lines 644-653),
-and the deploy stops with "Error generating the service identity" if that call is refused. Google's reference for the
-call names no IAM permission, only an OAuth scope, so whether `roles/serviceusage.serviceUsageConsumer` covers it is
-known only once it runs. If it doesn't, the error names the missing permission: grant that permission in a custom role,
-not `roles/serviceusage.serviceUsageAdmin`, which could enable any API.
+      ```bash
+      gcloud run services add-iam-policy-binding arcosindexer --region europe-west4 --project arcos-c80cf \
+        --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
+        --role projects/arcos-c80cf/roles/arcosRunInvokerAdmin
+      gcloud run services add-iam-policy-binding arcosindexer --region europe-west4 --project arcos-c80cf \
+        --member "serviceAccount:arcos-jobs@arcos-c80cf.iam.gserviceaccount.com" --role roles/run.invoker
+      ```
+
+   3. The second run completes: with `--only functions:arcos` the function is updated, never skipped as unchanged; the
+      update finds the invoker binding in place, keeps the service's other bindings, and creates the Scheduler job.
+
+   The pinned CLI allows no cleaner order: the service is created by the function's create, and the same step writes
+   its invoker binding with a policy that replaces the service's whole policy (`setInvokerCreate`), so no binding can be
+   placed ahead of it. If the function is ever deleted and created again, its service is new, and the same two runs
+   apply.
+
+The deploy log's warning "Couldn't find firebase-functions package in your source code" is expected: the deploy hands
+the CLI the built bundle without its `node_modules`, and Cloud Build installs the packages.
+
+To check on the next deploy, the first without `roles/editor`:
+- Every 2nd-gen functions deploy asks Service Usage to generate the service identities of Pub/Sub and Eventarc
+  (`services/<service>:generateServiceIdentity`, `deploy/functions/prepare.js`), and the deploy stops with "Error
+  generating the service identity" if that call is refused. Google's reference for the call names no IAM permission,
+  only an OAuth scope, and the first deploy ran under `roles/editor`, so whether
+  `roles/serviceusage.serviceUsageConsumer` covers it is known only once a deploy runs without it. If it doesn't, the
+  error names the missing permission: grant that permission in a custom role, not
+  `roles/serviceusage.serviceUsageAdmin`, which could enable any API.
+- The first deploy logged that it ensured `arcos-jobs@` access to `BLOCKSCOUT_API_KEY`. The CLI logs that whether or
+  not it wrote the binding, so check step 3's binding is in place (the command in step 3). Later deploys don't touch the
+  secret's policy while `arcos-jobs@` already runs the function.
+- Any other refusal names its permission: add it to the narrowest role above that fits, never `roles/editor`.
 
 After the first deploy, check the Scheduler job (below): its OIDC account must be `arcos-jobs@`. It is fixed when the job
 is created, and changing the function's account later doesn't move it.
