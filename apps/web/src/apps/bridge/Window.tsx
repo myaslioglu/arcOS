@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useConnection } from "wagmi";
-import { AppKit, isRetryableError, type BridgeResult } from "@circle-fin/app-kit";
+import { AppKit, isRetryableError, type BridgeResult, type BridgeStep } from "@circle-fin/app-kit";
 import { USDC_DECIMALS } from "@arcos/chain";
 import { useDesktop, type Tone } from "@arcos/shell";
 import { BalanceLine } from "@/components/BalanceLine";
@@ -14,7 +14,7 @@ import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
 import { bridgeChainInfo, bridgeChainOptions, chainLabel, type ChainId } from "./chains";
 import { explorerCheckNote, fundsLeftSource, inFlightNote } from "./inFlight";
 import { resolveRoute, type Direction } from "./route";
-import { classifyBridgeFailure, session, type BridgeFailureSource } from "./session";
+import { classifyBridgeFailure, describeStepError, session, type BridgeFailureSource } from "./session";
 import { useSourceBalance } from "./useSourceBalance";
 
 const STATE_LABEL: Record<string, string> = {
@@ -28,6 +28,12 @@ const STATE_TONE: Record<string, Tone> = { success: "ok", pending: "info", error
  * between the live "done" panel and the read-only evidence shown for `lastResult` (item 8: a retry
  * must not make the original attempt's steps/tx links disappear while it's in progress, or after a
  * retry that itself throws before returning a new result). */
+/** Where a step ran, for its error line: the destination for a mint, the source for everything else. */
+function stepChain(result: BridgeResult, step: BridgeStep): BridgeFailureSource {
+  const chain = /mint/i.test(step.name) ? result.destination.chain : result.source.chain;
+  return { label: chainLabel(chain.chain as ChainId), gasSymbol: chain.nativeCurrency.symbol };
+}
+
 function BridgeResultSteps({ result }: { result: BridgeResult }) {
   const note =
     result.state === "error" ? inFlightNote(result.source.chain.name, result.destination.chain.name, fundsLeftSource(result.steps)) : null;
@@ -54,7 +60,9 @@ function BridgeResultSteps({ result }: { result: BridgeResult }) {
                 </a>
               </>
             )}
-            {step.errorMessage && <span className="text-accent-3-text"> — {step.errorMessage}</span>}
+            {(step.error !== undefined || step.errorMessage) && step.state === "error" && (
+              <span className="text-accent-3-text"> — {describeStepError(step, stepChain(result, step))}</span>
+            )}
           </li>
         ))}
       </ul>
