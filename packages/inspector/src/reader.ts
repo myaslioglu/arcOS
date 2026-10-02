@@ -1,5 +1,5 @@
 import { BaseError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
-import { isRevert, revertPayload } from "./rpc-errors";
+import { isOutOfGas, isRevert, revertPayload } from "./rpc-errors";
 import { CallReverted, type ChainReader } from "./types";
 
 /**
@@ -15,6 +15,12 @@ function mapReadError(e: unknown): never {
   throw e;
 }
 
+/** A read that set its own gas limit and ran out of it got the node's answer: the call reverted, with nothing to say why. */
+function mapCappedReadError(e: unknown): never {
+  if (isOutOfGas(e)) throw new CallReverted("out of gas", null);
+  return mapReadError(e);
+}
+
 export function viemReader(client: PublicClient): ChainReader {
   return {
     getCode: async (address) => {
@@ -25,7 +31,8 @@ export function viemReader(client: PublicClient): ChainReader {
     // The function name is dynamic here, so viem's per-ABI inference can't apply; the checks cast the result.
     // viem's readContract hands everything it isn't typed for on to eth_call, `gas` included.
     read: (address, abi: Abi, functionName, args = [], options) =>
-      client.readContract({ address, abi, functionName, args, ...(options?.gas === undefined ? {} : { gas: options.gas }) } as Parameters<PublicClient["readContract"]>[0]).catch(mapReadError),
+      client.readContract({ address, abi, functionName, args, ...(options?.gas === undefined ? {} : { gas: options.gas }) } as Parameters<PublicClient["readContract"]>[0])
+        .catch(options?.gas === undefined ? mapReadError : mapCappedReadError),
     blockNumber: () => client.getBlockNumber(),
   };
 }

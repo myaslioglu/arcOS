@@ -156,3 +156,26 @@ describe("viemReader().read: a gas limit and the revert payload", () => {
     expect(((await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)) as CallReverted).data).toBeNull();
   });
 });
+
+// Arc answers an eth_call that runs out of gas mid-execution with -32003 "out of gas: gas required exceeds: N". For a read that
+// set its own gas limit, that is the node's answer about this call (asking again returns the same), never the endpoint failing.
+describe("viemReader().read: a gas-capped read that runs out of gas", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const outOfGas = async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32003, message: "out of gas: gas required exceeds: 2000000" } });
+
+  it("is the node's answer, a CallReverted with no payload, when the read gave a gas limit", async () => {
+    vi.stubGlobal("fetch", outOfGas);
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    const e: unknown = await viemReader(client).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(CallReverted);
+    expect((e as CallReverted).data).toBeNull();
+  });
+
+  it("stays an RPC failure for a read without a gas limit, and for any other -32003", async () => {
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    vi.stubGlobal("fetch", outOfGas);
+    expect(await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)).not.toBeInstanceOf(CallReverted);
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32003, message: "transaction rejected" } }));
+    expect(await viemReader(client).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x)).not.toBeInstanceOf(CallReverted);
+  });
+});

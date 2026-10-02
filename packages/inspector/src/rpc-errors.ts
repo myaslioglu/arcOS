@@ -86,6 +86,20 @@ export function isDecodeFailure(e: unknown): boolean {
   return links.some((l) => named(l, "ContractFunctionExecutionError")) && !links.some((l) => named(l, "CallExecutionError")) && !endpointFailed(links);
 }
 
+/** Arc's code and text for an eth_call that ran out of gas mid-execution (not -32000 "intrinsic gas too low"). */
+const OUT_OF_GAS_CODE = -32003;
+const OUT_OF_GAS_TEXT = /^out of gas/i;
+
+/**
+ * The node said the call ran out of gas during execution: Arc's -32003 "out of gas: gas required exceeds: N", anywhere in
+ * viem's cause chain, with no HTTP failure or timeout in it. Not a revert, and not read as one by `isRevert`: it only means
+ * "the node answered" for a call that set its own gas limit (a v4 quote), where the same call gets the same answer anywhere.
+ */
+export function isOutOfGas(e: unknown): boolean {
+  const links = chain(e);
+  return !endpointFailed(links) && links.some((l) => l.code === OUT_OF_GAS_CODE && OUT_OF_GAS_TEXT.test(nodeText(l)));
+}
+
 /**
  * What a reverted call reverted with: the error selector and its arguments, from whichever link of viem's cause chain holds
  * them (the node's `data`, or a `ContractFunctionRevertedError`'s `raw`). `null` when there is none, or the node sent a bare
