@@ -230,8 +230,8 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
       chainId: chain.id,
       walletChainId,
       // Passed by reference, not called here: flow.ts makes the one call, `deps.writeContractAsync(withChain(...))`,
-      // and the paid-write scan (lib/__tests__/paid-write.test.ts) checks that call there, by this name. An object key
-      // isn't a destructuring alias, so the scan's alias check doesn't apply to it.
+      // and the paid-write scan (lib/__tests__/paid-write.test.ts) checks that call there, by this name. This reference
+      // is the one entry in that scan's ALLOWLIST for this file; a second one fails it.
       writeContractAsync: writeContract.mutateAsync as (request: never) => Promise<`0x${string}`>,
     };
     void revokeSession.run(
