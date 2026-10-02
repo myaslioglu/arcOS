@@ -9,6 +9,7 @@ export { positionVaultAbi } from "./positionVault";
 export { arcVestingAbi } from "./arcVesting";
 export { vestingFactoryAbi } from "./vestingFactory";
 export { proPassAbi } from "./proPass";
+export { tradeSimulatorAbi, tradeSimulatorRuntime } from "./tradeSimulator";
 
 const key = (name: string) => keccak256(toHex(name));
 

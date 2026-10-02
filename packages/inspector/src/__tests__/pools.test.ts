@@ -6,7 +6,7 @@ import type { ExplorerSource, Holder } from "../explorer";
 import type { ExtraPool, Finding, InspectInput, PoolScan, Report } from "../types";
 import { NATIVE, QUOTE_CONCURRENCY, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
 import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, NOT_ENOUGH_LIQUIDITY_OTHER_POOL, NOT_ENOUGH_LIQUIDITY_POOL, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
-import { fakeChain, readKey, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
+import { fakeChain, readKey, v2PairReads, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111"; // sorts below USDC and EURC
 const HIGH = "0x9999999999999999999999999999999999999999"; // sorts above USDC, below EURC
@@ -55,10 +55,47 @@ describe("a DEX config without Uniswap v2 or v3 (testnet has neither)", () => {
   });
 
   it("asks only the factory it has: v2 alone", async () => {
-    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, [`${USDC}.balanceOf(${POOL})`]: 5_000_000_000n } });
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 5_000_000_000n) } });
     const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
     expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 5_000_000_000n }]);
-    expect(chain.asked.map((r) => r.fn)).toEqual(["getPair", "balanceOf"]);
+    expect(chain.asked.map((r) => r.fn)).toEqual(["getPair", "token0", "getReserves"]);
+  });
+
+  it("reads a v2 pair's depth from its reserves, so USDC sent to it without a sync doesn't make it deep", async () => {
+    const chain = fakeChain({
+      reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 0n, 0n), [`${USDC}.balanceOf(${POOL})`]: 90_000_000_000n },
+    });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 0n, liquid: false }]);
+    expect(chain.asked.map((r) => r.fn)).not.toContain("balanceOf");
+  });
+
+  it("never calls a v2 pair liquid with no tokens in its reserves: USDC sent to it and synced", async () => {
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 90_000_000_000n, 0n) } });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 90_000_000_000n, liquid: false, tradable: false }]);
+  });
+
+  it("keeps a thin v2 pair with tokens tradable though it isn't liquid", async () => {
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 27_000_000n, 10n ** 24n) } });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ depth: 27_000_000n, liquid: false, tradable: true }]);
+  });
+
+  it("never calls a v2 pair liquid when its quote for the test amount is nothing: a token reserve too small to pay out", async () => {
+    // 90,000 USDC against one token unit: 10 USDC buys 0 of it.
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 90_000_000_000n, 1n) } });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    // It holds tokens, so it isn't left out of the trade check: its buy is tried, and its revert caps a later pass.
+    expect(scan.pools).toMatchObject([{ liquid: false, tradable: true }]);
+    const funded = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 90_000_000_000n, 10n ** 24n) } });
+    expect((await findPools(inputFor(funded, { quoteTokens: [USD], v2Factory: V2 }))).pools).toMatchObject([{ liquid: true }]);
+  });
+
+  it("reads a v2 pair whose reserves can't be read as holding nothing", async () => {
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, [`${USDC}.balanceOf(${POOL})`]: 5_000_000_000n } });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 0n }]);
   });
 
   it("asks no v3 question when the factory is named but no fee tier is", async () => {
@@ -622,7 +659,7 @@ describe("the liquidity finding when a v4 pool's liquidity is undecided", () => 
     const r = await runWith({ v4: listed([delta, at1251()]) }, v4Only, extra);
     expect(find(r, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't verify Uniswap v4 liquidity" });
     expect(find(r, "liquidity").detail).toContain("has a hook, which can change what a swap pays");
-    expect(find(r, "liquidity").detail).toContain("trade simulation");
+    expect(find(r, "liquidity").detail).toContain("a quote can't judge its liquidity");
   });
 
   it("reads unknown, never thin, when a quote couldn't be read", async () => {
@@ -653,7 +690,7 @@ describe("the lp-lock finding beside a deeper pool", () => {
   const pair = (lpBurned: bigint, depth: bigint) => ({
     ...noPools(both, TOKEN),
     [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
-    [readKey(USDC, "balanceOf", [PAIR])]: depth,
+    ...v2PairReads(PAIR, USDC, TOKEN, depth),
     [readKey(PAIR, "totalSupply", [])]: 100n,
     [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
     [readKey(PAIR, "balanceOf", [DEAD])]: lpBurned,

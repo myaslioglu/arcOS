@@ -1,6 +1,6 @@
 import "server-only";
 import { activeChain, type Address } from "@arcos/chain";
-import { explorerFetch, inspect, proExplorerApi, withDeadline, type Report } from "@arcos/inspector";
+import { DEADLINE_MS, explorerFetch, inspect, proExplorerApi, withDeadline, type Report } from "@arcos/inspector";
 import { extraPoolsFor } from "./indexed-pools-server";
 import { inspectInput } from "./inspect-input";
 import { processGlobal } from "./process-global";
@@ -65,7 +65,9 @@ export function cachedInspection(address: Address): Promise<Report> {
       const extraPools = await extraPoolsFor(address);
       const controller = new AbortController();
       const fetchFn = explorerFetch(explorerTurn, controller.signal);
-      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools)), controller);
+      // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
+      const deadlineAt = Date.now() + DEADLINE_MS;
+      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt)), controller, DEADLINE_MS);
     }),
   );
 }

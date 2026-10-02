@@ -10,7 +10,7 @@ export const NAME_DISCLOSURE = "The name and symbol are chosen by whoever deploy
 
 export const tokenLabel = (r: Report): string => r.token.symbol ?? shortAddress(r.address);
 
-/** "5 of 8 checks pass" — with an explicit unknown clause whenever there is one to show, so a
+/** "5 of 9 checks pass" — with an explicit unknown clause whenever there is one to show, so a
  * gap in the evidence is never silently folded into "not pass". */
 export function passLine(r: Pick<Report, "counts" | "total">): string {
   const base = `${r.counts.pass} of ${r.total} checks pass`;

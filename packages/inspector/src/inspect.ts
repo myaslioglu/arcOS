@@ -4,7 +4,7 @@ import { extractSelectors, minimalProxyTarget, usesOpcode, type Hex } from "./by
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, abiDeclaresTransfer, addressFromSlot,
   beaconImplementation, checkHolders, checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges,
-  checkProxy, checkVerified, dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
+  checkProxy, checkTrade, checkVerified, dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
   type LogicBlock, type LogicGap, type ProxySlotKind,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
@@ -20,7 +20,7 @@ export class NotAContract extends Error {
   }
 }
 
-const ORDER: CheckId[] = ["verified", "ownership", "privileges", "proxy", "holders", "liquidity", "lp-lock", "prevrandao"];
+const ORDER: CheckId[] = ["verified", "ownership", "privileges", "proxy", "holders", "liquidity", "lp-lock", "prevrandao", "trade"];
 const DELEGATECALL = 0xf4;
 
 /** A check that throws becomes an "unknown" finding; one bad RPC call never sinks the report. The
@@ -94,6 +94,8 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
     getStorageAt: (address, slot) => watch(() => reader.getStorageAt(address, slot)),
     read: (address, abi, functionName, args, options) => watch(() => reader.read(address, abi, functionName, args, options)),
     blockNumber: () => watch(() => reader.blockNumber()),
+    gasPrice: () => watch(() => reader.gasPrice()),
+    callWithOverride: (call, overrides) => watch(() => reader.callWithOverride(call, overrides)),
   };
 }
 
@@ -414,6 +416,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     guard("liquidity", () => checkLiquidity(input, poolScan)),
     guard("lp-lock", () => checkLpLock(input, poolScan)),
     guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)).then(gateOpcodes),
+    // Behaviour measured at this block, not a statement about the code, so no logic gate: what the code may do later is
+    // the privileges and proxy findings' business.
+    guard("trade", () => checkTrade(input, poolScan)),
   ]);
   findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
 

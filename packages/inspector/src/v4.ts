@@ -221,7 +221,8 @@ function isPoolShort(data: Hex | null, poolId: Hex): boolean {
  *    others in a shared call, and its failure stays its own. Only the pool's own NotEnoughLiquidity means it can't pay
  *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable"). A pool with
  *    a hook isn't quoted at all: whatever its quote said would be the hook's to fake, so it is undecided (`liquid: null`,
- *    "hook") until a trade simulation can judge it. `depth` is the in-range amount, shown as such; it doesn't decide anything.
+ *    "hook"). Check 10's round trip still trades through it, but a few USDC each way says
+ *    nothing about 1,000. `depth` is the in-range amount, shown as such; it doesn't decide anything.
  * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure there rejects.
  */
 export async function readV4Pools(a: {

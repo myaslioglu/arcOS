@@ -10,7 +10,8 @@ export class InspectionTimeout extends Error {
   }
 }
 
-const DEADLINE_MS = 15_000;
+/** How long an inspection may take before its caller stops waiting (the default for `withDeadline`). */
+export const DEADLINE_MS = 15_000;
 
 /** Races `p` against `ms`. On timeout, `p` itself keeps running in the background — this only
  * makes the CALLER stop waiting on it, so whatever slot it was holding can free immediately — and

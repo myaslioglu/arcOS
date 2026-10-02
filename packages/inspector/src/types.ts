@@ -15,7 +15,7 @@ export class CallReverted extends Error {
 }
 
 export type Status = "pass" | "warn" | "fail" | "unknown";
-export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao";
+export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao" | "trade";
 
 export type Finding = {
   id: CheckId;
@@ -42,8 +42,9 @@ export type Report = {
    * - a `ChainReader` call failed: an HTTP error, a timeout, or a JSON-RPC error that isn't the node's answer (anything
    *   but a revert or -32602 invalid params; see rpc-errors.ts), on every endpoint the transport tried; or
    * - an explorer request ended in `ExplorerUnavailable`.
-   * Never degraded: a revert or an empty answer (`CallReverted`), -32602, a 404 from the explorer, and viem failing to
-   * decode what the node answered, since asking again returns the same. The findings mean what they always do; this
+   * Never degraded: a revert or an empty answer (`CallReverted`), a call that set its own gas limit running out of it (a v4
+   * quote, the trade simulation), -32602, a 404 from the explorer, and viem failing to decode what the node answered, since
+   * asking again returns the same. The findings mean what they always do; this
    * only says that some of the unknowns may be a network hiccup, so the report shouldn't be kept for long.
    */
   degraded: boolean;
@@ -62,7 +63,22 @@ export interface ChainReader {
    */
   read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[], options?: { gas?: bigint }): Promise<unknown>;
   blockNumber(): Promise<bigint>;
+  /** The network's current gas price (eth_gasPrice), in wei. */
+  gasPrice(): Promise<bigint>;
+  /**
+   * One eth_call with some accounts' state replaced for that call only (the RPC's third parameter): the trade simulation's
+   * code and USDC balance at a throwaway address. Resolves with what the call returned, `0x` included (code that never ran,
+   * when a node ignores the override, answers that). The gas limit is always set, so it rejects with `CallReverted` when
+   * the call reverts or runs out of that gas (Arc's -32003), both the node's answer; anything else, a node refusing the
+   * override included, is passed on as it came.
+   */
+  callWithOverride(call: OverrideCall, overrides: readonly StateOverride[]): Promise<Hex>;
 }
+
+/** The call `ChainReader.callWithOverride` makes, at `gasPrice` (wei per gas), which `from` must hold enough to prepay. */
+export type OverrideCall = { from: Address; to: Address; data: Hex; gas: bigint; gasPrice: bigint };
+/** One account's state for one call: its code, its native balance (in wei), or both. */
+export type StateOverride = { address: Address; code?: Hex; balance?: bigint };
 
 /** A Uniswap v4 pool's identity. Its id is keccak256(abi.encode(key)). `currency0 < currency1`, and address(0) is native USDC. */
 export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
@@ -95,6 +111,17 @@ export type Pool = {
   /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. "hook": the
    * pool has a hook, which runs inside any swap and so could fake a quote either way; it isn't quoted. */
   undecided?: "quote-unavailable" | "hook";
+  /**
+   * v2 only: whether its reserves hold any tokens at all. `false` for a pair holding USDC `sync`ed in and nothing to sell
+   * for it, whatever its depth; such a pair is never liquid and the trade check never trades against it. A pair with tokens
+   * is `true` even when it quotes nothing for the test amount or is thin; it is liquid only with 1,000 USDC and a nonzero
+   * quote.
+   */
+  tradable?: boolean;
+  /** v2 only: the token's reserve, in its raw units, next to `depth`, the USDC (or EURC) reserve. */
+  tokenReserve?: bigint;
+  /** v3 only: the fee tier the factory was asked for, in hundredths of a bip (3000 is 0.3%). */
+  fee?: number;
   /** v4 only. */
   poolId?: Hex;
   key?: PoolKey;
@@ -137,4 +164,9 @@ export type InspectInput = {
    */
   onPools?: (scan: PoolScan | null) => void;
   now?: () => Date;
+  /**
+   * When the caller stops waiting for the report (ms since the epoch, on `Date.now()`'s clock): the inspection's own
+   * deadline. The trade check fits its eth_calls inside it (see simulate.ts). Absent: it gives itself a fixed time.
+   */
+  deadlineAt?: number;
 };
