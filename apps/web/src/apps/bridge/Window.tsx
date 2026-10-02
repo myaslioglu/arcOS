@@ -2,16 +2,20 @@
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { useConnection } from "wagmi";
-import { AppKit, isRetryableError, type BridgeResult } from "@circle-fin/app-kit";
+import { AppKit, isRetryableError, type BridgeResult, type BridgeStep } from "@circle-fin/app-kit";
+import { USDC_DECIMALS } from "@arcos/chain";
 import { useDesktop, type Tone } from "@arcos/shell";
+import { BalanceLine } from "@/components/BalanceLine";
 import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, adapterFor, bridgeFee, feePercentLabel, feeRecipient } from "@/lib/appkit";
-import { bridgeChainOptions, chainLabel, type ChainId } from "./chains";
+import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
+import { bridgeChainInfo, bridgeChainOptions, chainLabel, type ChainId } from "./chains";
 import { explorerCheckNote, fundsLeftSource, inFlightNote } from "./inFlight";
 import { resolveRoute, type Direction } from "./route";
-import { classifyBridgeFailure, session } from "./session";
+import { classifyBridgeFailure, describeStepError, describeWarning, session, type BridgeFailureSource } from "./session";
+import { useSourceBalance } from "./useSourceBalance";
 
 const STATE_LABEL: Record<string, string> = {
   success: "Bridge complete",
@@ -24,6 +28,12 @@ const STATE_TONE: Record<string, Tone> = { success: "ok", pending: "info", error
  * between the live "done" panel and the read-only evidence shown for `lastResult` (item 8: a retry
  * must not make the original attempt's steps/tx links disappear while it's in progress, or after a
  * retry that itself throws before returning a new result). */
+/** Where a step ran, for its error line: the destination for a mint, the source for everything else. */
+function stepChain(result: BridgeResult, step: BridgeStep): BridgeFailureSource {
+  const chain = /mint/i.test(step.name) ? result.destination.chain : result.source.chain;
+  return { label: chainLabel(chain.chain as ChainId), gasSymbol: chain.nativeCurrency.symbol };
+}
+
 function BridgeResultSteps({ result }: { result: BridgeResult }) {
   const note =
     result.state === "error" ? inFlightNote(result.source.chain.name, result.destination.chain.name, fundsLeftSource(result.steps)) : null;
@@ -35,7 +45,7 @@ function BridgeResultSteps({ result }: { result: BridgeResult }) {
       {note && <p className="mt-1">{note}</p>}
       {result.warnings?.map((w, i) => (
         <p key={i} className="mt-1 text-accent-3-text">
-          {w.message ?? w.code}
+          {describeWarning(w)}
         </p>
       ))}
       <ul className="mt-1 grid gap-1">
@@ -50,12 +60,19 @@ function BridgeResultSteps({ result }: { result: BridgeResult }) {
                 </a>
               </>
             )}
-            {step.errorMessage && <span className="text-accent-3-text"> — {step.errorMessage}</span>}
+            {(step.error !== undefined || step.errorMessage) && step.state === "error" && (
+              <span className="text-accent-3-text"> — {describeStepError(step, stepChain(result, step))}</span>
+            )}
           </li>
         ))}
       </ul>
     </>
   );
+}
+
+/** The source chain as a balance failure names it: its label and the token that pays for gas there. */
+function failureSource(chain: ChainId): BridgeFailureSource {
+  return { label: chainLabel(chain), gasSymbol: bridgeChainInfo(chain)?.gasSymbol ?? "gas token" };
 }
 
 function Form() {
@@ -73,9 +90,16 @@ function Form() {
   const [amount, setAmount] = useState("");
 
   const { source, dest } = resolveRoute(direction, otherChain, ARC_CHAIN_NAME);
-  const issue = amountIssue(amount);
-  const normalized = normalizedAmount(amount);
   const recipient = feeRecipient();
+  // The platform fee is added on top of the amount and paid from the same USDC, so both "Max" and the balance check
+  // count it. Without a fee recipient no fee is charged.
+  const feeOnTopBps = recipient ? SWAP_FEE_BPS : 0;
+  const sourceBalance = useSourceBalance(source);
+  const sourceOnArc = source === ARC_CHAIN_NAME;
+  const sourceLabel = chainLabel(source);
+  const issue =
+    amountIssue(amount) ?? overBalanceIssue(amount, USDC_DECIMALS, sourceBalance, { feeOnTopBps, where: sourceLabel });
+  const normalized = normalizedAmount(amount);
   const fee = normalized ? bridgeFee(normalized) : "0";
   // Shown to the user — "…" rather than "0" until there's a real amount to price: a fee of 0 reads
   // as "this bridge is free", not "nothing has been typed yet" (quoteTotal's own version of this bug
@@ -99,7 +123,7 @@ function Form() {
       if (result.state === "success") trackEvent("bridge_success", { from: bridgeSource, to: bridgeDest });
       notify(STATE_LABEL[result.state] ?? "Bridge submitted", STATE_TONE[result.state] ?? "info");
     } catch (err) {
-      session.fail(classifyBridgeFailure(err, explorerCheckNote(chainLabel(bridgeSource))));
+      session.fail(classifyBridgeFailure(err, explorerCheckNote(chainLabel(bridgeSource)), failureSource(bridgeSource)));
     }
   };
 
@@ -204,6 +228,16 @@ function Form() {
           />
           {issue && <span className="mt-1 block text-xs text-accent-3-text">{issue}</span>}
         </label>
+        <BalanceLine
+          units={sourceBalance}
+          decimals={USDC_DECIMALS}
+          symbol="USDC"
+          where={sourceLabel}
+          // On Arc, USDC also pays for the approval and the burn, so "Max" leaves a little for gas there.
+          max={{ feeOnTopBps, reserveUnits: sourceOnArc ? ARC_GAS_RESERVE_UNITS : 0n }}
+          disabled={sessionActive}
+          onMax={setAmount}
+        />
 
         {recipient && (
           <p className="mt-3 text-xs text-muted">

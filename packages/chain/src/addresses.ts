@@ -10,6 +10,12 @@ export const EURC: Record<NetworkId, Address> = {
   testnet: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
 };
 
+/** Circle's cirBTC (8 decimals), one of Swap's tokens. The addresses are the ones App Kit's own token list names. */
+export const CIRBTC: Record<NetworkId, Address> = {
+  mainnet: "0x171A4217b86A807A64eB94757Db6849fb4bDbAA0",
+  testnet: "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF",
+};
+
 export const BURN_ADDRESSES: Address[] = [
   "0x0000000000000000000000000000000000000000",
   "0x000000000000000000000000000000000000dEaD",
