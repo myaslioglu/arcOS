@@ -37,7 +37,7 @@ why, and the condition for removing it.
 
 ## Run it
 
-Needs Node 22 (22.16 or later) and **npm 11 or newer** (`npm -v`). npm 10 installs Foundry but leaves out the
+Needs Node 22 (22.22.2 or later) and **npm 11 or newer** (`npm -v`). npm 10 installs Foundry but leaves out the
 `forge`, `cast` and `anvil` commands, so the `npx forge` / `npx cast` commands in
 [DEPLOY.md](packages/contracts/DEPLOY.md) would offer to download unrelated npm packages with those
 names instead; `npm install -g npm@11` fixes it.
