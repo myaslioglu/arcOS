@@ -3,22 +3,25 @@
 How a change reaches https://4rcos.com and the testnet site, https://testnet.4rcos.com. A deploy runs from GitHub
 Actions, signs in to Google Cloud without a key file, and starts only after the checks pass and the owner approves it.
 Both sites come from the same commit under the same approval: 4rc.OS from the App Hosting backend `arcos`, the testnet
-site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)).
+site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)). The testnet site takes part only
+once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every deploy is of 4rc.OS alone.
 
 1. **A pull request runs CI** ([ci.yml](../.github/workflows/ci.yml)): typecheck, lint, the tests (those of the deploy
    scripts, and a check of the deploy workflow's rules, included), the web build, the ABI drift check and `npm audit`.
    Nothing is deployed from a pull request.
-2. **Merging into `main` starts the Deploy workflow** ([deploy.yml](../.github/workflows/deploy.yml)). Two jobs run side
-   by side. They install the project's dependencies and run its build, which is third-party code, so they hold no Google
-   Cloud credential and no secret. `checks` runs the same CI again on the merged commit. `bundle` builds one bundle per
-   site, side by side: the mainnet one with the public values in [apps/web/apphosting.yaml](../apps/web/apphosting.yaml),
-   the testnet one with [apps/web/apphosting.testnet.yaml](../apps/web/apphosting.testnet.yaml) merged over it, as App
-   Hosting merges it (`scripts/apphosting-env.mjs --environment testnet`), so neither can drift from its site. Each checks
-   that its settings name its own network, and keeps its build output for one day as an artifact. The owner decides when
-   to merge; auto-merge is not used.
+2. **Merging into `main` starts the Deploy workflow** ([deploy.yml](../.github/workflows/deploy.yml)). A small `plan`
+   job first chooses the sites (step 5); it checks nothing out and holds no token. Then two jobs run side by side. They
+   install the project's dependencies and run its build, which is third-party code, so they hold no Google Cloud
+   credential and no secret. `checks` runs the same CI again on the merged commit. `bundle` builds one bundle per site
+   the run deploys, side by side: the mainnet one with the public values in
+   [apps/web/apphosting.yaml](../apps/web/apphosting.yaml), the testnet one with
+   [apps/web/apphosting.testnet.yaml](../apps/web/apphosting.testnet.yaml) merged over it, as App Hosting merges it
+   (`scripts/apphosting-env.mjs --environment testnet`), so neither can drift from its site. Each checks that its
+   settings name its own network, and keeps its build output for one day as an artifact. The owner decides when to
+   merge; auto-merge is not used.
 3. **The `production` environment waits for the owner's approval.** The `deploy` job belongs to a GitHub environment
    named `production`, which names a required reviewer and accepts the `main` branch only. It starts once `checks` and
-   both bundles have passed, and then sits at "Waiting" until the reviewer approves it; no Google Cloud credential exists
+   its bundles have passed, and then sits at "Waiting" until the reviewer approves it; no Google Cloud credential exists
    until then. Rejecting a run skips that deploy. Every merge asks, including one that only changes docs. Runs queue one
    behind another (a newer waiting run replaces an older waiting one), and a deploy that has started is not cancelled.
    Approve within a day: the bundles are kept for one day, so an approval given later fails at the download and the
@@ -48,8 +51,15 @@ site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)
    approvals check reads the allowances of Multicall3, a public contract that anyone can change, so that check can fail
    while the deploy is fine. If the failure is real, roll back (below).
 5. **Which sites, and what a failure stops.** A push to `main` deploys both. A manual run (Actions, Deploy, Run workflow)
-   can pick `targets`: `both` (the default), `mainnet` or `testnet`; it builds, scans and deploys only those. The order
-   keeps the testnet site from breaking 4rc.OS:
+   can pick `targets`: `both` (the default), `mainnet` or `testnet`; it builds, scans and deploys only those. The
+   testnet site is gated by the repository variable `ARCOS_TESTNET_READY`:
+   - While it is not exactly `true` (unset included), a push builds, scans and deploys 4rc.OS alone; the testnet bundle
+     isn't built, and the run shows a notice saying so. A manual run with `targets: both` or `testnet` fails at once in
+     `plan`, before anything is built or approved, and says to run again with `targets: mainnet`. It fails rather than
+     quietly dropping the testnet site, so a manual run never deploys less than it was asked to.
+   - Once it is `true`, both legs run as described here.
+
+   The order keeps the testnet site from breaking 4rc.OS:
    - A bundle that fails to build, either one, stops the run before approval, and nothing is deployed. To ship 4rc.OS
      while the testnet build is broken, run the workflow with `targets: mainnet`.
    - 4rc.OS deploys first. If its deploy fails, the testnet deploy doesn't start.
@@ -65,7 +75,8 @@ site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)
    - *Dry run:* Actions, Deploy, Run workflow, tick `dry_run`. It runs the checks and the bundle build, scans and signs
      in, then lists the App Hosting backends and stops. Approval is still needed. Use it after changing anything in the
      setup below. It proves the sign-in and the read access to App Hosting; the upload to Cloud Storage is first
-     exercised by a real deploy. Its table should list `arcos` and `arcos-testnet`.
+     exercised by a real deploy. Its table should list `arcos`, and `arcos-testnet` once that backend exists. Until
+     `ARCOS_TESTNET_READY` is `true`, pick `targets: mainnet` for a dry run, or it fails in `plan`.
    - *Rolling back:* in the Firebase console open App Hosting, the `arcos` backend (or `arcos-testnet`), its Rollouts
      tab, and choose "Roll back to this build" on an earlier build. This is instant and does not rebuild. To go back
      in git as well, revert the commit and merge the revert; that goes through the same approval.
@@ -135,8 +146,10 @@ merges the files the same way for the workflow's testnet bundle, and fails if `a
 
 ### Owner steps
 
-Once, before merging the change that adds the testnet deploy. Until the backend exists with its environment name, every
-deploy of `main` fails at the testnet step, after 4rc.OS has deployed. Run them from a machine signed in as the owner
+Once. Until the last step sets the repository variable `ARCOS_TESTNET_READY` to `true`, the workflow deploys 4rc.OS
+alone and never touches `arcos-testnet`, so these steps can be done at any pace. Set the variable only after the backend
+exists with the environment name `testnet` (steps 2 and 3): from then on every deploy of `main` deploys the testnet site
+too, and fails at its environment name check if that name is wrong. Run them from a machine signed in as the owner
 (`gcloud auth login`, `firebase login`):
 
 ```sh
@@ -201,5 +214,17 @@ export TESTNET_SA="arcos-testnet-web@${PROJECT_ID}.iam.gserviceaccount.com"
      --member="serviceAccount:arcos-deployer@${PROJECT_ID}.iam.gserviceaccount.com" --role=roles/iam.serviceAccountUser
    ```
 
-7. **The first deploy.** Merge, approve the run, and check the testnet site as in step 5 of the deploy above. A dry run
-   first (Actions, Deploy, Run workflow, `dry_run`) should list both backends.
+7. **Turn the testnet deploy on.** A dry run first (Actions, Deploy, Run workflow, `targets: mainnet`, `dry_run`)
+   should list both backends. Then set the repository variable, in a clone of this repository with `gh` signed in as
+   the owner:
+
+   ```sh
+   gh variable set ARCOS_TESTNET_READY --body true
+   ```
+
+   or on GitHub: Settings, Secrets and variables, Actions, the Variables tab, New repository variable, name
+   `ARCOS_TESTNET_READY`, value `true`. The value must be exactly `true`, lower case.
+
+8. **The first deploy.** Start a manual run with `targets: testnet` (or merge into `main` for both), approve it, and
+   check the testnet site as in step 5 of the deploy above. To turn the testnet deploy off again, delete the variable
+   (`gh variable delete ARCOS_TESTNET_READY`) or set it to anything but `true`.

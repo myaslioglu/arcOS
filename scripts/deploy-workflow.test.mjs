@@ -1,7 +1,9 @@
 // The owner's rules for deploying, as checks on the workflow files. They read the YAML as text, so they are blunt on
 // purpose: each pins something the setup outside the repo depends on, or something a reviewer could miss in a diff.
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -64,7 +66,7 @@ describe("deploy.yml", () => {
   it("calls ci.yml as its checks, and ci.yml can be called", () => {
     expect(deploy).toMatch(/^  checks:\n    uses: \.\/\.github\/workflows\/ci\.yml$/m);
     expect(ci).toMatch(/^  workflow_call:\s*$/m);
-    expect(job("deploy")).toMatch(/^ {4}needs: \[checks, bundle\]$/m);
+    expect(job("deploy")).toMatch(/^ {4}needs: \[plan, checks, bundle\]$/m);
     expect(job("smoke")).toMatch(/^ {4}needs: deploy$/m);
   });
 
@@ -120,7 +122,8 @@ describe("deploy.yml", () => {
   describe("keeps third-party code away from the production credential", () => {
     it("builds in a job of its own, beside the checks, with no credential of any kind", () => {
       const text = job("bundle");
-      expect(text).not.toMatch(/^ {4}needs:/m);
+      expect(text).toMatch(/^ {4}needs: plan$/m); // only the choice of sites, which runs no code of the project's
+      expect(job("plan")).not.toMatch(/^ {4}needs:/m);
       expect(text).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:/m); // that permission alone
       expect(text).not.toMatch(/secrets\.|vars\.|GITHUB_TOKEN|google-github-actions|GOOGLE_|firebase/);
       expect(text).toMatch(/persist-credentials: false/);
@@ -225,7 +228,7 @@ describe("deploy.yml", () => {
 // Both sites ship from one commit under one approval: 4rc.OS (backend arcos) first, the testnet site (arcos-testnet) only
 // after it. The testnet deploy must never be able to break 4rc.OS's, or stop it in a way nobody chose.
 describe("deploy.yml, the two sites", () => {
-  const MATRIX = `\${{ fromJSON(inputs.targets == 'mainnet' && '["mainnet"]' || inputs.targets == 'testnet' && '["testnet"]' || '["mainnet", "testnet"]') }}`;
+  const MATRIX = "${{ fromJSON(needs.plan.outputs.sites) }}";
   const deployStep = (id) => steps("deploy").find((s) => new RegExp(`^ {8}id: ${id}$`, "m").test(s));
 
   it("lets a manual run pick the sites, both by default, and a push has no choice: both", () => {
@@ -245,16 +248,12 @@ describe("deploy.yml, the two sites", () => {
     expect(text.match(/^ {8}site: (.+)$/m)?.[1]).toBe(MATRIX);
   });
 
-  it("deploys what it built: the deploy job's choice of sites is the matrix's", () => {
-    // inputs.targets is '', 'both', 'mainnet' or 'testnet'. Each evaluates the same way in both places.
+  it("deploys what it built: the deploy job's choice of sites is the matrix's, both from the plan job", () => {
     const text = job("deploy");
-    expect(text).toMatch(/^ {6}DEPLOY_MAINNET: \$\{\{ inputs\.targets != 'testnet' \}\}$/m);
-    expect(text).toMatch(/^ {6}DEPLOY_TESTNET: \$\{\{ inputs\.targets != 'mainnet' \}\}$/m);
-    const sites = (targets) => (targets === "mainnet" ? ["mainnet"] : targets === "testnet" ? ["testnet"] : ["mainnet", "testnet"]);
-    for (const targets of ["", "both", "mainnet", "testnet"]) {
-      const deployed = [...(targets !== "testnet" ? ["mainnet"] : []), ...(targets !== "mainnet" ? ["testnet"] : [])];
-      expect(deployed, targets).toEqual(sites(targets));
-    }
+    expect(text).toMatch(/^ {6}DEPLOY_MAINNET: \$\{\{ needs\.plan\.outputs\.mainnet \}\}$/m);
+    expect(text).toMatch(/^ {6}DEPLOY_TESTNET: \$\{\{ needs\.plan\.outputs\.testnet \}\}$/m);
+    expect(text).not.toMatch(/inputs\.targets/);
+    expect(job("bundle")).not.toMatch(/inputs\.targets/);
   });
 
   it("builds the testnet bundle with apphosting.testnet.yaml merged in, and checks each bundle's network", () => {
@@ -311,6 +310,105 @@ describe("deploy.yml, the two sites", () => {
 
   it("tells the smoke job whether 4rc.OS's deploy succeeded, so a testnet failure after it doesn't skip its checks", () => {
     expect(job("deploy")).toMatch(/^ {4}outputs:\n {6}mainnet: \$\{\{ steps\.deploy-mainnet\.outcome \}\}$/m);
+  });
+});
+
+// The testnet leg runs only once the owner has set the repository variable ARCOS_TESTNET_READY to `true`, after the
+// arcos-testnet backend exists with its environment name. Until then a push deploys 4rc.OS alone (the testnet bundle
+// isn't even built), and a manual run that asks for the testnet site fails before anything builds.
+describe("deploy.yml, the testnet gate", () => {
+  /** Runs the plan job's script as Actions runs it (bash -eo pipefail), and returns what it wrote and printed. */
+  function plan({ targets = "", ready } = {}) {
+    const [script, ...rest] = runScripts(job("plan"));
+    expect(rest).toEqual([]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-plan-"));
+    const output = path.join(dir, "output");
+    fs.writeFileSync(output, "");
+    const env = { PATH: process.env.PATH, GITHUB_OUTPUT: output, TARGETS: targets };
+    if (ready !== undefined) env.TESTNET_READY = ready;
+    const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { env, encoding: "utf8" });
+    const written = Object.fromEntries(
+      fs
+        .readFileSync(output, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { status: run.status, stdout: run.stdout, written };
+  }
+  const chose = (sites) => ({
+    sites: JSON.stringify(sites),
+    mainnet: String(sites.includes("mainnet")),
+    testnet: String(sites.includes("testnet")),
+  });
+
+  it("reads the variable in one place only: the plan job's env, never the bundle or deploy job", () => {
+    expect(deployCode.match(/\bvars\.ARCOS_TESTNET_READY\b/g)).toHaveLength(1);
+    expect(job("bundle")).not.toMatch(/ARCOS_TESTNET_READY/);
+    expect(job("deploy")).not.toMatch(/ARCOS_TESTNET_READY/);
+    expect(job("plan")).toMatch(/^ {10}TESTNET_READY: \$\{\{ vars\.ARCOS_TESTNET_READY \}\}$/m);
+    expect(job("plan")).toMatch(/^ {10}TARGETS: \$\{\{ inputs\.targets \}\}$/m);
+  });
+
+  it("chooses the sites in a job that holds nothing and runs nothing of the project's", () => {
+    const text = job("plan");
+    expect(text).toMatch(/^ {4}permissions: \{\}$/m);
+    expect(text).not.toMatch(/uses:|secrets\.|id-token|environment:|GITHUB_TOKEN/);
+    expect(text).toMatch(
+      /^ {4}outputs:\n {6}sites: \$\{\{ steps\.plan\.outputs\.sites \}\}\n {6}mainnet: \$\{\{ steps\.plan\.outputs\.mainnet \}\}\n {6}testnet: \$\{\{ steps\.plan\.outputs\.testnet \}\}$/m,
+    );
+    expect(job("deploy")).toMatch(/^ {4}needs: \[plan, checks, bundle\]$/m);
+  });
+
+  it("interpolates no expression into any script: values reach a run only through env", () => {
+    for (const workflow of [deploy, ci]) {
+      for (const script of runScripts(workflow)) expect(script).not.toMatch(/\$\{\{/);
+    }
+  });
+
+  it("on a push, deploys 4rc.OS alone until the variable is exactly true, and says so", () => {
+    for (const ready of [undefined, "", "false", "TRUE", "True", "1", "yes", " true"]) {
+      const result = plan({ ready });
+      expect(result.status, String(ready)).toBe(0);
+      expect(result.written, String(ready)).toEqual(chose(["mainnet"]));
+      expect(result.stdout).toMatch(/^::notice::.*ARCOS_TESTNET_READY/m);
+    }
+  });
+
+  it("on a push, deploys both once the variable is true", () => {
+    const result = plan({ ready: "true" });
+    expect(result.status).toBe(0);
+    expect(result.written).toEqual(chose(["mainnet", "testnet"]));
+    expect(result.stdout).not.toMatch(/::notice::|::error::/);
+  });
+
+  it("fails a manual run that asks for the testnet site before the variable is true, with nothing chosen", () => {
+    for (const targets of ["both", "testnet"]) {
+      for (const ready of [undefined, "false"]) {
+        const result = plan({ targets, ready });
+        expect(result.status, `${targets} ${ready}`).not.toBe(0);
+        expect(result.written).toEqual({});
+        expect(result.stdout).toMatch(/^::error::.*ARCOS_TESTNET_READY.*targets: mainnet/m);
+      }
+    }
+  });
+
+  it("does what a manual run asks once the variable is true, and mainnet alone whatever it is", () => {
+    expect(plan({ targets: "both", ready: "true" }).written).toEqual(chose(["mainnet", "testnet"]));
+    expect(plan({ targets: "testnet", ready: "true" }).written).toEqual(chose(["testnet"]));
+    for (const ready of [undefined, "true"]) {
+      const result = plan({ targets: "mainnet", ready });
+      expect(result.status).toBe(0);
+      expect(result.written).toEqual(chose(["mainnet"]));
+      expect(result.stdout).not.toMatch(/::notice::|::error::/);
+    }
+  });
+
+  it("refuses a target it doesn't know", () => {
+    const result = plan({ targets: "devnet", ready: "true" });
+    expect(result.status).not.toBe(0);
+    expect(result.written).toEqual({});
   });
 });
 

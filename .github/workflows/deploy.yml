@@ -6,14 +6,18 @@ name: Deploy
 # bundle builds pass and the owner approves it in the `production` environment, which allows the main branch only.
 #
 # Both sites come from the same commit under one approval. A push to main deploys both; a manual run can pick one
-# (`targets`). The mainnet site goes first, and the testnet deploy starts only after it has succeeded, so a testnet
-# failure never touches 4rc.OS. A bundle that fails to build stops the whole run before approval, nothing deployed; to
-# ship 4rc.OS while the testnet build is broken, run the workflow by hand with `targets: mainnet`.
+# (`targets`). The testnet site takes part only once the repository variable ARCOS_TESTNET_READY is `true`, which the
+# owner sets after its backend exists (docs/DEPLOYING.md, The testnet site). Until then a push builds and deploys 4rc.OS
+# alone, and a manual run that asks for the testnet site fails before any bundle is built. The mainnet site goes first,
+# and the testnet deploy starts only after it has succeeded, so a testnet failure never touches 4rc.OS. A bundle that
+# fails to build stops the whole run before approval, nothing deployed; to ship 4rc.OS while the testnet build is broken,
+# run the workflow by hand with `targets: mainnet`.
 #
-# The jobs are split by what they may touch. `checks` and `bundle` install the project's dependencies and run its build,
-# which is third-party code, so they hold no credential. `deploy` holds the credential and runs no project code: only
-# first-party actions and the SHA-pinned auth action, the bundle as data, the scan script from its own checkout and the
-# Firebase CLI installed from its lockfile. It restores no cache.
+# The jobs are split by what they may touch. `plan` reads only the inputs and that variable, checks nothing out and
+# holds no token. `checks` and `bundle` install the project's dependencies and run its build, which is third-party code,
+# so they hold no credential. `deploy` holds the credential and runs no project code: only first-party actions and the
+# SHA-pinned auth action, the bundle as data, the scan script from its own checkout and the Firebase CLI installed from
+# its lockfile. It restores no cache.
 on:
   push:
     branches: [main]
@@ -24,7 +28,7 @@ on:
         type: boolean
         default: false
       targets:
-        description: Which sites to build and deploy (a push to main deploys both, mainnet first)
+        description: Which sites to build and deploy (a push to main deploys both, mainnet first; testnet needs ARCOS_TESTNET_READY)
         type: choice
         options:
           - both
@@ -52,24 +56,63 @@ env:
   APPHOSTING_TESTNET_BACKEND: arcos-testnet
 
 jobs:
+  # Chooses the sites this run builds and deploys, from the `targets` input and the repository variable
+  # ARCOS_TESTNET_READY, before anything is built. A push has no inputs (TARGETS is empty): both sites once the variable is
+  # exactly `true`, 4rc.OS alone with a notice until then. A manual run that asks for the testnet site while the variable
+  # isn't `true` fails here, so it never deploys less than it asked for. No checkout, no token, no project code.
+  plan:
+    name: Choose the sites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      sites: ${{ steps.plan.outputs.sites }}
+      mainnet: ${{ steps.plan.outputs.mainnet }}
+      testnet: ${{ steps.plan.outputs.testnet }}
+    steps:
+      - name: Choose the sites
+        id: plan
+        env:
+          TARGETS: ${{ inputs.targets }}
+          TESTNET_READY: ${{ vars.ARCOS_TESTNET_READY }}
+        run: |
+          case "$TARGETS" in
+            "" | both) mainnet=true; testnet=true ;;
+            mainnet) mainnet=true; testnet=false ;;
+            testnet) mainnet=false; testnet=true ;;
+            *) echo "::error::Unknown targets '$TARGETS'"; exit 1 ;;
+          esac
+          if [ "$testnet" = true ] && [ "$TESTNET_READY" != true ]; then
+            if [ -n "$TARGETS" ]; then
+              echo "::error::The testnet site isn't set up yet: the repository variable ARCOS_TESTNET_READY is not true (docs/DEPLOYING.md, The testnet site). To deploy 4rc.OS, run again with targets: mainnet."
+              exit 1
+            fi
+            echo "::notice::ARCOS_TESTNET_READY is not true, so this run builds and deploys 4rc.OS only (docs/DEPLOYING.md, The testnet site)."
+            testnet=false
+          fi
+          if [ "$mainnet" = true ] && [ "$testnet" = true ]; then sites='["mainnet","testnet"]'
+          elif [ "$mainnet" = true ]; then sites='["mainnet"]'
+          else sites='["testnet"]'; fi
+          { echo "sites=$sites"; echo "mainnet=$mainnet"; echo "testnet=$testnet"; } >> "$GITHUB_OUTPUT"
+
   # The same checks a pull request runs (ci.yml, called as a reusable workflow): typecheck, lint, tests, build, audit.
   checks:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
 
-  # Builds the bundle of each site this run deploys, which the deploy job scans: one leg per site. It installs the
-  # project's dependencies and runs the Next.js build, so it gets no credential of any kind: a read-only token, no
-  # environment, no secret. It runs beside `checks`, and `deploy` waits for both. A push has no inputs, so it builds both
-  # sites. fail-fast is off so one site's failure doesn't cancel the other's build, whose log is then there to read.
+  # Builds the bundle of each site this run deploys, which the deploy job scans: one leg per site, as `plan` chose. It
+  # installs the project's dependencies and runs the Next.js build, so it gets no credential of any kind: a read-only
+  # token, no environment, no secret, no variable. It runs beside `checks`, and `deploy` waits for both. fail-fast is off so one site's failure doesn't cancel the other's build, whose log is then there to read.
   bundle:
     name: Build the ${{ matrix.site }} bundle
     runs-on: ubuntu-24.04
+    needs: plan
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        site: ${{ fromJSON(inputs.targets == 'mainnet' && '["mainnet"]' || inputs.targets == 'testnet' && '["testnet"]' || '["mainnet", "testnet"]') }}
+        site: ${{ fromJSON(needs.plan.outputs.sites) }}
     permissions:
       contents: read
     steps:
@@ -123,7 +166,7 @@ jobs:
   # the bundle arrives as data, and the scan script comes from this job's own checkout, never from the bundle.
   deploy:
     name: Deploy to production
-    needs: [checks, bundle]
+    needs: [plan, checks, bundle]
     # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -136,10 +179,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # Which sites this run deploys. A push has no inputs, so both.
+    # Which sites this run deploys: the ones `plan` chose and `bundle` built.
     env:
-      DEPLOY_MAINNET: ${{ inputs.targets != 'testnet' }}
-      DEPLOY_TESTNET: ${{ inputs.targets != 'mainnet' }}
+      DEPLOY_MAINNET: ${{ needs.plan.outputs.mainnet }}
+      DEPLOY_TESTNET: ${{ needs.plan.outputs.testnet }}
     # Whether the mainnet deploy succeeded, for the smoke job: it checks 4rc.OS even when the testnet deploy after it failed.
     outputs:
       mainnet: ${{ steps.deploy-mainnet.outcome }}
