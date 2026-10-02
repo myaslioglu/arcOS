@@ -3,14 +3,25 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {TradeSimulator, ISimPoolManager} from "../../src/sim/TradeSimulator.sol";
-import {SimToken, SimTrapToken, MockV2Pair, MockV3Pool, MockPoolManager} from "./SimMocks.sol";
+import {
+    SimToken,
+    SimTrapToken,
+    GasSink,
+    MockV2Pair,
+    MockV3Pool,
+    MockPoolManager,
+    PermissiveManager
+} from "./SimMocks.sol";
 
 /// The simulator against mock v2, v3 and v4 pools: an honest token, a transfer tax, a sell block, a blacklist, a sell
-/// that burns its gas, and a dynamic fee. The USDC here is a 6-decimal mock (a fork can't move Arc's 0x3600 USDC; the
-/// live eth_call suite covers that path), and native USDC is the test chain's ether.
+/// that burns its gas (itself or in a contract it calls), a `transferFrom` that reverts, and a dynamic fee. The USDC here
+/// is a 6-decimal mock (a fork can't move Arc's 0x3600 USDC; the live eth_call suite covers that path), and native USDC is
+/// the test chain's ether.
 contract TradeSimulatorTest is Test {
-    /// Where Inspector places the code with its state override.
-    address internal constant S = 0x00000000000000000000000000000000000A4c05;
+    /// Where Inspector places the code with its state override (a fresh random address on every run; these are two).
+    address internal constant S = 0x7c3f9A51d2E84B06a1c95e3d7b28F04c6A9E1D53;
+    /// The router: a second copy of the code, in the same override.
+    address internal constant R = 0x2b9E64C1f07A3d85E4b1C6A9d03f7e52b8c41a96;
     uint256 internal constant AMOUNT = 10e6; // 10 USDC
     uint24 internal constant DYNAMIC_FEE = 0x800000; // v4's dynamic-fee flag
 
@@ -23,6 +34,7 @@ contract TradeSimulatorTest is Test {
         token = new SimTrapToken();
         // As in the eth_call: the runtime code placed at S, which holds the USDC it trades with.
         vm.etch(S, type(TradeSimulator).runtimeCode);
+        vm.etch(R, type(TradeSimulator).runtimeCode);
         sim = TradeSimulator(payable(S));
         usdc.mint(S, AMOUNT);
     }
@@ -71,8 +83,9 @@ contract TradeSimulatorTest is Test {
         view
         returns (TradeSimulator.Trade memory)
     {
-        return
-            TradeSimulator.Trade({kind: kind, pool: pool, token: address(token), usdc: quote, amount: amount, key: key});
+        return TradeSimulator.Trade({
+            kind: kind, pool: pool, token: address(token), usdc: quote, router: R, amount: amount, key: key
+        });
     }
 
     function _noKey() internal pure returns (ISimPoolManager.PoolKey memory key) {}
@@ -97,9 +110,17 @@ contract TradeSimulatorTest is Test {
         assertEq(r.status, sim.OK());
         assertEq(r.spent, AMOUNT);
         assertGt(r.bought, 0);
+        assertEq(r.paidOut, r.bought);
         assertEq(r.sold, r.bought);
         // Two 0.3% fees: about 0.6%, and nothing more.
         assertApproxEqAbs(_lossPpm(r), 6_000, 100);
+        _assertSoldThroughTheRouter();
+    }
+
+    /// The sell went in as a real one does: S approved R, and R's `transferFrom` used all of it.
+    function _assertSoldThroughTheRouter() internal view {
+        assertEq(token.transferFroms(), 1);
+        assertEq(token.allowance(S, R), 0);
     }
 
     function test_v2_transferTaxShowsInTheLoss() public {
@@ -146,8 +167,41 @@ contract TradeSimulatorTest is Test {
             _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
         assertEq(r.status, sim.OK());
         assertEq(r.spent, AMOUNT);
+        // The pair paid out; the token delivered nothing of it.
+        assertGt(r.paidOut, 0);
         assertEq(r.bought, 0);
         assertEq(r.received, 0);
+    }
+
+    function test_v2_aBuyThePairGivesNothingForIsABuyRevertAndPaysNothing() public {
+        // A pair holding one token unit: 10 USDC buys nothing of it, so the buy reverts before paying.
+        MockV2Pair pair = new MockV2Pair(address(usdc), address(token));
+        usdc.mint(address(pair), 10_000e6);
+        token.seed(address(pair), 1);
+        pair.sync();
+        token.setPool(address(pair));
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.BUY_REVERTED());
+        assertEq(r.spent, 0);
+        assertEq(usdc.balanceOf(S), AMOUNT);
+    }
+
+    function test_v2_aSellWhoseTransferFromRevertsIsASellRevert() public {
+        MockV2Pair pair = _v2();
+        token.setTransferFromBlocked(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+        assertGt(r.bought, 0);
+    }
+
+    function test_v2_aSellThatRunsAContractOutOfGasIsOutOfGasNotARevert() public {
+        MockV2Pair pair = _v2();
+        token.setGasSink(address(new GasSink()));
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_OUT_OF_GAS());
     }
 
     // --- v3 ---
@@ -158,9 +212,28 @@ contract TradeSimulatorTest is Test {
             _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
         assertEq(r.status, sim.OK());
         assertEq(r.spent, AMOUNT);
+        assertEq(r.paidOut, r.bought);
         assertEq(r.sold, r.bought);
         assertApproxEqAbs(_lossPpm(r), 6_000, 100);
         assertEq(pool.calls(), 2);
+        _assertSoldThroughTheRouter();
+    }
+
+    function test_v3_aSellWhoseTransferFromRevertsIsASellRevert() public {
+        MockV3Pool pool = _v3(3000);
+        token.setTransferFromBlocked(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+        assertGt(r.bought, 0);
+    }
+
+    function test_v3_aSellThatRunsAContractOutOfGasIsOutOfGasNotARevert() public {
+        MockV3Pool pool = _v3(3000);
+        token.setGasSink(address(new GasSink()));
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_OUT_OF_GAS());
     }
 
     function test_v3_aTokenThatArrivesShortCantBeSoldIntoTheSamePool() public {
@@ -181,7 +254,7 @@ contract TradeSimulatorTest is Test {
 
     function test_v3_callbackRefusesAnyoneButThePoolBeingSwapped() public {
         vm.expectRevert();
-        sim.uniswapV3SwapCallback(1, 0, abi.encode(address(usdc)));
+        sim.uniswapV3SwapCallback(1, 0, abi.encode(address(usdc), address(0)));
         assertEq(usdc.balanceOf(S), AMOUNT);
     }
 
@@ -193,8 +266,25 @@ contract TradeSimulatorTest is Test {
         TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(0), 10e18, key), 5_000_000);
         assertEq(r.status, sim.OK());
         assertEq(r.spent, 10e18);
+        assertEq(r.paidOut, r.bought);
         assertEq(r.sold, r.bought);
         assertApproxEqAbs(_lossPpm(r), 6_000, 100);
+        _assertSoldThroughTheRouter();
+    }
+
+    function test_v4_aSellWhoseTransferFromRevertsIsASellRevert() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+        token.setTransferFromBlocked(true);
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+        assertGt(r.bought, 0);
+    }
+
+    function test_v4_aSellThatRunsAContractOutOfGasIsOutOfGasNotARevert() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+        token.setGasSink(address(new GasSink()));
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.SELL_OUT_OF_GAS());
     }
 
     function test_v4_erc20UsdcTransferTaxIsSoldForWhatArrived() public {
@@ -202,6 +292,8 @@ contract TradeSimulatorTest is Test {
         token.setTaxes(300, 300);
         TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
         assertEq(r.status, sim.OK());
+        // The manager paid out the full amount; 3% of it went to the tax wallet on the way.
+        assertApproxEqAbs(r.bought, (r.paidOut * 97) / 100, 1);
         // 1 - 0.97 * 0.97 * 0.997^2, about 6.5%.
         assertApproxEqAbs(_lossPpm(r), 64_500, 1_000);
     }
@@ -241,9 +333,14 @@ contract TradeSimulatorTest is Test {
         assertEq(usdc.balanceOf(S), AMOUNT);
     }
 
+    /// The caller answers every call the callback makes, so only the guard stops it being paid: this fails without it.
     function test_v4_unlockCallbackRefusesAnyoneButTheManagerBeingSwapped() public {
+        PermissiveManager impostor = new PermissiveManager();
+        bytes memory data = abi.encode(_key(address(usdc), 3000), address(usdc), address(token), AMOUNT, address(0));
         vm.expectRevert();
-        sim.unlockCallback(abi.encode(_key(address(usdc), 3000), address(usdc), address(token), AMOUNT));
+        impostor.attack(S, data);
+        assertEq(usdc.balanceOf(S), AMOUNT);
+        assertEq(usdc.balanceOf(address(impostor)), 0);
     }
 
     // --- the call itself ---
@@ -252,6 +349,22 @@ contract TradeSimulatorTest is Test {
         MockV2Pair pair = _v2();
         TradeSimulator.Result memory r = _run(_trade(7, address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
         assertEq(r.status, sim.BUY_REVERTED());
+    }
+
+    function test_simulateIsOnlyCallableByTheSimulatorItself() public {
+        MockV2Pair pair = _v2();
+        TradeSimulator.Trade memory t = _trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey());
+        vm.expectRevert();
+        sim.simulate(t);
+        assertEq(usdc.balanceOf(S), AMOUNT);
+    }
+
+    function test_theRouterOnlyMovesWhatItsCallerApproved() public {
+        // R pulls from its caller only: asked by anyone else, it can't touch S's tokens.
+        token.seed(S, 1e18);
+        vm.expectRevert();
+        TradeSimulator(payable(R)).pull(address(token), address(this), 1e18);
+        assertEq(token.balanceOf(S), 1e18);
     }
 
     function test_theLegsAreOnlyCallableByTheSimulatorItself() public {

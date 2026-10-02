@@ -25,9 +25,17 @@ contract SimToken is ERC20 {
     }
 }
 
+/// A contract that burns every bit of gas it is given.
+contract GasSink {
+    fallback() external {
+        while (true) {}
+    }
+}
+
 /// A token whose behaviour around one address (the pool, or v4's PoolManager) is set by the test: a transfer tax on buys
-/// and sells, a sell block (no transfer into the pool), a blacklist that catches every buyer, or a sell that burns all
-/// the gas it is given.
+/// and sells, a sell block (no transfer into the pool), a blacklist that catches every buyer, a sell that burns all the
+/// gas it is given (itself, or in a contract it calls), or a `transferFrom` that always reverts. It counts the
+/// `transferFrom`s that went through.
 contract SimTrapToken is SimToken {
     address public pool;
     address public constant TAX_WALLET = address(0x7a7);
@@ -36,6 +44,9 @@ contract SimTrapToken is SimToken {
     bool public sellBlocked;
     bool public blacklistBuyers;
     bool public burnGasOnSell;
+    bool public transferFromBlocked;
+    address public gasSink;
+    uint256 public transferFroms;
     mapping(address account => bool) public blacklisted;
     bool private _seeding;
 
@@ -61,6 +72,21 @@ contract SimTrapToken is SimToken {
         burnGasOnSell = on;
     }
 
+    function setTransferFromBlocked(bool on) external {
+        transferFromBlocked = on;
+    }
+
+    /// A sell calls `sink` with all its gas and requires the call to succeed.
+    function setGasSink(address sink) external {
+        gasSink = sink;
+    }
+
+    function transferFrom(address from, address to, uint256 value) public override returns (bool) {
+        require(!transferFromBlocked, "transferFrom is blocked");
+        transferFroms++;
+        return super.transferFrom(from, to, value);
+    }
+
     /// Seeds the pool without any of the traps applying.
     function seed(address to, uint256 amount) external {
         _seeding = true;
@@ -74,6 +100,10 @@ contract SimTrapToken is SimToken {
         if (to == pool) {
             if (burnGasOnSell) {
                 while (true) {}
+            }
+            if (gasSink != address(0)) {
+                (bool ok,) = gasSink.call("");
+                require(ok, "sink");
             }
             require(!sellBlocked, "sells are paused");
             uint256 tax = (value * sellTaxBps) / 10_000;
@@ -171,6 +201,30 @@ contract MockV3Pool {
 
 interface IUnlockCallback {
     function unlockCallback(bytes calldata data) external returns (bytes memory);
+}
+
+/// A contract that answers every PoolManager call the simulator's `unlockCallback` makes (`sync`, `settle`, `swap`,
+/// `take`) without complaint, and calls that callback itself. Without the callback's guard it would be paid.
+contract PermissiveManager {
+    function attack(address sim, bytes calldata data) external {
+        IUnlockCallback(sim).unlockCallback(data);
+    }
+
+    function sync(address) external {}
+
+    function settle() external payable returns (uint256) {
+        return 1;
+    }
+
+    function swap(ISimPoolManager.PoolKey calldata, ISimPoolManager.SwapParams calldata, bytes calldata)
+        external
+        pure
+        returns (int256)
+    {
+        return 0;
+    }
+
+    function take(address, address, uint256) external {}
 }
 
 /// Uniswap v4's PoolManager, reduced to what the simulator uses: flash accounting (`unlock`, `sync`, `settle`, `take`,

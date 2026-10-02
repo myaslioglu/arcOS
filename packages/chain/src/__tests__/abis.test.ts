@@ -34,9 +34,9 @@ const stateMutability = (abi: readonly AbiItem[], name: string) =>
   (findItem(abi, "function", name) as { stateMutability?: string } | undefined)?.stateMutability;
 
 describe("abis", () => {
-  it("tradeSimulatorAbi exposes the call Inspector makes, and its callbacks", () => {
+  it("tradeSimulatorAbi exposes the call Inspector makes, the router's pull, and its callbacks", () => {
     const fns = names(tradeSimulatorAbi, "function");
-    expect(fns).toEqual(expect.arrayContaining(["simulate", "uniswapV3SwapCallback", "unlockCallback"]));
+    expect(fns).toEqual(expect.arrayContaining(["simulate", "pull", "uniswapV3SwapCallback", "unlockCallback"]));
   });
 
   it("tradeSimulatorRuntime is runtime code without solc's metadata trailer", () => {
