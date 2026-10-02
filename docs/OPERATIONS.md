@@ -41,7 +41,9 @@ the Inspector reads that as "no indexed pools".
    writes nothing the second time. The tokens (new ones, and known ones queued again for a new pool) are written
    before the pools: a pool doc marks its sighting as done, so a crash between the two leaves the pool to be found
    again. The cursor is written after the window's pools and tokens, and only ever forward: a run that crashes repeats
-   a window, and never skips one, and a run behind another never moves the cursor back.
+   a window, and never skips one, and a run behind another never moves the cursor back. New pools and tokens are
+   created, never overwritten: if another run created one in the meantime, the window is read and written once more,
+   and that doc is left as it is.
 5. Inspects up to `INSPECT_PER_TICK` queued tokens (default 3): a token last found liquid that gained a new pool
    first, then tokens with a pool, then tokens without; newest first within each. A token still queued after 24 hours
    is skipped (it is inspected when someone opens it), and one whose inspection fails three times is skipped too. The
@@ -53,9 +55,15 @@ the Inspector reads that as "no indexed pools".
    tokens the run changed, and rebuilds one of the four from its query, a different one each minute, writing a page
    only when it changed. A page that missed a change (a run that died between an inspection and this step) is whole
    again within four runs.
-7. Ends the run: `lastRunAt`, the day's explorer calls, and the lease given back. Steps 6 and 7 run whatever failed in
-   step 5; the error's name is in the run's log line (`error`). A run that halts or fails before step 7 gives the lease
-   back too, and a run that died holding it leaves a lease that expires on its own.
+7. Ends the run: `lastRunAt` (never moved back), the run's explorer calls added to the day's count, and the lease given
+   back if it is still this run's.
+
+Once the window phase (steps 2 to 4) is over, steps 6 and 7 run whatever fails in step 5, and a failure in step 6
+doesn't stop step 7; the error's name is in the run's log line (`error`). Before that, they don't: a run that can't read
+the head, halts, or fails to write a window's pools, tokens or cursor ends there, with no feed update and no
+`lastRunAt`. It has spent no explorer call yet, so the day's count loses nothing, and the next run reads the window
+again. Such a run gives the lease back on its way out (best effort), and a run that died holding it leaves a lease that
+expires on its own.
 
 The indexer records pools, not their depth: `pools.depthUsdc` and `pools.sampledAt` stay `null` in R1. A token's best
 pool and its depth come from its inspection (`tokens.bestPool`).
@@ -100,9 +108,10 @@ under the same approval, the Firestore indexes (`firebase deploy --only firestor
 The functions are built in a job without a credential: `npm run build -w @arcos/functions` bundles
 [functions/src](../functions/src) with esbuild into `functions/deploy/index.js` and writes
 `functions/deploy/functions.yaml`, the manifest firebase-functions makes from that bundle. The deploy job scans both
-files with the sites' bundles, checks the manifest with `jq` (one document; every endpoint named `arcos…`, run as
-`arcos-jobs@`, triggered by a schedule and nothing else, in `europe-west4`; no extensions, no lifecycle hooks, no param
-or secret but `BLOCKSCOUT_API_KEY`), and only then signs in and hands both to the Firebase CLI, which reads the manifest
+files with the sites' bundles, checks the manifest with `jq` (one document; the one endpoint `arcosIndexer`, `gcfv2`,
+run as `arcos-jobs@`, triggered by a schedule and nothing else, in `europe-west4`, with no VPC, no environment variables
+and the default ingress; no extensions, no lifecycle hooks, no required roles; required APIs only from the pinned CLI's
+standard list; no param or secret but `BLOCKSCOUT_API_KEY`), and only then signs in and hands both to the Firebase CLI, which reads the manifest
 instead of loading the code. A manifest that fails the check stops the deploy with a message that says which rule it
 broke. On a push, a functions build that fails stops the sites' deploy too (the deploy job waits for every build); to
 ship the sites meanwhile, run the workflow by hand with `targets: both`.
@@ -152,7 +161,24 @@ deploys a scheduled 2nd-gen function; the files named are under `tools/firebase/
    - `roles/cloudfunctions.developer` and `roles/cloudscheduler.admin` on the project: the function and its Scheduler
      job;
    - `roles/iam.serviceAccountUser` on `arcos-jobs@` only: the function and the job run as it;
-   - `roles/secretmanager.viewer` on `BLOCKSCOUT_API_KEY`: the CLI resolves the secret's version;
+   - a custom role holding `secretmanager.versions.get` and `secretmanager.secrets.getIamPolicy`, bound on the secret
+     `BLOCKSCOUT_API_KEY` only. The CLI resolves the secret's latest version before every deploy
+     (`deploy/functions/validate.js`, `validateSecretVersions`: `versions.get`), and on the first deploy, when
+     `arcos-jobs@` is new to the secret, it reads the secret's IAM policy to make sure that account can read it
+     (`deploy/functions/ensure.js` `secretsAccessDelta`, lines 90-108; `release/fabricator.js` lines 158-164;
+     `gcp/secretManager.js` lines 224-244). `roles/secretmanager.viewer` has no `getIamPolicy`, so it isn't enough.
+     The CLI writes the policy (`setIamPolicy`) only when the `secretAccessor` binding of step 3 is missing; the
+     deployer can't, so step 3 comes first.
+
+     ```bash
+     gcloud iam roles create arcosSecretDeployReader --project arcos-c80cf \
+       --title "arcos: resolve a function secret" \
+       --permissions secretmanager.versions.get,secretmanager.secrets.getIamPolicy --stage GA
+     gcloud secrets add-iam-policy-binding BLOCKSCOUT_API_KEY --project arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
+       --role projects/arcos-c80cf/roles/arcosSecretDeployReader
+     ```
+
    - `roles/datastore.indexAdmin` on the project, with the same `arcos` condition as above: the indexes;
    - a custom role holding `run.services.getIamPolicy` and `run.services.setIamPolicy`, bound on the project with an IAM
      condition that limits it to the Cloud Run services whose names start with `arcos` (the function's service is
@@ -172,9 +198,16 @@ deploys a scheduled 2nd-gen function; the files named are under `tools/firebase/
        --condition 'expression=resource.name.startsWith("projects/arcos-c80cf/locations/europe-west4/services/arcos"),title=arcos Cloud Run services only'
      ```
 
-     The condition is verified on the first deploy: if that deploy stops at "set invoker" with a permission error on
-     `run.services.setIamPolicy`, the resource name Cloud Run checks differs from the one above. Read it from the
-     error or the audit log, and fix the condition; never drop it.
+     The condition is verified on the first deploy. If it doesn't match, the deploy fails at "set invoker" with a
+     permission error on `run.services.setIamPolicy`, after the function itself was created: `arcosIndexer` then
+     exists with no `roles/run.invoker` binding, and every Scheduler call to it is refused (HTTP 403 in the job's
+     log), so nothing runs. The first thing to try is the project-number form of the name, which Cloud Run may use in
+     place of the project id:
+     `resource.name.startsWith("projects/<project number>/locations/europe-west4/services/arcos")` (the number is in
+     the console's project settings, or `gcloud projects describe arcos-c80cf --format='value(projectNumber)'`). If
+     neither form matches, read the name from the error or the audit log. Fix the condition and deploy again: with
+     `--only functions:arcos` the function is updated, never skipped as unchanged, and the update writes the binding.
+     Never drop the condition.
    - No Artifact Registry role (see step 6).
 6. The cleanup policy of the functions' image repository, set by the owner:
 
