@@ -8,7 +8,7 @@ import type { TokenBalance } from "@arcos/inspector";
 // their answers. Nothing here reaches the network.
 const state = vi.hoisted(() => ({ address: undefined as string | undefined, holdings: [] as TokenBalance[] }));
 vi.mock("wagmi", () => ({
-  useAccount: () => ({ address: state.address }),
+  useConnection: () => ({ address: state.address }),
   useReadContract: () => ({ data: undefined, isLoading: false }),
   useReadContracts: () => ({ data: undefined }),
 }));

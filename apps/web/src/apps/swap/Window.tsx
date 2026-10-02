@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { useAccount } from "wagmi";
+import { useConnection } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { AppKit, isRateLimitError } from "@circle-fin/app-kit";
 import { useDesktop } from "@arcos/shell";
@@ -43,7 +43,7 @@ function buildParams(
 }
 
 function Form() {
-  const { address, connector } = useAccount();
+  const { address, connector } = useConnection();
   const { notify } = useDesktop();
   const kit = useMemo(() => new AppKit(), []);
 

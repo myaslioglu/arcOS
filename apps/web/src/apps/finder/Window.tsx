@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAccount, useReadContract, useReadContracts } from "wagmi";
+import { useConnection, useReadContract, useReadContracts } from "wagmi";
 import { erc20Abi, formatUnits } from "viem";
 import { Coins } from "lucide-react";
 import { ARCOS, activeChain, activeNetwork, explorerUrl, tokenFactoryAbi, type Address } from "@arcos/chain";
@@ -30,7 +30,7 @@ const CREATED_PAGE_SIZE = 100;
 const MONOGRAM_SIZE: Record<number, string> = { 1: "text-[15px]", 2: "text-[13px]", 3: "text-[11px]" };
 
 function Files() {
-  const { address } = useAccount();
+  const { address } = useConnection();
   const { open } = useDesktop();
   const network = activeNetwork();
   const chain = activeChain();
@@ -213,7 +213,7 @@ function Files() {
 export default function FinderWindow() {
   // Another account has other tokens: keying the list by it starts it over, so a page expanded with
   // Show more and the selected token don't carry over (switching keeps the wallet connected).
-  const { address } = useAccount();
+  const { address } = useConnection();
   return (
     <ConnectGate>
       <Files key={address} />
