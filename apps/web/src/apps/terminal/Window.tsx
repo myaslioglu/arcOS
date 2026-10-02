@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useAccount, usePublicClient } from "wagmi";
+import { useConnection, usePublicClient } from "wagmi";
 import type { Address } from "viem";
 import { activeChain } from "@arcos/chain";
 import { setThemePreference, useDesktop, useRegistry } from "@arcos/shell";
@@ -30,7 +30,7 @@ export default function TerminalWindow() {
   const chain = activeChain();
   const { list } = useRegistry();
   const { open } = useDesktop();
-  const { address, chainId } = useAccount();
+  const { address, chainId } = useConnection();
   const client = usePublicClient({ chainId: chain.id });
   const [state, setState] = useState<log.LogState>(log.emptyLog());
   const [input, setInput] = useState("");
