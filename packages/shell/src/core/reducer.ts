@@ -60,6 +60,8 @@ export function windowReducer(state: WindowState, action: WindowAction): WindowS
         z: zTop,
         minimized: false,
         maximized: false,
+        // Eight cascade slots, then round again: windowRect drifts each slot
+        // further from the centre, and the cycle keeps that drift short.
         cascade: state.windows.length % 8,
         rect: null,
       };

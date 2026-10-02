@@ -3,8 +3,16 @@ import type { Rect, WindowSize } from "./types";
 const EDGE = 16;
 /** Room kept free under a window for the dock. */
 const DOCK_CLEARANCE = 76;
-const GAP = 16;
+/** How far each new window sits down and right of the one before. */
 const STEP = 28;
+/** Where the first window sits in the free vertical room: 0.5 is the middle, less is higher. */
+const RISE = 0.4;
+/**
+ * The height of a typical window. Windows up to this tall share one top line,
+ * the one a window this tall would get, so their title bars step down evenly
+ * whatever their sizes; a taller window rises above that line to fit.
+ */
+const TYPICAL_H = 480;
 
 function clampRange(n: number, lo: number, hi: number): number {
   return Math.min(Math.max(n, lo), hi);
@@ -12,25 +20,36 @@ function clampRange(n: number, lo: number, hi: number): number {
 
 /**
  * Where a window opens, given how many were open before it (`slot`, which is
- * the reducer's `cascade`) and the size of the stage.
+ * the reducer's `cascade`) and the size of the stage, the way a desktop OS
+ * does it: around the middle, each new window overlapping the last.
  *
- * The first window sits against the right edge, so the trays on the left stay
- * readable. The second takes the left side beside it when both fit, which
- * tiles two windows instead of stacking them. Later windows cascade from
- * whichever side they land on. A stage too narrow for two cascades everything
- * from the right. No rect ever leaves the stage or runs under the dock.
+ * Slot 0 is centred horizontally and sits a little above the middle of the
+ * room between the top margin and the dock (its top on a line shared by every
+ * window up to TYPICAL_H tall). Each later slot moves one STEP down and right,
+ * so the title bars step down evenly even when the windows differ in size.
+ * When the next step would push the window under the dock, the cascade starts
+ * a new column: back at the first window's top, one STEP further right than
+ * the column before, so every slot lands somewhere distinct. A stage with no room to spare in a direction (a phone, a window as
+ * large as the stage) simply holds that coordinate. No rect ever leaves the
+ * stage or runs under the dock; windows may cover the desktop's folders, as
+ * they do on any desktop, and can be dragged off them.
  */
 export function windowRect(slot: number, size: WindowSize, stageW: number, stageH: number): Rect {
   const width = Math.max(260, Math.min(size.w, stageW - EDGE * 2));
   const height = Math.max(200, Math.min(size.h, stageH - EDGE - DOCK_CLEARANCE));
-  const twoFit = stageW >= EDGE * 2 + GAP + width * 2;
-  const onLeft = twoFit && slot % 2 === 1;
-  const depth = (twoFit ? Math.floor(slot / 2) : slot) * STEP;
-  const left = onLeft ? EDGE + depth : stageW - EDGE - width - depth;
-  const top = EDGE + depth;
+  const maxLeft = Math.max(EDGE, stageW - EDGE - width);
+  const maxTop = Math.max(EDGE, stageH - DOCK_CLEARANCE - height);
+  const baseLeft = EDGE + Math.round((maxLeft - EDGE) / 2);
+  const room = stageH - DOCK_CLEARANCE - EDGE;
+  const sharedTop = EDGE + Math.round(Math.max(0, room - TYPICAL_H) * RISE);
+  const baseTop = Math.min(sharedTop, EDGE + Math.round((maxTop - EDGE) * RISE));
+  // How many windows one column holds before the next would reach the dock.
+  const perColumn = 1 + Math.floor((maxTop - baseTop) / STEP);
+  const row = slot % perColumn;
+  const column = Math.floor(slot / perColumn);
   return {
-    left: clampRange(left, EDGE, Math.max(EDGE, stageW - EDGE - width)),
-    top: clampRange(top, EDGE, Math.max(EDGE, stageH - DOCK_CLEARANCE - height)),
+    left: clampRange(baseLeft + (row + column) * STEP, EDGE, maxLeft),
+    top: clampRange(baseTop + row * STEP, EDGE, maxTop),
     width,
     height,
   };

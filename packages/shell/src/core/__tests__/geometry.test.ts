@@ -17,25 +17,78 @@ describe("windowRect", () => {
   const W = 1440;
   const H = 860;
 
-  it("opens the first window against the right edge, clear of the dock", () => {
+  // The stage's lower edge minus the dock's clearance: no window runs under the dock.
+  const floor = (h: number) => h - 76;
+
+  it("centres the first window horizontally, a little above the middle, clear of the dock", () => {
     const r = windowRect(0, SIZES.a!, W, H);
-    expect(r.left + r.width).toBe(W - 16);
-    expect(r.top).toBe(16);
-    expect(r.top + r.height).toBeLessThanOrEqual(H - 60);
+    expect(Math.abs(r.left + r.width / 2 - W / 2)).toBeLessThanOrEqual(1);
+    const space = floor(H) - 16; // the band a window may occupy, from the top margin to the dock
+    const middle = 16 + space / 2;
+    expect(r.top + r.height / 2).toBeLessThan(middle);
+    expect(r.top).toBeGreaterThan(16);
+    expect(r.top + r.height).toBeLessThanOrEqual(floor(H));
   });
 
-  it("tiles the second window beside the first when both fit", () => {
-    const a = windowRect(0, SIZES.a!, W, H);
-    const b = windowRect(1, SIZES.a!, W, H);
+  it("cascades each later window one step down and right of the one before", () => {
+    const big = { w: 620, h: 480 };
+    const rects = [0, 1, 2].map((slot) => windowRect(slot, big, W, H));
+    for (let i = 1; i < rects.length; i++) {
+      const dx = rects[i]!.left - rects[i - 1]!.left;
+      const dy = rects[i]!.top - rects[i - 1]!.top;
+      expect(dx).toBeGreaterThanOrEqual(24);
+      expect(dx).toBeLessThanOrEqual(32);
+      expect(dy).toBe(dx);
+      // Partly overlapping, never side by side.
+      expect(rects[i]!.left).toBeLessThan(rects[i - 1]!.left + rects[i - 1]!.width);
+    }
+  });
+
+  it("steps title bars and centres down and right even when the windows differ in size", () => {
+    const sizes = [SIZES.narrow!, { w: 460, h: 360 }, { w: 640, h: 420 }];
+    const rects = sizes.map((size, slot) => windowRect(slot, size, W, H));
+    for (let i = 1; i < rects.length; i++) {
+      const prev = rects[i - 1]!;
+      const r = rects[i]!;
+      expect(r.top - prev.top).toBe(28);
+      expect(r.left + r.width / 2 - (prev.left + prev.width / 2)).toBeCloseTo(28, 0);
+    }
+  });
+
+  it("never opens a window pinned to the left or right edge of a wide stage", () => {
+    for (let slot = 0; slot < 8; slot++) {
+      const r = windowRect(slot, SIZES.a!, W, H);
+      expect(r.left).toBeGreaterThan(16 + 200);
+      expect(r.left + r.width).toBeLessThan(W - 16 - 200);
+    }
+  });
+
+  it("wraps back towards the top of a new column when the next step would reach the dock", () => {
+    const rects = Array.from({ length: 8 }, (_, slot) => windowRect(slot, SIZES.a!, W, H));
+    const first = rects[0]!;
+    // A tall window has little room below it: the cascade turns back up before it would be clamped.
+    const wrap = rects.findIndex((r, i) => i > 0 && r.top < rects[i - 1]!.top);
+    expect(wrap).toBeGreaterThan(0);
+    expect(rects[wrap]!.top).toBe(first.top);
+    expect(rects[wrap]!.left).toBeGreaterThan(first.left);
+    // Every slot lands somewhere distinct, so no window hides another exactly.
+    const keys = new Set(rects.map((r) => `${r.left},${r.top}`));
+    expect(keys.size).toBe(rects.length);
+    for (const r of rects) expect(r.top + r.height).toBeLessThanOrEqual(floor(H));
+  });
+
+  it("is the same rect for the same slot and stage", () => {
+    expect(windowRect(3, SIZES.b!, W, H)).toEqual(windowRect(3, SIZES.b!, W, H));
+  });
+
+  it("fits a phone-width stage: full usable width, cascading down only", () => {
+    const a = windowRect(0, SIZES.a!, 390, 800);
+    const b = windowRect(1, SIZES.a!, 390, 800);
+    expect(a.left).toBe(16);
+    expect(a.width).toBe(390 - 32);
     expect(b.left).toBe(16);
-    expect(b.left + b.width).toBeLessThanOrEqual(a.left);
-  });
-
-  it("cascades on a stage too narrow for two", () => {
-    const a = windowRect(0, SIZES.a!, 1000, H);
-    const b = windowRect(1, SIZES.a!, 1000, H);
-    expect(b.left).toBeLessThan(a.left);
     expect(b.top).toBeGreaterThan(a.top);
+    expect(b.top + b.height).toBeLessThanOrEqual(floor(800));
   });
 
   it("handles differently sized windows and never leaves the stage", () => {
