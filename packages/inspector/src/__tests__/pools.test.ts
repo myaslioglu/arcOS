@@ -589,7 +589,7 @@ describe("the liquidity finding when a v4 pool's liquidity is undecided", () => 
     const r = await runWith({ v4: listed([delta, at1251()]) }, v4Only, extra);
     expect(find(r, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't verify Uniswap v4 liquidity" });
     expect(find(r, "liquidity").detail).toContain("has a hook, which can change what a swap pays");
-    expect(find(r, "liquidity").detail).toContain("trade simulation");
+    expect(find(r, "liquidity").detail).toContain("a quote can't judge its liquidity");
   });
 
   it("reads unknown, never thin, when a quote couldn't be read", async () => {

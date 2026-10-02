@@ -790,7 +790,7 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
   if (undecided.length > 0) {
     const why = [
       undecided.some((p) => p.undecided === "hook")
-        ? `A Uniswap v4 pool has a hook, which can change what a swap pays, so its liquidity can't be judged without a trade simulation.`
+        ? `A Uniswap v4 pool has a hook, which can change what a swap pays, so a quote can't judge its liquidity.`
         : null,
       undecided.some((p) => p.undecided !== "hook") ? `The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.` : null,
       silent,
