@@ -6,8 +6,8 @@ on:
   pull_request:
 
 # Read-only, no deploy step, no secrets. It checks out the repo, installs from the committed lockfiles and runs the
-# @arcos/data Firestore emulator suite (its unit tests run in ci.yml). The suite talks only to the local emulator under
-# the demo-arcos project id, so it needs no credential and none is available to it.
+# Firestore emulator suites of @arcos/data and @arcos/functions (their unit tests run in ci.yml). The suites talk only to
+# the local emulator under the demo-arcos project id, so they need no credential and none is available to them.
 permissions:
   contents: read
 
@@ -44,3 +44,7 @@ jobs:
       # firebase emulators:exec starts the Firestore emulator, runs the suite against it and stops the emulator.
       - name: Emulator suite
         run: npm run test:emulator -w @arcos/data
+
+      # Whole indexer runs against fake chains: windows, idempotent writes, the queue, the feeds.
+      - name: Emulator suite (functions)
+        run: npm run test:emulator -w @arcos/functions
