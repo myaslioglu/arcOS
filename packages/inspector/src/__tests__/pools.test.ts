@@ -86,7 +86,8 @@ describe("a DEX config without Uniswap v2 or v3 (testnet has neither)", () => {
     // 90,000 USDC against one token unit: 10 USDC buys 0 of it.
     const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 90_000_000_000n, 1n) } });
     const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
-    expect(scan.pools).toMatchObject([{ liquid: false }]);
+    // It holds tokens, so it isn't left out of the trade check: its buy is tried, and its revert caps a later pass.
+    expect(scan.pools).toMatchObject([{ liquid: false, tradable: true }]);
     const funded = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 90_000_000_000n, 10n ** 24n) } });
     expect((await findPools(inputFor(funded, { quoteTokens: [USD], v2Factory: V2 }))).pools).toMatchObject([{ liquid: true }]);
   });

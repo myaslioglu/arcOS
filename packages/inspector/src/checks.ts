@@ -73,7 +73,7 @@ import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { NATIVE, readV4Pools, type V4Quote } from "./v4";
-import { STATUS, buyDidNotTrade, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type TradeAttempt, type TradeRun } from "./simulate";
+import { STATUS, buyDidNotTrade, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type SkipCause, type TradeAttempt, type TradeRun } from "./simulate";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -378,8 +378,11 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     if (version === "v2") {
       const reserves = await v2Reserves(pool as Address, quote.address);
       const depth = reserves.quote;
-      const tradable = reserves.token > 0n && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
-      return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH && tradable, tradable };
+      // Only a pair with no tokens at all (USDC `sync`ed in) is left out of the trade check. One that holds tokens but quotes
+      // nothing for the test amount is still traded against, and its buy reverting caps the finding (see `checkTrade`).
+      const tradable = reserves.token > 0n;
+      const liquid = depth >= MIN_DEPTH && tradable && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
+      return { address: pool as Address, version, quote: quote.symbol, depth, liquid, tradable };
     }
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
     return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
@@ -1002,9 +1005,10 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
 /**
  * Check 10: buy the token with USDC from its deepest USDC pool and sell it straight back, in one eth_call (see simulate.ts).
  * A pool whose buy can't trade (it reverted, took nothing, or paid nothing out; depth alone can be faked) is passed over for
- * the next deepest liquid pool, up to `MAX_TRADE_POOLS`, and the finding names the pools passed over. A buy that reverted in
- * a pool passed over may be the token refusing a buyer it can tell is simulated, so it caps the finding at `warn`: a round
- * trip that went through elsewhere after it is never a `pass` (a `fail` stays one). Only what was measured is evidence:
+ * the next deepest liquid pool, up to `MAX_TRADE_POOLS`, and the finding names the pools passed over and why. Only a pool
+ * that paid nothing out (which the token can't cause) is passed over freely; any other cause (a revert, a buy that took no
+ * USDC though the pool paid out) may be the token refusing or undoing a buy it can tell is simulated, and so does a deeper
+ * pool never tried: either caps the finding at `warn`, never `pass` (a `fail` stays one). Only what was measured is evidence:
  * - no pool tried could trade, or either leg ran out of the gas it was given: `unknown`, since neither says anything about
  *   selling;
  * - the buy went through and the sell reverted: `fail`, "Can't be sold", unless the pool can refuse a sell on its own account
@@ -1022,29 +1026,56 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   if (scan === null) return finding("trade", "unknown", TRADE_UNKNOWN, "The network didn't answer the pool lookup.");
   const run = await simulateTrade(input.reader, input.address, scan);
   const f = tradeFinding(input, scan, run);
-  const skipped = run.kind === "no-pool" ? undefined : run.skipped;
-  if (!skipped?.length || run.kind === "no-pool") return f;
-  const deeper = `the deeper ${skipped.length === 1 ? "pool" : "pools"} ${listWith("and", skipped.map((s) => poolName(s.pool)))}`;
-  const reverted = skipped.find((s) => s.buyReverted);
-  // A buy that reverted may be the token refusing a buyer it can tell is simulated (one with code, say) in the pool it
-  // blocks sells into, so a round trip measured elsewhere after it is never a pass.
-  if (reverted && f.status === "pass") {
-    const where = reverted === skipped[0] ? `its deepest pool (${poolName(reverted.pool)})` : `a deeper pool (${poolName(reverted.pool)})`;
+  if (run.kind === "no-pool" || !run.skipped?.length) return f;
+  const { skipped } = run;
+  const untried = run.untriedDeeper ?? [];
+  const passedOver = listWith("and", skipped.map((s) => `${poolName(s.pool)} (${SKIP_NOTE[s.cause]})`));
+  const capping = skipped.find((s) => s.tokenMayHaveCaused);
+  // A buy the token may have refused or undone (one it can tell is simulated, from a buyer with code, say), or a deeper
+  // pool never tried, leaves a round trip measured elsewhere short of a pass: it is capped at a warning.
+  if ((capping || untried.length > 0) && f.status === "pass") {
+    const where = (p: Pool) => (p === skipped[0]!.pool ? `its deepest pool (${poolName(p)})` : `a deeper pool (${poolName(p)})`);
+    const title = capping
+      ? `Buying in ${capping.pool === skipped[0]!.pool ? "its deepest pool" : "a deeper pool"} ${SKIP_TITLE[capping.cause]}`
+      : "A deeper pool wasn't tried";
+    const lead = capping
+      ? `Buying with ${usdcAmount(capping.amount)} USDC in ${where(capping.pool)} ${SKIP_VERB[capping.cause]}`
+      : `Buying in ${listWith("and", skipped.map((s) => where(s.pool)))} couldn't trade (${listWith("and", skipped.map((s) => SKIP_NOTE[s.cause]))})`;
+    const untriedNote = untried.length > 0 ? ` ${listWith("and", untried.map(poolName))}, deeper than that, ${untried.length === 1 ? "wasn't" : "weren't"} tried.` : "";
     return {
       ...f,
       status: "warn",
-      title: "Buying in its deepest pool reverted",
-      detail: `Buying with ${usdcAmount(reverted.amount)} USDC in ${where} reverted; a round trip on ${poolName(run.pool)} went through. ${f.detail} A token can refuse a buy it can tell is simulated, so a round trip measured elsewhere after that is never a pass.`,
+      title,
+      detail: `${lead}; a round trip on ${poolName(run.pool)} went through. ${f.detail}${untriedNote} A token can refuse or undo a buy it can tell is simulated, so a round trip measured elsewhere after that is never a pass.`,
     };
   }
+  const deeper = `the deeper ${skipped.length === 1 ? "pool" : "pools"} ${passedOver}`;
+  const untriedNote = untried.length > 0 ? ` ${listWith("and", untried.map(poolName))}, deeper than the pool measured, ${untried.length === 1 ? "wasn't" : "weren't"} tried.` : "";
   const note =
     run.kind === "ran" && buyDidNotTrade(run)
       ? ` Buying in ${deeper} couldn't trade either.`
       : run.kind === "ran"
-        ? ` Buying in ${deeper} couldn't trade (it reverted or got nothing), so this was measured on the next one.`
-        : ` Buying in ${deeper} couldn't trade (it reverted or got nothing), and the next one wasn't measured either.`;
+        ? ` Buying in ${deeper} couldn't trade, so this was measured on the next one.${untriedNote}`
+        : ` Buying in ${deeper} couldn't trade, and the next one wasn't measured either.`;
   return { ...f, detail: `${f.detail}${note}` };
 }
+
+/** Why a pool was passed over, as a note ("its buy reverted") and in a title ("Buying in its deepest pool reverted"). */
+const SKIP_NOTE: Record<SkipCause, string> = {
+  "buy-reverted": "its buy reverted",
+  "took-no-usdc": "its buy took no USDC though the pool paid out",
+  "pool-paid-nothing": "the pool paid nothing out",
+};
+const SKIP_VERB: Record<SkipCause, string> = {
+  "buy-reverted": "reverted",
+  "took-no-usdc": "took no USDC though the pool paid out",
+  "pool-paid-nothing": "got nothing: the pool paid nothing out",
+};
+const SKIP_TITLE: Record<SkipCause, string> = {
+  "buy-reverted": "reverted",
+  "took-no-usdc": "took no USDC",
+  "pool-paid-nothing": "paid nothing out",
+};
 
 function tradeFinding(input: InspectInput, scan: PoolScan, run: TradeRun): Finding {
   if (run.kind === "no-pool") {

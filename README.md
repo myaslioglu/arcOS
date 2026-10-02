@@ -187,15 +187,20 @@ but does have privileged functions, both the ownership and privileges findings r
 - Depth doesn't prove a pool trades. A v2 pair's depth is its USDC reserve, and a v3 or Aerodrome
   pool's is its USDC balance, so anyone can make a pool look deepest: by sending USDC to a v3 or
   Aerodrome pool with no liquidity, or to a v2 pair and calling `sync`, which leaves it USDC and no
-  tokens. A v2 pair whose reserves hold no tokens, or quote nothing for its test amount, is never
-  traded against or called liquid. When the buy in the deepest pool reverts, takes no USDC or gets
-  nothing from the pool, the check moves on, but only to the next deepest pool that discovery found
-  liquid (never a thinner one a deployer could seed with dust), up to three pools in all, and says
-  so; when none of them can trade the result is "unknown". A deeper pool whose buy reverted caps the
-  result at a warning: a token can refuse a buy it can tell is simulated (a recipient with code, say)
-  in the pool it blocks sells into, so a round trip that went through elsewhere after that is never a
-  pass ("Buying with 10 USDC in its deepest pool (Uniswap v3 0x…) reverted; a round trip on Uniswap
-  v2 0x… went through"). A fail stays a fail.
+  tokens. A v2 pair with no tokens in its reserves is never traded against or called liquid; one that
+  holds tokens is traded against even when it quotes nothing for the test amount. When the buy in the
+  deepest pool reverts, takes no USDC, or gets nothing because the pool paid nothing out, the check
+  moves on, but only to the next deepest pool that discovery found liquid (never a thinner one a
+  deployer could seed with dust), up to three pools in all, and the finding names each pool passed
+  over and why; when none of them can trade the result is "unknown". Only a pool that paid nothing
+  out, which the token can't bring about, is passed over freely. Any other reason caps the result at
+  a warning, because the token may have refused or undone the buy (rejecting a recipient with code,
+  say, or refunding the USDC) in the pool it blocks sells into: "Buying with 10 USDC in its deepest
+  pool (Uniswap v3 0x…) reverted; a round trip on Uniswap v2 0x… went through". So does a pool
+  deeper than the one measured that was never tried. A fail stays a fail. The cost of this rule: a
+  decoy whose buy reverts, such as a v3 pool that was never initialized with USDC sent to it, can
+  turn an honest token's pass into a warning. That griefing costs the USDC sent and errs on the safe
+  side.
 - How the round trip is judged: a buy the pool paid out for and of which no tokens arrived is a fail
   ("Buying delivers no tokens"). A sell that reverts after the buy went through is a fail ("Can't be
   sold") in a Uniswap v2 pair or a hookless v4 pool, where only the token can refuse it. A Uniswap v3
@@ -213,8 +218,8 @@ but does have privileged functions, both the ownership and privileges findings r
 - A round trip that loses more than the pool's own fees for the two swaps plus 3% is a warning; where
   the fee can change from swap to swap (a dynamic-fee or hooked v4 pool, Aerodrome) the line is 5%. A
   round trip that brings nothing back loses 100% and is a warning too. A buy that no pool tried could
-  trade, a leg that runs out of the gas it is given, and an RPC that won't run the simulation (or
-  read the gas price) all read "unknown".
+  trade (it reverted, took no USDC, or the pool paid nothing out), a leg that runs out of the gas it is
+  given, and an RPC that won't run the simulation (or read the gas price) all read "unknown".
 - A pass says what one simulated buy and sell did at that block, against one pool; a rule the owner
   can switch on later, or one that applies to other pools or larger amounts, isn't covered. A token
   can still tell the simulation from a real trade, and one written to behave differently for it can

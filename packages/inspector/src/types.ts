@@ -112,9 +112,10 @@ export type Pool = {
    * pool has a hook, which runs inside any swap and so could fake a quote either way; it isn't quoted. */
   undecided?: "quote-unavailable" | "hook";
   /**
-   * v2 only: whether its reserves can serve a buy at all, with tokens beside the USDC and a nonzero quote for the trade
-   * check's amount. `false` for a pair holding USDC `sync`ed in and nothing to sell for it, whatever its depth; such a pair
-   * is never liquid and the trade check never trades against it. A thin pair with both can be `true` and not liquid.
+   * v2 only: whether its reserves hold any tokens at all. `false` for a pair holding USDC `sync`ed in and nothing to sell
+   * for it, whatever its depth; such a pair is never liquid and the trade check never trades against it. A pair with tokens
+   * is `true` even when it quotes nothing for the test amount or is thin; it is liquid only with 1,000 USDC and a nonzero
+   * quote.
    */
   tradable?: boolean;
   /** v3 only: the fee tier the factory was asked for, in hundredths of a bip (3000 is 0.3%). */

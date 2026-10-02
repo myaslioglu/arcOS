@@ -350,7 +350,7 @@ describe("trade simulation: a deepest pool that can't trade", () => {
     const { f, chain } = await run(tookNothing, decoyV3, realV2);
     expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL, PAIR]);
     expect(f).toMatchObject({ status: "pass", evidenceUrl: `https://explorer.test/address/${PAIR}` });
-    expect(f.detail).toMatch(/Buying in the deeper pool Uniswap v3 0x7777…7777 couldn't trade \(it reverted or got nothing\), so this was measured on the next one\./);
+    expect(f.detail).toMatch(/Buying in the deeper pool Uniswap v3 0x7777…7777 \(the pool paid nothing out\) couldn't trade, so this was measured on the next one\./);
   });
 
   it("never passes a round trip measured after the deepest pool's buy reverted: the token may refuse a simulated buyer there", async () => {
@@ -360,6 +360,50 @@ describe("trade simulation: a deepest pool that can't trade", () => {
     expect(f).toMatchObject({ status: "warn", title: "Buying in its deepest pool reverted" });
     expect(f.detail).toMatch(/^Buying with 10 USDC in its deepest pool \(Uniswap v3 0x7777…7777\) reverted; a round trip on Uniswap v2 0x4444…4444 went through\./);
     expect(f.detail).toMatch(/never a pass/);
+  });
+
+  it("never passes after a deepest pool whose buy took no USDC though the pool paid out: the token can refund the buyer", async () => {
+    const refunded = (trade: { pool: string }) =>
+      lower(trade.pool) === lower(POOL)
+        ? withStatus(0, { spent: 0n, paidOut: 5n * 10n ** 18n, bought: 5n * 10n ** 18n, sold: 0n, received: 0n })
+        : roundTrip(5n * USDC_UNITS, 4_970_000n);
+    const { f, chain } = await run(refunded, decoyV3, realV2);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL, PAIR]);
+    expect(f).toMatchObject({ status: "warn", title: "Buying in its deepest pool took no USDC" });
+    expect(f.detail).toMatch(/^Buying with 10 USDC in its deepest pool \(Uniswap v3 0x7777…7777\) took no USDC though the pool paid out; a round trip on Uniswap v2 0x4444…4444 went through\./);
+    expect(f.detail).not.toMatch(/reverted or got nothing/);
+  });
+
+  it("names the pool that caused the cap: a deeper pool, not the deepest, when the deepest only paid nothing out", async () => {
+    const third = { ...v2Pool(2_000n * USDC_UNITS), address: "0x9999999999999999999999999999999999999999" as const };
+    const sim = (trade: { pool: string }) =>
+      lower(trade.pool) === lower(POOL)
+        ? withStatus(0, { spent: 0n, paidOut: 0n, bought: 0n })
+        : lower(trade.pool) === lower(PAIR) ? withStatus(1) : roundTrip(2n * USDC_UNITS, 1_988_000n);
+    const { f, chain } = await run(sim, decoyV3, realV2, third);
+    expect(chain.simulations).toHaveLength(3);
+    expect(f).toMatchObject({ status: "warn", title: "Buying in a deeper pool reverted" });
+    expect(f.detail).toMatch(/^Buying with 5 USDC in a deeper pool \(Uniswap v2 0x4444…4444\) reverted;/);
+  });
+
+  it("trades against a pair holding tokens that quotes nothing for the test amount, and caps a later pass when its buy reverts", async () => {
+    const quotesNothing = v2Pool(90_000n * USDC_UNITS, { liquid: false, tradable: true });
+    const liquidV3 = v3Pool(5_000n * USDC_UNITS, 3000);
+    const sim = (trade: { pool: string }) => (lower(trade.pool) === lower(PAIR) ? withStatus(1) : roundTrip(5n * USDC_UNITS, 4_970_000n));
+    const { f, chain } = await run(sim, quotesNothing, liquidV3);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR, POOL]);
+    expect(f).toMatchObject({ status: "warn", title: "Buying in its deepest pool reverted" });
+  });
+
+  it("caps a pass when a pool deeper than the one measured was never tried, and names it", async () => {
+    const quotesNothing = v2Pool(50_000n * USDC_UNITS, { liquid: false, tradable: true });
+    const shallow = v4Pool(1_000n * USDC_UNITS, USDC, 3000, 60);
+    const sim = (trade: { pool: string }) =>
+      lower(trade.pool) === lower(POOL) ? withStatus(0, { spent: 0n, paidOut: 0n, bought: 0n }) : roundTrip(TEN, 9_940_000n);
+    const { f, chain } = await run(sim, decoyV3, quotesNothing, shallow);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL, UNISWAP_V4.poolManager]);
+    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't tried" });
+    expect(f.detail).toMatch(/Uniswap v2 0x4444…4444, deeper than that, wasn't tried\./);
   });
 
   it("never measures a pool discovery didn't find liquid in place of the deepest: a deployer could seed one with dust", async () => {

@@ -112,8 +112,8 @@ export const MAX_TRADE_POOLS = 3;
  * The pools to trade against, in the order they are tried: those that trade USDC, the only currency the override can fund,
  * deepest first, every pool without a hook before any with one. Depth is what discovery read: v3 and Aerodrome's USDC
  * balance; v4's USDC in range at the current price, a lower figure, so a v4 pool comes before another kind only when even
- * that is deeper; a v2 pair's USDC reserve. A v2 pair whose reserves can't serve a buy (`tradable: false`: USDC `sync`ed in
- * with no tokens beside it) is left out. Depth still doesn't prove a pool trades: USDC sent to a v3 or Aerodrome pool with no
+ * that is deeper; a v2 pair's USDC reserve. A v2 pair with no tokens in its reserves (`tradable: false`: USDC `sync`ed in
+ * and nothing else) is left out. Depth still doesn't prove a pool trades: USDC sent to a v3 or Aerodrome pool with no
  * liquidity raises its balance. So the deepest can be a decoy whose buy can't trade, and `simulateTrade` moves on.
  */
 export function tradePools(scan: PoolScan, token: Address): Pool[] {
@@ -210,14 +210,30 @@ export type TradeAttempt =
    */
   | { kind: "ran"; pool: Pool; amount: bigint; decimals: 6 | 18; result: SimulatorResult; second?: TradeAttempt };
 
-/** A deeper pool tried first whose buy couldn't trade: `buyReverted` when the buy reverted, rather than took or got nothing. */
-export type SkippedPool = { pool: Pool; amount: bigint; buyReverted: boolean };
+/**
+ * Why a pool's buy couldn't trade (`buyDidNotTrade`): it reverted; it took no USDC although the pool paid out (a token can
+ * refund the buyer); or the pool paid nothing out, which only the pool can bring about.
+ */
+export type SkipCause = "buy-reverted" | "took-no-usdc" | "pool-paid-nothing";
+
+/**
+ * A deeper pool tried first whose buy couldn't trade. `tokenMayHaveCaused` is true for every cause but "pool-paid-nothing":
+ * a pool passed over for it caps the finding at a warning, since the token may have refused or undone the buy itself.
+ */
+export type SkippedPool = { pool: Pool; amount: bigint; cause: SkipCause; tokenMayHaveCaused: boolean };
+
+/** Why `attempt`'s buy couldn't trade; only called on one that `buyDidNotTrade`. */
+function skipCause(attempt: Extract<TradeAttempt, { kind: "ran" }>): SkipCause {
+  const r = attempt.result;
+  if (r.status === STATUS.buyReverted) return "buy-reverted";
+  return r.paidOut === 0n && r.bought === 0n ? "pool-paid-nothing" : "took-no-usdc";
+}
 
 /**
  * What `simulateTrade` found. `skipped` are the deeper pools tried first, in order, whose buy couldn't trade
  * (`buyDidNotTrade`): this attempt is against the next one.
  */
-export type TradeRun = { kind: "no-pool" } | (TradeAttempt & { skipped?: SkippedPool[] });
+export type TradeRun = { kind: "no-pool" } | (TradeAttempt & { skipped?: SkippedPool[]; untriedDeeper?: Pool[] });
 
 /**
  * Runs the round trip against the deepest USDC pool (`tradePools`): one eth_call, gas-capped, at the network's gas price.
@@ -243,13 +259,20 @@ export async function simulateTrade(reader: ChainReader, token: Address, scan: P
   let first = await roundTrip(reader, token, pools[0]!, gasPrice);
   for (const next of pools.slice(1)) {
     if (first.kind !== "ran" || !buyDidNotTrade(first)) break;
-    skipped.push({ pool: first.pool, amount: first.amount, buyReverted: first.result.status === STATUS.buyReverted });
+    const cause = skipCause(first);
+    skipped.push({ pool: first.pool, amount: first.amount, cause, tokenMayHaveCaused: cause !== "pool-paid-nothing" });
     first = await roundTrip(reader, token, next, gasPrice);
   }
-  const run: TradeRun = skipped.length > 0 ? { ...first, skipped } : first;
+  // After moving on, the pools deeper than the one measured that were never tried (not liquid, or past the cap): a pool
+  // left out that way could be where the token's real trading is, so it caps the finding as a refused buy does.
+  const measured = first.pool;
+  const tried = new Set<Pool>([...skipped.map((s) => s.pool), measured]);
+  const untriedDeeper = skipped.length > 0 ? all.filter((p) => !tried.has(p) && p.depth > measured.depth) : [];
+  const extra = { ...(skipped.length > 0 ? { skipped } : {}), ...(untriedDeeper.length > 0 ? { untriedDeeper } : {}) };
+  const run: TradeRun = { ...first, ...extra };
   if (first.kind !== "ran" || first.result.status !== STATUS.sellReverted || !poolCanRefuseSell(first.pool)) return run;
   const other = fallbackPool(scan, token, first.pool, skipped.map((s) => s.pool));
-  return other ? { ...first, ...(skipped.length > 0 ? { skipped } : {}), second: await roundTrip(reader, token, other, gasPrice) } : run;
+  return other ? { ...first, ...extra, second: await roundTrip(reader, token, other, gasPrice) } : run;
 }
 
 /**
