@@ -187,10 +187,15 @@ but does have privileged functions, both the ownership and privileges findings r
 - Depth doesn't prove a pool trades. A v2 pair's depth is its USDC reserve, and a v3 or Aerodrome
   pool's is its USDC balance, so anyone can make a pool look deepest: by sending USDC to a v3 or
   Aerodrome pool with no liquidity, or to a v2 pair and calling `sync`, which leaves it USDC and no
-  tokens. A v2 pair counts as liquid only with tokens in its reserves and a nonzero quote for its
-  test amount. And when the buy in the deepest pool reverts, takes no USDC or gets nothing from the
-  pool, the check moves on to the next deepest pool, up to three in all, and says so; only when none
-  of them can trade is the result "unknown".
+  tokens. A v2 pair whose reserves hold no tokens, or quote nothing for its test amount, is never
+  traded against or called liquid. When the buy in the deepest pool reverts, takes no USDC or gets
+  nothing from the pool, the check moves on, but only to the next deepest pool that discovery found
+  liquid (never a thinner one a deployer could seed with dust), up to three pools in all, and says
+  so; when none of them can trade the result is "unknown". A deeper pool whose buy reverted caps the
+  result at a warning: a token can refuse a buy it can tell is simulated (a recipient with code, say)
+  in the pool it blocks sells into, so a round trip that went through elsewhere after that is never a
+  pass ("Buying with 10 USDC in its deepest pool (Uniswap v3 0x…) reverted; a round trip on Uniswap
+  v2 0x… went through"). A fail stays a fail.
 - How the round trip is judged: a buy the pool paid out for and of which no tokens arrived is a fail
   ("Buying delivers no tokens"). A sell that reverts after the buy went through is a fail ("Can't be
   sold") in a Uniswap v2 pair or a hookless v4 pool, where only the token can refuse it. A Uniswap v3
@@ -244,6 +249,9 @@ but does have privileged functions, both the ownership and privileges findings r
   not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
+- A Uniswap v3 or Aerodrome pool's depth is still read from its USDC balance, which anyone can raise
+  by sending it USDC, so a pool with no liquidity can come first in the trade check's order; it is
+  passed over when its buy can't trade, but it can push a real pool past the three the check tries.
 - Inspector's trade simulation (check 10) can still be told from a real trade. S and R are fresh
   random addresses and the call carries the network's gas price, but: `tx.origin` (S) has code, which
   a wallet's address doesn't; S and R are addresses the token has never seen, and R is no router it

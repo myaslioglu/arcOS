@@ -112,12 +112,12 @@ export const MAX_TRADE_POOLS = 3;
  * The pools to trade against, in the order they are tried: those that trade USDC, the only currency the override can fund,
  * deepest first, every pool without a hook before any with one. Depth is what discovery read: v3 and Aerodrome's USDC
  * balance; v4's USDC in range at the current price, a lower figure, so a v4 pool comes before another kind only when even
- * that is deeper; a v2 pair's USDC reserve. None of these proves the pool trades: USDC sent to a v3 or Aerodrome pool with
- * no liquidity raises its balance, and USDC sent to a v2 pair and `sync`ed raises its reserve with no tokens beside it. So
- * the deepest can be a decoy whose buy can't trade, and `simulateTrade` moves on to the next.
+ * that is deeper; a v2 pair's USDC reserve. A v2 pair whose reserves can't serve a buy (`tradable: false`: USDC `sync`ed in
+ * with no tokens beside it) is left out. Depth still doesn't prove a pool trades: USDC sent to a v3 or Aerodrome pool with no
+ * liquidity raises its balance. So the deepest can be a decoy whose buy can't trade, and `simulateTrade` moves on.
  */
 export function tradePools(scan: PoolScan, token: Address): Pool[] {
-  const usable = scan.pools.filter((p) => usdcOf(p, token) !== null);
+  const usable = scan.pools.filter((p) => usdcOf(p, token) !== null && p.tradable !== false);
   return [...byDepth(usable.filter((p) => !hooked(p))), ...byDepth(usable.filter(hooked))];
 }
 
@@ -210,39 +210,45 @@ export type TradeAttempt =
    */
   | { kind: "ran"; pool: Pool; amount: bigint; decimals: 6 | 18; result: SimulatorResult; second?: TradeAttempt };
 
+/** A deeper pool tried first whose buy couldn't trade: `buyReverted` when the buy reverted, rather than took or got nothing. */
+export type SkippedPool = { pool: Pool; amount: bigint; buyReverted: boolean };
+
 /**
  * What `simulateTrade` found. `skipped` are the deeper pools tried first, in order, whose buy couldn't trade
  * (`buyDidNotTrade`): this attempt is against the next one.
  */
-export type TradeRun = { kind: "no-pool" } | (TradeAttempt & { skipped?: Pool[] });
+export type TradeRun = { kind: "no-pool" } | (TradeAttempt & { skipped?: SkippedPool[] });
 
 /**
  * Runs the round trip against the deepest USDC pool (`tradePools`): one eth_call, gas-capped, at the network's gas price.
- * When the buy can't trade there (`buyDidNotTrade`), it moves on to the next pool, up to `MAX_TRADE_POOLS` in all; only
- * when none can trade is the last attempt returned as it is (`unknown`). When the sell reverts in a pool that can refuse a
+ * When the buy can't trade there (`buyDidNotTrade`), it moves on to the next pool that discovery found liquid, never to a
+ * thinner one a deployer could seed with dust, up to `MAX_TRADE_POOLS` in all; only when none can trade is the last attempt
+ * returned as it is (`unknown`). A buy that reverted in a deeper pool may be the token's own doing, so the check never
+ * passes a round trip measured after one (see `checkTrade`). When the sell reverts in a pool that can refuse a
  * sell on its own account, it runs a second round trip on the deepest Uniswap v2 or hookless v4 USDC pool that can trade,
  * if there is one. Nothing else is read. Every failure is returned as what it is, for the check to read as `unknown`; a
  * rejection never escapes.
  */
 export async function simulateTrade(reader: ChainReader, token: Address, scan: PoolScan): Promise<TradeRun> {
-  const pools = tradePools(scan, token).slice(0, MAX_TRADE_POOLS);
-  if (pools.length === 0) return { kind: "no-pool" };
+  const all = tradePools(scan, token);
+  if (all.length === 0) return { kind: "no-pool" };
+  const pools = [all[0]!, ...all.slice(1).filter((p) => p.liquid === true)].slice(0, MAX_TRADE_POOLS);
   let gasPrice: bigint;
   try {
     gasPrice = await reader.gasPrice();
   } catch {
     return { kind: "call-failed", pool: pools[0]!, amount: testAmount(pools[0]!) };
   }
-  const skipped: Pool[] = [];
+  const skipped: SkippedPool[] = [];
   let first = await roundTrip(reader, token, pools[0]!, gasPrice);
   for (const next of pools.slice(1)) {
-    if (!buyDidNotTrade(first)) break;
-    skipped.push(first.pool);
+    if (first.kind !== "ran" || !buyDidNotTrade(first)) break;
+    skipped.push({ pool: first.pool, amount: first.amount, buyReverted: first.result.status === STATUS.buyReverted });
     first = await roundTrip(reader, token, next, gasPrice);
   }
   const run: TradeRun = skipped.length > 0 ? { ...first, skipped } : first;
   if (first.kind !== "ran" || first.result.status !== STATUS.sellReverted || !poolCanRefuseSell(first.pool)) return run;
-  const other = fallbackPool(scan, token, first.pool, skipped);
+  const other = fallbackPool(scan, token, first.pool, skipped.map((s) => s.pool));
   return other ? { ...first, ...(skipped.length > 0 ? { skipped } : {}), second: await roundTrip(reader, token, other, gasPrice) } : run;
 }
 

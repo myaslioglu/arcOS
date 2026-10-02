@@ -378,8 +378,8 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     if (version === "v2") {
       const reserves = await v2Reserves(pool as Address, quote.address);
       const depth = reserves.quote;
-      const liquid = depth >= MIN_DEPTH && reserves.token > 0n && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
-      return { address: pool as Address, version, quote: quote.symbol, depth, liquid };
+      const tradable = reserves.token > 0n && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
+      return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH && tradable, tradable };
     }
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
     return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
@@ -953,6 +953,7 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
     return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${VENUE[pool.version]} went through. ${capitalized(SOLD_BACK_REVERTED)}.`, at);
   }
   const deepestPool = run.skipped?.length ? `the deepest pool it could be bought from (${poolName(pool)})` : `its deepest pool (${poolName(pool)})`;
+  const warnTitle = run.skipped?.length ? "Can't be sold into the deepest pool it could be bought from" : "Can't be sold into its deepest pool";
   const first = `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool)}`;
   const second = run.second;
   const fail = (detail: string, title = "Can't be sold") => finding("trade", "fail", title, detail, at);
@@ -964,7 +965,7 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
   }
   if (second.kind === "no-answer" || second.kind === "call-failed") {
     return finding(
-      "trade", "warn", "Can't be sold into its deepest pool",
+      "trade", "warn", warnTitle,
       `Selling into ${deepestPool} reverted; a round trip on ${other} couldn't be completed (${rpcNote(second)}), so selling it elsewhere wasn't shown either way. ${poolRefusal(pool)} ${SIMULATED}`,
       at,
     );
@@ -992,7 +993,7 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
   }
   const back = `${usdcAmount(toSix(r.spent))} USDC came back as ${usdcAmount(toSix(r.received))}`;
   return finding(
-    "trade", "warn", "Can't be sold into its deepest pool",
+    "trade", "warn", warnTitle,
     `Selling into ${deepestPool} reverted; selling into ${other} went through (${back}). ${poolRefusal(pool)} ${SIMULATED}`,
     at,
   );
@@ -1001,7 +1002,9 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
 /**
  * Check 10: buy the token with USDC from its deepest USDC pool and sell it straight back, in one eth_call (see simulate.ts).
  * A pool whose buy can't trade (it reverted, took nothing, or paid nothing out; depth alone can be faked) is passed over for
- * the next deepest, up to `MAX_TRADE_POOLS`, and the finding names the pools passed over. Only what was measured is evidence:
+ * the next deepest liquid pool, up to `MAX_TRADE_POOLS`, and the finding names the pools passed over. A buy that reverted in
+ * a pool passed over may be the token refusing a buyer it can tell is simulated, so it caps the finding at `warn`: a round
+ * trip that went through elsewhere after it is never a `pass` (a `fail` stays one). Only what was measured is evidence:
  * - no pool tried could trade, or either leg ran out of the gas it was given: `unknown`, since neither says anything about
  *   selling;
  * - the buy went through and the sell reverted: `fail`, "Can't be sold", unless the pool can refuse a sell on its own account
@@ -1020,12 +1023,26 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   const run = await simulateTrade(input.reader, input.address, scan);
   const f = tradeFinding(input, scan, run);
   const skipped = run.kind === "no-pool" ? undefined : run.skipped;
-  if (!skipped?.length) return f;
-  const which = listWith("and", skipped.map(poolName));
+  if (!skipped?.length || run.kind === "no-pool") return f;
+  const deeper = `the deeper ${skipped.length === 1 ? "pool" : "pools"} ${listWith("and", skipped.map((s) => poolName(s.pool)))}`;
+  const reverted = skipped.find((s) => s.buyReverted);
+  // A buy that reverted may be the token refusing a buyer it can tell is simulated (one with code, say) in the pool it
+  // blocks sells into, so a round trip measured elsewhere after it is never a pass.
+  if (reverted && f.status === "pass") {
+    const where = reverted === skipped[0] ? `its deepest pool (${poolName(reverted.pool)})` : `a deeper pool (${poolName(reverted.pool)})`;
+    return {
+      ...f,
+      status: "warn",
+      title: "Buying in its deepest pool reverted",
+      detail: `Buying with ${usdcAmount(reverted.amount)} USDC in ${where} reverted; a round trip on ${poolName(run.pool)} went through. ${f.detail} A token can refuse a buy it can tell is simulated, so a round trip measured elsewhere after that is never a pass.`,
+    };
+  }
   const note =
     run.kind === "ran" && buyDidNotTrade(run)
-      ? ` Buying in the deeper ${skipped.length === 1 ? "pool" : "pools"} ${which} couldn't trade either.`
-      : ` Buying in the deeper ${skipped.length === 1 ? "pool" : "pools"} ${which} couldn't trade (it reverted or got nothing), so this was measured on the next one.`;
+      ? ` Buying in ${deeper} couldn't trade either.`
+      : run.kind === "ran"
+        ? ` Buying in ${deeper} couldn't trade (it reverted or got nothing), so this was measured on the next one.`
+        : ` Buying in ${deeper} couldn't trade (it reverted or got nothing), and the next one wasn't measured either.`;
   return { ...f, detail: `${f.detail}${note}` };
 }
 

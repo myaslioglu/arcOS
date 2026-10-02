@@ -73,7 +73,13 @@ describe("a DEX config without Uniswap v2 or v3 (testnet has neither)", () => {
   it("never calls a v2 pair liquid with no tokens in its reserves: USDC sent to it and synced", async () => {
     const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 90_000_000_000n, 0n) } });
     const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
-    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 90_000_000_000n, liquid: false }]);
+    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 90_000_000_000n, liquid: false, tradable: false }]);
+  });
+
+  it("keeps a thin v2 pair with tokens tradable though it isn't liquid", async () => {
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 27_000_000n, 10n ** 24n) } });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ depth: 27_000_000n, liquid: false, tradable: true }]);
   });
 
   it("never calls a v2 pair liquid when its quote for the test amount is nothing: a token reserve too small to pay out", async () => {
