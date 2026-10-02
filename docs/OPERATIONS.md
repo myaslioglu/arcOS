@@ -76,9 +76,10 @@ under the plan's own daily quota: on 2026-10-02 a 5,000 budget was the whole pla
 mid-afternoon, and every `/api/approvals` lookup on the site answered 503 until the UTC day ended. The explorer's own
 refusals are read too: after a 429 the indexer sends no explorer request for 60 s; after a 402 (the plan's quota or its
 payment is gone) it also marks the rest of the day's budget spent, so no run today asks again. Signs of a spent plan,
-in Logs Explorer: `approvals failed ApprovalsUnavailable 402` on the site's service (`arcos`), `arcosIndexer inspection
-failed` lines with `error: "ExplorerUnavailable"` on `arcosindexer`, and `explorerCalls.count` at the budget in
-`indexer/mainnet`. The site's own calls are not counted there, so check the plan's dashboard for the day's total.
+in Logs Explorer: `approvals failed ApprovalsUnavailable 402` on the site's service (`arcos`); on the indexer's side,
+`explorerCalls.count` at the budget in `indexer/mainnet` and new `reports` docs with `degraded: true` (an explorer
+refusal degrades a report, it doesn't fail the inspection). The site's own calls are not counted there, so check the
+plan's dashboard for the day's total.
 
 `INSPECT_PER_TICK` and `EXPLORER_DAILY_BUDGET` are environment variables of the function. Nothing sets them, so the
 defaults in [functions/src/indexer/schedule.ts](../functions/src/indexer/schedule.ts) apply; change a default there and

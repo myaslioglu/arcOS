@@ -18,7 +18,7 @@ describe("INDEXER_OPTIONS", () => {
 });
 
 describe("indexerSettings", () => {
-  it("defaults to 3 inspections a run and 5,000 explorer calls a day", () => {
+  it("defaults to 3 inspections a run and 3,000 explorer calls a day", () => {
     expect(indexerSettings({})).toEqual({ inspectPerTick: 3, explorerDailyBudget: 3_000 });
   });
 
