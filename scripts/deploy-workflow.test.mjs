@@ -903,3 +903,14 @@ describe("the end-to-end smoke job in ci.yml", () => {
     expect(upload).toMatch(/path: playwright-report\/$/m);
   });
 });
+
+// The owner sets the functions' image cleanup policy from Cloud Shell, which has no tools/firebase, with npx and an
+// exact version (docs/OPERATIONS.md, Setting it up). That version must be the pinned CLI's.
+describe("docs/OPERATIONS.md, the CLI version run by npx", () => {
+  it("runs the version pinned in tools/firebase/package.json", () => {
+    const pinned = JSON.parse(read("tools/firebase/package.json")).dependencies["firebase-tools"];
+    const used = [...read("docs/OPERATIONS.md").matchAll(/npx -y firebase-tools@([^\s`]+)/g)].map((m) => m[1]);
+    expect(used.length).toBeGreaterThan(0);
+    for (const version of used) expect(version).toBe(pinned);
+  });
+});

@@ -105,11 +105,14 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
   `npm ci --ignore-scripts --prefix tools/firebase` works with npm 10. Then run `npm audit --prefix tools/firebase`, read the CLI's release notes, and
   run a dry run before the next real deploy. The same CLI runs `@arcos/data`'s tests: its unit tests load the CLI's
   deploy code (ci.yml) and its emulator suite starts the Firestore emulator with it (emulator.yml), so a bump must pass
-  both, `npm test -w @arcos/data` and `npm run test:emulator -w @arcos/data`.
+  both, `npm test -w @arcos/data` and `npm run test:emulator -w @arcos/data`. Also change the version in the
+  `functions:artifacts:setpolicy` command of [OPERATIONS.md](OPERATIONS.md#setting-it-up) (a test in
+  `scripts/deploy-workflow.test.mjs` checks the two match).
 - **Google Cloud**: a workload identity provider that accepts tokens only from this repository's `production`
   environment, and a deployer service account with App Hosting Developer, Service Usage Consumer and Storage Bucket
   Viewer on the project, and Storage Object Creator on the bucket that holds uploaded source. It has no key. The same
-  roles cover both backends (see [The testnet site](#the-testnet-site)).
+  roles cover both backends (see [The testnet site](#the-testnet-site)). The functions and the indexes need more roles,
+  listed in [OPERATIONS.md](OPERATIONS.md#setting-it-up).
 - **Two App Hosting backends** in `europe-west4`, both listed in `firebase.json` with the root `apps/web`: `arcos`
   (https://4rcos.com), which runs as `arcos-web@` and has no environment name, so it reads `apphosting.yaml` alone; and
   `arcos-testnet` (https://testnet.4rcos.com), which runs as `arcos-testnet-web@` and has the environment name

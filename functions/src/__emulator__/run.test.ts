@@ -483,6 +483,40 @@ describe("a run that fails part way", () => {
     expect((await feed("passing"))!.rows.map((r) => r.address)).toEqual([C]);
   });
 
+  it("logs a Firestore-shaped failure by name, code and masked details, never by its message", async () => {
+    await seed();
+    const message = `5 NOT_FOUND: No document to update: projects/${project}/databases/arcos/documents/tokens/mainnet:${A}`;
+    const failure = Object.assign(new Error(message), {
+      code: 5,
+      details: `No document to update: projects/${project}/databases/arcos/documents/tokens/mainnet:${A}`,
+      metadata: {},
+    });
+    const lines: { message: string; data?: object }[] = [];
+    const record = (message: string, data?: object) => void lines.push({ message, data });
+    const result = ran(
+      await runIndexer({
+        db,
+        network: "mainnet",
+        chain: fakeChain({ head: START + 10_000 }),
+        inspectToken: fakeInspector({ [A]: failure, [B]: { report: fakeReport(B, 5, false), scan }, [C]: { report: fakeReport(C, 5, false), scan } }),
+        settings: { inspectPerTick: 3, explorerDailyBudget: 5_000 },
+        now: clock.now,
+        log: { info: record, warn: record, error: record },
+      }),
+    );
+    expect(result.failed).toBe(1);
+    const failed = lines.find((l) => l.message === "arcosIndexer inspection failed");
+    expect(failed?.data).toEqual({
+      error: "Error",
+      code: 5,
+      details: `No document to update: projects/${project}/databases/arcos/documents/tokens/mainnet:[address]`,
+      attempts: 1,
+    });
+    const logged = JSON.stringify(lines);
+    expect(logged).not.toContain("NOT_FOUND");
+    expect(logged.toLowerCase()).not.toContain(A.toLowerCase());
+  });
+
   it("rebuilds one feed a run, in turn, so a page that missed a change is whole again within four runs", async () => {
     await seed();
     await run({ head: START + 10_000 }, fakeInspector({ [C]: { report: fakeReport(C, 5, false), scan } }), { inspectPerTick: 1, explorerDailyBudget: 0 });
