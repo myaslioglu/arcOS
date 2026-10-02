@@ -63,7 +63,7 @@ describe("windowRect", () => {
     }
   });
 
-  it("wraps back towards the top of a new column when the next step would reach the dock", () => {
+  it("wraps into a new column before the dock, every slot in its own place on a stage with room", () => {
     const rects = Array.from({ length: 8 }, (_, slot) => windowRect(slot, SIZES.a!, W, H));
     const first = rects[0]!;
     // A tall window has little room below it: the cascade turns back up before it would be clamped.
@@ -71,7 +71,8 @@ describe("windowRect", () => {
     expect(wrap).toBeGreaterThan(0);
     expect(rects[wrap]!.top).toBe(first.top);
     expect(rects[wrap]!.left).toBeGreaterThan(first.left);
-    // Every slot lands somewhere distinct, so no window hides another exactly.
+    // On a stage with room every slot lands somewhere distinct, so no window hides another exactly. (On a stage
+    // with no room to spare, such as 300x300 below, slots may share a rect; the clamps still hold.)
     const keys = new Set(rects.map((r) => `${r.left},${r.top}`));
     expect(keys.size).toBe(rects.length);
     for (const r of rects) expect(r.top + r.height).toBeLessThanOrEqual(floor(H));
@@ -91,13 +92,16 @@ describe("windowRect", () => {
     expect(b.top + b.height).toBeLessThanOrEqual(floor(800));
   });
 
-  it("handles differently sized windows and never leaves the stage", () => {
+  it("handles differently sized windows, never leaves the stage, never runs under the dock", () => {
     expect(windowRect(0, SIZES.wide!, W, H).width).toBeGreaterThan(windowRect(0, SIZES.narrow!, W, H).width);
     const stages = [
       [1440, 860],
       [1024, 700],
       [800, 560],
       [390, 800],
+      [1280, 720],
+      [1920, 1080],
+      [300, 300],
     ] as const;
     for (const [w, h] of stages) {
       for (const size of Object.values(SIZES)) {
@@ -107,6 +111,7 @@ describe("windowRect", () => {
           expect(r.top).toBeGreaterThanOrEqual(0);
           expect(r.left + r.width).toBeLessThanOrEqual(w);
           expect(r.top + r.height).toBeLessThanOrEqual(h);
+          expect(r.top + r.height).toBeLessThanOrEqual(floor(h));
         }
       }
     }
