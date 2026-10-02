@@ -60,11 +60,11 @@ the Inspector reads that as "no indexed pools".
 
 Once the window phase (steps 2 to 4) is over, steps 6 and 7 run whatever fails in step 5, and a failure in step 6
 doesn't stop step 7; the error's name is in the run's log line (`error`), with its `code` when it has one, and, for a
-Firestore error, its `details` cut to 200 characters (never the message, which could carry a node's URL). Before that,
-they don't: a run that can't read the head, halts, or fails to write a window's pools, tokens or cursor ends there,
-with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's count loses nothing, and the
-next run reads the window again. Such a run gives the lease back on its way out (best effort), and a run that died
-holding it leaves a lease that expires on its own.
+Firestore error, its `details` with URLs and addresses masked, cut to 200 characters (never the message, which could
+carry a node's URL). Before that, they don't: a run that can't read the head, halts, or fails to write a window's pools,
+tokens or cursor ends there, with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's
+count loses nothing, and the next run reads the window again. Such a run gives the lease back on its way out (best
+effort), and a run that died holding it leaves a lease that expires on its own.
 
 The indexer records pools, not their depth: `pools.depthUsdc` and `pools.sampledAt` stay `null` in R1. A token's best
 pool and its depth come from its inspection (`tokens.bestPool`).

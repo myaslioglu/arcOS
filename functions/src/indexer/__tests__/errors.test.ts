@@ -18,6 +18,18 @@ describe("errorFields", () => {
     expect(fields.details).toBe("connect failed: [url] refused");
   });
 
+  it("masks addresses and host paths in details, as a Firestore NOT_FOUND carries a token's doc id", () => {
+    const address = "0x00000000000000000000000000000000000000a1";
+    const path = `projects/demo-arcos/databases/arcos/documents/tokens/mainnet:${address}`;
+    const fields = errorFields(grpcError(5, `No document to update: ${path}`));
+    expect(fields).toEqual({
+      error: "Error",
+      code: 5,
+      details: "No document to update: projects/demo-arcos/databases/arcos/documents/tokens/mainnet:[address]",
+    });
+    expect(errorFields(grpcError(14, "failed to reach rpc.node.example.com:443/v2/key123")).details).toBe("failed to reach [url]");
+  });
+
   it("gives a JSON-RPC error's code but not its details, which could carry a node's answer", () => {
     const e = Object.assign(new Error("https://node.example/key123 said no"), { code: -32005, details: "https://node.example/key123" });
     expect(errorFields(e)).toEqual({ error: "Error", code: -32005 });
