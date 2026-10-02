@@ -168,6 +168,26 @@ const toSixDecimals = (raw: bigint, decimals: number): bigint =>
  */
 export const QUOTE_GAS = 2_000_000n;
 
+/**
+ * How many quotes run at once. Each is still its own eth_call with its own gas; this only keeps a token with many pools (the
+ * ten standard keys and up to 50 from the index) from sending them all to the endpoint in one burst.
+ */
+export const QUOTE_CONCURRENCY = 6;
+
+/** `fn` over every item, at most `limit` at a time, the results in the items' order. */
+async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 /** V4Quoter wraps whatever its inner call reverted with in `UnexpectedRevertBytes(bytes)`. */
 const UNEXPECTED_REVERT_BYTES = "0x6190b2b0";
 /** `NotEnoughLiquidity(bytes32 poolId)`: the pool's own "I can't pay that". */
@@ -193,7 +213,7 @@ function isPoolShort(data: Hex | null, poolId: Hex): boolean {
 }
 
 /**
- * `token`'s v4 pools against each quote currency: one round trip for the state, then one quote per pool that exists, all at once.
+ * `token`'s v4 pools against each quote currency: one round trip for the state, then one quote per pool that exists, `QUOTE_CONCURRENCY` at a time.
  * 1. One multicall of `StateView.getSlot0` and `getLiquidity` for every candidate: the standard hookless keys and the
  *    index's pools. A pool whose `sqrtPriceX96` is 0 was never initialised.
  * 2. For each pool that exists, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call
@@ -240,21 +260,19 @@ export async function readV4Pools(a: {
   });
   if (live.length === 0) return { answered, pools: [] };
 
-  const pools = await Promise.all(
-    live.map(async (c): Promise<Pool> => {
-      const held = quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: c.liquidity, quoteIsCurrency0: c.quoteIsCurrency0 });
-      const base = { address: a.v4.poolManager, version: "v4" as const, quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), poolId: c.id, key: c.key };
-      if (hasHook(c.key)) return { ...base, liquid: null, undecided: "hook" };
-      try {
-        // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
-        const params = { poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" };
-        await a.reader.read(a.v4.quoter, quoterAbi, "quoteExactOutputSingle", [params], { gas: QUOTE_GAS });
-        return { ...base, liquid: true };
-      } catch (e) {
-        if (e instanceof CallReverted && isPoolShort(e.data, c.id)) return { ...base, liquid: false };
-        return { ...base, liquid: null, undecided: "quote-unavailable" };
-      }
-    }),
-  );
+  const pools = await mapLimited(live, QUOTE_CONCURRENCY, async (c): Promise<Pool> => {
+    const held = quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: c.liquidity, quoteIsCurrency0: c.quoteIsCurrency0 });
+    const base = { address: a.v4.poolManager, version: "v4" as const, quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), poolId: c.id, key: c.key };
+    if (hasHook(c.key)) return { ...base, liquid: null, undecided: "hook" };
+    try {
+      // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
+      const params = { poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" };
+      await a.reader.read(a.v4.quoter, quoterAbi, "quoteExactOutputSingle", [params], { gas: QUOTE_GAS });
+      return { ...base, liquid: true };
+    } catch (e) {
+      if (e instanceof CallReverted && isPoolShort(e.data, c.id)) return { ...base, liquid: false };
+      return { ...base, liquid: null, undecided: "quote-unavailable" };
+    }
+  });
   return { answered, pools };
 }

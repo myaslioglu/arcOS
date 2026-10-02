@@ -4,7 +4,7 @@ import { findPools } from "../checks";
 import { inspect } from "../inspect";
 import type { ExplorerSource, Holder } from "../explorer";
 import type { ExtraPool, Finding, InspectInput, Report } from "../types";
-import { NATIVE, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
+import { NATIVE, QUOTE_CONCURRENCY, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
 import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, NOT_ENOUGH_LIQUIDITY_OTHER_POOL, NOT_ENOUGH_LIQUIDITY_POOL, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
 import { fakeChain, readKey, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
 
@@ -90,6 +90,29 @@ describe("Uniswap v4 discovery", () => {
 
   it("gives every quote the same bounded gas: enough for an honest quote (about 62,500 gas, measured), far under an empty spacing-1 pool's walk (over 20 million)", () => {
     expect(QUOTE_GAS).toBe(2_000_000n);
+  });
+
+  it("runs at most QUOTE_CONCURRENCY quotes at once, still one eth_call each, and quotes every pool", async () => {
+    const keys = standardV4Keys(TOKEN, [USDC, NATIVE]);
+    const chain = fakeChain({ v4: listed(...keys.map((k): [typeof k, FakePool] => [k, at1251()])) });
+    let inFlight = 0;
+    let most = 0;
+    const reader: FakeReader = {
+      ...chain,
+      read: async (address, abi, fn, args, options) => {
+        if (fn !== "quoteExactOutputSingle") return chain.read(address, abi, fn, args, options);
+        most = Math.max(most, ++inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return chain.read(address, abi, fn, args, options);
+      },
+    };
+    const scan = await findPools(inputFor(reader, v4Only));
+    expect(keys.length).toBeGreaterThan(QUOTE_CONCURRENCY);
+    expect(most).toBe(QUOTE_CONCURRENCY);
+    expect(chain.quotes).toHaveLength(keys.length);
+    expect(scan.pools.map((p) => p.poolId)).toEqual(keys.map(v4PoolId));
+    expect(scan.pools.every((p) => p.liquid === true)).toBe(true);
   });
 
   it("stops after one multicall when no standard pool exists, and says the StateView answered", async () => {
