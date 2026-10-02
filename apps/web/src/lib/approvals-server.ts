@@ -1,10 +1,8 @@
 import "server-only";
 import { multicall3Abi, parseAbi, type Address } from "viem";
 import { activeChain, activeNetwork } from "@arcos/chain";
+import { explorerFetch, proLogsApi, withDeadline } from "@arcos/inspector";
 import { ApprovalsUnavailable, loadApprovals, logsPageUrl, readLogsPage, type ApprovalsAnswer } from "./approvals";
-import { withDeadline } from "./deadline";
-import { explorerFetch } from "./explorer-fetch";
-import { proLogsApi } from "./inspect-input";
 import { processGlobal } from "./process-global";
 import { inFlightGate } from "./rate-limit";
 import { approvalsRpcClient, explorerPacer } from "./server-rpc";
@@ -34,7 +32,7 @@ const gate = processGlobal("approvals.gate", () => inFlightGate(4, () => new App
  * lookup makes three explorer requests (see `loadApprovals`). The logs come from Blockscout's PRO API with the Inspector's key when one is set
  * (`BLOCKSCOUT_API_KEY`, read on each call and sent only as a bearer header), else from the network's public explorer,
  * which refuses servers on mainnet. Explorer requests wait their turn on the Inspector's pacer, each ends after 8 s
- * (explorer-fetch.ts), and the whole lookup after 15 s (deadline.ts). The allowances and token details come from
+ * (explorer-fetch.ts in @arcos/inspector), and the whole lookup after 15 s (deadline.ts, the same). The allowances and token details come from
  * Revoke's own RPC client (`approvalsRpcClient()`, its own endpoint-health record, never the Inspector's shared
  * one): a clean multicall is one Multicall3 call, and one a spoofed Approval event poisons is split and retried
  * within its own budget (see `liveApprovals` in approvals.ts) rather than cooling the Inspector's endpoints. When

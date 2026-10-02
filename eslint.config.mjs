@@ -19,6 +19,9 @@ const eslintConfig = defineConfig([
     "packages/contracts/out/**",
     "packages/contracts/cache/**",
     "packages/contracts/broadcast/**",
+    // The functions bundle (esbuild output) and the folders its test builds into.
+    "functions/deploy/**",
+    "functions/.bundle-test-*/**",
   ]),
 ]);
 

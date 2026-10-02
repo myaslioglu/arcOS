@@ -1,0 +1,14 @@
+{
+  "name": "arcos-functions",
+  "private": true,
+  "description": "The deployed functions codebase arcos: index.js and functions.yaml are built by `npm run build -w @arcos/functions` and are not committed. Cloud Build installs these two packages from the lockfile, with install scripts off (.npmrc).",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.0",
+    "firebase-functions": "7.4.0"
+  }
+}

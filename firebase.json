@@ -14,7 +14,9 @@
         "firebase-debug.*.log",
         "packages/contracts/out",
         "packages/contracts/cache",
-        "packages/contracts/broadcast"
+        "packages/contracts/broadcast",
+        "functions/deploy/index.js",
+        "functions/deploy/functions.yaml"
       ]
     },
     {
@@ -31,7 +33,9 @@
         "firebase-debug.*.log",
         "packages/contracts/out",
         "packages/contracts/cache",
-        "packages/contracts/broadcast"
+        "packages/contracts/broadcast",
+        "functions/deploy/index.js",
+        "functions/deploy/functions.yaml"
       ]
     }
   ],
@@ -50,6 +54,16 @@
       "database": "arcos",
       "rules": "firestore/arcos.rules",
       "indexes": "firestore/arcos.indexes.json"
+    }
+  ],
+  "functions": [
+    {
+      "codebase": "arcos",
+      "source": "functions/deploy",
+      "runtime": "nodejs22",
+      "ignore": [
+        "node_modules"
+      ]
     }
   ],
   "hosting": {

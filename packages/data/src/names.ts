@@ -52,3 +52,23 @@ export const TTL_MS = {
 } as const satisfies Partial<Record<CollectionKey, number>>;
 export type TtlCollection = keyof typeof TTL_MS;
 export const TTL_COLLECTIONS = Object.keys(TTL_MS) as TtlCollection[];
+
+/**
+ * tokens.inspect.priority: the inspection queue takes the highest first, then the newest `firstSeen` (design 1.3, step
+ * 8: liquid first, then newest). Liquidity is only known once a token has been inspected, so "liquid first" means a
+ * token whose last report found it liquid, queued again because a new pool appeared. Then a token with a USDC or EURC
+ * pool, then one without (a TokenFactory token nobody has paired yet).
+ */
+export const INSPECT_PRIORITY = { liquid: 2, pooled: 1, bare: 0 } as const;
+
+/** A token still queued this long after it joined the queue is skipped; it is inspected when someone opens it. */
+export const INSPECT_QUEUE_MAX_AGE_MS = DAY;
+
+/** How many rows a radarFeed doc holds: one Radar page. */
+export const RADAR_FEED_SIZE = 50;
+
+/** Radar's "at least 5 checks pass" (tokens.radar.passing), R1's filter. */
+export const RADAR_PASSING_MIN = 5;
+
+/** The most pools /api/pools and the indexer hand an inspection: the Inspector reads at most 50 index pools. */
+export const INDEXED_POOLS_LIMIT = 50;

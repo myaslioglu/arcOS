@@ -20,3 +20,8 @@ firestore-debug.log
 
 # Written into the workspace by google-github-actions/auth; the deploy uploads the workspace, so keep it out
 gha-creds-*.json
+
+# The functions bundle and its manifest, built by `npm run build -w @arcos/functions` (and in CI); never committed
+functions/deploy/index.js
+functions/deploy/functions.yaml
+functions/.bundle-test-*

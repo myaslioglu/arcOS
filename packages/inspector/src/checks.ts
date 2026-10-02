@@ -774,7 +774,8 @@ const foundVenues = (pools: readonly Pool[]): string[] =>
 
 /** The pool a finding is about: a liquid one, then an undecided one, then one that can't pay; the deepest within each. */
 const rank = (p: Pool): number => (p.liquid === true ? 2 : p.liquid === null ? 1 : 0);
-const bestPool = (pools: Pool[]): Pool => pools.reduce((a, b) => (rank(a) !== rank(b) ? (rank(b) > rank(a) ? b : a) : b.depth > a.depth ? b : a));
+/** The pool the liquidity finding is about: a liquid one before an undecided one before one that can't pay, then the deepest. */
+export const bestPool = (pools: Pool[]): Pool => pools.reduce((a, b) => (rank(a) !== rank(b) ? (rank(b) > rank(a) ? b : a) : b.depth > a.depth ? b : a));
 
 const wholeUnits = (depth: bigint): string => (depth / 1_000_000n).toLocaleString("en-US");
 /** "1,000": the amount the copy says a liquid pool can pay out, from the one constant that decides it. */

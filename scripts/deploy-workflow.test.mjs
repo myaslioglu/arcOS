@@ -48,6 +48,15 @@ function runScripts(text) {
   return scripts;
 }
 
+/** The deploy job's `if:`, a folded block, as one line without the expression's braces. */
+function deployCondition() {
+  const m = job("deploy").match(/^ {4}if: >-\n((?: {6}.+\n)+)/m);
+  expect(m, "the deploy job has a folded if").not.toBeNull();
+  const text = m[1].split("\n").map((l) => l.trim()).filter(Boolean).join(" ");
+  expect(text).toMatch(/^\$\{\{ .* \}\}$/);
+  return text.slice(4, -3);
+}
+
 /** The steps of one job, each as its text from its "- " line to the next step's. */
 function steps(name) {
   const text = job(name);
@@ -66,7 +75,7 @@ describe("deploy.yml", () => {
   it("calls ci.yml as its checks, and ci.yml can be called", () => {
     expect(deploy).toMatch(/^  checks:\n    uses: \.\/\.github\/workflows\/ci\.yml$/m);
     expect(ci).toMatch(/^  workflow_call:\s*$/m);
-    expect(job("deploy")).toMatch(/^ {4}needs: \[plan, checks, bundle\]$/m);
+    expect(job("deploy")).toMatch(/^ {4}needs: \[plan, checks, bundle, functions-bundle\]$/m);
     expect(job("smoke")).toMatch(/^ {4}needs: deploy$/m);
   });
 
@@ -82,7 +91,20 @@ describe("deploy.yml", () => {
     expect(job("deploy")).toMatch(/^ {4}environment:\n {6}name: production\n {6}url: https:\/\/4rcos\.com$/m);
     expect(deploy.match(/^ {4}environment:/gm)).toHaveLength(1); // the bundle and smoke jobs have none, so neither is a second way in
     expect(job("bundle")).not.toMatch(/^\s*environment:/m);
-    expect(job("deploy")).toMatch(/^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
+    expect(job("functions-bundle")).not.toMatch(/^\s*environment:/m);
+    expect(deployCondition()).toMatch(/^github\.ref == 'refs\/heads\/main' && /);
+  });
+
+  // A bundle job this run didn't need is skipped, and a skipped need would skip the deploy too; so the deploy job says
+  // which results it accepts. Nothing else: a failed or cancelled check or bundle still stops it.
+  it("deploys after skipped bundle jobs, never after a failed or cancelled one", () => {
+    expect(deployCondition()).toBe(
+      [
+        "github.ref == 'refs/heads/main' && !cancelled() && needs.plan.result == 'success' && needs.checks.result == 'success'",
+        "&& (needs.bundle.result == 'success' || needs.bundle.result == 'skipped')",
+        "&& (needs.functions-bundle.result == 'success' || needs.functions-bundle.result == 'skipped')",
+      ].join(" "),
+    );
   });
 
   it("gives only the deploy job a token to sign in with", () => {
@@ -153,7 +175,7 @@ describe("deploy.yml", () => {
       const up = steps("bundle").find((s) => /actions\/upload-artifact@/.test(s));
       const downs = steps("deploy").filter((s) => /actions\/download-artifact@/.test(s));
       expect(up, "the bundle job uploads").toBeDefined();
-      expect(downs, "the deploy job downloads one bundle per site").toHaveLength(2);
+      expect(downs, "the deploy job downloads one bundle per site, and the functions bundle").toHaveLength(3);
       expect(up).toMatch(/apps\/web\/\.next\/static\n/);
       expect(up).toMatch(/apps\/web\/\.next\/server\n/);
       expect(up).not.toMatch(/scripts|\.github/); // scripts/ always comes from the deploy job's own checkout
@@ -162,7 +184,7 @@ describe("deploy.yml", () => {
       expect(up).toMatch(/include-hidden-files: true/); // the scan must see every file the build made
       expect(up.match(/^ {10}name: (.+)$/m)?.[1]).toBe("bundle-${{ matrix.site }}"); // the artifact's name, not the step's
       // By name, never by pattern: a missing bundle fails its download rather than being skipped.
-      expect(downs.map((d) => d.match(/^ {10}name: (.+)$/m)?.[1])).toEqual(["bundle-mainnet", "bundle-testnet"]);
+      expect(downs.map((d) => d.match(/^ {10}name: (.+)$/m)?.[1])).toEqual(["bundle-mainnet", "bundle-testnet", "bundle-functions"]);
       for (const d of downs) expect(d).not.toMatch(/pattern:/);
     });
 
@@ -172,13 +194,16 @@ describe("deploy.yml", () => {
       expect(downs[0]).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle-mainnet$/m);
       expect(downs[1]).toMatch(/^ {8}if: env\.DEPLOY_TESTNET == 'true'$/m);
       expect(downs[1]).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle-testnet$/m);
+      expect(downs[2]).toMatch(/^ {8}if: env\.DEPLOY_FUNCTIONS == 'true'$/m);
+      expect(downs[2]).toMatch(/path: \$\{\{ runner\.temp \}\}\/bundle-functions$/m);
       const scan = runScripts(job("deploy")).find((r) => /scan-bundle/.test(r));
       expect(scan).toBe(
         [
           "dirs=()",
           'if [ "$DEPLOY_MAINNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-mainnet/static" "$RUNNER_TEMP/bundle-mainnet/server"); fi',
           'if [ "$DEPLOY_TESTNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-testnet/static" "$RUNNER_TEMP/bundle-testnet/server"); fi',
-          'node scripts/scan-bundle.mjs "${dirs[@]}"',
+          'if [ "$DEPLOY_FUNCTIONS" = true ]; then dirs+=("$RUNNER_TEMP/bundle-functions"); fi',
+          'if [ "${#dirs[@]}" -gt 0 ]; then node scripts/scan-bundle.mjs "${dirs[@]}"; fi',
         ].join("\n"),
       );
     });
@@ -233,7 +258,9 @@ describe("deploy.yml, the two sites", () => {
 
   it("lets a manual run pick the sites, both by default; a push has no input (plan decides)", () => {
     const triggers = deploy.slice(deploy.indexOf("\non:"), deploy.indexOf("\nconcurrency:"));
-    expect(triggers).toMatch(/ {6}targets:\n {8}description: .+\n {8}type: choice\n {8}options:\n {10}- both\n {10}- mainnet\n {10}- testnet\n {8}default: both\n/);
+    expect(triggers).toMatch(
+      / {6}targets:\n {8}description: .+\n {8}type: choice\n {8}options:\n {10}- both\n {10}- mainnet\n {10}- testnet\n {10}- functions\n {10}- indexes\n {8}default: both\n/,
+    );
   });
 
   it("names the testnet backend as firebase.json does", () => {
@@ -302,7 +329,7 @@ describe("deploy.yml, the two sites", () => {
   });
 
   it("deploys each backend by name, never every backend in firebase.json at once", () => {
-    const deploys = runScripts(job("deploy")).filter((r) => /firebase deploy/.test(r));
+    const deploys = runScripts(job("deploy")).filter((r) => /firebase deploy/.test(r) && /apphosting/.test(r));
     expect(deploys).toHaveLength(2);
     for (const r of deploys) expect(r).toMatch(/--only "apphosting:\$\{APPHOSTING(_TESTNET)?_BACKEND\}"/);
     expect(deployCode).not.toMatch(/--only "?apphosting"?(\s|$)/);
@@ -318,7 +345,7 @@ describe("deploy.yml, the two sites", () => {
 // isn't even built), and a manual run that asks for the testnet site fails before anything builds.
 describe("deploy.yml, the testnet gate", () => {
   /** Runs the plan job's script as Actions runs it (bash -eo pipefail), and returns what it wrote and printed. */
-  function plan({ targets = "", ready } = {}) {
+  function plan({ targets = "", ready, functionsReady } = {}) {
     const [script, ...rest] = runScripts(job("plan"));
     expect(rest).toEqual([]);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-plan-"));
@@ -326,6 +353,7 @@ describe("deploy.yml, the testnet gate", () => {
     fs.writeFileSync(output, "");
     const env = { PATH: process.env.PATH, GITHUB_OUTPUT: output, TARGETS: targets };
     if (ready !== undefined) env.TESTNET_READY = ready;
+    if (functionsReady !== undefined) env.FUNCTIONS_READY = functionsReady;
     const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { env, encoding: "utf8" });
     const written = Object.fromEntries(
       fs
@@ -337,10 +365,12 @@ describe("deploy.yml, the testnet gate", () => {
     fs.rmSync(dir, { recursive: true, force: true });
     return { status: run.status, stdout: run.stdout, written };
   }
-  const chose = (sites) => ({
+  const chose = (sites, { functions = false, indexes = false } = {}) => ({
     sites: JSON.stringify(sites),
     mainnet: String(sites.includes("mainnet")),
     testnet: String(sites.includes("testnet")),
+    functions: String(functions),
+    indexes: String(indexes),
   });
 
   it("reads the variable in one place only: the plan job's env, never the bundle or deploy job", () => {
@@ -358,7 +388,7 @@ describe("deploy.yml, the testnet gate", () => {
     expect(text).toMatch(
       /^ {4}outputs:\n {6}sites: \$\{\{ steps\.plan\.outputs\.sites \}\}\n {6}mainnet: \$\{\{ steps\.plan\.outputs\.mainnet \}\}\n {6}testnet: \$\{\{ steps\.plan\.outputs\.testnet \}\}$/m,
     );
-    expect(job("deploy")).toMatch(/^ {4}needs: \[plan, checks, bundle\]$/m);
+    expect(job("deploy")).toMatch(/^ {4}needs: \[plan, checks, bundle, functions-bundle\]$/m);
   });
 
   it("interpolates no expression into any script: values reach a run only through env", () => {
@@ -377,9 +407,9 @@ describe("deploy.yml, the testnet gate", () => {
   });
 
   it("on a push, deploys both once the variable is true", () => {
-    const result = plan({ ready: "true" });
+    const result = plan({ ready: "true", functionsReady: "true" });
     expect(result.status).toBe(0);
-    expect(result.written).toEqual(chose(["mainnet", "testnet"]));
+    expect(result.written).toEqual(chose(["mainnet", "testnet"], { functions: true, indexes: true }));
     expect(result.stdout).not.toMatch(/::notice::|::error::/);
   });
 
@@ -405,10 +435,300 @@ describe("deploy.yml, the testnet gate", () => {
     }
   });
 
+  it("deploys no functions and no indexes from a manual run of the sites, whatever the variables say", () => {
+    for (const targets of ["both", "mainnet", "testnet"]) {
+      const result = plan({ targets, ready: "true", functionsReady: "true" });
+      expect(result.written, targets).toMatchObject({ functions: "false", indexes: "false" });
+    }
+  });
+
   it("refuses a target it doesn't know", () => {
     const result = plan({ targets: "devnet", ready: "true" });
     expect(result.status).not.toBe(0);
     expect(result.written).toEqual({});
+  });
+});
+
+// The functions and the indexes join a run only once the owner has set ARCOS_FUNCTIONS_READY to `true`, after the arcos
+// database, the account arcos-jobs@ and the deployer's roles exist (docs/OPERATIONS.md). Until then a push deploys the
+// sites alone, and a manual run that asks for either fails before anything builds.
+describe("deploy.yml, the functions and the indexes", () => {
+  function plan({ targets = "", testnetReady = "true", functionsReady } = {}) {
+    const [script] = runScripts(job("plan"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-plan-"));
+    const output = path.join(dir, "output");
+    fs.writeFileSync(output, "");
+    const env = { PATH: process.env.PATH, GITHUB_OUTPUT: output, TARGETS: targets, TESTNET_READY: testnetReady };
+    if (functionsReady !== undefined) env.FUNCTIONS_READY = functionsReady;
+    const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { env, encoding: "utf8" });
+    const written = Object.fromEntries(
+      fs.readFileSync(output, "utf8").split("\n").filter(Boolean).map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+    return { status: run.status, stdout: run.stdout, written };
+  }
+  const step = (id) => steps("deploy").find((s) => new RegExp(`^ {8}id: ${id}$`, "m").test(s));
+
+  it("reads the variable in the plan job's env only", () => {
+    expect(deployCode.match(/\bvars\.ARCOS_FUNCTIONS_READY\b/g)).toHaveLength(1);
+    expect(job("plan")).toMatch(/^ {10}FUNCTIONS_READY: \$\{\{ vars\.ARCOS_FUNCTIONS_READY \}\}$/m);
+    expect(job("plan")).toMatch(/^ {6}functions: \$\{\{ steps\.plan\.outputs\.functions \}\}\n {6}indexes: \$\{\{ steps\.plan\.outputs\.indexes \}\}$/m);
+  });
+
+  it("on a push, adds the indexes and the functions only when the variable is exactly true, and says so otherwise", () => {
+    for (const functionsReady of [undefined, "", "false", "TRUE", "1"]) {
+      const result = plan({ functionsReady });
+      expect(result.status).toBe(0);
+      expect(result.written).toMatchObject({ sites: '["mainnet","testnet"]', functions: "false", indexes: "false" });
+      expect(result.stdout).toMatch(/^::notice::.*ARCOS_FUNCTIONS_READY/m);
+    }
+    expect(plan({ functionsReady: "true" }).written).toMatchObject({ sites: '["mainnet","testnet"]', functions: "true", indexes: "true" });
+  });
+
+  it("deploys either alone from a manual run, building no site, and fails one asked for before the variable is true", () => {
+    expect(plan({ targets: "functions", functionsReady: "true" }).written).toEqual({ sites: "[]", mainnet: "false", testnet: "false", functions: "true", indexes: "false" });
+    expect(plan({ targets: "indexes", functionsReady: "true" }).written).toEqual({ sites: "[]", mainnet: "false", testnet: "false", functions: "false", indexes: "true" });
+    for (const targets of ["functions", "indexes"]) {
+      const result = plan({ targets, functionsReady: "false" });
+      expect(result.status).not.toBe(0);
+      expect(result.written).toEqual({});
+      expect(result.stdout).toMatch(/^::error::.*ARCOS_FUNCTIONS_READY/m);
+    }
+  });
+
+  it("skips the site bundles when no site is chosen, since a matrix can't be empty", () => {
+    expect(job("bundle")).toMatch(/^ {4}if: needs\.plan\.outputs\.sites != '\[\]'$/m);
+  });
+
+  it("builds the functions in a job with no credential of any kind, and hands over the two built files only", () => {
+    const text = job("functions-bundle");
+    expect(text).toMatch(/^ {4}needs: plan$/m);
+    expect(text).toMatch(/^ {4}if: needs\.plan\.outputs\.functions == 'true'$/m);
+    expect(text).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:/m);
+    expect(text).not.toMatch(/secrets\.|vars\.|GITHUB_TOKEN|google-github-actions|GOOGLE_|id-token|tools\/firebase/);
+    expect(text).toMatch(/persist-credentials: false/);
+    expect(text).toMatch(/run: npm ci$/m);
+    expect(text).toMatch(/run: npm run build -w @arcos\/functions$/m);
+    const up = steps("functions-bundle").find((s) => /actions\/upload-artifact@/.test(s));
+    expect(up.match(/^ {10}name: (.+)$/m)?.[1]).toBe("bundle-functions");
+    expect(up).toMatch(/path: \|\n {12}functions\/deploy\/index\.js\n {12}functions\/deploy\/functions\.yaml\n/);
+    expect(up).toMatch(/if-no-files-found: error/);
+    expect(up).toMatch(/retention-days: 1$/m);
+  });
+
+  it("scans the functions bundle with the sites', then copies it into functions/deploy without running anything", () => {
+    const list = steps("deploy");
+    const scan = list.findIndex((s) => /scripts\/scan-bundle\.mjs/.test(s));
+    const place = list.findIndex((s) => /Put the functions bundle in place/.test(s));
+    expect(place).toBeGreaterThan(scan);
+    expect(list[place]).toMatch(/^ {8}if: env\.DEPLOY_FUNCTIONS == 'true'$/m);
+    expect(runScripts(list[place])).toEqual(['cp "$RUNNER_TEMP/bundle-functions/index.js" "$RUNNER_TEMP/bundle-functions/functions.yaml" functions/deploy/']);
+  });
+
+  it("deploys the indexes, then the functions, after the sites, each by name and only when chosen", () => {
+    const list = steps("deploy");
+    const indexes = step("deploy-indexes");
+    const functions = step("deploy-functions");
+    expect(indexes).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_INDEXES == 'true' \}\}$/m);
+    expect(functions).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_FUNCTIONS == 'true' \}\}$/m);
+    expect(runScripts(indexes)).toEqual(['tools/firebase/node_modules/.bin/firebase deploy --only firestore:indexes --project "$FIREBASE_PROJECT" --non-interactive']);
+    expect(runScripts(functions)).toEqual(['tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --project "$FIREBASE_PROJECT" --non-interactive']);
+    expect(list.indexOf(indexes)).toBeGreaterThan(list.indexOf(step("deploy-testnet")));
+    expect(list.indexOf(functions)).toBe(list.indexOf(indexes) + 1);
+    for (const id of ["deploy-indexes", "deploy-functions"]) expect(step(id)).toMatch(/^ {8}timeout-minutes: \d+$/m);
+    // Never the rules (the deployer has no rules role), never every codebase, never everything.
+    expect(deployCode).not.toMatch(/--only "?firestore"?(\s|$)|firestore:rules|firestore:arcos|--only "?functions"?(\s|$)/);
+    expect(job("deploy")).toMatch(/^ {6}DEPLOY_FUNCTIONS: \$\{\{ needs\.plan\.outputs\.functions \}\}\n {6}DEPLOY_INDEXES: \$\{\{ needs\.plan\.outputs\.indexes \}\}$/m);
+  });
+
+  it("matches firebase.json: the codebase it deploys is the one entry there, from the folder the bundle lands in", () => {
+    expect(JSON.parse(read("firebase.json")).functions).toEqual([
+      { codebase: "arcos", source: "functions/deploy", runtime: "nodejs22", ignore: ["node_modules"] },
+    ]);
+    for (const entry of JSON.parse(read("firebase.json")).apphosting) {
+      expect(entry.ignore).toEqual(expect.arrayContaining(["functions/deploy/index.js", "functions/deploy/functions.yaml"]));
+    }
+  });
+});
+
+// The manifest the functions build wrote decides what the CLI deploys, and that build ran the project's code. So the
+// deploy job checks it with jq before it signs in, and refuses anything but the one scheduled function it expects.
+describe("deploy.yml, the check of the functions manifest", () => {
+  const JOBS = "arcos-jobs@arcos-c80cf.iam.gserviceaccount.com";
+  /** The manifest the build writes today (functions/src/__tests__/bundle.test.ts runs the real one through this check). */
+  const good = () => ({
+    specVersion: "v1alpha1",
+    endpoints: {
+      arcosIndexer: {
+        availableMemoryMb: 512,
+        timeoutSeconds: 120,
+        minInstances: null,
+        maxInstances: 1,
+        ingressSettings: null,
+        concurrency: 1,
+        serviceAccountEmail: JOBS,
+        vpc: null,
+        platform: "gcfv2",
+        region: ["europe-west4"],
+        secretEnvironmentVariables: [{ key: "BLOCKSCOUT_API_KEY" }],
+        labels: {},
+        scheduleTrigger: { schedule: "every 1 minutes", retryConfig: { retryCount: 0 }, timeZone: "Etc/UTC" },
+        entryPoint: "arcosIndexer",
+      },
+    },
+    params: [{ type: "secret", name: "BLOCKSCOUT_API_KEY" }],
+    requiredAPIs: [{ api: "cloudscheduler.googleapis.com", reason: "Needed for scheduled functions." }],
+    extensions: {},
+  });
+  const step = () => steps("deploy").find((s) => /- name: Check the functions manifest$/m.test(s));
+  /** The step's literal env values. */
+  const stepEnv = () => Object.fromEntries([...step().matchAll(/^ {10}([A-Z_]+): (\S+)$/gm)].map((m) => [m[1], m[2]]));
+
+  /** Runs the step's script as Actions would, on `text` as the downloaded functions.yaml (none when null). */
+  function check(text) {
+    const [script, ...rest] = runScripts(step());
+    expect(rest).toEqual([]);
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-manifest-"));
+    fs.mkdirSync(path.join(temp, "bundle-functions"));
+    if (text !== null) fs.writeFileSync(path.join(temp, "bundle-functions", "functions.yaml"), text);
+    const env = { PATH: process.env.PATH, RUNNER_TEMP: temp, ...stepEnv() };
+    const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { env, encoding: "utf8" });
+    fs.rmSync(temp, { recursive: true, force: true });
+    return { status: run.status, stdout: run.stdout };
+  }
+  const json = (manifest) => JSON.stringify(manifest, null, 2);
+  /** The good manifest with `change` applied to it. */
+  const changed = (change) => {
+    const manifest = good();
+    change(manifest, manifest.endpoints.arcosIndexer);
+    return json(manifest);
+  };
+  const refused = (text, message) => {
+    const result = check(text);
+    expect(result.status, message.source).not.toBe(0);
+    expect(result.stdout).toMatch(/^::error::functions\.yaml .*, so nothing is deployed/m);
+    expect(result.stdout).toMatch(message);
+  };
+
+  it("runs after the scan and before the bundle is put in place and the sign-in, only when the functions deploy", () => {
+    const list = steps("deploy");
+    const at = (pattern) => list.findIndex((s) => pattern.test(s));
+    const index = at(/- name: Check the functions manifest$/m);
+    expect(index).toBeGreaterThan(at(/scripts\/scan-bundle\.mjs/));
+    expect(index).toBeLessThan(at(/Put the functions bundle in place/));
+    expect(index).toBeLessThan(at(/uses: google-github-actions\/auth@/));
+    expect(step()).toMatch(/^ {8}if: env\.DEPLOY_FUNCTIONS == 'true'$/m);
+    expect(stepEnv()).toMatchObject({ FUNCTIONS_ENDPOINT: "arcosIndexer", JOBS_ACCOUNT: JOBS, FUNCTIONS_REGION: "europe-west4", FUNCTIONS_SECRET: "BLOCKSCOUT_API_KEY" });
+    expect(Object.keys(stepEnv()).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
+  });
+
+  // The CLI enables a required API on the standard list without asking (deploy/functions/prepare.js,
+  // ensureAllRequiredAPIsEnabled); the check allows that list and nothing else, so it must be the pinned CLI's.
+  const prepare = path.join(root, "tools/firebase/node_modules/firebase-tools/lib/deploy/functions/prepare.js");
+  it.runIf(fs.existsSync(prepare))("allows exactly the pinned CLI's STANDARD_APIS as required APIs", () => {
+    const list = fs.readFileSync(prepare, "utf8").match(/const STANDARD_APIS = \[([^\]]*)\]/);
+    expect(list, "prepare.js declares STANDARD_APIS").not.toBeNull();
+    const standard = [...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(standard.length).toBeGreaterThan(5);
+    expect(stepEnv().FUNCTIONS_APIS.split(",")).toEqual(standard);
+  });
+
+  it("uses jq and the shell only: no node, no npm, no project script", () => {
+    const [script] = runScripts(step());
+    expect(script).not.toMatch(/\b(node|npm|npx)\b|scripts\//);
+    expect(script).toMatch(/\bjq -e\b/);
+    // Each rule is its own jq check with its own message, and a failed check stops the step.
+    expect(script.match(/\|\| fail "/g).length).toBe(15);
+    expect(script).not.toMatch(/\$\{\{/);
+  });
+
+  it("passes the manifest the build writes, and says what it deploys", () => {
+    const result = check(json(good()));
+    expect(result.status, result.stdout).toBe(0);
+    expect(result.stdout).toMatch(/^functions\.yaml: arcosIndexer, scheduled, as arcos-jobs@arcos-c80cf\.iam\.gserviceaccount\.com, in europe-west4\.$/m);
+    // Optional keys may be absent.
+    expect(check(changed((m, e) => (delete m.extensions, delete m.params, delete e.secretEnvironmentVariables))).status).toBe(0);
+    expect(check(changed((m) => (m.extensions = []))).status).toBe(0);
+  });
+
+  it("refuses a file that is missing, empty, not JSON, or more than one document", () => {
+    refused(null, /is not one JSON object/);
+    refused("", /is not one JSON object/);
+    refused("specVersion: v1alpha1\nendpoints: {}\n", /is not one JSON object/);
+    refused(`${json(good())}\n${json(good())}`, /is not one JSON object/);
+    refused("[]", /is not one JSON object/);
+    refused(json({ specVersion: "v1alpha1" }), /endpoints other than arcosIndexer alone/);
+    refused(json({ ...good(), endpoints: {} }), /endpoints other than arcosIndexer alone/);
+  });
+
+  it("refuses any endpoint set but arcosIndexer alone, even one named arcos*", () => {
+    refused(changed((m, e) => (m.endpoints = { indexer: e })), /endpoints other than arcosIndexer alone/);
+    refused(changed((m, e) => (m.endpoints.otherIndexer = e)), /endpoints other than arcosIndexer alone/);
+    refused(changed((m, e) => (m.endpoints.arcosOther = e)), /endpoints other than arcosIndexer alone/);
+    refused(changed((m, e) => (m.endpoints = { arcosindexer: e })), /endpoints other than arcosIndexer alone/);
+  });
+
+  it("refuses an endpoint that isn't gcfv2", () => {
+    refused(changed((m, e) => (e.platform = "gcfv1")), /not gcfv2/);
+    refused(changed((m, e) => (e.platform = "run")), /not gcfv2/);
+    refused(changed((m, e) => delete e.platform), /not gcfv2/);
+  });
+
+  it("refuses a VPC, environment variables or an ingress setting", () => {
+    refused(changed((m, e) => (e.vpc = { connector: "projects/arcos-c80cf/locations/europe-west4/connectors/c", egressSettings: "ALL_TRAFFIC" })), /puts an endpoint on a VPC/);
+    refused(changed((m, e) => (e.environmentVariables = { INSPECT_PER_TICK: "50" })), /environment variables/);
+    refused(changed((m, e) => (e.ingressSettings = "ALLOW_INTERNAL_ONLY")), /sets an endpoint's ingress/);
+    refused(changed((m, e) => (e.ingressSettings = "ALLOW_ALL")), /sets an endpoint's ingress/);
+    // As the build writes them today: vpc and ingressSettings null, no environment variables.
+    expect(check(changed((m, e) => (delete e.vpc, delete e.ingressSettings, (e.environmentVariables = {})))).status).toBe(0);
+  });
+
+  it("refuses required roles, even none", () => {
+    refused(changed((m) => (m.requiredRoles = ["roles/owner"])), /declares required roles/);
+    refused(changed((m) => (m.requiredRoles = [])), /declares required roles/);
+  });
+
+  it("refuses a required API outside the CLI's standard list", () => {
+    refused(changed((m) => m.requiredAPIs.push({ api: "iam.googleapis.com", reason: "x" })), /an API outside the CLI's standard list/);
+    refused(changed((m) => (m.requiredAPIs = [{ api: "cloudscheduler.googleapis.com.evil", reason: "x" }])), /an API outside the CLI's standard list/);
+    refused(changed((m) => (m.requiredAPIs = [{ reason: "no api" }])), /an API outside the CLI's standard list/);
+    expect(check(changed((m) => (m.requiredAPIs = [{ api: "cloudtasks.googleapis.com", reason: "x" }, { api: "run.googleapis.com", reason: "y" }]))).status).toBe(0);
+    expect(check(changed((m) => delete m.requiredAPIs)).status).toBe(0);
+  });
+
+  it("refuses an endpoint that runs as another account, under either key the CLI reads", () => {
+    refused(changed((m, e) => (e.serviceAccountEmail = "other@arcos-c80cf.iam.gserviceaccount.com")), /an account other than arcos-jobs@/);
+    refused(changed((m, e) => delete e.serviceAccountEmail), /an account other than arcos-jobs@/);
+    refused(changed((m, e) => (e.serviceAccount = "other@arcos-c80cf.iam.gserviceaccount.com")), /an account other than arcos-jobs@/);
+    expect(check(changed((m, e) => (e.serviceAccount = JOBS))).status).toBe(0);
+  });
+
+  it("refuses any trigger but a schedule, beside it or in its place", () => {
+    for (const trigger of ["httpsTrigger", "callableTrigger", "eventTrigger", "taskQueueTrigger", "blockingTrigger", "dataConnectGraphqlTrigger"]) {
+      refused(changed((m, e) => (e[trigger] = {})), /triggered by something other than a schedule alone/);
+      refused(changed((m, e) => ((e[trigger] = {}), delete e.scheduleTrigger)), /triggered by something other than a schedule alone/);
+    }
+    refused(changed((m, e) => delete e.scheduleTrigger), /triggered by something other than a schedule alone/);
+    refused(changed((m, e) => (e.scheduleTrigger = "every 1 minutes")), /triggered by something other than a schedule alone/);
+  });
+
+  it("refuses a region other than europe-west4, or more than one", () => {
+    refused(changed((m, e) => (e.region = ["us-central1"])), /outside europe-west4/);
+    refused(changed((m, e) => (e.region = ["europe-west4", "us-central1"])), /outside europe-west4/);
+    refused(changed((m, e) => delete e.region), /outside europe-west4/);
+  });
+
+  it("refuses extensions and lifecycle hooks", () => {
+    refused(changed((m) => (m.extensions = { "an-extension": { ref: "x/y@1.0.0", params: {} } })), /declares extensions/);
+    refused(changed((m) => (m.lifecycleHooks = {})), /declares lifecycle hooks/);
+  });
+
+  it("refuses a param or a secret other than the secret BLOCKSCOUT_API_KEY", () => {
+    refused(changed((m) => m.params.push({ type: "string", name: "BLOCKSCOUT_API_KEY" })), /a param other than the secret BLOCKSCOUT_API_KEY/);
+    refused(changed((m) => (m.params = [{ type: "secret", name: "OTHER_KEY" }])), /a param other than the secret BLOCKSCOUT_API_KEY/);
+    refused(changed((m) => (m.params = [{ type: "int", name: "INSPECT_PER_TICK" }])), /a param other than the secret BLOCKSCOUT_API_KEY/);
+    refused(changed((m, e) => e.secretEnvironmentVariables.push({ key: "OTHER_KEY" })), /a secret other than BLOCKSCOUT_API_KEY/);
+    refused(changed((m, e) => (e.secretEnvironmentVariables = [{ key: "BLOCKSCOUT_API_KEY", secret: "OTHER_KEY" }])), /a secret other than BLOCKSCOUT_API_KEY/);
   });
 });
 
@@ -453,7 +773,7 @@ describe("the Firebase CLI the deploy runs", () => {
     expect(firebase.apphosting[0].ignore).toContain("node_modules"); // matched at any depth, so this folder's too
     expect(read(".gitignore")).toMatch(/^node_modules$/m);
     const { workspaces } = JSON.parse(read("package.json"));
-    for (const glob of workspaces) expect(glob, "a workspace glob").toMatch(/^(apps|packages)\/[^/]*$/);
+    for (const glob of workspaces) expect(glob, "a workspace glob").toMatch(/^((apps|packages)\/[^/]*|functions)$/);
     const rootLock = JSON.parse(read("package-lock.json"));
     expect(Object.keys(rootLock.packages).filter((name) => name === "tools" || name.startsWith("tools/"))).toEqual([]);
   });
@@ -502,6 +822,17 @@ describe("the Firestore tests in CI", () => {
 
   it("audits the Firebase CLI's packages too, since CI now installs and loads them", () => {
     expect(ci).toMatch(/^ {8}run: npm audit --audit-level=high --prefix tools\/firebase$/m);
+  });
+
+  it("runs the functions' unit tests with the other workspaces, and their emulator suite with the same CLI", () => {
+    expect(ci).toMatch(/^ {8}run: npm run test (--workspace=@arcos\/\S+ )*--workspace=@arcos\/functions( --workspace=@arcos\/\S+)*$/m);
+    const suite = /^ {8}run: npm run test:emulator -w @arcos\/functions$/m;
+    expect(emulator).toMatch(suite);
+    expect(at(emulator, install)).toBeLessThan(at(emulator, suite));
+  });
+
+  it("audits the functions' own lockfile, which Cloud Build installs from", () => {
+    expect(ci).toMatch(/^ {8}run: npm audit --audit-level=high --prefix functions\/deploy$/m);
   });
 
   it("leaves no GitHub token in the checkout of either job, since both run the CLI's code", () => {
