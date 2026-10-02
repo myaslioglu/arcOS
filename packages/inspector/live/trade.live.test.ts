@@ -57,6 +57,12 @@ const TAX_TOKEN = "0xe60e2bcd092b78092a4a4010de1ccaadf5c03cca";
  * through, and only addresses its owner lists can sell. */
 const SELL_WHITELIST_TOKEN = "0xdb07d187ed6ba6790ec1fc473a386fa1106db697";
 
+/** A launch token whose only USDC pool is a Uniswap v3 1% pool, 0xf74B…3939, with about 1,692 USDC (block 23,840,329):
+ * 1.6916 USDC buys it, and selling straight back into the same pool reverts. With no Uniswap v2 or hookless v4 pool to try
+ * instead, it fails. The warning case has no live example yet: no token with a Uniswap v3 USDC pool also had a Uniswap v2
+ * USDC pair with 1 USDC or more in both, and the 300 newest hooked v4 USDC pools all sold back. */
+const V3_SELL_REVERTS = "0x786a352a5ad3905fe2ff4c0849fa8da849281991";
+
 describe("check 10 on Arc mainnet, read-only", () => {
   it("places the simulator and its router at fresh addresses with no code of their own", async () => {
     const { simulator, router } = simulatorAddresses();
@@ -120,6 +126,14 @@ describe("check 10 on Arc mainnet, read-only", () => {
     const scan = await findPools(input(SELL_WHITELIST_TOKEN, v2Only));
     const f = await checkTrade(input(SELL_WHITELIST_TOKEN, v2Only), scan);
     expect(f).toMatchObject({ id: "trade", status: "fail", title: "Can't be sold" });
+  });
+
+  it("fails a token whose sell reverts in its only pool, a Uniswap v3 pool, and says why such a pool can refuse it", async () => {
+    const scan = await findPools(input(V3_SELL_REVERTS));
+    const f = await checkTrade(input(V3_SELL_REVERTS), scan);
+    expect(f).toMatchObject({ id: "trade", status: "fail", title: "Can't be sold" });
+    expect(f.detail).toMatch(/Uniswap v3 pools refuse a token that arrives short \(a transfer tax\)/);
+    expect(f.detail).toMatch(/no Uniswap v2 or hookless Uniswap v4 USDC pool to try selling into instead/);
   });
 
   it("inspects the honest v2 token end to end: check 10 passes in the report", async () => {
