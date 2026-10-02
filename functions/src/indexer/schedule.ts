@@ -25,8 +25,13 @@ export const INDEXER_OPTIONS = {
 /** The network the indexer reads: Firestore data is mainnet-only (D6), and testnet has no data routes. */
 export const INDEXER_NETWORK = "mainnet" as const;
 
-/** The defaults of design 1.8: three inspections a run, 5,000 explorer calls a UTC day. */
-export const DEFAULT_SETTINGS = { inspectPerTick: 3, explorerDailyBudget: 5_000 } as const;
+/**
+ * The defaults: three inspections a run, and 3,000 explorer calls a UTC day. The website reads Blockscout's PRO API
+ * with the SAME key (Revoke's approvals, the Inspector pages), so the indexer's budget must leave it headroom: design
+ * 1.8's 5,000 was the whole plan, and on 2026-10-02 the indexer spent it by mid-afternoon and every approvals lookup on
+ * the site answered 503 for the rest of the day.
+ */
+export const DEFAULT_SETTINGS = { inspectPerTick: 3, explorerDailyBudget: 3_000 } as const;
 
 /**
  * INSPECT_PER_TICK and EXPLORER_DAILY_BUDGET, from the function's environment, else the defaults. They are plain

@@ -23,8 +23,12 @@ import {
 } from "./store";
 import { MAX_WINDOW, firstCursor, grow, nextWindow, shrink } from "./windows";
 
-/** The explorer calls one run may still make today, and a way to spend one. */
-export type ExplorerBudget = { remaining(): number; spend(): boolean };
+/**
+ * The explorer calls one run may still make today, a way to spend one, and a way to spend the rest at once: the explorer
+ * answering 402 means the plan's quota is gone for the day, whatever this side's count says, and asking again only costs
+ * the website's share (inspect.ts, `budgetedFetch`).
+ */
+export type ExplorerBudget = { remaining(): number; spend(): boolean; exhaust(): void };
 
 /** What an inspection gives back: the report, and the pool lookup it was made from (null when that failed). */
 export type Inspected = { report: Report; scan: PoolScan | null };
@@ -199,6 +203,9 @@ async function leased(
       if (spent >= settings.explorerDailyBudget) return false;
       spent++;
       return true;
+    },
+    exhaust: () => {
+      spent = Math.max(spent, settings.explorerDailyBudget);
     },
   };
   let inspected = 0;

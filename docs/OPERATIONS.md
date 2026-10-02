@@ -69,8 +69,17 @@ effort), and a run that died holding it leaves a lease that expires on its own.
 The indexer records pools, not their depth: `pools.depthUsdc` and `pools.sampledAt` stay `null` in R1. A token's best
 pool and its depth come from its inspection (`tokens.bestPool`).
 
-Explorer calls count against `EXPLORER_DAILY_BUDGET` (default 5,000 a UTC day, kept in `indexer/mainnet`
-`explorerCalls`). Over budget, an inspection runs on RPC only and its report is marked `degraded`.
+Explorer calls count against `EXPLORER_DAILY_BUDGET` (default 3,000 a UTC day, kept in `indexer/mainnet`
+`explorerCalls`). Over budget, an inspection runs on RPC only and its report is marked `degraded`. The website reads
+Blockscout's PRO API with the same key (Revoke's approvals, the Inspector pages), so the budget must leave it headroom
+under the plan's own daily quota: on 2026-10-02 a 5,000 budget was the whole plan, the indexer spent it by
+mid-afternoon, and every `/api/approvals` lookup on the site answered 503 until the UTC day ended. The explorer's own
+refusals are read too: after a 429 the indexer sends no explorer request for 60 s; after a 402 (the plan's quota or its
+payment is gone) it also marks the rest of the day's budget spent, so no run today asks again. Signs of a spent plan,
+in Logs Explorer: `approvals failed ApprovalsUnavailable 402` on the site's service (`arcos`); on the indexer's side,
+`explorerCalls.count` at the budget in `indexer/mainnet` and new `reports` docs with `degraded: true` (an explorer
+refusal degrades a report, it doesn't fail the inspection). The site's own calls are not counted there, so check the
+plan's dashboard for the day's total.
 
 `INSPECT_PER_TICK` and `EXPLORER_DAILY_BUDGET` are environment variables of the function. Nothing sets them, so the
 defaults in [functions/src/indexer/schedule.ts](../functions/src/indexer/schedule.ts) apply; change a default there and
@@ -390,14 +399,14 @@ minute), a steady-state run makes:
 |---|---|---|
 | Arc RPC (indexer) | 2 calls: the head and one window | about 86,000 |
 | Arc RPC (inspections) | about 15 to 40 `eth_call`s per inspection, up to 3 inspections | about 2 to 5 million |
-| Blockscout PRO | up to about 6 per inspection | at most 5,000 a day (the budget), about 150,000 |
+| Blockscout PRO | up to about 6 per inspection | at most 3,000 a day (the budget), about 90,000; the rest of the plan's quota is the site's |
 | Firestore reads | about 30: the controls and the lease 2, the window's pools and tokens about 4, the cursor 1, the queue up to 12, each inspection's pools 1 or 2, the feeds 4, the end of the run 1; plus up to 50 for the feed rebuilt that run | about 3.5 million |
 | Firestore writes | about 17: the lease 1, pools and tokens about 4, the cursor 1, each inspection 2, the feeds up to 4, the end of the run 1 | about 0.7 million |
 | Function time | a few seconds, plus up to 15 seconds per inspection | inside or near the free tier at the default CPU of a 512 MiB function (the function sets no `cpu` option) |
 
 The first run's 24-hour backfill reads and writes about 6,000 documents once. Firestore single-region prices are about
 half of the multi-region $0.06 per 100,000 reads and $0.18 per 100,000 writes, so the indexer's Firestore use is about
-$2 a month. The explorer budget covers about 800 inspections a day; at about 2,900 new tokens a day, most reports
+$2 a month. The explorer budget covers about 500 inspections a day; at about 2,900 new tokens a day, most reports
 are made on RPC only and marked `degraded` unless the budget grows.
 
 ## Tests
