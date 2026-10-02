@@ -2,6 +2,7 @@ import {
   DESKTOP_VIEWS,
   TOUCH_VIEW_LABEL,
   VIEW_LABEL,
+  appTag,
   type AppManifest,
   type DesktopView,
   type DesktopWindow,
@@ -67,6 +68,9 @@ export const THEME_CHOICES: { preference: ThemePreference; label: string }[] = [
 ];
 
 const SEP: MenuEntry = { type: "sep" };
+/** An app's tag ("Soon") as its menu entry's hint, or nothing. */
+const menuHint = (tag: string | null): Partial<MenuItem> => (tag ? { hint: tag } : {});
+
 const item = (label: string, onSelect: () => void, extra: Partial<MenuItem> = {}): MenuItem => ({
   type: "item",
   label,
@@ -76,7 +80,7 @@ const item = (label: string, onSelect: () => void, extra: Partial<MenuItem> = {}
 
 /**
  * The menu bar's menus, as data. The brand menu holds About and Keyboard shortcuts. File searches, opens any app (a
- * grey one opens its "work in progress" window, so it is hinted "Soon") and closes the focused window. Window is as it
+ * grey one opens its "work in progress" window, so it is hinted "Soon", as is a tagged one) and closes the focused window. Window is as it
  * was. View picks the desktop's view and the theme, and stays on narrow screens, because "Match system" can't be
  * reached from the theme button. Help holds the shortcuts, the Roadmap, the repository and About.
  */
@@ -100,7 +104,7 @@ export function menuModel(input: MenuInput): Menu[] {
       entries: [
         item("Search…", on.search, { hint: "⌘K / Ctrl+K" }),
         SEP,
-        ...input.apps.map((m) => item(`Open ${m.name}`, () => on.openApp(m.id), m.comingSoon ? { hint: "Soon" } : {})),
+        ...input.apps.map((m) => item(`Open ${m.name}`, () => on.openApp(m.id), menuHint(appTag(m)))),
         SEP,
         item("Close window", on.closeActive, { hint: "Esc", disabled: !active }),
       ],
