@@ -1,10 +1,10 @@
 name: Deploy
 
 # Deploys https://4rcos.com (backend arcos) and https://testnet.4rcos.com (backend arcos-testnet) to Firebase App
-# Hosting, and the functions codebase arcos (arcosIndexer) with the Firestore indexes of the arcos database, project
-# arcos-c80cf, from GitHub Actions. No key file exists anywhere: the deploy job signs in through
-# Workload Identity Federation and a service account (see docs/DEPLOYING.md), and it runs only after the checks and the
-# bundle builds pass and the owner approves it in the `production` environment, which allows the main branch only.
+# Hosting, and the functions codebase arcos (arcosIndexer), project arcos-c80cf, from GitHub Actions. No key file
+# exists anywhere: the deploy job signs in through Workload Identity Federation and a service account (see
+# docs/DEPLOYING.md), and it runs only after the checks and the bundle builds pass and the owner approves it in the
+# `production` environment, which allows the main branch only.
 #
 # Both sites come from the same commit under one approval. A push to main deploys both; a manual run can pick one
 # (`targets`). The testnet site takes part only once the repository variable ARCOS_TESTNET_READY is `true`, which the
@@ -14,14 +14,18 @@ name: Deploy
 # fails to build stops the whole run before approval, nothing deployed; to ship 4rc.OS while the testnet build is broken,
 # run the workflow by hand with `targets: mainnet`.
 #
-# The functions and the indexes (docs/OPERATIONS.md) take part only once the repository variable ARCOS_FUNCTIONS_READY is
-# `true`, which the owner sets after the database, the account arcos-jobs@ and the deployer's roles exist. From then on a
-# push deploys them after the sites, from the same commit; a manual run can deploy either alone (`targets: functions` or
-# `targets: indexes`). The functions are built in a job without a credential, like the sites: the bundle and the manifest
-# firebase-functions writes from it (functions/deploy/functions.yaml), which the CLI reads instead of loading the code.
-# The deploy job checks that manifest with jq before it signs in. On a push, a functions build that fails stops the sites
+# The functions (docs/OPERATIONS.md) take part only once the repository variable ARCOS_FUNCTIONS_READY is `true`, which
+# the owner sets after the database, the account arcos-jobs@ and the deployer's roles exist. From then on a push deploys
+# them after the sites, from the same commit; a manual run can deploy them alone (`targets: functions`). The functions
+# are built in a job without a credential, like the sites: the bundle and the manifest firebase-functions writes from
+# it (functions/deploy/functions.yaml), which the CLI reads instead of loading the code. The deploy job checks that
+# manifest with jq before it signs in. On a push, a functions build that fails stops the sites
 # too, like any bundle: the deploy job waits for every build of the run, so nothing deploys. To ship the sites while the
 # functions build is broken, run the workflow by hand with `targets: both` (or `mainnet`), which builds no functions.
+#
+# The workflow deploys neither the Firestore indexes nor the rules. The pinned CLI compiles firestore/arcos.rules
+# through the Rules API even for `--only firestore:indexes`, and the deployer has no rules role, on purpose, so an
+# indexes deploy from here always fails. The owner deploys both by hand (docs/OPERATIONS.md, Deploying).
 #
 # The jobs are split by what they may touch. `plan` reads only the inputs and that variable, checks nothing out and
 # holds no token. `checks` and `bundle` install the project's dependencies and run its build, which is third-party code,
@@ -38,14 +42,13 @@ on:
         type: boolean
         default: false
       targets:
-        description: What to build and deploy (a push to main deploys both sites, mainnet first, then the indexes and the functions; testnet needs ARCOS_TESTNET_READY, functions and indexes ARCOS_FUNCTIONS_READY)
+        description: What to build and deploy (a push to main deploys both sites, mainnet first, then the functions; testnet needs ARCOS_TESTNET_READY, functions ARCOS_FUNCTIONS_READY)
         type: choice
         options:
           - both
           - mainnet
           - testnet
           - functions
-          - indexes
         default: both
 
 # One deploy at a time. A run that starts while another waits for approval or deploys queues behind it (a newer
@@ -70,8 +73,8 @@ env:
 jobs:
   # Chooses what this run builds and deploys, from the `targets` input and the repository variables ARCOS_TESTNET_READY
   # and ARCOS_FUNCTIONS_READY, before anything is built. A push has no inputs (TARGETS is empty): both sites once the
-  # testnet variable is exactly `true`, 4rc.OS alone with a notice until then; and the indexes and the functions once the
-  # functions variable is exactly `true`, with a notice until then. A manual run that asks for something whose variable
+  # testnet variable is exactly `true`, 4rc.OS alone with a notice until then; and the functions once the functions
+  # variable is exactly `true`, with a notice until then. A manual run that asks for something whose variable
   # isn't `true` fails here, so it never deploys less than it asked for. No checkout, no token, no project code.
   plan:
     name: Choose the sites
@@ -83,23 +86,21 @@ jobs:
       mainnet: ${{ steps.plan.outputs.mainnet }}
       testnet: ${{ steps.plan.outputs.testnet }}
       functions: ${{ steps.plan.outputs.functions }}
-      indexes: ${{ steps.plan.outputs.indexes }}
     steps:
-      - name: Choose the sites, the functions and the indexes
+      - name: Choose the sites and the functions
         id: plan
         env:
           TARGETS: ${{ inputs.targets }}
           TESTNET_READY: ${{ vars.ARCOS_TESTNET_READY }}
           FUNCTIONS_READY: ${{ vars.ARCOS_FUNCTIONS_READY }}
         run: |
-          functions=false; indexes=false
+          functions=false
           case "$TARGETS" in
-            "") mainnet=true; testnet=true; functions=true; indexes=true ;;
+            "") mainnet=true; testnet=true; functions=true ;;
             both) mainnet=true; testnet=true ;;
             mainnet) mainnet=true; testnet=false ;;
             testnet) mainnet=false; testnet=true ;;
             functions) mainnet=false; testnet=false; functions=true ;;
-            indexes) mainnet=false; testnet=false; indexes=true ;;
             *) echo "::error::Unknown targets '$TARGETS'"; exit 1 ;;
           esac
           if [ "$testnet" = true ] && [ "$TESTNET_READY" != true ]; then
@@ -110,19 +111,19 @@ jobs:
             echo "::notice::ARCOS_TESTNET_READY is not true, so this run builds and deploys 4rc.OS only (docs/DEPLOYING.md, The testnet site)."
             testnet=false
           fi
-          if { [ "$functions" = true ] || [ "$indexes" = true ]; } && [ "$FUNCTIONS_READY" != true ]; then
+          if [ "$functions" = true ] && [ "$FUNCTIONS_READY" != true ]; then
             if [ -n "$TARGETS" ]; then
-              echo "::error::The functions and the indexes aren't set up yet: the repository variable ARCOS_FUNCTIONS_READY is not true (docs/OPERATIONS.md, Setting it up)."
+              echo "::error::The functions aren't set up yet: the repository variable ARCOS_FUNCTIONS_READY is not true (docs/OPERATIONS.md, Setting it up)."
               exit 1
             fi
-            echo "::notice::ARCOS_FUNCTIONS_READY is not true, so this run deploys neither the functions nor the indexes (docs/OPERATIONS.md, Setting it up)."
-            functions=false; indexes=false
+            echo "::notice::ARCOS_FUNCTIONS_READY is not true, so this run deploys no functions (docs/OPERATIONS.md, Setting it up)."
+            functions=false
           fi
           if [ "$mainnet" = true ] && [ "$testnet" = true ]; then sites='["mainnet","testnet"]'
           elif [ "$mainnet" = true ]; then sites='["mainnet"]'
           elif [ "$testnet" = true ]; then sites='["testnet"]'
           else sites='[]'; fi
-          { echo "sites=$sites"; echo "mainnet=$mainnet"; echo "testnet=$testnet"; echo "functions=$functions"; echo "indexes=$indexes"; } >> "$GITHUB_OUTPUT"
+          { echo "sites=$sites"; echo "mainnet=$mainnet"; echo "testnet=$testnet"; echo "functions=$functions"; } >> "$GITHUB_OUTPUT"
 
   # The same checks a pull request runs (ci.yml, called as a reusable workflow): typecheck, lint, tests, build, audit.
   checks:
@@ -138,7 +139,7 @@ jobs:
     name: Build the ${{ matrix.site }} bundle
     runs-on: ubuntu-24.04
     needs: plan
-    # A run of the functions or the indexes alone builds no site, and a matrix can't be empty.
+    # A run of the functions alone builds no site, and a matrix can't be empty.
     if: needs.plan.outputs.sites != '[]'
     timeout-minutes: 20
     strategy:
@@ -261,7 +262,6 @@ jobs:
       DEPLOY_MAINNET: ${{ needs.plan.outputs.mainnet }}
       DEPLOY_TESTNET: ${{ needs.plan.outputs.testnet }}
       DEPLOY_FUNCTIONS: ${{ needs.plan.outputs.functions }}
-      DEPLOY_INDEXES: ${{ needs.plan.outputs.indexes }}
     # Whether the mainnet deploy succeeded, for the smoke job: it checks 4rc.OS even when the testnet deploy after it failed.
     outputs:
       mainnet: ${{ steps.deploy-mainnet.outcome }}
@@ -415,18 +415,11 @@ jobs:
         timeout-minutes: 40
         run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_TESTNET_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
 
-      # The composite indexes and field overrides of firestore/arcos.indexes.json, for the arcos database only (the only
-      # one firebase.json lists). Without the force flag an index the file no longer names is left in place, never deleted. The
-      # rules are not deployed here: the owner deploys firestore/arcos.rules by hand, and the deployer has no rules role.
-      - name: Deploy the Firestore indexes
-        id: deploy-indexes
-        if: ${{ !inputs.dry_run && env.DEPLOY_INDEXES == 'true' }}
-        timeout-minutes: 15
-        run: tools/firebase/node_modules/.bin/firebase deploy --only firestore:indexes --project "$FIREBASE_PROJECT" --non-interactive
-
       # The functions codebase arcos, from functions/deploy: the CLI reads functions.yaml, uploads the folder, and Cloud
       # Build installs the two external packages from its lockfile with install scripts off. Only this codebase: a
-      # function of another codebase is never touched.
+      # function of another codebase is never touched. It doesn't touch Firestore either: `--only functions:arcos` keeps
+      # the functions target alone (filterTargets.js), and only a Firestore-triggered function would make the functions
+      # deploy read a database (deploy/functions/services), which the manifest check above refuses.
       - name: Deploy the functions
         id: deploy-functions
         if: ${{ !inputs.dry_run && env.DEPLOY_FUNCTIONS == 'true' }}

@@ -259,7 +259,7 @@ describe("deploy.yml, the two sites", () => {
   it("lets a manual run pick the sites, both by default; a push has no input (plan decides)", () => {
     const triggers = deploy.slice(deploy.indexOf("\non:"), deploy.indexOf("\nconcurrency:"));
     expect(triggers).toMatch(
-      / {6}targets:\n {8}description: .+\n {8}type: choice\n {8}options:\n {10}- both\n {10}- mainnet\n {10}- testnet\n {10}- functions\n {10}- indexes\n {8}default: both\n/,
+      / {6}targets:\n {8}description: .+\n {8}type: choice\n {8}options:\n {10}- both\n {10}- mainnet\n {10}- testnet\n {10}- functions\n {8}default: both\n/,
     );
   });
 
@@ -365,12 +365,11 @@ describe("deploy.yml, the testnet gate", () => {
     fs.rmSync(dir, { recursive: true, force: true });
     return { status: run.status, stdout: run.stdout, written };
   }
-  const chose = (sites, { functions = false, indexes = false } = {}) => ({
+  const chose = (sites, { functions = false } = {}) => ({
     sites: JSON.stringify(sites),
     mainnet: String(sites.includes("mainnet")),
     testnet: String(sites.includes("testnet")),
     functions: String(functions),
-    indexes: String(indexes),
   });
 
   it("reads the variable in one place only: the plan job's env, never the bundle or deploy job", () => {
@@ -409,7 +408,7 @@ describe("deploy.yml, the testnet gate", () => {
   it("on a push, deploys both once the variable is true", () => {
     const result = plan({ ready: "true", functionsReady: "true" });
     expect(result.status).toBe(0);
-    expect(result.written).toEqual(chose(["mainnet", "testnet"], { functions: true, indexes: true }));
+    expect(result.written).toEqual(chose(["mainnet", "testnet"], { functions: true }));
     expect(result.stdout).not.toMatch(/::notice::|::error::/);
   });
 
@@ -435,10 +434,10 @@ describe("deploy.yml, the testnet gate", () => {
     }
   });
 
-  it("deploys no functions and no indexes from a manual run of the sites, whatever the variables say", () => {
+  it("deploys no functions from a manual run of the sites, whatever the variables say", () => {
     for (const targets of ["both", "mainnet", "testnet"]) {
       const result = plan({ targets, ready: "true", functionsReady: "true" });
-      expect(result.written, targets).toMatchObject({ functions: "false", indexes: "false" });
+      expect(result.written, targets).toMatchObject({ functions: "false" });
     }
   });
 
@@ -449,10 +448,12 @@ describe("deploy.yml, the testnet gate", () => {
   });
 });
 
-// The functions and the indexes join a run only once the owner has set ARCOS_FUNCTIONS_READY to `true`, after the arcos
-// database, the account arcos-jobs@ and the deployer's roles exist (docs/OPERATIONS.md). Until then a push deploys the
-// sites alone, and a manual run that asks for either fails before anything builds.
-describe("deploy.yml, the functions and the indexes", () => {
+// The functions join a run only once the owner has set ARCOS_FUNCTIONS_READY to `true`, after the arcos database, the
+// account arcos-jobs@ and the deployer's roles exist (docs/OPERATIONS.md). Until then a push deploys the sites alone,
+// and a manual run that asks for them fails before anything builds. The Firestore indexes and rules are never deployed
+// from the workflow: the pinned CLI compiles the rules even for an indexes-only deploy, and the deployer has no rules
+// role, on purpose. The owner deploys both by hand.
+describe("deploy.yml, the functions", () => {
   function plan({ targets = "", testnetReady = "true", functionsReady } = {}) {
     const [script] = runScripts(job("plan"));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-plan-"));
@@ -472,28 +473,31 @@ describe("deploy.yml, the functions and the indexes", () => {
   it("reads the variable in the plan job's env only", () => {
     expect(deployCode.match(/\bvars\.ARCOS_FUNCTIONS_READY\b/g)).toHaveLength(1);
     expect(job("plan")).toMatch(/^ {10}FUNCTIONS_READY: \$\{\{ vars\.ARCOS_FUNCTIONS_READY \}\}$/m);
-    expect(job("plan")).toMatch(/^ {6}functions: \$\{\{ steps\.plan\.outputs\.functions \}\}\n {6}indexes: \$\{\{ steps\.plan\.outputs\.indexes \}\}$/m);
+    expect(job("plan")).toMatch(/^ {6}functions: \$\{\{ steps\.plan\.outputs\.functions \}\}\n {4}steps:$/m);
   });
 
-  it("on a push, adds the indexes and the functions only when the variable is exactly true, and says so otherwise", () => {
+  it("on a push, adds the functions only when the variable is exactly true, and says so otherwise", () => {
     for (const functionsReady of [undefined, "", "false", "TRUE", "1"]) {
       const result = plan({ functionsReady });
       expect(result.status).toBe(0);
-      expect(result.written).toMatchObject({ sites: '["mainnet","testnet"]', functions: "false", indexes: "false" });
+      expect(result.written).toEqual({ sites: '["mainnet","testnet"]', mainnet: "true", testnet: "true", functions: "false" });
       expect(result.stdout).toMatch(/^::notice::.*ARCOS_FUNCTIONS_READY/m);
     }
-    expect(plan({ functionsReady: "true" }).written).toMatchObject({ sites: '["mainnet","testnet"]', functions: "true", indexes: "true" });
+    expect(plan({ functionsReady: "true" }).written).toEqual({ sites: '["mainnet","testnet"]', mainnet: "true", testnet: "true", functions: "true" });
   });
 
-  it("deploys either alone from a manual run, building no site, and fails one asked for before the variable is true", () => {
-    expect(plan({ targets: "functions", functionsReady: "true" }).written).toEqual({ sites: "[]", mainnet: "false", testnet: "false", functions: "true", indexes: "false" });
-    expect(plan({ targets: "indexes", functionsReady: "true" }).written).toEqual({ sites: "[]", mainnet: "false", testnet: "false", functions: "false", indexes: "true" });
-    for (const targets of ["functions", "indexes"]) {
-      const result = plan({ targets, functionsReady: "false" });
-      expect(result.status).not.toBe(0);
-      expect(result.written).toEqual({});
-      expect(result.stdout).toMatch(/^::error::.*ARCOS_FUNCTIONS_READY/m);
-    }
+  it("deploys the functions alone from a manual run, building no site, and fails that run before the variable is true", () => {
+    expect(plan({ targets: "functions", functionsReady: "true" }).written).toEqual({ sites: "[]", mainnet: "false", testnet: "false", functions: "true" });
+    const result = plan({ targets: "functions", functionsReady: "false" });
+    expect(result.status).not.toBe(0);
+    expect(result.written).toEqual({});
+    expect(result.stdout).toMatch(/^::error::.*ARCOS_FUNCTIONS_READY/m);
+  });
+
+  it("has no indexes target any more: a manual run that asks for it fails like any unknown target", () => {
+    const result = plan({ targets: "indexes", functionsReady: "true" });
+    expect(result.status).not.toBe(0);
+    expect(result.written).toEqual({});
   });
 
   it("skips the site bundles when no site is chosen, since a matrix can't be empty", () => {
@@ -525,20 +529,20 @@ describe("deploy.yml, the functions and the indexes", () => {
     expect(runScripts(list[place])).toEqual(['cp "$RUNNER_TEMP/bundle-functions/index.js" "$RUNNER_TEMP/bundle-functions/functions.yaml" functions/deploy/']);
   });
 
-  it("deploys the indexes, then the functions, after the sites, each by name and only when chosen", () => {
+  it("deploys the functions after the sites, by codebase and only when chosen, and never Firestore", () => {
     const list = steps("deploy");
-    const indexes = step("deploy-indexes");
     const functions = step("deploy-functions");
-    expect(indexes).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_INDEXES == 'true' \}\}$/m);
     expect(functions).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_FUNCTIONS == 'true' \}\}$/m);
-    expect(runScripts(indexes)).toEqual(['tools/firebase/node_modules/.bin/firebase deploy --only firestore:indexes --project "$FIREBASE_PROJECT" --non-interactive']);
     expect(runScripts(functions)).toEqual(['tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --project "$FIREBASE_PROJECT" --non-interactive']);
-    expect(list.indexOf(indexes)).toBeGreaterThan(list.indexOf(step("deploy-testnet")));
-    expect(list.indexOf(functions)).toBe(list.indexOf(indexes) + 1);
-    for (const id of ["deploy-indexes", "deploy-functions"]) expect(step(id)).toMatch(/^ {8}timeout-minutes: \d+$/m);
-    // Never the rules (the deployer has no rules role), never every codebase, never everything.
-    expect(deployCode).not.toMatch(/--only "?firestore"?(\s|$)|firestore:rules|firestore:arcos|--only "?functions"?(\s|$)/);
-    expect(job("deploy")).toMatch(/^ {6}DEPLOY_FUNCTIONS: \$\{\{ needs\.plan\.outputs\.functions \}\}\n {6}DEPLOY_INDEXES: \$\{\{ needs\.plan\.outputs\.indexes \}\}$/m);
+    expect(list.indexOf(functions)).toBe(list.indexOf(step("deploy-testnet")) + 1);
+    expect(functions).toMatch(/^ {8}timeout-minutes: \d+$/m);
+    // Never Firestore: the CLI compiles the rules even for `--only firestore:indexes`, and the deployer has no rules
+    // role. Never every codebase, never everything.
+    expect(step("deploy-indexes")).toBeUndefined();
+    expect(deployCode).not.toMatch(/firestore|DEPLOY_INDEXES|outputs\.indexes/);
+    expect(deployCode).not.toMatch(/--only "?functions"?(\s|$)/);
+    expect(deployCode.match(/ deploy --only /g)).toHaveLength(3);
+    expect(job("deploy")).toMatch(/^ {6}DEPLOY_FUNCTIONS: \$\{\{ needs\.plan\.outputs\.functions \}\}\n {4}# /m);
   });
 
   it("matches firebase.json: the codebase it deploys is the one entry there, from the folder the bundle lands in", () => {
