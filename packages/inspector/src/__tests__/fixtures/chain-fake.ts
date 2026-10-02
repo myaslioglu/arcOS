@@ -23,8 +23,11 @@ export type FakePool = {
   sqrtPriceX96: bigint;
   tick: number;
   liquidity: bigint;
-  /** `{ amountIn }`: the quoter answers. Absent: it reverts, as it does for a pool that can't pay the amount out. */
-  quote?: { amountIn: bigint };
+  /**
+   * What the quoter does for this pool: `{ amountIn }` answers; `{ reverts }` reverts with those bytes (see fixtures/quoter-reverts.ts);
+   * `{ fails }` is a transport failure. Absent: it reverts with "not enough liquidity" for this pool, as for a pool that can't pay.
+   */
+  quote?: { amountIn: bigint } | { reverts: `0x${string}` } | { fails: Error };
 };
 
 /**
@@ -53,10 +56,13 @@ export type ReadRecord = { address: string; fn: string; args: readonly unknown[]
 /** One `aggregate3`, with each inner call decoded. */
 export type BatchRecord = { calls: { target: string; fn: string; args: readonly unknown[] }[] };
 /** One quote request the fake's V4Quoter received. */
-export type QuoteRecord = { poolId: string; zeroForOne: boolean; exactAmount: bigint };
+export type QuoteRecord = { poolId: string; zeroForOne: boolean; exactAmount: bigint; gas: bigint | undefined };
 export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[] };
 
 const lower = (a: string) => a.toLowerCase();
+/** UnexpectedRevertBytes(NotEnoughLiquidity(poolId)), laid out like the bytes read live (fixtures/quoter-reverts.ts). */
+const notEnoughLiquidity = (poolId: string): string =>
+  `0x6190b2b0${"20".padStart(64, "0")}${"24".padStart(64, "0")}7a5ed734${poolId.slice(2)}${"0".repeat(56)}`;
 export const readKey = (address: string, fn: string, args: readonly unknown[]): string =>
   `${lower(address)}.${fn}(${args.map((x) => lower(String(x))).join(",")})`;
 
@@ -106,15 +112,8 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
             : encodeFunctionResult({ abi: stateViewAbi, functionName: "getLiquidity", result: pool?.liquidity ?? 0n }),
       };
     }
-    if (lower(target) === quoter) {
-      const p = args[0] as { poolKey: Parameters<typeof poolIdOf>[0]; zeroForOne: boolean; exactAmount: bigint };
-      const poolId = poolIdOf(p.poolKey);
-      quotes.push({ poolId, zeroForOne: p.zeroForOne, exactAmount: p.exactAmount });
-      const quote = f.v4?.[poolId]?.quote;
-      return quote
-        ? { success: true, returnData: encodeFunctionResult({ abi: quoterAbi, functionName: "quoteExactOutputSingle", result: [quote.amountIn, 30_000n] }) }
-        : { success: false, returnData: "0x6190b2b0" };
-    }
+    // A quote runs the pool's hooks and can burn a lot of gas, so it is never sent inside a multicall.
+    if (lower(target) === quoter) throw new Error("a quote must be its own eth_call, not part of a multicall");
     try {
       return { success: true, returnData: encodeFunctionResult({ abi: plainAbi, functionName, result: plain(target, functionName, args) } as never) };
     } catch (e) {
@@ -129,8 +128,17 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
     quotes,
     getCode: async (a) => (f.code?.[lower(a)] as `0x${string}` | undefined) ?? null,
     getStorageAt: async () => null,
-    read: async (address, _abi, fn, args = []) => {
+    read: async (address, _abi, fn, args = [], options) => {
       asked.push({ address, fn, args });
+      if (lower(address) === quoter && fn === "quoteExactOutputSingle") {
+        const p = args[0] as { poolKey: Parameters<typeof poolIdOf>[0]; zeroForOne: boolean; exactAmount: bigint };
+        const poolId = poolIdOf(p.poolKey);
+        quotes.push({ poolId, zeroForOne: p.zeroForOne, exactAmount: p.exactAmount, gas: options?.gas });
+        const quote = f.v4?.[poolId]?.quote;
+        if (quote && "amountIn" in quote) return [quote.amountIn, 30_000n];
+        if (quote && "fails" in quote) throw quote.fails;
+        throw new CallReverted("execution reverted", quote && "reverts" in quote ? quote.reverts : (notEnoughLiquidity(poolId) as `0x${string}`));
+      }
       if (lower(address) === lower(MULTICALL3) && fn === "aggregate3") {
         if (f.multicallError) throw f.multicallError;
         if (f.multicallReverts) throw new CallReverted();

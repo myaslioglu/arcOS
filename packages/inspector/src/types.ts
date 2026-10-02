@@ -89,8 +89,11 @@ export type Pool = {
   /**
    * The pool alone can pay out 1,000 units of the quote currency. v2, v3 and Aerodrome: `depth` is at least that. v4: a
    * V4Quoter exact-output quote for that amount succeeded, which is real, extractable USDC through the pool's own hooks.
+   * `null` is undecided (see `undecided`); `false` is only ever the pool's own "not enough liquidity".
    */
-  liquid: boolean;
+  liquid: boolean | null;
+  /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. */
+  undecided?: "quote-unavailable";
   /** v4 only. */
   poolId?: Hex;
   key?: PoolKey;

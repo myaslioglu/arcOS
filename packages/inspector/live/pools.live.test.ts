@@ -73,7 +73,7 @@ const inner = viemReader(client);
 const reader: ChainReader = {
   getCode: (a) => paced(() => inner.getCode(a)),
   getStorageAt: (a, slot) => paced(() => inner.getStorageAt(a, slot)),
-  read: (a, abi, fn, args) => paced(() => inner.read(a, abi, fn, args)),
+  read: (a, abi, fn, args, options) => paced(() => inner.read(a, abi, fn, args, options)),
   blockNumber: () => paced(() => inner.blockNumber()),
 };
 
@@ -158,7 +158,7 @@ describe("Arc mainnet, read-only", () => {
     expect(pool).toMatchObject({ version: "v4", quote: "USDC" });
     expect(pool!.key!.currency0).toBe(NATIVE);
     expect(typeof pool!.depth).toBe("bigint");
-    expect(typeof pool!.liquid).toBe("boolean");
+    expect(pool!.liquid === null || typeof pool!.liquid === "boolean").toBe(true);
   });
 
   it("finds a hooked v4 pool only when the index supplies it", async () => {
@@ -169,7 +169,19 @@ describe("Arc mainnet, read-only", () => {
     const given = await findPools(input(token, v4Only, [{ version: "v4", key: HOOKED_POOL.key }]));
     const pool = given.pools.find((p) => p.poolId === HOOKED_POOL.id);
     expect(pool, `pool ${HOOKED_POOL.id}`).toMatchObject({ version: "v4", quote: "USDC", key: HOOKED_POOL.key });
-    expect(typeof pool!.liquid).toBe("boolean");
+    expect(pool!.liquid === null || typeof pool!.liquid === "boolean").toBe(true);
+  });
+
+  it("bounds each quote's gas: the empty USDC/EURC spacing-1 pool runs out and reads undecided, never thin, and the honest pool beside it still quotes", async () => {
+    // At block 23,825,212 this pool held nothing and its quote walked every tick word (over 20M gas); with QUOTE_GAS it
+    // reverts with an empty inner reason. If someone fills it, it quotes, and that is fine too: it must never read thin.
+    const spacing1 = v4PoolId(v4PoolKey(USDC, EURC.mainnet, 100, 1));
+    const scan = await findPools(input(EURC.mainnet, v4Only));
+    const empty = scan.pools.find((p) => p.poolId === spacing1);
+    expect(empty, `pool ${spacing1}`).toBeDefined();
+    expect(empty!.liquid).not.toBe(false);
+    if (empty!.liquid === null) expect(empty!.undecided).toBe("quote-unavailable");
+    expect(scan.pools.find((p) => p.poolId === USDC_EURC_POOL)).toMatchObject({ liquid: true });
   });
 
   it("finds the WETH/USDC Aerodrome pool and reads its USDC balance", async () => {

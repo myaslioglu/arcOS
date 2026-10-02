@@ -4,7 +4,8 @@ import { findPools } from "../checks";
 import { inspect } from "../inspect";
 import type { ExplorerSource, Holder } from "../explorer";
 import type { ExtraPool, Finding, InspectInput, Report } from "../types";
-import { NATIVE, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
+import { NATIVE, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
+import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, NOT_ENOUGH_LIQUIDITY_OTHER_POOL, NOT_ENOUGH_LIQUIDITY_POOL, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
 import { fakeChain, readKey, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111"; // sorts below USDC and EURC
@@ -56,20 +57,26 @@ describe("a DEX config without Uniswap v2 or v3 (testnet has neither)", () => {
 });
 
 describe("Uniswap v4 discovery", () => {
-  it("asks one multicall for every standard key, then one for the depth of the pools that exist: two round trips", async () => {
+  it("asks one multicall for every standard key's price and liquidity, then one eth_call per pool that exists for its quote: two round trips", async () => {
     const key = v4PoolKey(TOKEN, USDC, 3000, 60);
     const chain = fakeChain({ v4: listed([key, at1251()]) });
     const scan = await findPools(inputFor(chain, v4Only));
 
-    expect(chain.batches).toHaveLength(2);
-    const [first, second] = chain.batches;
-    expect(first!.calls.map((c) => [c.target, c.fn, c.args[0]])).toEqual(
-      standardV4Keys(TOKEN, [USDC, NATIVE]).map((k) => [UNISWAP_V4.stateView, "getSlot0", v4PoolId(k)]),
+    expect(chain.batches).toHaveLength(1);
+    const ids = standardV4Keys(TOKEN, [USDC, NATIVE]).map(v4PoolId);
+    expect(chain.batches[0]!.calls.map((c) => [c.target, c.fn, c.args[0]])).toEqual(
+      ids.flatMap((id) => [[UNISWAP_V4.stateView, "getSlot0", id], [UNISWAP_V4.stateView, "getLiquidity", id]]),
     );
-    expect(second!.calls.map((c) => [c.target, c.fn])).toEqual([[UNISWAP_V4.stateView, "getLiquidity"], [UNISWAP_V4.quoter, "quoteExactOutputSingle"]]);
-    expect(second!.calls[0]!.args).toEqual([v4PoolId(key)]);
+    // The quote is its own call with its own gas limit, so no other pool's quote can spend the gas it needs.
+    expect(chain.quotes).toHaveLength(1);
+    expect(chain.quotes[0]).toMatchObject({ poolId: v4PoolId(key), gas: QUOTE_GAS });
+    expect(chain.asked.filter((r) => r.fn === "quoteExactOutputSingle")).toHaveLength(1);
     expect(scan.pools).toHaveLength(1);
-    expect(scan.pools[0]).toMatchObject({ address: UNISWAP_V4.poolManager, version: "v4", quote: "USDC", poolId: v4PoolId(key), key });
+    expect(scan.pools[0]).toMatchObject({ address: UNISWAP_V4.poolManager, version: "v4", quote: "USDC", poolId: v4PoolId(key), key, liquid: true });
+  });
+
+  it("gives every quote the same bounded gas: enough for an honest quote (about 62,500 gas, measured), far under an empty spacing-1 pool's walk (over 20 million)", () => {
+    expect(QUOTE_GAS).toBe(2_000_000n);
   });
 
   it("stops after one multicall when no standard pool exists, and says the StateView answered", async () => {
@@ -83,14 +90,14 @@ describe("Uniswap v4 discovery", () => {
     const chain = fakeChain({ v4: listed([v4PoolKey(TOKEN, USDC, 500, 10), at1251()]) });
     const scan = await findPools(inputFor(chain, v4Only));
     expect(scan.pools[0]!.depth).toBe(422_599_842n);
-    expect(chain.quotes).toEqual([{ poolId: v4PoolId(v4PoolKey(TOKEN, USDC, 500, 10)), zeroForOne: true, exactAmount: 1_000_000_000n }]);
+    expect(chain.quotes).toEqual([{ poolId: v4PoolId(v4PoolKey(TOKEN, USDC, 500, 10)), zeroForOne: true, exactAmount: 1_000_000_000n, gas: QUOTE_GAS }]);
   });
 
   it("reads the in-range USDC when USDC sorts first and is currency0: the quote asks for currency0 out", async () => {
     const chain = fakeChain({ v4: listed([v4PoolKey(HIGH, USDC, 500, 10), at1251()]) });
     const scan = await findPools(inputFor(chain, v4Only, HIGH));
     expect(scan.pools[0]!.depth).toBe(53_223_226n);
-    expect(chain.quotes).toEqual([{ poolId: v4PoolId(v4PoolKey(HIGH, USDC, 500, 10)), zeroForOne: false, exactAmount: 1_000_000_000n }]);
+    expect(chain.quotes).toEqual([{ poolId: v4PoolId(v4PoolKey(HIGH, USDC, 500, 10)), zeroForOne: false, exactAmount: 1_000_000_000n, gas: QUOTE_GAS }]);
   });
 
   it("counts native USDC in 18 decimals, shows it in 6, and asks for 1,000 native units out", async () => {
@@ -99,7 +106,7 @@ describe("Uniswap v4 discovery", () => {
     const scan = await findPools(inputFor(chain, v4Only));
     expect(key.currency0).toBe(NATIVE);
     expect(scan.pools[0]).toMatchObject({ quote: "USDC", depth: 53_223_226n, key });
-    expect(chain.quotes).toEqual([{ poolId: v4PoolId(key), zeroForOne: false, exactAmount: 1000n * 10n ** 18n }]);
+    expect(chain.quotes).toEqual([{ poolId: v4PoolId(key), zeroForOne: false, exactAmount: 1000n * 10n ** 18n, gas: QUOTE_GAS }]);
   });
 
   it("calls a pool liquid exactly when its quote succeeds, whatever the in-range depth", async () => {
@@ -127,12 +134,13 @@ describe("Uniswap v4 discovery", () => {
   describe("extraPools", () => {
     const hooked = v4PoolKey(TOKEN, USDC, 10000, 200, HOOK);
     const standard = v4PoolKey(TOKEN, USDC, 500, 10);
-    const ids = (chain: FakeReader) => chain.batches[0]!.calls.map((c) => c.args[0]);
+    const ids = (chain: FakeReader) => chain.batches[0]!.calls.filter((c) => c.fn === "getSlot0").map((c) => c.args[0]);
+    const slots = (chain: FakeReader) => chain.batches[0]!.calls.filter((c) => c.fn === "getSlot0");
 
     it("reads a hooked pool the index knows, next to the standard keys", async () => {
       const chain = fakeChain({ v4: listed([hooked, at1251()]) });
       const scan = await findPools(inputFor(chain, v4Only, TOKEN, [{ version: "v4", key: hooked }]));
-      expect(chain.batches[0]!.calls).toHaveLength(11);
+      expect(slots(chain)).toHaveLength(11);
       expect(scan.pools).toHaveLength(1);
       expect(scan.pools[0]).toMatchObject({ version: "v4", poolId: v4PoolId(hooked), key: hooked, liquid: true });
     });
@@ -153,7 +161,7 @@ describe("Uniswap v4 discovery", () => {
         { version: "v4", key: { ...hooked, hooks: "0x123" as `0x${string}` } },
       ];
       const scan = await findPools(inputFor(chain, v4Only, TOKEN, extras));
-      expect(chain.batches[0]!.calls).toHaveLength(11);
+      expect(slots(chain)).toHaveLength(11);
       expect(new Set(ids(chain)).size).toBe(11);
       expect(scan.pools).toHaveLength(1);
     });
@@ -162,7 +170,7 @@ describe("Uniswap v4 discovery", () => {
       const many = Array.from({ length: 60 }, (_, i): ExtraPool => ({ version: "v4", key: v4PoolKey(TOKEN, USDC, 1 + i, 200, HOOK) }));
       const chain = fakeChain();
       await findPools(inputFor(chain, v4Only, TOKEN, many));
-      expect(chain.batches[0]!.calls).toHaveLength(10 + 50);
+      expect(slots(chain)).toHaveLength(10 + 50);
     });
 
     it("counts the 50-pool cap after validating and deduplicating, so junk in front doesn't use it up", async () => {
@@ -174,7 +182,7 @@ describe("Uniswap v4 discovery", () => {
       const valid = Array.from({ length: 60 }, (_, i): ExtraPool => ({ version: "v4", key: v4PoolKey(TOKEN, USDC, 1 + i, 200, HOOK) }));
       const chain = fakeChain();
       await findPools(inputFor(chain, v4Only, TOKEN, [...junk, ...valid, ...valid]));
-      expect(chain.batches[0]!.calls).toHaveLength(10 + 50);
+      expect(slots(chain)).toHaveLength(10 + 50);
       expect(new Set(ids(chain)).size).toBe(60);
     });
 
@@ -192,7 +200,7 @@ describe("Uniswap v4 discovery", () => {
   it("never treats a token as its own quote: inspecting USDC asks about EURC alone", async () => {
     const chain = fakeChain();
     await findPools(inputFor(chain, { quoteTokens: [USD, EUR], v4: UNISWAP_V4 }, USDC));
-    expect(chain.batches[0]!.calls.map((c) => c.args[0])).toEqual(standardV4Keys(USDC, [EURC.mainnet]).map(v4PoolId));
+    expect(chain.batches[0]!.calls.filter((c) => c.fn === "getSlot0").map((c) => c.args[0])).toEqual(standardV4Keys(USDC, [EURC.mainnet]).map(v4PoolId));
   });
 
   it("calls a StateView that answers 0x silent, not empty: nothing was read, so no pool is ruled out", async () => {
@@ -460,5 +468,69 @@ describe("the holders finding", () => {
     const explorer = holdersOf([wallet(UNISWAP_V4.poolManager, 700n), wallet(OTHER, 300n)]);
     const r = await run({ reads: noPools(uniswapAll, TOKEN) }, { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000] }, TOKEN, explorer);
     expect(find(r, "holders")).toMatchObject({ status: "fail", title: "All 2 wallets hold 100%" });
+  });
+});
+
+// --- What a quote's outcome means ---
+
+describe("a v4 quote's outcome", () => {
+  // The USDC/EURC 0.05% pool, so the pinned revert bytes (read live for exactly that pool id) apply as they are.
+  const eurcPool = v4PoolKey(USDC, EURC.mainnet, 500, 10);
+  const scanOf = async (pool: FakePool, key = eurcPool) => {
+    const chain = fakeChain({ v4: listed([key, pool]) });
+    return (await findPools(inputFor(chain, v4Only, EURC.mainnet, [{ version: "v4", key }]))).pools[0]!;
+  };
+
+  it("pins the fixture to the pool it was read for", () => {
+    expect(v4PoolId(eurcPool)).toBe(NOT_ENOUGH_LIQUIDITY_POOL);
+  });
+
+  it("can't pay only when the quoter says the pool's own liquidity ran out: NotEnoughLiquidity with this pool's id", async () => {
+    const pool = await scanOf(at1251({ quote: { reverts: NOT_ENOUGH_LIQUIDITY } }));
+    expect(pool).toMatchObject({ liquid: false });
+    expect(pool.undecided).toBeUndefined();
+  });
+
+  it.each<[string, NonNullable<FakePool["quote"]>]>([
+    ["an empty inner reason (the inner call ran out of gas)", { reverts: EMPTY_INNER_REASON }],
+    ["an uninitialised pool's reason", { reverts: POOL_NOT_INITIALIZED }],
+    ["another pool's NotEnoughLiquidity", { reverts: NOT_ENOUGH_LIQUIDITY_OTHER_POOL }],
+    ["a bare Error(string) selector", { reverts: "0x08c379a0" as const }],
+    ["a transport failure", { fails: new Error("ETIMEDOUT") }],
+  ])("leaves the pool unquoted, never thin, on %s", async (_, quote) => {
+    const pool = await scanOf(at1251({ quote }));
+    expect(pool).toMatchObject({ liquid: null, undecided: "quote-unavailable" });
+  });
+
+  it("gives each pool's quote its own failure: one that fails leaves the others' answers alone", async () => {
+    const a = v4PoolKey(USDC, EURC.mainnet, 500, 10);
+    const b = v4PoolKey(USDC, EURC.mainnet, 3000, 60);
+    const chain = fakeChain({ v4: listed([a, at1251({ quote: { fails: new Error("ETIMEDOUT") } })], [b, at1251()]) });
+    const { pools } = await findPools(inputFor(chain, v4Only, EURC.mainnet));
+    expect(pools.map((p) => [p.poolId, p.liquid])).toEqual([[v4PoolId(a), null], [v4PoolId(b), true]]);
+  });
+
+  it("keeps the other families' pools when every v4 quote fails", async () => {
+    const reads = { ...noPools(mainnetLike, TOKEN), [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: POOL, [readKey(USDC, "balanceOf", [POOL])]: 5_000_000_000n };
+    const key = v4PoolKey(TOKEN, USDC, 500, 10);
+    const chain = fakeChain({ reads, v4: listed([key, at1251({ quote: { fails: new Error("ETIMEDOUT") } })]) });
+    const scan = await findPools(inputFor(chain, mainnetLike));
+    expect(scan.pools.map((p) => p.version)).toEqual(["v3", "v4"]);
+    expect(scan.silent).toEqual([]);
+  });
+});
+
+describe("the liquidity finding when a v4 pool's liquidity is undecided", () => {
+  const key = v4PoolKey(TOKEN, USDC, 500, 10);
+  const runWith = (f: FakeChain, dex: DexConfig, extraPools?: ExtraPool[]) =>
+    inspect({
+      address: TOKEN, network: "mainnet", reader: fakeChain({ code: { [TOKEN]: PLAIN }, ...f }), explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.test",
+      extraPools,
+    });
+
+  it("reads unknown, never thin, when a quote couldn't be read", async () => {
+    const r = await runWith({ v4: listed([key, at1251({ quote: { reverts: EMPTY_INNER_REASON } })]) }, v4Only);
+    expect(find(r, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't verify Uniswap v4 liquidity" });
+    expect(find(r, "liquidity").detail).toContain("didn't answer");
   });
 });

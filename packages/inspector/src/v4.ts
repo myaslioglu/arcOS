@@ -1,4 +1,4 @@
-import { encodeAbiParameters, getAddress, isAddress, keccak256, parseAbi } from "viem";
+import { decodeAbiParameters, encodeAbiParameters, getAddress, isAddress, keccak256, parseAbi } from "viem";
 import type { Address, UniswapV4Config } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
@@ -161,14 +161,38 @@ const toSixDecimals = (raw: bigint, decimals: number): bigint =>
   decimals >= 6 ? raw / 10n ** BigInt(decimals - 6) : raw * 10n ** BigInt(6 - decimals);
 
 /**
- * `token`'s v4 pools against each quote currency, in two round trips whatever their number.
- * 1. One multicall of `StateView.getSlot0` for every candidate: the standard hookless keys (`STANDARD_V4_TIERS` against each
- *    quote) and the index's pools. A pool whose `sqrtPriceX96` is 0 was never initialised.
- * 2. One multicall, for the pools that exist, of `StateView.getLiquidity` (what `quoteInRange` needs) and a V4Quoter
- *    exact-output quote for `quoteUnits` of the quote currency. A pool is `liquid` when that quote succeeds: real,
- *    extractable USDC through the pool's own hooks, which a narrow position can't fake. `depth` is the in-range amount, shown
- *    as such; it doesn't decide anything.
- * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure rejects.
+ * The gas one quote may use. Measured on Arc mainnet (eth_call, block 23,825,212): an honest 1,000-unit quote on the USDC/EURC
+ * 0.05% pool needs about 62,500 gas in either direction, while a quote that walks an empty tick-spacing-1 pool's tick words
+ * takes 10-25M and runs out of this limit (an empty inner reason, so undecided). 2M leaves room for a quote that crosses
+ * many initialised ticks or runs a hook, and keeps any one pool far below the ~30M an eth_call gets.
+ */
+export const QUOTE_GAS = 2_000_000n;
+
+/** V4Quoter wraps whatever its inner call reverted with in `UnexpectedRevertBytes(bytes)`. */
+const UNEXPECTED_REVERT_BYTES = "0x6190b2b0";
+/** `NotEnoughLiquidity(bytes32 poolId)`: the pool's own "I can't pay that". */
+const NOT_ENOUGH_LIQUIDITY = "0x7a5ed734";
+/** True only for the pool's own NotEnoughLiquidity, for this pool: anything else (an inner out-of-gas, another error) says nothing. */
+function isPoolShort(data: Hex | null, poolId: Hex): boolean {
+  if (!data || lower(data).slice(0, 10) !== UNEXPECTED_REVERT_BYTES) return false;
+  try {
+    const [inner] = decodeAbiParameters([{ type: "bytes" }], `0x${data.slice(10)}`);
+    return inner.length === 2 + 36 * 2 && lower(inner).slice(0, 10) === NOT_ENOUGH_LIQUIDITY && lower(`0x${inner.slice(10)}`) === lower(poolId);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `token`'s v4 pools against each quote currency: two round trips for the state, then one quote per pool that exists.
+ * 1. One multicall of `StateView.getSlot0` and `getLiquidity` for every candidate: the standard hookless keys and the
+ *    index's pools. A pool whose `sqrtPriceX96` is 0 was never initialised.
+ * 2. For each pool that exists, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call
+ *    with `QUOTE_GAS`: a quote walks tick words, so one pool that plants an empty tick-spacing-1 range would starve the
+ *    others in a shared call, and its failure stays its own. Only the pool's own NotEnoughLiquidity means it can't pay
+ *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable").
+ *    `depth` is the in-range amount, shown as such; it doesn't decide anything.
+ * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure there rejects.
  */
 export async function readV4Pools(a: {
   reader: ChainReader;
@@ -181,45 +205,45 @@ export async function readV4Pools(a: {
 }): Promise<V4Read> {
   const asked = candidates(a.token, a.quotes, a.extra);
   if (asked.length === 0) return { answered: false, pools: [] };
-  let slots: BatchResult[];
+  let state: BatchResult[];
   try {
-    slots = await multicall(a.reader, asked.map((c): BatchCall => ({ target: a.v4.stateView, abi: stateViewAbi, functionName: "getSlot0", args: [c.id] })));
+    state = await multicall(
+      a.reader,
+      asked.flatMap((c): BatchCall[] => [
+        { target: a.v4.stateView, abi: stateViewAbi, functionName: "getSlot0", args: [c.id] },
+        { target: a.v4.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [c.id] },
+      ]),
+    );
   } catch (e) {
     if (e instanceof CallReverted) return { answered: false, pools: [] };
     throw e;
   }
-  const answered = slots.some((s) => s.ok);
+  const answered = asked.some((_, i) => state[i * 2]!.ok);
   const live = asked.flatMap((c, i) => {
-    const slot = slots[i]!;
+    const slot = state[i * 2]!;
     if (!slot.ok) return [];
     const [sqrtPriceX96, tick] = slot.value as readonly [bigint, number, number, number];
-    return sqrtPriceX96 > 0n ? [{ ...c, sqrtPriceX96, tick }] : [];
+    if (sqrtPriceX96 <= 0n) return [];
+    const liquidity = state[i * 2 + 1]!;
+    // A liquidity read that failed inside an answered multicall is a depth of 0, never a made-up figure.
+    return [{ ...c, sqrtPriceX96, tick, liquidity: liquidity.ok ? (liquidity.value as bigint) : 0n }];
   });
   if (live.length === 0) return { answered, pools: [] };
 
-  const depth = await multicall(
-    a.reader,
-    live.flatMap((c): BatchCall[] => [
-      { target: a.v4.stateView, abi: stateViewAbi, functionName: "getLiquidity", args: [c.id] },
-      {
-        target: a.v4.quoter,
-        abi: quoterAbi,
-        functionName: "quoteExactOutputSingle",
+  const pools = await Promise.all(
+    live.map(async (c): Promise<Pool> => {
+      const held = quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: c.liquidity, quoteIsCurrency0: c.quoteIsCurrency0 });
+      const base = { address: a.v4.poolManager, version: "v4" as const, quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), poolId: c.id, key: c.key };
+      try {
         // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
-        args: [{ poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" }],
-      },
-    ]),
-  );
-  return {
-    answered,
-    pools: live.map((c, i): Pool => {
-      const liquidity = depth[i * 2]!;
-      const quote = depth[i * 2 + 1]!;
-      // A liquidity read that failed inside an answered multicall is a depth of 0, never a made-up figure.
-      const held = liquidity.ok
-        ? quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: liquidity.value as bigint, quoteIsCurrency0: c.quoteIsCurrency0 })
-        : 0n;
-      return { address: a.v4.poolManager, version: "v4", quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), liquid: quote.ok, poolId: c.id, key: c.key };
+        const params = { poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" };
+        await a.reader.read(a.v4.quoter, quoterAbi, "quoteExactOutputSingle", [params], { gas: QUOTE_GAS });
+        return { ...base, liquid: true };
+      } catch (e) {
+        if (e instanceof CallReverted && isPoolShort(e.data, c.id)) return { ...base, liquid: false };
+        return { ...base, liquid: null, undecided: "quote-unavailable" };
+      }
     }),
-  };
+  );
+  return { answered, pools };
 }

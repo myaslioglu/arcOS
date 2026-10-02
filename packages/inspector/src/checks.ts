@@ -751,8 +751,9 @@ const silentNote = (scan: PoolScan): string | null =>
 const foundVenues = (pools: readonly Pool[]): string[] =>
   (["v2", "v3", "v4", "aero"] as const).filter((v) => pools.some((p) => p.version === v)).map((v) => VENUE[v]);
 
-/** The pool a finding is about: a liquid one before any that isn't, then the deepest. */
-const bestPool = (pools: Pool[]): Pool => pools.reduce((a, b) => (a.liquid !== b.liquid ? (b.liquid ? b : a) : b.depth > a.depth ? b : a));
+/** The pool a finding is about: a liquid one, then an undecided one, then one that can't pay; the deepest within each. */
+const rank = (p: Pool): number => (p.liquid === true ? 2 : p.liquid === null ? 1 : 0);
+const bestPool = (pools: Pool[]): Pool => pools.reduce((a, b) => (rank(a) !== rank(b) ? (rank(b) > rank(a) ? b : a) : b.depth > a.depth ? b : a));
 
 const wholeUnits = (depth: bigint): string => (depth / 1_000_000n).toLocaleString("en-US");
 /** "1,000": the amount the copy says a liquid pool can pay out, from the one constant that decides it. */
@@ -770,7 +771,7 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
   const best = bestPool(pools);
   const units = wholeUnits(best.depth);
   const url = `${input.explorerBase}/address/${best.address}`;
-  if (best.liquid) {
+  if (best.liquid === true) {
     return best.version === "v4"
       ? finding(
           "liquidity", "pass", `${MIN_UNITS} ${best.quote} can be swapped out of Uniswap v4`,
@@ -778,6 +779,12 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
           { evidenceUrl: url },
         )
       : finding("liquidity", "pass", `${units} ${best.quote} of liquidity on ${VENUE[best.version]}`, `${pools.length} pool(s) found.`, { evidenceUrl: url });
+  }
+  // A quote that couldn't decide is no evidence of "thin", and with nothing liquid, none of "liquid" either.
+  const undecided = pools.filter((p) => p.liquid === null);
+  if (undecided.length > 0) {
+    const why = [`The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.`, silent].filter((x): x is string => x !== null);
+    return finding("liquidity", "unknown", "Couldn't verify Uniswap v4 liquidity", why.join(" "), { evidenceUrl: `${input.explorerBase}/address/${undecided[0]!.address}` });
   }
   const deepest =
     best.version === "v4"
