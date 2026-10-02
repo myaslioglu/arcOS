@@ -85,6 +85,7 @@ export const erc20Abi = parseAbi([
 const ownableAbi = parseAbi(["function owner() view returns (address)", "function getOwner() view returns (address)"]);
 const beaconAbi = parseAbi(["function implementation() view returns (address)"]);
 const v2FactoryAbi = parseAbi(["function getPair(address,address) view returns (address)"]);
+const v2PairAbi = parseAbi(["function token0() view returns (address)", "function getReserves() view returns (uint112, uint112, uint32)"]);
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
 /** Slipstream's factory keys a pool by tick spacing (an int24), where Uniswap v3's takes a fee. */
 const aeroFactoryAbi = parseAbi(["function getPool(address,address,int24) view returns (address)"]);
@@ -356,9 +357,22 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     uniswapAnswered = true;
     return answer;
   };
+  // A v2 pair's depth is its quote reserve, which is what it trades on: a balance can be raised by sending it USDC without a
+  // `sync`, which would make an empty pair look deep. A pair whose reserves can't be read has none.
+  const v2Reserve = async (pair: Address, quote: Address): Promise<bigint> => {
+    const [token0, reserves] = await Promise.all([
+      catchReverted(reader.read(pair, v2PairAbi, "token0") as Promise<Address | null>, null),
+      catchReverted(reader.read(pair, v2PairAbi, "getReserves") as Promise<readonly [bigint, bigint, number] | null>, null),
+    ]);
+    if (typeof token0 !== "string" || !Array.isArray(reserves)) return 0n;
+    return BigInt(lower(token0) === lower(quote) ? reserves[0] : reserves[1]);
+  };
   const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }, fee?: number): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
-    const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
+    const depth =
+      version === "v2"
+        ? await v2Reserve(pool as Address, quote.address)
+        : await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
     return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
   };
   // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
@@ -905,23 +919,33 @@ const poolRefusal = (pool: Pool): string =>
     ? "The pool's hook runs inside every swap and can refuse one the token itself would allow."
     : `${VENUE[pool.version]} pools refuse a token that arrives short (a transfer tax), so a tax alone reverts this sell.`;
 
-/** What a second round trip that neither sold nor reverted on selling came to, as "its buy reverted" and the like. */
+/** What a second round trip that neither sold nor reverted on selling came to, as "a leg used up all the gas" and the like. */
 function attemptNote(attempt: TradeAttempt): string {
   if (attempt.kind === "call-reverted") return "the simulation reverted as a whole";
   if (attempt.kind === "no-answer") return "the RPC didn't run it";
   if (attempt.kind === "call-failed") return "the RPC refused it or didn't answer";
   const r = attempt.result;
-  if (r.status === STATUS.buyReverted) return "its buy reverted";
   if (r.status === STATUS.buyOutOfGas || r.status === STATUS.sellOutOfGas) return "a leg used up all the gas it is given";
-  return "it bought nothing to sell";
+  if (r.status !== STATUS.ok) return "the simulation answered with a status it never gives";
+  // The buy delivered tokens, but the pair gave nothing for them, so no sell was sent.
+  return "the pool would give nothing back for the tokens bought, so no sell was sent";
 }
+
+/** A second round trip whose buy reverted, took nothing, or that the pool paid nothing for: that pool doesn't trade. */
+const couldntBuy = (attempt: TradeAttempt): boolean =>
+  attempt.kind === "ran" &&
+  (attempt.result.status === STATUS.buyReverted ||
+    (attempt.result.status === STATUS.ok && (attempt.result.spent === 0n || (attempt.result.paidOut === 0n && attempt.result.bought === 0n))));
 
 /**
  * The finding for a buy that went through and a sell that reverted. In a Uniswap v2 pair or a hookless v4 pool only the
  * token can have refused the sell: `fail`. A Uniswap v3, Aerodrome or hooked v4 pool can refuse it on its own account, so
- * the round trip was tried again on the deepest v2 or hookless v4 USDC pool: a sell that reverts there too, or no such pool
- * to try, is a `fail`; one that went through, or a second round trip that couldn't be completed, is a `warn` naming both
- * pools.
+ * the round trip was tried again on the deepest v2 or hookless v4 USDC pool that can trade (`fallbackPool`):
+ * - a sell that reverts there too: `fail`;
+ * - no such pool, or one whose buy reverted or that paid nothing out (it doesn't trade, whatever discovery read): `fail`;
+ * - a buy there that the pool paid out for and of which no tokens arrived: `fail`, "Buying delivers no tokens";
+ * - a sell there that went through, or a second round trip that couldn't be completed otherwise (out of gas, the RPC): a
+ *   `warn` naming both pools.
  */
 function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evidenceUrl: string }): Finding {
   const { pool } = run;
@@ -930,19 +954,30 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
     return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${VENUE[pool.version]} went through. ${capitalized(SOLD_BACK_REVERTED)}.`, at);
   }
   const deepestPool = `its deepest pool (${poolName(pool)})`;
+  const first = `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool)}`;
   const second = run.second;
   if (!second) {
+    return finding("trade", "fail", "Can't be sold", `${first} It has no ${VENUE.v2} or hookless ${VENUE.v4} USDC pool that trades to try selling into instead.`, at);
+  }
+  const other = fallbackName(second.pool);
+  if (couldntBuy(second)) {
     return finding(
       "trade", "fail", "Can't be sold",
-      `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool)} It has no ${VENUE.v2} or hookless ${VENUE.v4} USDC pool to try selling into instead.`,
+      `${first} Buying from ${other} to try selling there instead ${second.kind === "ran" && second.result.status === STATUS.buyReverted ? "reverted" : "got nothing"}, so it has no other pool that trades to sell into.`,
       at,
     );
   }
-  const other = fallbackName(second.pool);
   if (second.kind === "ran" && second.result.status === STATUS.sellReverted) {
     return finding(
       "trade", "fail", "Can't be sold",
       `Selling into ${deepestPool} reverted, and so did selling into ${other}: each time straight back, in the same transaction and from a contract.`,
+      at,
+    );
+  }
+  if (second.kind === "ran" && second.result.status === STATUS.ok && second.result.bought === 0n) {
+    return finding(
+      "trade", "fail", "Buying delivers no tokens",
+      `Selling into ${deepestPool} reverted. Buying from ${other} to try selling there instead went through and the pool paid out, but none of the tokens arrived. ${SIMULATED}`,
       at,
     );
   }
@@ -964,8 +999,9 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
  * Only what that call measured is evidence:
  * - the buy reverted, or either leg ran out of the gas it was given: `unknown`, since neither says anything about selling;
  * - the buy went through and the sell reverted: `fail`, "Can't be sold", unless the pool can refuse a sell on its own account
- *   (Uniswap v3, Aerodrome, a hooked v4 pool) and a sell into the deepest Uniswap v2 or hookless v4 USDC pool went through
- *   or couldn't be completed: then a `warn` naming both (see `sellRevertedFinding`);
+ *   (Uniswap v3, Aerodrome, a hooked v4 pool) and a sell into the deepest Uniswap v2 or hookless v4 USDC pool that trades
+ *   went through or couldn't be completed for a reason that isn't the token's: then a `warn` naming both (see
+ *   `sellRevertedFinding`);
  * - the pool paid out for the buy and no tokens arrived: `fail`, "Buying delivers no tokens"; the pool paid nothing out:
  *   `unknown`;
  * - both went through: the finding states the round trip's measured loss. It is a `warn` above the pool's own fees for the

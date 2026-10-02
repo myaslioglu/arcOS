@@ -7,6 +7,7 @@ import { ExplorerUnavailable, blockscoutSource, type ExplorerSource, type Holder
 import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
 import { MINTABLE_TOKEN_DEPLOYED, STANDARD_TOKEN_DEPLOYED } from "./fixtures/tokens";
+import { v2PairReads } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const IMPL = "0x2222222222222222222222222222222222222222";
@@ -174,7 +175,7 @@ describe("inspect", () => {
       [`${TOKEN}.totalSupply()`]: 1000n,
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
       [`${V3}.getPool(${TOKEN},${USDC},3000)`]: ZERO,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 100n,
       [`${PAIR}.balanceOf(${ZERO})`]: 0n,
       [`${PAIR}.balanceOf(${DEAD})`]: 100n,
@@ -191,7 +192,7 @@ describe("inspect", () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
       [`${V3}.getPool(${TOKEN},${USDC},3000)`]: ZERO,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 100n,
       [`${PAIR}.balanceOf(${ZERO})`]: 0n,
       [`${PAIR}.balanceOf(${DEAD})`]: 10n,
@@ -243,7 +244,7 @@ describe("inspect", () => {
   it("says unknown when an LP balance read fails at the network level", async () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 100n,
       [`${PAIR}.balanceOf(${ZERO})`]: new Error("ETIMEDOUT"),
       [`${PAIR}.balanceOf(${DEAD})`]: 100n,
@@ -418,7 +419,7 @@ describe("inspect", () => {
   it("marks lp-lock unknown, not fail, when the v2 pair's LP totalSupply is zero", async () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 0n,
     };
     const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);

@@ -94,6 +94,18 @@ const lower = (a: string) => a.toLowerCase();
 /** UnexpectedRevertBytes(NotEnoughLiquidity(poolId)), laid out like the bytes read live (fixtures/quoter-reverts.ts). */
 const notEnoughLiquidity = (poolId: string): string =>
   `0x6190b2b0${"20".padStart(64, "0")}${"24".padStart(64, "0")}7a5ed734${poolId.slice(2)}${"0".repeat(56)}`;
+/**
+ * The reads that make `pair` a Uniswap v2 pair of `token` against `quote` holding `quoteReserve` of the quote (and
+ * `tokenReserve` of the token) in its reserves: its `token0` and `getReserves`, as findPools reads its depth.
+ */
+export const v2PairReads = (pair: string, quote: string, token: string, quoteReserve: bigint, tokenReserve = 10n ** 24n): Record<string, unknown> => {
+  const quoteFirst = lower(quote) < lower(token);
+  return {
+    [readKey(pair, "token0", [])]: quoteFirst ? quote : token,
+    [readKey(pair, "getReserves", [])]: quoteFirst ? [quoteReserve, tokenReserve, 0] : [tokenReserve, quoteReserve, 0],
+  };
+};
+
 export const readKey = (address: string, fn: string, args: readonly unknown[]): string =>
   `${lower(address)}.${fn}(${args.map((x) => lower(String(x))).join(",")})`;
 

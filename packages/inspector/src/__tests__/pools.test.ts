@@ -6,7 +6,7 @@ import type { ExplorerSource, Holder } from "../explorer";
 import type { ExtraPool, Finding, InspectInput, Report } from "../types";
 import { NATIVE, QUOTE_CONCURRENCY, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
 import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, NOT_ENOUGH_LIQUIDITY_OTHER_POOL, NOT_ENOUGH_LIQUIDITY_POOL, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
-import { fakeChain, readKey, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
+import { fakeChain, readKey, v2PairReads, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111"; // sorts below USDC and EURC
 const HIGH = "0x9999999999999999999999999999999999999999"; // sorts above USDC, below EURC
@@ -55,10 +55,25 @@ describe("a DEX config without Uniswap v2 or v3 (testnet has neither)", () => {
   });
 
   it("asks only the factory it has: v2 alone", async () => {
-    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, [`${USDC}.balanceOf(${POOL})`]: 5_000_000_000n } });
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 5_000_000_000n) } });
     const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
     expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 5_000_000_000n }]);
-    expect(chain.asked.map((r) => r.fn)).toEqual(["getPair", "balanceOf"]);
+    expect(chain.asked.map((r) => r.fn)).toEqual(["getPair", "token0", "getReserves"]);
+  });
+
+  it("reads a v2 pair's depth from its reserves, so USDC sent to it without a sync doesn't make it deep", async () => {
+    const chain = fakeChain({
+      reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, ...v2PairReads(POOL, USDC, TOKEN, 0n, 0n), [`${USDC}.balanceOf(${POOL})`]: 90_000_000_000n },
+    });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 0n, liquid: false }]);
+    expect(chain.asked.map((r) => r.fn)).not.toContain("balanceOf");
+  });
+
+  it("reads a v2 pair whose reserves can't be read as holding nothing", async () => {
+    const chain = fakeChain({ reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: POOL, [`${USDC}.balanceOf(${POOL})`]: 5_000_000_000n } });
+    const scan = await findPools(inputFor(chain, { quoteTokens: [USD], v2Factory: V2 }));
+    expect(scan.pools).toMatchObject([{ address: POOL, version: "v2", depth: 0n }]);
   });
 
   it("asks no v3 question when the factory is named but no fee tier is", async () => {
@@ -620,7 +635,7 @@ describe("the lp-lock finding beside a deeper pool", () => {
   const pair = (lpBurned: bigint, depth: bigint) => ({
     ...noPools(both, TOKEN),
     [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
-    [readKey(USDC, "balanceOf", [PAIR])]: depth,
+    ...v2PairReads(PAIR, USDC, TOKEN, depth),
     [readKey(PAIR, "totalSupply", [])]: 100n,
     [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
     [readKey(PAIR, "balanceOf", [DEAD])]: lpBurned,
