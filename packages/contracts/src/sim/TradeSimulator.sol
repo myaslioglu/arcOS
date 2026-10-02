@@ -233,7 +233,9 @@ contract TradeSimulator {
     /// the 63/64 a call may forward, so the leg gets all of it. A leg that used nearly all of it (7/8 or more) ran out of
     /// gas, itself or in a nested call: each level forwards 63/64 of what it has, and the deepest sell (v4: the leg, the
     /// PoolManager, the callback, the router, the token, and a contract the token calls) runs five levels down, where
-    /// (63/64)^5 is still above 7/8. That says nothing about the token, so it is never read as a revert. Return data is
+    /// (63/64)^5 = 0.924. The 7/8 line holds to eight levels deep ((63/64)^8 = 0.882); a token that nests its calls
+    /// deeper than that before running out reads as a revert. Running out of gas says nothing about the token, so within
+    /// that depth it is never read as a revert. Return data is
     /// copied only from a leg that succeeded (`words` words), so a token can't make the copy expensive.
     function _leg(bytes memory data, uint256 words) private returns (uint8 outcome, uint256 a, uint256 b, uint256 c) {
         uint256 start = gasleft();

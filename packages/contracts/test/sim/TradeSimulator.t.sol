@@ -360,11 +360,18 @@ contract TradeSimulatorTest is Test {
     }
 
     function test_theRouterOnlyMovesWhatItsCallerApproved() public {
-        // R pulls from its caller only: asked by anyone else, it can't touch S's tokens.
+        // S has approved R, as on a sell; R still pulls from its caller only, so a third party asking it can't touch S's
+        // tokens or use S's allowance.
         token.seed(S, 1e18);
+        vm.prank(S);
+        token.approve(R, 1e18);
+        address thirdParty = makeAddr("thirdParty");
+        vm.prank(thirdParty);
         vm.expectRevert();
-        TradeSimulator(payable(R)).pull(address(token), address(this), 1e18);
+        TradeSimulator(payable(R)).pull(address(token), thirdParty, 1e18);
         assertEq(token.balanceOf(S), 1e18);
+        assertEq(token.balanceOf(thirdParty), 0);
+        assertEq(token.allowance(S, R), 1e18);
     }
 
     function test_theLegsAreOnlyCallableByTheSimulatorItself() public {
