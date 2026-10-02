@@ -63,6 +63,7 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     error NoLiquidity();
     error OwedNotCollected();
     error PositionNotReceived();
+    error HookedPool();
 
     constructor(address owner_, IFeeController feeController_) Ownable(owner_) {
         if (address(feeController_) == address(0)) revert ZeroFeeController();
@@ -134,7 +135,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// Once the transfer returns, the vault must own the NFT (`PositionNotReceived`), and the position must hold
     /// principal: some liquidity (`NoLiquidity`), and on v3 nothing waiting in `tokensOwed` (`OwedNotCollected`),
     /// where a decrease leaves principal that the first collect would release as fees. Fees waiting there look the
-    /// same, so they must be collected before the lock too.
+    /// same, so they must be collected before the lock too. On v4 the pool must have no hooks (`HookedPool`): a hook
+    /// runs on the zero-liquidity decrease every `collect` makes, where it could block collecting or take the fees
+    /// through return deltas. A pool's hooks are part of its PoolKey and never change, so the check holds for the
+    /// life of the lock.
     function lockPosition(address manager, uint256 tokenId, uint64 unlockAt, address owner_)
         external
         payable
@@ -155,6 +159,7 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         IV3PositionManager(manager).safeTransferFrom(msg.sender, vault, tokenId); // same ERC-721 call on v4
         if (IV3PositionManager(manager).ownerOf(tokenId) != vault) revert PositionNotReceived();
         _requirePrincipal(manager, m.kind, tokenId);
+        if (m.kind == PositionVault.Kind.V4) _requireNoHooks(manager, tokenId);
         emit PositionLocked(owner_, manager, tokenId, vault, unlockAt);
     }
 
@@ -248,6 +253,12 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         }
         if (liquidity == 0) revert NoLiquidity();
         if (owed0 != 0 || owed1 != 0) revert OwedNotCollected();
+    }
+
+    /// @dev Refuses a v4 position whose pool has a hook contract. See `lockPosition`.
+    function _requireNoHooks(address manager, uint256 tokenId) private view {
+        (IV4PositionManager.PoolKey memory key,) = IV4PositionManager(manager).getPoolAndPositionInfo(tokenId);
+        if (key.hooks != address(0)) revert HookedPool();
     }
 
     function _register(address vault, address owner_) private {
