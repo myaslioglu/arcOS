@@ -44,6 +44,22 @@ describe("checkLockfile", () => {
     expect(found).toHaveLength(4);
   });
 
+  it("judges WalletConnect's helper packages by their licence alone: they have version lines of their own", () => {
+    const ok = checkLockfile(lock({ "node_modules/@walletconnect/logger": pkg("3.0.2", "MIT") }));
+    expect(ok.problems).toEqual([]);
+    const relicensed = checkLockfile(lock({ "node_modules/@walletconnect/logger": pkg("3.0.3", "SEE LICENSE IN LICENSE.md") }));
+    expect(relicensed.problems).toHaveLength(1);
+    expect(relicensed.problems[0]).toMatch(/licence/);
+  });
+
+  it("applies the 2.21.9 line to every package of WalletConnect's monorepo", () => {
+    const monorepo = ["core", "sign-client", "types", "utils", "universal-provider", "ethereum-provider"];
+    const { problems } = checkLockfile(
+      lock(Object.fromEntries(monorepo.map((name) => [`node_modules/@walletconnect/${name}`, pkg("2.21.9", "Apache-2.0")]))),
+    );
+    expect(problems).toHaveLength(monorepo.length);
+  });
+
   it("fails the first relicensed releases even when the licence field says Apache-2.0", () => {
     const { problems } = checkLockfile(
       lock({

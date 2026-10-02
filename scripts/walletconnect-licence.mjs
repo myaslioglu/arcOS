@@ -3,12 +3,17 @@
 //
 //   node scripts/walletconnect-licence.mjs [package-lock.json]
 //
-// @walletconnect/ethereum-provider 2.21.8 is the last release under Apache-2.0. From 2.21.9 on, @walletconnect/* and
-// @reown/* (AppKit 1.8 and later) ship under Reown's own community licence: a proprietary licence with usage thresholds
-// that this MIT repo doesn't take on. wagmi 3 leaves the provider to the app (an optional peer), so a routine bump could
-// pull the new licence in without any error. This fails instead, for any copy of either scope at any depth of the tree:
-// a licence field that is not a permissive open-source one (or missing), a @walletconnect/* version at or past 2.21.9, or
-// a @reown/* version at or past 1.8.0. The web suite runs it through scripts/walletconnect-licence.test.mjs.
+// @walletconnect/ethereum-provider 2.21.8 is the last release under Apache-2.0. From 2.21.9 on, WalletConnect's monorepo
+// packages ship under Reown's own community licence: a proprietary licence with usage thresholds that this MIT repo
+// doesn't take on. @reown/appkit followed at 1.8.3 (1.8.0 to 1.8.2 are still Apache-2.0); this stops at 1.8.0 to be safe.
+// wagmi 3 leaves the provider to the app (an optional peer), so a routine bump could pull the new licence in without any
+// error. This fails instead, for any copy of either scope at any depth of the tree:
+// - a licence field that is not a permissive open-source one, or none;
+// - a package of WalletConnect's monorepo (core, sign-client, types, utils, universal-provider, ethereum-provider) at or
+//   past 2.21.9. The other @walletconnect/* packages (logger, jsonrpc-*, ...) have version lines of their own, so for
+//   them the licence field alone decides;
+// - a @reown/* package at or past 1.8.0.
+// The web suite runs it through scripts/walletconnect-licence.test.mjs.
 //
 // Exit codes: 0 nothing found; 1 a package is past the line; 2 the lockfile could not be read or holds no WalletConnect
 // provider at all (so the check would have passed without looking).
@@ -19,7 +24,10 @@ import { fileURLToPath } from "node:url";
 /** Licence identifiers a package of either scope may carry. An SPDX expression passes when every identifier in it does. */
 export const PERMISSIVE = new Set(["MIT", "Apache-2.0", "ISC", "BSD-2-Clause", "BSD-3-Clause", "0BSD"]);
 
-/** The first version of each scope released under Reown's licence. */
+/** Where the version line applies: WalletConnect's monorepo packages, and all of @reown. */
+const WALLETCONNECT_MONOREPO = new Set(["core", "sign-client", "types", "utils", "universal-provider", "ethereum-provider"]);
+
+/** The first version this check refuses, for each scope. AppKit's relicensing began at 1.8.3; 1.8.0 leaves a margin. */
 export const FIRST_RELICENSED = { "@walletconnect": [2, 21, 9], "@reown": [1, 8, 0] };
 
 const SCOPED = /(?:^|\/)node_modules\/(@walletconnect|@reown)\/([^/]+)$/;
@@ -58,10 +66,11 @@ export function checkLockfile(lock) {
     const id = `${scope}/${name}@${entry.version}`;
     found.push(id);
     if (!isPermissive(entry.license)) problems.push(`${key}: ${id} has licence ${JSON.stringify(entry.license ?? null)}`);
+    if (scope === "@walletconnect" && !WALLETCONNECT_MONOREPO.has(name)) continue;
     const version = parseVersion(entry.version);
     if (!version) problems.push(`${key}: ${id} has a version this check can't read`);
     else if (atOrPast(version, FIRST_RELICENSED[scope])) {
-      problems.push(`${key}: ${id} is at or past ${scope} ${FIRST_RELICENSED[scope].join(".")}, the first release under Reown's licence`);
+      problems.push(`${key}: ${id} is at or past ${scope} ${FIRST_RELICENSED[scope].join(".")}, the line this check holds against Reown's licence`);
     }
   }
   return { found, problems };
