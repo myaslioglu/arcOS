@@ -181,11 +181,13 @@ but does have privileged functions, both the ownership and privileges findings r
   the token could still trade (a v2 pair with tokens in its reserves, a v3 or Aerodrome pool holding
   any USDC, any hookless v4 pool that exists, such as a single-sided launch pool with nothing in range
   and a quote that can't pay), up to six pools in all. A liquid decoy pool that lets sells through
-  therefore can't hide a thinner pool where the token really trades. In a v2 pair that pays nothing
-  for the test amount (a dust raw reserve, or a token whose one raw unit is worth more), the buy is
-  what buys one raw unit, if that is at most 20 USDC; a pair where it is more isn't tried. Each round
-  trip is one `eth_call`: a small simulator contract (`packages/contracts/src/sim/TradeSimulator.sol`)
-  is placed with a state override at a fresh random address S, together with the USDC it spends and
+  doesn't stand in for a thinner pool: the thinner one gets its own round trip, and what it shows
+  counts. In a v2 pair that pays nothing for the test amount (a dust raw reserve, or a token whose one
+  raw unit is worth more), the buy is what buys one raw unit, up to the larger of 20 USDC and 2% of
+  the pair's USDC reserve, and never over 1,000 USDC (the override funds it, so it costs nothing); a
+  pair where one unit costs more isn't tried, but it still counts as a pool left untried, which caps
+  a pass. Each round trip is one `eth_call`: a small simulator contract
+  (`packages/contracts/src/sim/TradeSimulator.sol`) is placed with a state override at a fresh random address S, together with the USDC it spends and
   the gas the call prepays at the network's current gas price, and a second copy of it at another
   fresh random address R acts as the router. It swaps against the pool contracts directly. The buy
   pays the pool with a plain `transfer`; the sell moves the token as a real sell does, with S
@@ -220,10 +222,15 @@ but does have privileged functions, both the ownership and privileges findings r
   round trip that brings nothing back loses 100% and is a warning too. A buy that reverts, takes no
   USDC or gets nothing from the pool, a leg that runs out of the gas it is given, and an RPC that won't
   run the simulation (or read the gas price, or answer in time) read "unknown" for that pool.
-- The finding is the worst of the round trips, naming the pool. A buy that can't trade (it reverts,
-  takes no USDC or gets nothing) in a pool that isn't liquid is left out, so a dust pool can't cost an
-  honest token its pass; everything else such a pool shows counts, and a sell it blocks after a buy
-  went through fails the token as in any pool. Any fail is a fail. Otherwise the worst warning, or the
+- The finding is the worst of the round trips, naming the pool. A pool is left out only when it
+  couldn't trade on its own account, which nothing the token does can bring about: before sending
+  anything the simulator checks the pool's own state (a v2 pair whose reserves give nothing for the
+  amount; a v3, Aerodrome or v4 pool with no price, or its price already at the swap's limit) and
+  reports "pool can't trade", or the pool paid nothing out. So a dust pool can't cost an honest token
+  its pass. Everything else counts, in any pool: a buy that reverts (the token may refuse a buyer it
+  can tell is simulated, one with code, say) reads "unknown" and caps a pass, and a sell blocked after
+  a buy went through fails the token. A pool left out is no measurement: when it is deeper than a
+  pool measured, it caps a pass as an untried deeper pool does. Any fail is a fail. Otherwise the worst warning, or the
   largest loss, is shown, and the result is a pass only when every round trip counted passed, one of
   them in a liquid pool, and nothing below applies; each of these caps it at a warning, named in the
   finding:
@@ -286,8 +293,9 @@ but does have privileged functions, both the ownership and privileges findings r
   market is in such a pool can still pass on the pool Inspector did find. Hooked v4 pools reach the
   scan only through the pool index; when the index can't be read (the site gives it 1.5 seconds), the
   inspection runs without them, so a hooked pool that would have capped a pass doesn't.
-- A v2 pair whose one raw token unit costs more than 20 USDC isn't traded against, so a real market
-  shaped that way next to a liquid decoy isn't measured.
+- A v2 pair whose one raw token unit costs more than its limit (20 USDC, or 2% of its USDC reserve, up
+  to 1,000 USDC) isn't traded against. It counts as a pool left untried, so the token can't pass, but
+  a sell it would block there isn't shown as a fail.
 - Inspector's trade simulation (check 10) can still be told from a real trade. S and R are fresh
   random addresses and the call carries the network's gas price, but: `tx.origin` (S) has code, which
   a wallet's address doesn't; S and R are addresses the token has never seen, and R is no router it

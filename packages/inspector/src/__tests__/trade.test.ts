@@ -379,9 +379,11 @@ describe("trade simulation: a round trip in every liquid pool", () => {
     expect(f.detail).toMatch(/Uniswap v3 0x7777…7777 couldn't be measured \(buying with 10 USDC on Uniswap v3 reverted, so selling couldn't be tried\)/);
   });
 
-  it("warns on a donated v3 decoy, liquid by its balance, whose buy the pool paid nothing for", async () => {
-    const decoy = at(POOL, withStatus(0, { spent: 0n, paidOut: 0n, bought: 0n, sold: 0n, received: 0n }), roundTrip(5n * USDC_UNITS, 4_970_000n));
-    expect((await run(decoy, liquidV3, liquidV2)).f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+  it("warns on a donated v3 decoy deeper than the real pool: it couldn't trade, so it is no measurement, and caps as deeper", async () => {
+    const decoy = at(POOL, withStatus(5, { spent: 0n, paidOut: 0n, bought: 0n }), roundTrip(5n * USDC_UNITS, 4_970_000n));
+    const { f } = await run(decoy, liquidV3, liquidV2);
+    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't measured" });
+    expect(f.detail).toMatch(/Uniswap v3 0x7777…7777 couldn't trade on its own account/);
   });
 
   it("warns, never passes, with more pools to try than the six it tries: it says how many were tried", async () => {
@@ -421,8 +423,8 @@ describe("trade simulation: a round trip in every liquid pool", () => {
   it("warns when a pool deeper than one measured wasn't traded against: a non-liquid EURC pool", async () => {
     const eurc: Pool = { address: EURC_POOL, version: "v3", quote: "EURC", depth: 90_000n * USDC_UNITS, liquid: false, fee: 3000 };
     const { f } = await run(roundTrip(TEN, 9_940_000n), v3Pool(5_000n * USDC_UNITS, 3000), eurc);
-    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't traded against" });
-    expect(f.detail).toMatch(/Uniswap v3 0x8888…8888 \(EURC\), deeper than a pool measured, was never traded against\./);
+    expect(f).toMatchObject({ status: "warn", title: "A deeper pool wasn't measured" });
+    expect(f.detail).toMatch(/Uniswap v3 0x8888…8888 \(EURC\), deeper than a pool measured, wasn't measured\./);
   });
 
   it("is unknown when no liquid pool could be measured", async () => {
@@ -530,24 +532,68 @@ describe("trade simulation: a liquid decoy can't hide a thinner real pool", () =
     expect(f).toMatchObject({ status: "fail", title: "Can't be sold", evidenceUrl: `https://explorer.test/address/${DUST}` });
   });
 
-  it("still passes an honest token next to dust pools whose buys can't trade: they don't count", async () => {
+  it("still passes an honest token next to dust pools that can't trade on their own account: they don't count", async () => {
     const dust = v2Pool(30n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 5n });
     const launch: Pool = { ...v4Pool(0n, USDC, 10_000, 200), liquid: false };
     const sim = (trade: { pool: string }) =>
-      lower(trade.pool) === lower(DUST) ? withStatus(1)
+      lower(trade.pool) === lower(DUST) ? withStatus(5, { spent: 0n, paidOut: 0n, bought: 0n })
       : lower(trade.pool) === lower(UNISWAP_V4.poolManager) ? withStatus(0, { paidOut: 0n, bought: 0n, sold: 0n, received: 0n })
       : roundTrip(TEN, 9_940_000n);
     const { f, chain } = await run(sim, v3Pool(50_000n * USDC_UNITS, 3000), dust, launch);
     expect(chain.simulations).toHaveLength(3);
     expect(f).toMatchObject({ status: "pass" });
-    expect(f.detail).toMatch(/which aren't liquid, couldn't trade, so they don't count\./);
+    expect(f.detail).toMatch(/couldn't trade on their own account \(no liquidity at their price, or nothing for the amount\), so they don't count\./);
   });
 
-  it("never tries a pair whose one raw unit costs more than 20 USDC", async () => {
+  it("never tries a pair whose one raw unit costs more than its limit, but counts it, so it caps a pass", async () => {
+    // 1,000 USDC against 5 raw units: one costs about 250 USDC, over max(20 USDC, 2% of 1,000 USDC).
     const pricey = v2Pool(1_000n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 5n });
     expect(tradeAmount(pricey)).toBeNull();
-    const { chain } = await run(roundTrip(TEN, 9_940_000n), decoy, pricey);
+    const { f, chain } = await run(roundTrip(TEN, 9_940_000n), decoy, pricey);
     expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR]);
+    expect(f).toMatchObject({ status: "warn", title: "2 pools; 1 were tried" });
+  });
+
+  it("buys one raw unit with up to 2% of the pair's USDC: a 5,000 USDC pair with 100 raw tokens behind a 6,000 USDC decoy fails", async () => {
+    const real = v2Pool(5_000n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 100n });
+    const decoy6k = v2Pool(6_000n * USDC_UNITS);
+    // One raw unit costs about 50.66 USDC, within 2% of 5,000 USDC (100 USDC).
+    expect(tradeAmount(real)).toBe(50_657_022n);
+    const { f, chain } = await run(blockedIn(DUST), decoy6k, real);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([PAIR, DUST]);
+    expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+  });
+
+  describe("a token that refuses a buyer it can tell is simulated, next to a decoy: never a pass", () => {
+    // The anti-bot rule reverts the buy for S, which has code. That is the token's doing, so the pool still counts.
+    const refusesIn = (where: string) => (trade: { pool: string }) => (lower(trade.pool) === lower(where) ? withStatus(1) : roundTrip(TEN, 9_940_000n));
+
+    it("in a thin v2 pair of 900 USDC", async () => {
+      const thin = v2Pool(900n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 10n ** 24n });
+      const { f } = await run(refusesIn(DUST), v2Pool(1_000n * USDC_UNITS), thin);
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+    });
+
+    it("in a hookless v4 launch pool", async () => {
+      const launch: Pool = { ...v4Pool(0n, USDC, 10_000, 200), liquid: false };
+      const { f } = await run(refusesIn(UNISWAP_V4.poolManager), v2Pool(1_000n * USDC_UNITS), launch);
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+    });
+
+    it("in a real v2 pair of 100,000 USDC deeper than a 1,000 USDC decoy", async () => {
+      const real = v2Pool(100_000n * USDC_UNITS, { address: DUST, tokenReserve: 10n ** 24n });
+      const { f } = await run(refusesIn(DUST), v2Pool(1_000n * USDC_UNITS), real);
+      expect(f.status).not.toBe("pass");
+      expect(f).toMatchObject({ status: "warn" });
+    });
+  });
+
+  it("leaves out a pool at its price limit, which can't trade on its own account, so an honest token still passes", async () => {
+    const atLimit = v2Pool(900n * USDC_UNITS, { address: DUST, liquid: false, tokenReserve: 10n ** 24n });
+    const sim = (trade: { pool: string }) =>
+      lower(trade.pool) === lower(DUST) ? withStatus(5, { spent: 0n, paidOut: 0n, bought: 0n }) : roundTrip(TEN, 9_940_000n);
+    const { f } = await run(sim, v3Pool(50_000n * USDC_UNITS, 3000), atLimit);
+    expect(f).toMatchObject({ status: "pass" });
   });
 
   it("uses the test amount in a pair that quotes something for it", () => {

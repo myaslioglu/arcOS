@@ -78,7 +78,7 @@ export const MIN_TEST_AMOUNT = 10_000n;
 const KIND = { v2: 0, v3: 1, aero: 1, v4: 2 } as const;
 
 /** TradeSimulator's statuses. */
-export const STATUS = { ok: 0, buyReverted: 1, buyOutOfGas: 2, sellReverted: 3, sellOutOfGas: 4 } as const;
+export const STATUS = { ok: 0, buyReverted: 1, buyOutOfGas: 2, sellReverted: 3, sellOutOfGas: 4, poolCantTrade: 5 } as const;
 
 /** One part in a million: fees are counted in these, as Uniswap counts them (3000 is 0.3%). */
 const PPM = 1_000_000n;
@@ -134,8 +134,16 @@ export const DEFAULT_TRADE_MS = 8_000;
 /** Kept back from the inspection's deadline for the rest of the report, so the trade check ends before the caller stops waiting. */
 export const DEADLINE_MARGIN_MS = 1_000;
 
-/** The most USDC a buy of one raw unit may take in a pair that quotes nothing for the test amount (20 USDC, 6 decimals). */
-export const MAX_UNIT_BUY = 20_000_000n;
+/**
+ * The most USDC a buy of one raw unit may take in a pair that quotes nothing for the test amount: the larger of 20 USDC and
+ * 2% of the pair's USDC reserve, but never over 1,000 USDC (6 decimals). The override funds S with it, so it costs nothing.
+ */
+export const MIN_UNIT_BUY = 20_000_000n;
+export const MAX_UNIT_BUY = 1_000_000_000n;
+export const unitBuyLimit = (depth: bigint): bigint => {
+  const share = (depth * 2n) / 100n;
+  return share > MAX_UNIT_BUY ? MAX_UNIT_BUY : share < MIN_UNIT_BUY ? MIN_UNIT_BUY : share;
+};
 
 /**
  * The pools to trade against, in the order they are tried: those that trade USDC, the only currency the override can fund,
@@ -162,7 +170,24 @@ export function tradePool(scan: PoolScan, token: Address): Pool | null {
 export function buyDidNotTrade(attempt: TradeAttempt): boolean {
   if (attempt.kind !== "ran") return false;
   const r = attempt.result;
-  return r.status === STATUS.buyReverted || (r.status === STATUS.ok && (r.spent === 0n || (r.paidOut === 0n && r.bought === 0n)));
+  return (
+    r.status === STATUS.buyReverted ||
+    r.status === STATUS.poolCantTrade ||
+    (r.status === STATUS.ok && (r.spent === 0n || (r.paidOut === 0n && r.bought === 0n)))
+  );
+}
+
+/**
+ * Whether a round trip's buy couldn't trade on the pool's account alone, which nothing the token does can bring about: the
+ * simulator found the pool can't serve the buy before sending anything (`poolCantTrade`: a v2 pair whose reserves give
+ * nothing, a pool with no active liquidity, no price or its price at the limit), or the pool paid nothing out. Only such
+ * a pool may be left out of the finding. A buy that reverted, or took no USDC though the pool paid out, may be the token's
+ * doing and always counts.
+ */
+export function poolCouldNotTrade(attempt: TradeAttempt): boolean {
+  if (attempt.kind !== "ran") return false;
+  const r = attempt.result;
+  return r.status === STATUS.poolCantTrade || (r.status === STATUS.ok && r.paidOut === 0n && r.bought === 0n);
 }
 
 /**
@@ -207,7 +232,7 @@ export const v2Out = (amountIn: bigint, reserveIn: bigint, reserveOut: bigint): 
 
 /**
  * What the round trip in `pool` buys with: `testAmount`, except in a v2 pair that pays nothing for it (a dust raw reserve,
- * or a token whose one raw unit is worth more), where it is what buys one raw unit, if that is at most `MAX_UNIT_BUY`.
+ * or a token whose one raw unit is worth more), where it is what buys one raw unit, if that is at most `unitBuyLimit`.
  * `null` when no such amount exists: a buy there can't trade, and the pool isn't tried.
  */
 export function tradeAmount(pool: Pool): bigint | null {
@@ -216,7 +241,7 @@ export function tradeAmount(pool: Pool): bigint | null {
   if (v2Out(amount, pool.depth, pool.tokenReserve) > 0n) return amount;
   if (pool.tokenReserve <= 1n) return null;
   const one = (pool.depth * 1000n) / ((pool.tokenReserve - 1n) * 997n) + 1n;
-  return one > MAX_UNIT_BUY ? null : one < MIN_TEST_AMOUNT ? MIN_TEST_AMOUNT : one;
+  return one > unitBuyLimit(pool.depth) ? null : one < MIN_TEST_AMOUNT ? MIN_TEST_AMOUNT : one;
 }
 
 /** `testAmount` for a pool `depth` deep. */
@@ -303,11 +328,16 @@ export async function simulateTrade(reader: ChainReader, token: Address, scan: P
   const candidates = tradeCandidates(scan, token);
   if (candidates.length === 0) return { kind: "no-pool" };
   const pools = candidates.slice(0, MAX_POOLS);
+  // A v2 pair with tokens where no amount within `unitBuyLimit` buys anything isn't tried, but it is still a pool the
+  // token could trade in, so it counts among the candidates and caps a pass as any pool left untried does.
+  const unbuyable = tradePools(scan, token).filter(
+    (p) => !hooked(p) && p.version === "v2" && (p.tokenReserve ?? 0n) > 0n && tradeAmount(p) === null && !candidates.includes(p),
+  ).length;
   const end = deadlineAt === undefined ? Date.now() + DEFAULT_TRADE_MS : deadlineAt - DEADLINE_MARGIN_MS;
   const failed = (kind: "call-failed" | "timed-out"): TradeRun => ({
     kind: "measured",
     attempts: pools.map((pool) => ({ kind, pool, amount: tradeAmount(pool) ?? testAmount(pool) })),
-    candidates: candidates.length,
+    candidates: candidates.length + unbuyable,
   });
   if (end <= Date.now()) return failed("timed-out");
   let gasPrice: bigint;
@@ -317,7 +347,7 @@ export async function simulateTrade(reader: ChainReader, token: Address, scan: P
     return failed("call-failed");
   }
   const attempts = await Promise.all(pools.map((pool) => withPoolDeadline(pool, poolRoundTrips(reader, token, scan, pool, gasPrice), end)));
-  return { kind: "measured", attempts, candidates: candidates.length };
+  return { kind: "measured", attempts, candidates: candidates.length + unbuyable };
 }
 
 /** `p`, or a rejection once `end` (ms since the epoch) has passed. */
