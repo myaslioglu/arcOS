@@ -232,6 +232,8 @@ but does have privileged functions, both the ownership and privileges findings r
   simulator raises the buy, at the pool's price, to what buys about 100 raw units of the token when
   the test amount would buy fewer, up to the larger of 20 USDC and 2% of the pool's USDC and never
   over 1,000 USDC; when even two units cost more, the pool isn't bought in and counts as "unknown".
+  An honest token with few decimals whose buy is capped at that limit gets only a few whole units, so
+  rounding alone can show a loss and give a warning; this errs on the safe side.
   Everything else counts, in any pool: a buy that reverts (the token may refuse a buyer it can tell is
   simulated, one with code, say) reads "unknown" and caps a pass, and a sell blocked after a buy went
   through fails the token. A pool left out is no measurement: when it is deeper than a pool measured,

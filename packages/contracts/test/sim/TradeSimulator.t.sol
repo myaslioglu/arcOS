@@ -457,6 +457,167 @@ contract TradeSimulatorTest is Test {
         assertEq(usdc.balanceOf(address(impostor)), 0);
     }
 
+    // --- the buy amount: a unit's price, either way round ---
+
+    /// sqrt(currency1 / currency0) in Q64.96 for a token with no decimals at 10 USDC (6 decimals) a unit: 1e-7 when USDC
+    /// is currency0, 1e7 when it is currency1. A unit then costs 10,000,001 and 10,000,000 raw USDC, rounded up.
+    uint160 internal constant SQRT_USDC_FIRST = 25_054_144_837_504_793_118_641_380;
+    uint160 internal constant SQRT_TOKEN_FIRST = 250_541_448_375_047_931_186_413_801_569_606;
+
+    /// Moves the USDC stand-in to an address above or below the token's, so the test picks which is currency0, and funds
+    /// S there. Its code holds its decimals; nothing else of its state is needed.
+    function _placeUsdc(bool first) internal {
+        address at = first ? address(0x10000) : address(type(uint160).max - 0x10000);
+        vm.etch(at, address(usdc).code);
+        usdc = SimToken(at);
+        assertEq(address(usdc) < address(token), first);
+        usdc.mint(S, AMOUNT);
+    }
+
+    /// A v3 pool of a token with no decimals: 1,000 raw units against 10,000 USDC, priced at 10 USDC a unit.
+    function _v3FewUnitsAt(bool usdcFirst) internal returns (MockV3Pool pool) {
+        _placeUsdc(usdcFirst);
+        pool = _v3FewUnits();
+        assertEq(pool.token0() == address(usdc), usdcFirst);
+    }
+
+    function test_v3_theTokenAsCurrency0IsPricedAtTheUnitsCost() public {
+        MockV3Pool pool = _v3FewUnitsAt(false);
+        usdc.mint(S, 2_000e6);
+        // 100 units at 10,000,000 raw USDC each, under a 2,000 USDC limit: the buy is exactly that.
+        TradeSimulator.Result memory r = _run(_fewUnitsTrade(pool, 2_000e6), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, 1_000_000_000);
+        assertGt(r.bought, 0);
+        assertEq(r.sold, r.bought);
+    }
+
+    function test_v3_theTokenAsCurrency0OverTheLimitIsNotBought() public {
+        MockV3Pool pool = _v3FewUnitsAt(false);
+        // Two units cost 20 USDC, over a 15 USDC limit; at 20 USDC they fit.
+        TradeSimulator.Result memory r = _run(_fewUnitsTrade(pool, 15e6), 5_000_000);
+        assertEq(r.status, sim.AMOUNT_OVER_LIMIT());
+        assertEq(r.spent, 0);
+        usdc.mint(S, 20e6);
+        r = _run(_fewUnitsTrade(pool, 20e6), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, 20e6);
+    }
+
+    function test_v3_theTokenAsCurrency1IsPricedAtTheUnitsCostRoundedUp() public {
+        MockV3Pool pool = _v3FewUnitsAt(true);
+        usdc.mint(S, 2_000e6);
+        TradeSimulator.Result memory r = _run(_fewUnitsTrade(pool, 2_000e6), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, 1_000_000_100);
+    }
+
+    /// A v4 pool of a token with no decimals against `quote`, `quoteSeed` of it to 1,000 raw units, at `sqrtPrice`.
+    function _v4FewUnits(address quote, uint256 quoteSeed, uint160 sqrtPrice)
+        internal
+        returns (MockPoolManager manager, ISimPoolManager.PoolKey memory key)
+    {
+        manager = new MockPoolManager();
+        key = _key(quote, 3000);
+        if (quote == address(0)) vm.deal(address(manager), quoteSeed);
+        else usdc.mint(address(manager), quoteSeed);
+        token.seed(address(manager), 1000);
+        (uint256 a0, uint256 a1) = key.currency0 == quote ? (quoteSeed, uint256(1000)) : (uint256(1000), quoteSeed);
+        manager.seed(key, a0, a1);
+        manager.setState(key, sqrtPrice, 1e18);
+        token.setPool(address(manager));
+    }
+
+    function test_v4_aTokenWithFewUnitsIsPricedAtTheUnitsCostEitherWayRound() public {
+        bool[2] memory usdcFirst = [true, false];
+        uint256[2] memory expected = [uint256(1_000_000_100), 1_000_000_000];
+        for (uint256 i; i < 2; i++) {
+            _placeUsdc(usdcFirst[i]);
+            usdc.mint(S, 2_000e6);
+            (MockPoolManager manager, ISimPoolManager.PoolKey memory key) =
+                _v4FewUnits(address(usdc), 10_000e6, usdcFirst[i] ? SQRT_USDC_FIRST : SQRT_TOKEN_FIRST);
+            assertEq(key.currency0 == address(usdc), usdcFirst[i]);
+            TradeSimulator.Trade memory t = _trade(sim.V4(), address(manager), address(usdc), 10_000, key);
+            t.maxAmount = 2_000e6;
+            TradeSimulator.Result memory r = _run(t, 5_000_000);
+            assertEq(r.status, sim.OK());
+            assertEq(r.spent, expected[i]);
+            assertGt(r.bought, 0);
+            assertEq(r.sold, r.bought);
+            t.maxAmount = 15e6;
+            r = _run(t, 5_000_000);
+            assertEq(r.status, sim.AMOUNT_OVER_LIMIT());
+        }
+    }
+
+    function test_v4_nativeUsdcPricesAUnitIn18Decimals() public {
+        // Native USDC has 18 decimals: a unit of a token with none, at 10 USDC, costs 1e19 raw. Native is always
+        // currency0, so the price is sqrt(1e-19) in Q64.96 and a unit costs 1e19 + 1, rounded up.
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) =
+            _v4FewUnits(address(0), 10_000e18, 25_054_144_837_504_793_118);
+        assertEq(key.currency0, address(0));
+        vm.deal(S, 2_000e18);
+        TradeSimulator.Trade memory t = _trade(sim.V4(), address(manager), address(0), 1e16, key); // 0.01 USDC
+        t.maxAmount = 2_000e18;
+        TradeSimulator.Result memory r = _run(t, 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, 1_000e18 + 100);
+        assertGt(r.bought, 0);
+        assertEq(r.sold, r.bought);
+        assertGt(r.received, 0);
+        // Under a 100 USDC limit the buy stops there; under 15 USDC two units don't fit.
+        t.maxAmount = 100e18;
+        r = _run(t, 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, 100e18);
+        t.maxAmount = 15e18;
+        r = _run(t, 5_000_000);
+        assertEq(r.status, sim.AMOUNT_OVER_LIMIT());
+    }
+
+    /// A price of 2^64 or more (sqrtPrice from 2^128): with USDC as currency0 a unit costs 1 raw USDC, so a buy of 50
+    /// raw is raised to 100; with USDC as currency1 a unit costs more than any limit.
+    function test_v3_anExtremePriceCostsOneOrIsOverAnyLimit() public {
+        uint160[2] memory prices = [uint160(1 << 128), uint160(1 << 159)];
+        for (uint256 first; first < 2; first++) {
+            bool usdcFirst = first == 0;
+            _placeUsdc(usdcFirst);
+            MockV3Pool pool = _v3(3000);
+            for (uint256 i; i < 2; i++) {
+                pool.setState(prices[i], 1e18);
+                TradeSimulator.Trade memory t = _trade(sim.V3(), address(pool), address(usdc), 50, _noKey());
+                t.maxAmount = type(uint128).max;
+                TradeSimulator.Result memory r = _run(t, 5_000_000);
+                if (usdcFirst) {
+                    assertEq(r.status, sim.OK());
+                    assertEq(r.spent, 100);
+                } else {
+                    assertEq(r.status, sim.AMOUNT_OVER_LIMIT());
+                    assertEq(r.spent, 0);
+                }
+            }
+        }
+    }
+
+    function test_v4_anExtremePriceCostsOneOrIsOverAnyLimit() public {
+        for (uint256 first; first < 2; first++) {
+            bool usdcFirst = first == 0;
+            _placeUsdc(usdcFirst);
+            (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+            manager.setState(key, uint160(1 << 128), 1e18);
+            TradeSimulator.Trade memory t = _trade(sim.V4(), address(manager), address(usdc), 50, key);
+            t.maxAmount = type(uint128).max;
+            TradeSimulator.Result memory r = _run(t, 5_000_000);
+            if (usdcFirst) {
+                assertEq(r.status, sim.OK());
+                assertEq(r.spent, 100);
+            } else {
+                assertEq(r.status, sim.AMOUNT_OVER_LIMIT());
+                assertEq(r.spent, 0);
+            }
+        }
+    }
+
     // --- the call itself ---
 
     function test_anUnknownKindIsABuyRevertNotARevertOfTheCall() public {

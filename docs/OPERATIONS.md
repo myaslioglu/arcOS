@@ -201,6 +201,22 @@ removed it, and every later deploy must work with the roles below alone.
        --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" --role roles/iam.serviceAccountUser
      ```
 
+   - `roles/iam.serviceAccountUser` on the project's default Compute account
+     `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` only. Cloud Functions 2nd gen builds the function with
+     that account, so every functions deploy needs `iam.serviceAccounts.actAs` on it. The
+     production deploy without it stopped with "Caller is missing permission 'iam.serviceaccounts.actAs' on service
+     account projects/-/serviceAccounts/<PROJECT_NUMBER>-compute@developer.gserviceaccount.com". It is safe for the same
+     reason as the App Engine account: the manifest check pins the function's runtime account to `arcos-jobs@`, so the
+     Compute account is used only for the build. Read the project number, then grant the role with it in place of
+     `<PROJECT_NUMBER>`:
+
+     ```bash
+     gcloud projects describe arcos-c80cf --format='value(projectNumber)'
+     gcloud iam service-accounts add-iam-policy-binding <PROJECT_NUMBER>-compute@developer.gserviceaccount.com \
+       --project arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" --role roles/iam.serviceAccountUser
+     ```
+
    - `roles/firebase.viewer` on the project. Every functions deploy reads the project's Admin SDK config
      (`firebase.googleapis.com/v1beta1/projects/arcos-c80cf/adminSdkConfig`, `functionsConfig.js`
      `getFirebaseConfig`, called from `deploy/functions/prepare.js`), which needs `firebase.projects.get`.
@@ -327,14 +343,14 @@ removed it, and every later deploy must work with the roles below alone.
 The deploy log's warning "Couldn't find firebase-functions package in your source code" is expected: the deploy hands
 the CLI the built bundle without its `node_modules`, and Cloud Build installs the packages.
 
-To check on the next deploy, the first without `roles/editor`:
+Settled by the first deploy without `roles/editor`, which succeeded once the deployer held the roles above:
 - Every 2nd-gen functions deploy asks Service Usage to generate the service identities of Pub/Sub and Eventarc
-  (`services/<service>:generateServiceIdentity`, `deploy/functions/prepare.js`), and the deploy stops with "Error
-  generating the service identity" if that call is refused. Google's reference for the call names no IAM permission,
-  only an OAuth scope, and the first deploy ran under `roles/editor`, so whether
-  `roles/serviceusage.serviceUsageConsumer` covers it is known only once a deploy runs without it. If it doesn't, the
-  error names the missing permission: grant that permission in a custom role, not
-  `roles/serviceusage.serviceUsageAdmin`, which could enable any API.
+  (`services/<service>:generateServiceIdentity`, `deploy/functions/prepare.js`). `roles/serviceusage.serviceUsageConsumer`
+  covers that call; `roles/serviceusage.serviceUsageAdmin`, which could enable any API, isn't needed.
+- A functions update needs `actAs` on the default Compute account (step 5): the production deploy was refused without
+  it, and went through once it was granted.
+
+To check on later deploys:
 - The first deploy logged that it ensured `arcos-jobs@` access to `BLOCKSCOUT_API_KEY`. The CLI logs that whether or
   not it wrote the binding, so check step 3's binding is in place (the command in step 3). Later deploys don't touch the
   secret's policy while `arcos-jobs@` already runs the function.
