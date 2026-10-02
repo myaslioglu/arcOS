@@ -26,11 +26,12 @@ const v3Only: DexConfig = { quoteTokens: m.quoteTokens, v3Factory: m.v3Factory, 
 const v4Only: DexConfig = { quoteTokens: m.quoteTokens, v4: UNISWAP_V4 };
 const lower = (a: string) => a.toLowerCase();
 
-/** The round trip `simulateTrade` ran, failing the test with what it got instead. */
+/** The round trip `simulateTrade` ran in the first pool it measured, failing the test with what it got instead. */
 async function ran(address: `0x${string}`, dex: DexConfig) {
   const scan: PoolScan = await findPools(input(address, dex));
-  const run = await simulateTrade(reader, address, scan);
-  if (run.kind !== "ran") throw new Error(`no round trip for ${address}: ${run.kind}`);
+  const measured = await simulateTrade(reader, address, scan);
+  const run = measured.kind === "measured" ? measured.attempts[0] : undefined;
+  if (run?.kind !== "ran") throw new Error(`no round trip for ${address}: ${run?.kind ?? measured.kind}`);
   return { scan, run };
 }
 
