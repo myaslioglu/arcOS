@@ -238,8 +238,8 @@ describe("trade simulation: a sell the pool itself can refuse", () => {
     expect(f.detail).toMatch(/Uniswap v3 0x7777…7777.*the Uniswap v2 pair \(0x4444…4444\)/);
   });
 
-  it("warns, without a pass, when the second round trip couldn't be completed for a reason that isn't the token's", async () => {
-    for (const second of [withStatus(2), withStatus(4), { reverts: true } as const, { returns: "0x" } as const]) {
+  it("warns, without a pass, when the RPC didn't run or answer the second round trip", async () => {
+    for (const second of [{ returns: "0x" } as const, { fails: new Error("ETIMEDOUT") }]) {
       const { f } = await run(byPool(POOL, second), deepV3, shallowV2);
       expect(f).toMatchObject({ status: "warn", title: "Can't be sold into its deepest pool" });
       expect(f.detail).toMatch(/couldn't be completed/);
@@ -260,6 +260,18 @@ describe("trade simulation: a sell the pool itself can refuse", () => {
       expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
       expect(f.detail).toMatch(/Buying from the Uniswap v2 pair \(0x4444…4444\) to try selling there instead (reverted|got nothing), so it has no other pool that trades to sell into\./);
     }
+  });
+
+  it("keeps the fail when the second round trip ran out of gas, buying or selling: that is undecided, not a sell", async () => {
+    for (const [status, leg] of [[2, "Buying"], [4, "Selling"]] as const) {
+      const { f, chain } = await run(byPool(POOL, withStatus(status)), deepV3, shallowV2);
+      expect(chain.simulations).toHaveLength(2);
+      expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+      expect(f.detail).toContain(`${leg} in the Uniswap v2 pair (0x4444…4444), tried instead, used up all the gas the simulation gives it`);
+    }
+    const { f } = await run(byPool(POOL, { reverts: true }), deepV3, shallowV2);
+    expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+    expect(f.detail).toMatch(/reverted or ran out of its gas as a whole/);
   });
 
   it("fails with the evidence when the second pool paid out for the buy and no tokens arrived", async () => {

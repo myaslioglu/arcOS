@@ -194,7 +194,8 @@ but does have privileged functions, both the ownership and privileges findings r
   liquid (1,000 USDC in a v2 pair's reserves, or a v4 quote paid out) and deep enough for the test
   amount, since anyone can create an empty pair. It fails the token if that sell reverts too, if
   there is no such pool or its buy reverts or gets nothing (the finding then says why the first pool
-  may have refused the sell), or if that buy delivers no tokens. Otherwise it warns and names both
+  may have refused the sell), if that buy delivers no tokens, or if that round trip runs out of gas
+  (which shows nothing either way). Otherwise it warns and names both
   pools ("Selling into its deepest pool (Uniswap v3 0x…) reverted; selling into the Uniswap v2 pair
   (0x…) went through"). A round trip that
   loses more than the pool's own fees for the two swaps plus 3% is a warning; where the fee can change

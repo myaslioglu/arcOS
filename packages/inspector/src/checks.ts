@@ -920,13 +920,14 @@ const poolRefusal = (pool: Pool): string =>
     ? "The pool's hook runs inside every swap and can refuse one the token itself would allow."
     : `${VENUE[pool.version]} pools refuse a token that arrives short (a transfer tax), so a tax alone reverts this sell.`;
 
-/** What a second round trip that neither sold nor reverted on selling came to, as "a leg used up all the gas" and the like. */
+/**
+ * What a second round trip that neither sold, nor reverted, nor ran out of gas came to: the RPC didn't run it, or the pool
+ * would give nothing back for what it bought.
+ */
 function attemptNote(attempt: TradeAttempt): string {
-  if (attempt.kind === "call-reverted") return "the simulation reverted as a whole";
   if (attempt.kind === "no-answer") return "the RPC didn't run it";
-  if (attempt.kind === "call-failed") return "the RPC refused it or didn't answer";
+  if (attempt.kind !== "ran") return "the RPC refused it or didn't answer";
   const r = attempt.result;
-  if (r.status === STATUS.buyOutOfGas || r.status === STATUS.sellOutOfGas) return "a leg used up all the gas it is given";
   if (r.status !== STATUS.ok) return "the simulation answered with a status it never gives";
   // The buy delivered tokens, but the pair gave nothing for them, so no sell was sent.
   return "the pool would give nothing back for the tokens bought, so no sell was sent";
@@ -944,9 +945,10 @@ const couldntBuy = (attempt: TradeAttempt): boolean =>
  * the round trip was tried again on the deepest v2 or hookless v4 USDC pool that can trade (`fallbackPool`):
  * - a sell that reverts there too: `fail`;
  * - no such pool, or one whose buy reverted or that paid nothing out (it doesn't trade, whatever discovery read): `fail`;
+ * - a second round trip that ran out of the gas it is given, buying or selling (or reverted as a whole): undecided, so it
+ *   can't soften the first pool's revert, and the `fail` stands with a note saying so;
  * - a buy there that the pool paid out for and of which no tokens arrived: `fail`, "Buying delivers no tokens";
- * - a sell there that went through, or a second round trip that couldn't be completed otherwise (out of gas, the RPC): a
- *   `warn` naming both pools.
+ * - a sell there that went through, or a second round trip the RPC didn't complete: a `warn` naming both pools.
  */
 function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evidenceUrl: string }): Finding {
   const { pool } = run;
@@ -967,6 +969,13 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
       `${first} Buying from ${other} to try selling there instead ${second.kind === "ran" && second.result.status === STATUS.buyReverted ? "reverted" : "got nothing"}, so it has no other pool that trades to sell into.`,
       at,
     );
+  }
+  if (second.kind === "call-reverted" || (second.kind === "ran" && (second.result.status === STATUS.buyOutOfGas || second.result.status === STATUS.sellOutOfGas))) {
+    const what =
+      second.kind === "call-reverted"
+        ? `The simulation in ${other}, tried instead, reverted or ran out of its gas as a whole`
+        : `${second.result.status === STATUS.buyOutOfGas ? "Buying" : "Selling"} in ${other}, tried instead, used up all the gas the simulation gives it`;
+    return finding("trade", "fail", "Can't be sold", `${first} ${what}, which shows nothing either way, so it doesn't count as a pool the token sells into.`, at);
   }
   if (second.kind === "ran" && second.result.status === STATUS.sellReverted) {
     return finding(
@@ -1001,7 +1010,7 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
  * - the buy reverted, or either leg ran out of the gas it was given: `unknown`, since neither says anything about selling;
  * - the buy went through and the sell reverted: `fail`, "Can't be sold", unless the pool can refuse a sell on its own account
  *   (Uniswap v3, Aerodrome, a hooked v4 pool) and a sell into the deepest Uniswap v2 or hookless v4 USDC pool that trades
- *   went through or couldn't be completed for a reason that isn't the token's: then a `warn` naming both (see
+ *   went through, or the RPC didn't run or answer the second round trip: then a `warn` naming both (see
  *   `sellRevertedFinding`);
  * - the pool paid out for the buy and no tokens arrived: `fail`, "Buying delivers no tokens"; the pool paid nothing out:
  *   `unknown`;
