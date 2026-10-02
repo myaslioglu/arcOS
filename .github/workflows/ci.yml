@@ -24,9 +24,10 @@ jobs:
           persist-credentials: false
 
       # Node version comes from .nvmrc ("22": the newest 22.x), which satisfies the root package.json's
-      # "engines": { "node": "^22.16.0" } and is what contributors run locally. 22.16 fixed an
-      # AbortSignal.timeout inside AbortSignal.any that could be garbage-collected and never fire
-      # (nodejs/node#57736), which the server's explorer requests rely on.
+      # "engines": { "node": "^22.22.2" } and is what contributors run locally. 22.22.2 is the oldest 22.x
+      # that jsdom 30 and the packages it depends on support. 22.16 fixed an AbortSignal.timeout inside
+      # AbortSignal.any that could be garbage-collected and never fire (nodejs/node#57736), which the
+      # server's explorer requests rely on.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
