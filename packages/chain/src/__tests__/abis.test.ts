@@ -10,6 +10,8 @@ import {
   positionVaultAbi,
   proPassAbi,
   tokenFactoryAbi,
+  tradeSimulatorAbi,
+  tradeSimulatorRuntime,
   vaultFactoryAbi,
   vestingFactoryAbi,
 } from "../abis";
@@ -32,6 +34,18 @@ const stateMutability = (abi: readonly AbiItem[], name: string) =>
   (findItem(abi, "function", name) as { stateMutability?: string } | undefined)?.stateMutability;
 
 describe("abis", () => {
+  it("tradeSimulatorAbi exposes the call Inspector makes, and its callbacks", () => {
+    const fns = names(tradeSimulatorAbi, "function");
+    expect(fns).toEqual(expect.arrayContaining(["simulate", "uniswapV3SwapCallback", "unlockCallback"]));
+  });
+
+  it("tradeSimulatorRuntime is runtime code without solc's metadata trailer", () => {
+    expect(tradeSimulatorRuntime).toMatch(/^0x([0-9a-f]{2})+$/);
+    // The trailer is CBOR that starts a2 64 "ipfs" (a2646970667358) and ends with its two-byte length.
+    expect(tradeSimulatorRuntime).not.toContain("a2646970667358");
+    expect(tradeSimulatorRuntime.length).toBeLessThan(2 + 2 * 24_576);
+  });
+
   it("feeControllerAbi exposes the functions the app calls", () => {
     const fns = names(feeControllerAbi, "function");
     expect(fns).toContain("feeOf");
