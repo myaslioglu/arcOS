@@ -22,3 +22,5 @@ export function arcosDb(): Firestore {
   handle = getFirestore(app, resolveDatabaseId(process.env));
   return handle;
 }
+
+export { indexedPools } from "./pools";
