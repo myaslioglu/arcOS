@@ -133,20 +133,26 @@ function usable(key: PoolKey, token: Address, quotes: readonly V4Quote[]): { key
   return quote ? { key: v4PoolKey(currency0, currency1, fee, tickSpacing, hooks), quote } : null;
 }
 
-/** The standard hookless keys for every quote currency, then the index's pools that are usable, each pool once. */
+/**
+ * The standard hookless keys for every quote currency, then the index's pools that are usable, each pool once. The cap on
+ * the index's pools counts the ones that survive validation and dedupe, so junk entries can't crowd real ones out.
+ */
 function candidates(token: Address, quotes: readonly V4Quote[], extra: readonly ExtraPool[]): Candidate[] {
   const seen = new Set<string>();
   const out: Candidate[] = [];
-  const add = (key: PoolKey, quote: V4Quote) => {
+  const add = (key: PoolKey, quote: V4Quote): boolean => {
     const id = v4PoolId(key);
-    if (seen.has(id)) return;
+    if (seen.has(id)) return false;
     seen.add(id);
     out.push({ key, id, quote, quoteIsCurrency0: lower(key.currency0) === lower(quote.address) });
+    return true;
   };
   for (const quote of quotes) for (const t of STANDARD_V4_TIERS) add(v4PoolKey(token, quote.address, t.fee, t.tickSpacing), quote);
-  for (const e of extra.slice(0, MAX_EXTRA_POOLS)) {
+  let taken = 0;
+  for (const e of extra) {
+    if (taken >= MAX_EXTRA_POOLS) break;
     const found = e.version === "v4" ? usable(e.key, token, quotes) : null;
-    if (found) add(found.key, found.quote);
+    if (found && add(found.key, found.quote)) taken++;
   }
   return out;
 }

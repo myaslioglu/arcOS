@@ -165,6 +165,19 @@ describe("Uniswap v4 discovery", () => {
       expect(chain.batches[0]!.calls).toHaveLength(10 + 50);
     });
 
+    it("counts the 50-pool cap after validating and deduplicating, so junk in front doesn't use it up", async () => {
+      const junk: ExtraPool[] = [
+        ...Array.from({ length: 12 }, (): ExtraPool => ({ version: "v4", key: { ...hooked, tickSpacing: 0 } })),
+        { version: "v4", key: standard },
+        { version: "v4", key: standard },
+      ];
+      const valid = Array.from({ length: 60 }, (_, i): ExtraPool => ({ version: "v4", key: v4PoolKey(TOKEN, USDC, 1 + i, 200, HOOK) }));
+      const chain = fakeChain();
+      await findPools(inputFor(chain, v4Only, TOKEN, [...junk, ...valid, ...valid]));
+      expect(chain.batches[0]!.calls).toHaveLength(10 + 50);
+      expect(new Set(ids(chain)).size).toBe(60);
+    });
+
     it("accepts keys in any letter case", async () => {
       const lowerToken = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
       const known = v4PoolKey(lowerToken, USDC, 10000, 200, HOOK);
