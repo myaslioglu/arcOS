@@ -14,7 +14,7 @@ import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
 import { bridgeChainInfo, bridgeChainOptions, chainLabel, type ChainId } from "./chains";
 import { explorerCheckNote, fundsLeftSource, inFlightNote } from "./inFlight";
 import { resolveRoute, type Direction } from "./route";
-import { classifyBridgeFailure, describeStepError, session, type BridgeFailureSource } from "./session";
+import { classifyBridgeFailure, describeStepError, describeWarning, session, type BridgeFailureSource } from "./session";
 import { useSourceBalance } from "./useSourceBalance";
 
 const STATE_LABEL: Record<string, string> = {
@@ -45,7 +45,7 @@ function BridgeResultSteps({ result }: { result: BridgeResult }) {
       {note && <p className="mt-1">{note}</p>}
       {result.warnings?.map((w, i) => (
         <p key={i} className="mt-1 text-accent-3-text">
-          {w.message ?? w.code}
+          {describeWarning(w)}
         </p>
       ))}
       <ul className="mt-1 grid gap-1">

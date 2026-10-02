@@ -1,4 +1,13 @@
-import { BalanceError, isBalanceError, isRateLimitError, type BridgeResult, type BridgeStep } from "@circle-fin/app-kit";
+import {
+  BalanceError,
+  QUOTE_NOT_REUSED_WARNING_CODE,
+  SPEED_DOWNGRADED_WARNING_CODE,
+  isBalanceError,
+  isRateLimitError,
+  type BridgeResult,
+  type BridgeStep,
+  type BridgeWarning,
+} from "@circle-fin/app-kit";
 import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
 import { isKitCancellation } from "@/lib/kit-errors";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
@@ -204,9 +213,11 @@ export const session = createBridgeSession();
 /**
  * What a finished bridge's step list says for a step that failed, in the app's own words: the SDK's `errorMessage` is
  * viem's text ("User rejected the request. Request Arguments: from: 0x…"), which names addresses and the call's
- * arguments, and is never shown. Checked in order, by the step's `error` (a KitError, wrapping the wallet's or the
- * node's own error under `cause.trace.rawError`) and the words of its chain, which only ever pick a sentence:
+ * arguments, and is never shown. Checked in order, by the SDK's own classification of the step (`errorCategory`), then
+ * the step's `error` (a KitError, wrapping the wallet's or the node's own error under `cause.trace.rawError`) and the
+ * words of its chain, which only ever pick a sentence:
  *
+ * - the SDK says the visitor rejected it (`errorCategory: "user_rejected"`);
  * - the wallet took the page for an embedded frame (`EMBEDDED_FRAME_MESSAGE`);
  * - the wallet didn't switch to the step's chain: the adapter's "Failed to switch to chain" wrapper, or code 4902;
  * - the visitor rejected the request: the kit's own cancellation check, or EIP-1193's 4001 anywhere in the chain;
@@ -214,20 +225,51 @@ export const session = createBridgeSession();
  * - anything else: one generic sentence.
  *
  * `chain` is where the step ran: the source for an approval or a burn, the destination for a mint.
+ *
+ * This runs during render, so it never throws: an error object whose `code`, `message` or `type` getter throws (the
+ * kit's guards read those) gets the generic sentence.
  */
-export function describeStepError(step: Pick<BridgeStep, "error" | "errorMessage">, chain: BridgeFailureSource): string {
-  const err = step.error ?? step.errorMessage;
-  if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
-  const nodes = errorChain(err);
-  const codes = nodes.map((n) => (typeof n === "object" && n !== null ? (n as { code?: unknown }).code : undefined));
-  const words = nodes.map((n) => (typeof n === "string" ? n : textOf(n))).join(" ");
-  if (codes.includes(4902) || SWITCH_REFUSED.test(words)) return `Your wallet didn't switch to ${chain.label}.`;
-  if (codes.includes(4001) || isKitCancellation(err)) return "Rejected in your wallet.";
-  if (isBalanceError(err)) {
-    const message = balanceFailureMessage(err.code, chain);
-    if (message) return message;
+export function describeStepError(step: Pick<BridgeStep, "error" | "errorMessage" | "errorCategory">, chain: BridgeFailureSource): string {
+  try {
+    if (step.errorCategory === "user_rejected") return STEP_REJECTED;
+    const err = step.error ?? step.errorMessage;
+    if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
+    const nodes = errorChain(err);
+    const codes = nodes.map((n) => (typeof n === "object" && n !== null ? (n as { code?: unknown }).code : undefined));
+    const words = nodes.map((n) => (typeof n === "string" ? n : textOf(n))).join(" ");
+    if (codes.includes(4902) || SWITCH_REFUSED.test(words)) return `Your wallet didn't switch to ${chain.label}.`;
+    if (codes.includes(4001) || isKitCancellation(err)) return STEP_REJECTED;
+    if (isBalanceError(err)) {
+      const message = balanceFailureMessage(err.code, chain);
+      if (message) return message;
+    }
+    return STEP_UNKNOWN;
+  } catch {
+    return STEP_UNKNOWN;
   }
-  return "This step didn't finish.";
+}
+
+const STEP_REJECTED = "Rejected in your wallet.";
+const STEP_UNKNOWN = "This step didn't finish.";
+
+/**
+ * What a `BridgeResult`'s warning says, by its code: the two the installed App Kit defines get a sentence of their own,
+ * any other code one generic sentence. The SDK's `message` is never shown, like every other SDK text. Never throws: a
+ * warning whose `code` getter throws reads as unknown.
+ */
+export function describeWarning(warning: Pick<BridgeWarning, "code">): string {
+  try {
+    switch (warning.code) {
+      case SPEED_DOWNGRADED_WARNING_CODE:
+        return "The fast transfer wasn't available, so this bridge takes the slower route. Your USDC still arrives.";
+      case QUOTE_NOT_REUSED_WARNING_CODE:
+        return "The fee quoted beforehand couldn't be reused, so the fee paid may differ from it.";
+      default:
+        return "The bridge reported a warning.";
+    }
+  } catch {
+    return "The bridge reported a warning.";
+  }
 }
 
 /** The adapter's wrapper around a chain switch the wallet refused or failed (adapter-viem-v2's `switchToChain`). */

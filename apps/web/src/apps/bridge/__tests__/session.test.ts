@@ -6,6 +6,7 @@ import {
   bridgeSessionReducer,
   classifyBridgeFailure,
   describeStepError,
+  describeWarning,
   createBridgeSession,
   initialBridgeSessionState,
   session,
@@ -391,11 +392,40 @@ describe("describeStepError", () => {
     expect(describeStepError({ error: noGas }, { label: "Base", gasSymbol: "ETH" })).toMatch(/^Your wallet doesn't have enough ETH on Base/);
   });
 
+  it("trusts the SDK's own classification first: errorCategory 'user_rejected' needs no error object at all", () => {
+    expect(describeStepError({ errorCategory: "user_rejected", errorMessage: "execution reverted" }, ARC)).toBe("Rejected in your wallet.");
+  });
+
+  it("never throws during render: a getter that throws on code, message or type reads as the generic sentence", () => {
+    const hostile = {
+      get code(): number { throw new Error("no"); },
+      get message(): string { throw new Error("no"); },
+      get type(): string { throw new Error("no"); },
+    };
+    expect(describeStepError({ error: hostile, errorMessage: "x" }, ARC)).toBe("This step didn't finish.");
+    expect(describeStepError({ error: { cause: { get trace(): unknown { throw new Error("no"); } } } }, ARC)).toBe("This step didn't finish.");
+  });
+
   it("keeps one generic sentence for anything else, never the error's own text", () => {
     const line = describeStepError({ error: new Error("execution reverted: https://internal.example/x 0xdeadbeef"), errorMessage: "execution reverted 0xdeadbeef" }, ARC);
     expect(line).toBe("This step didn't finish.");
     const loop: { cause?: unknown; message: string } = { message: "loop" };
     loop.cause = loop;
     expect(describeStepError({ error: loop }, ARC)).toBe("This step didn't finish.");
+  });
+});
+
+// What a BridgeResult's warnings say: by code, never the SDK's own message.
+describe("describeWarning", () => {
+  it("words the two codes the installed App Kit defines", () => {
+    expect(describeWarning({ code: "SPEED_DOWNGRADED" })).toMatch(/slower route/);
+    expect(describeWarning({ code: "QUOTE_NOT_REUSED" })).toMatch(/fee paid may differ/);
+  });
+
+  it("gives any other code one generic sentence, and never the message", () => {
+    const line = describeWarning({ code: "SOMETHING_NEW", message: "Fee recipient 0x463A81a017326E9029DcCA2a2d9AA42599Bef12c rejected" } as { code: string });
+    expect(line).toBe("The bridge reported a warning.");
+    expect(line).not.toMatch(/0x/);
+    expect(describeWarning({ get code(): string { throw new Error("no"); } })).toBe("The bridge reported a warning.");
   });
 });

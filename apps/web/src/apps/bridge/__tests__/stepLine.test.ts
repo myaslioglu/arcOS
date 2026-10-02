@@ -22,7 +22,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Bridge, the step list of a finished bridge", () => {
-  it("shows the app's sentence for a rejected approval: no address, no request arguments, none of the SDK's text", async () => {
+  it("shows the app's sentences for a rejected approval and a warning: no address, no request arguments, none of the SDK's text", async () => {
     const { session } = await import("../session");
     const { default: BridgeWindow } = await import("../Window");
     const chain = (name: string, chainId: number, symbol: string) => ({ chain: name, name, chainId, nativeCurrency: { name: symbol, symbol, decimals: 18 } });
@@ -32,6 +32,7 @@ describe("Bridge, the step list of a finished bridge", () => {
       token: "USDC",
       source: { chain: chain("Arc", 5042, "USDC"), adapter: {} },
       destination: { chain: chain("Base", 8453, "ETH"), adapter: {} },
+      warnings: [{ code: "SPEED_DOWNGRADED", message: "Fast burn allowance exhausted for 0x463A81a017326E9029DcCA2a2d9AA42599Bef12c; degraded to SLOW" }],
       steps: [
         {
           name: "approve",
@@ -50,6 +51,9 @@ describe("Bridge, the step list of a finished bridge", () => {
     expect(html).not.toMatch(/Request Arguments/i);
     expect(html).not.toMatch(/0x463A/);
     expect(html).not.toContain("Unknown blockchain error");
+    // The warning too: its code picks the app's sentence, its message (with an address) is never rendered.
+    expect(html).toContain("slower route");
+    expect(html).not.toContain("Fast burn allowance");
     session.dismiss();
   });
 });
