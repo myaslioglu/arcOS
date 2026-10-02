@@ -26,6 +26,8 @@ Automated analysis, not investment advice.
 | Watchdog | Alerts when a token you hold changes | Coming soon |
 | Radar | New tokens, each with Inspector's checks | Coming soon |
 
+Meme: soon.
+
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
 (addresses in `packages/contracts/DEPLOY.md`). Swap and
 Bridge run on Circle's App Kit SDK in keyless mode (no Circle API key ships to the browser) and

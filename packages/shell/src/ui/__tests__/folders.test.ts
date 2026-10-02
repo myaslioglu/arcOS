@@ -7,6 +7,7 @@ import { FolderCell } from "../DeskCells";
 import { DeskFolders } from "../DeskFolders";
 import { FolderArt } from "../FolderArt";
 import { FolderItem, FolderWindow } from "../FolderWindow";
+import { TouchRow } from "../TouchRow";
 import { RegistryProvider } from "../registry";
 
 const app = (id: string, name: string, category: AppManifest["category"], over: Partial<AppManifest> = {}): AppManifest => ({
@@ -30,6 +31,8 @@ const APPS = [
   app("inspector", "Inspector", "trust"),
   app("vault", "Vault", "trust", { comingSoon: true, release: "r2" }),
   app("mint", "Mint", "create"),
+  app("swap", "Swap", "trade"),
+  app("meme", "Meme", "trade", { tag: "Soon" }),
 ];
 const el = {} as HTMLElement;
 const count = (html: string, needle: string) => html.split(needle).length - 1;
@@ -62,7 +65,7 @@ describe("DeskFolders", () => {
       createElement(DeskFolders, { apps: APPS, items: [], onOpenFolder: () => {}, onOpenItem: () => {} }),
     );
     const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
-    expect(labels).toEqual(["Desktop", "System: 4 items", "Trust: 2 items", "Create: 1 item"]);
+    expect(labels).toEqual(["Desktop", "System: 4 items", "Trust: 2 items", "Create: 1 item", "Trade: 2 items"]);
   });
 });
 
@@ -75,6 +78,32 @@ describe("FolderWindow", () => {
     expect(count(html, 'data-soon="true"')).toBe(1);
     expect(html).toContain('<span class="os-soon">Soon</span>');
     expect(html).toContain('<p class="os-group-status">2 items</p>');
+  });
+});
+
+describe("FolderWindow with a tagged live app", () => {
+  it("tags the app Soon at full strength, names it so, and keeps it enabled", () => {
+    const trade = APPS.filter((m) => m.category === "trade");
+    const html = renderToStaticMarkup(createElement(FolderWindow, { category: "trade", apps: trade, onOpen: () => {} }));
+    expect(html).toContain('aria-label="Meme, soon"');
+    expect(html).toContain('<span class="os-soon">Soon</span>');
+    expect(html).not.toContain("data-soon");
+    expect(html).not.toContain("disabled");
+    expect(html).toContain('<p class="os-group-status">2 items</p>');
+  });
+
+  it("tags its touch row too, without repeating the tag as its blurb", () => {
+    const html = renderToStaticMarkup(createElement(TouchRow, { m: { ...APPS[APPS.length - 1], blurb: "Soon" }, onOpen: () => {} }));
+    expect(html).toContain('<span class="os-soon">Soon</span>');
+    expect(html).not.toContain("os-touch-blurb");
+    expect(renderToStaticMarkup(createElement(TouchRow, { m: APPS[0], onOpen: () => {} }))).toContain("Finder blurb");
+  });
+
+  it("opens the app like any other", () => {
+    const onOpen = vi.fn();
+    const item = FolderItem({ m: APPS[APPS.length - 1], onOpen, onHint: () => {} }) as ReactElement<Record<string, (e?: unknown) => void>>;
+    item.props.onClick({ currentTarget: el });
+    expect(onOpen).toHaveBeenCalledWith("meme", el);
   });
 });
 

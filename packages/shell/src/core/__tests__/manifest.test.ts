@@ -5,6 +5,8 @@ import {
   FOLDER_APP_ID,
   ROADMAP_APP_ID,
   appHue,
+  appLabel,
+  appTag,
   buildRegistry,
   folderWindowSize,
   isCategory,
@@ -24,6 +26,21 @@ const stub = (over: Partial<AppManifest>): AppManifest => ({
   requiresWallet: false,
   release: "r0",
   ...over,
+});
+
+describe("appTag and appLabel", () => {
+  it("tags a grey app Soon and names it work in progress, whatever its own tag", () => {
+    const grey = stub({ name: "Vault", comingSoon: true, release: "r2", tag: "Beta" });
+    expect(appTag(grey)).toBe("Soon");
+    expect(appLabel(grey)).toBe("Vault, work in progress");
+  });
+
+  it("gives a live app its own tag, lower-cased in its name, and a plain app neither", () => {
+    expect(appTag(stub({ name: "Meme", tag: "Soon" }))).toBe("Soon");
+    expect(appLabel(stub({ name: "Meme", tag: "Soon" }))).toBe("Meme, soon");
+    expect(appTag(stub({ name: "Mint" }))).toBeNull();
+    expect(appLabel(stub({ name: "Mint" }))).toBe("Mint");
+  });
 });
 
 describe("buildRegistry", () => {

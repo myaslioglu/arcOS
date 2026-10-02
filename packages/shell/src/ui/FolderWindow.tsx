@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CATEGORY_HUE, appHue, folderContents, itemCount, type AppCategory, type AppManifest } from "../core";
+import { CATEGORY_HUE, appHue, appLabel, appTag, folderContents, itemCount, type AppCategory, type AppManifest } from "../core";
 import { useDesktop } from "./desktop-context";
 import { useIsTouch } from "./hooks/useIsTouch";
 import { useRegistry } from "./registry";
@@ -11,17 +11,18 @@ type Open = (appId: string, from: HTMLElement) => void;
 
 /**
  * One app in a folder window. A grey app is dimmed and tagged "Soon", and opens its "work in progress" window like
- * any other launch. While pointed at or focused, the app's name and blurb go to `onHint` for the status line.
+ * any other launch; a live app with a `tag` carries it the same way, at full strength. While pointed at or focused, the app's name and blurb go to `onHint` for the status line.
  * Hookless, so a test can call it and press it.
  */
 export function FolderItem({ m, onOpen, onHint }: { m: AppManifest; onOpen: Open; onHint: (text: string | null) => void }) {
   const hint = `${m.name}: ${m.blurb}`;
+  const tag = appTag(m);
   return (
     <button
       type="button"
       className="os-icon"
       data-soon={m.comingSoon ? "true" : undefined}
-      aria-label={m.comingSoon ? `${m.name}, work in progress` : m.name}
+      aria-label={appLabel(m)}
       style={{ "--os-hue": appHue(m) } as React.CSSProperties}
       onClick={(e) => onOpen(m.id, e.currentTarget)}
       onPointerEnter={() => onHint(hint)}
@@ -33,7 +34,7 @@ export function FolderItem({ m, onOpen, onHint }: { m: AppManifest; onOpen: Open
         <m.icon size={20} aria-hidden />
       </span>
       <span className="os-icon-name">{m.name}</span>
-      {m.comingSoon && <span className="os-soon">Soon</span>}
+      {tag && <span className="os-soon">{tag}</span>}
     </button>
   );
 }
