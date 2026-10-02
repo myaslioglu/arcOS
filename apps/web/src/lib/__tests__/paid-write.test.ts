@@ -54,12 +54,13 @@ describe("assertWalletOnChain", () => {
  * (`const { writeContractAsync: doIt } = useWriteContract()`) would silently defeat: every call
  * after that rename would read `doIt(...)`, invisible to a scan for the literal text
  * `writeContractAsync(`. This version instead walks the whole `apps/web/src` tree (reusing the
- * directory walk in contract-error.test.ts), scans every file that MENTIONS one of the three wagmi/
- * viem paid-write functions (`writeContractAsync`, `writeContract(`, `sendTransaction`) — not just
- * the two files it used to hard-code — and separately fails outright if it finds that exact
- * aliasing pattern anywhere, so a future rename can't quietly walk the guard right off a cliff.
+ * directory walk in contract-error.test.ts) and scans every file that imports from wagmi, calls one
+ * of wagmi 3's write hooks (useWriteContract, useSendTransaction, useSendCalls, useDeployContract and
+ * their Sync forms), or mentions a paid-write function by name — not just the two files it used to
+ * hard-code — and separately fails outright if it finds that exact aliasing pattern anywhere, so a
+ * future rename can't quietly walk the guard right off a cliff.
  */
-describe("every paid write goes through withChain (writeContractAsync / writeContract / sendTransaction)", () => {
+describe("every paid write goes through withChain (wagmi's write hooks and actions, and the functions passed them)", () => {
   const root = path.resolve(import.meta.dirname, "..", "..");
   // This file's own source is exempt: it contains the literal marker text below as scanner
   // configuration, and the doc comment above mentions the very identifiers being scanned for.
@@ -86,24 +87,43 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
     return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
   }
 
-  const FUNCTION_NAMES = ["writeContractAsync", "writeContract", "sendTransaction", "mutateAsync", "mutate"];
-  // File-selection net: any file mentioning any of these three names at all (call, comment, or
-  // otherwise) is worth scanning — a file with a comment-only mention (e.g. mint/session.ts) simply
-  // contributes zero call sites below, rather than being silently skipped.
-  const FILE_MENTION_MARKERS = ["writeContractAsync", "writeContract(", "sendTransaction", "useWriteContract(", "useSendTransaction("];
-  const matchedFiles = listSourceFiles(root).filter((f) => {
-    const source = readFileSync(f, "utf8");
-    return FILE_MENTION_MARKERS.some((m) => source.includes(m));
-  });
+  // The paid-write actions (wagmi's and viem's, and Revoke's own `deps.writeContractAsync`), and the
+  // mutate/mutateAsync calls wagmi 3's write hooks are made through.
+  const ACTION_NAMES = [
+    "writeContractAsync",
+    "writeContract",
+    "writeContractSync",
+    "sendTransaction",
+    "sendTransactionSync",
+    "sendCalls",
+    "sendCallsSync",
+    "deployContract",
+  ];
+  const MUTATION_NAMES = ["mutateAsync", "mutate"];
+  const FUNCTION_NAMES = [...ACTION_NAMES, ...MUTATION_NAMES];
+  // wagmi 3's write hooks, Sync forms included. A file that calls one has its mutate/mutateAsync calls
+  // scanned too; elsewhere those are connect, disconnect or switch-chain calls, which aren't writes.
+  const WRITE_HOOK = /\buse(?:WriteContract|SendTransaction|SendCalls|DeployContract)\w*\s*\(/;
+  // File-selection net, as wide as it can be: any file importing from wagmi at all, any file calling a
+  // write hook, and any file that mentions a paid-write function by name (call, comment, or otherwise:
+  // Revoke's flow.ts gets its write passed in and never imports wagmi). A file selected for a
+  // comment-only mention (e.g. mint/session.ts) simply contributes zero call sites below, rather than
+  // being silently skipped.
+  const IMPORTS_WAGMI = /\bfrom\s*["'](?:wagmi|@wagmi\/[\w-]+)(?:\/[\w-]+)?["']/;
+  const FILE_MENTION_MARKERS = ["writeContractAsync", "writeContract(", "sendTransaction"];
+  function selectsFile(source: string): boolean {
+    return IMPORTS_WAGMI.test(source) || WRITE_HOOK.test(source) || FILE_MENTION_MARKERS.some((m) => source.includes(m));
+  }
+  const matchedFiles = listSourceFiles(root).filter((f) => selectsFile(readFileSync(f, "utf8")));
 
-  const CALL_MARKERS = FUNCTION_NAMES.map((name) => `${name}(`);
   const LOOKAHEAD = 60; // comfortably more than prettier's deepest realistic indent before an argument
 
   /** Every `name(` call site in `source`, with `LOOKAHEAD` characters of trailing text — trimmed
    * below to just the first token, so this isn't sensitive to exact formatting. */
   function callSitesAndArgs(source: string): string[] {
     const calls: string[] = [];
-    for (const marker of CALL_MARKERS) {
+    const names = WRITE_HOOK.test(source) ? FUNCTION_NAMES : ACTION_NAMES;
+    for (const marker of names.map((name) => `${name}(`)) {
       let idx = source.indexOf(marker);
       while (idx !== -1) {
         calls.push(source.slice(idx + marker.length, idx + marker.length + LOOKAHEAD));
@@ -112,6 +132,34 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
     }
     return calls;
   }
+
+  /** The call sites in `source` (comments stripped) whose first argument isn't `withChain(...)`. */
+  function unwrappedCalls(source: string): string[] {
+    return callSitesAndArgs(stripComments(source)).filter((call) => !call.trimStart().startsWith("withChain("));
+  }
+
+  it("selects and catches a file that writes through another wagmi 3 write hook, such as useWriteContractSync", () => {
+    const source = [
+      'import { useWriteContractSync } from "wagmi";',
+      "const write = useWriteContractSync();",
+      "await write.mutateAsync(request);",
+    ].join("\n");
+    expect(selectsFile(source)).toBe(true);
+    expect(unwrappedCalls(source)).toHaveLength(1);
+    expect(unwrappedCalls(source.replace("mutateAsync(request)", "mutateAsync(withChain(request, 1))"))).toEqual([]);
+  });
+
+  it("selects any file that imports from wagmi, whatever hook it calls the write through", () => {
+    const source = ['import * as wagmi from "wagmi/actions";', "await wagmi.sendCallsSync(config, { calls });"].join("\n");
+    expect(selectsFile(source)).toBe(true);
+    expect(unwrappedCalls(source)).toHaveLength(1);
+  });
+
+  it("leaves a mutate call alone in a file with no write hook (connecting, switching chain)", () => {
+    const source = ['import { useConnect } from "wagmi";', "const connect = useConnect();", "connect.mutate({ connector });"].join("\n");
+    expect(selectsFile(source)).toBe(true);
+    expect(unwrappedCalls(source)).toEqual([]);
+  });
 
   it("scans at least the two known paid-write files — a future move/rename must not silently drop them from the file set", () => {
     expect(matchedFiles.some((f) => f.endsWith(path.join("apps", "mint", "Window.tsx")))).toBe(true);
@@ -147,7 +195,7 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
     expect(aliasesIn("interface FakeWagmi { writeContract: (args: unknown) => Promise<void> }")).toEqual([]);
   });
 
-  it("finds no destructuring alias of writeContractAsync/writeContract/sendTransaction — that would let a call bypass this whole scan", () => {
+  it("finds no destructuring alias of a paid-write function — that would let a call bypass this whole scan", () => {
     const offenders: string[] = [];
     for (const file of matchedFiles) {
       const stripped = stripComments(readFileSync(file, "utf8"));
@@ -156,7 +204,7 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
     expect(offenders, `found a destructuring rename that would hide a paid write from this scan:\n${offenders.join("\n")}`).toEqual([]);
   });
 
-  it("every call site, across every file that mentions one of these functions, is wrapped in withChain(...)", () => {
+  it("every call site, across every file the scan selects, is wrapped in withChain(...)", () => {
     let totalCalls = 0;
     const offenders: string[] = [];
     for (const file of matchedFiles) {
