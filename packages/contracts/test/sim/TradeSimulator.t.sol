@@ -84,7 +84,14 @@ contract TradeSimulatorTest is Test {
         returns (TradeSimulator.Trade memory)
     {
         return TradeSimulator.Trade({
-            kind: kind, pool: pool, token: address(token), usdc: quote, router: R, amount: amount, key: key
+            kind: kind,
+            pool: pool,
+            token: address(token),
+            usdc: quote,
+            router: R,
+            amount: amount,
+            maxAmount: amount * 100,
+            key: key
         });
     }
 
@@ -299,6 +306,55 @@ contract TradeSimulatorTest is Test {
         assertEq(r.status, sim.BUY_REVERTED());
     }
 
+    /// A v3 pool of a token with no decimals: 1,000 raw units against 10,000 USDC, 10 USDC a unit, its price set to match.
+    function _v3FewUnits() internal returns (MockV3Pool pool) {
+        pool = new MockV3Pool(address(usdc), address(token), 3000);
+        usdc.mint(address(pool), 10_000e6);
+        token.seed(address(pool), 1000);
+        token.setPool(address(pool));
+        // sqrt(token1 / token0) in Q64.96: 1e-7 when USDC is token0, 1e7 when it is token1.
+        pool.setState(
+            address(usdc) < address(token)
+                ? 25_054_144_837_504_793_118_641_380
+                : 250_541_448_375_047_931_186_413_801_569_606,
+            1e18
+        );
+    }
+
+    function _fewUnitsTrade(MockV3Pool pool, uint256 maxAmount) internal view returns (TradeSimulator.Trade memory t) {
+        t = _trade(sim.V3(), address(pool), address(usdc), 10_000, _noKey()); // 0.01 USDC: less than one unit
+        t.maxAmount = maxAmount;
+    }
+
+    function test_v3_aTokenWithFewUnitsIsBoughtWithEnoughForWholeUnits() public {
+        MockV3Pool pool = _v3FewUnits();
+        usdc.mint(S, 100e6);
+        TradeSimulator.Result memory r = _run(_fewUnitsTrade(pool, 100e6), 5_000_000);
+        assertEq(r.status, sim.OK());
+        // Raised to the 100 USDC limit (100 units would cost 1,000): about 9.9 units, 9 whole.
+        assertEq(r.spent, 100e6);
+        assertGt(r.paidOut, 0);
+        assertEq(r.bought, r.paidOut);
+        assertEq(r.sold, r.bought);
+        assertGt(r.received, 0);
+    }
+
+    function test_v3_aTokenWhoseUnitCostsMoreThanTheLimitIsNotBought() public {
+        MockV3Pool pool = _v3FewUnits();
+        // Two units cost 20 USDC, over a 15 USDC limit.
+        TradeSimulator.Result memory r = _run(_fewUnitsTrade(pool, 15e6), 5_000_000);
+        assertEq(r.status, sim.AMOUNT_OVER_LIMIT());
+        assertEq(r.spent, 0);
+        assertEq(usdc.balanceOf(S), AMOUNT);
+    }
+
+    function test_aNormalTokenIsBoughtWithTheTestAmount() public {
+        MockV3Pool pool = _v3(3000);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.spent, AMOUNT);
+    }
+
     // --- v4 ---
 
     function test_v4_aPoolAtItsPriceLimitIsAPoolThatCantTrade() public {
@@ -436,7 +492,7 @@ contract TradeSimulatorTest is Test {
         MockV2Pair pair = _v2();
         TradeSimulator.Trade memory t = _trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey());
         vm.expectRevert();
-        sim.buy(t);
+        sim.buy(t, AMOUNT);
         vm.expectRevert();
         sim.sell(t, 1);
     }

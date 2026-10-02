@@ -268,7 +268,8 @@ contract MockPoolManager {
     }
 
     /// What `extsload` answers, by slot: a seeded pool's slot0 (its price) and its liquidity, as v4's StateLibrary lays
-    /// them out.
+    /// them out. This mock writes the same slots the simulator reads, so it can't prove that layout: only the live
+    /// eth_call suite (packages/inspector/live), trading through Arc's real PoolManager, shows it matches.
     mapping(bytes32 slot => bytes32) private _ext;
 
     /// Credits a pool with liquidity the test has already sent to this contract, at a mid price.

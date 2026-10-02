@@ -76,6 +76,9 @@ contract TradeSimulator {
     /// sits outside its range with none active, and a buy moves the price into it. A pool with no liquidity anywhere pays
     /// nothing out, which Inspector reads from the result.)
     uint8 public constant POOL_CANT_TRADE = 5;
+    /// One raw unit of the token costs more, at the pool's price, than `maxAmount` allows: the buy isn't tried. The token's
+    /// decimals and price are its deployer's choice, so this is no answer about the pool alone.
+    uint8 public constant AMOUNT_OVER_LIMIT = 6;
 
     uint8 public constant V2 = 0;
     uint8 public constant V3 = 1;
@@ -90,7 +93,9 @@ contract TradeSimulator {
 
     /// One round trip. `pool` is the v2 pair, the v3 or Slipstream pool, or v4's PoolManager (with `key` naming the pool).
     /// `usdc` is the currency paid in: the USDC ERC-20, or address(0) for native USDC on v4. `amount` is in its units.
-    /// `router` is where the override put the second copy of this code, which moves the token on the sell leg.
+    /// `router` is where the override put the second copy of this code, which moves the token on the sell leg. `maxAmount`
+    /// is the most a v3, Slipstream or v4 buy may be raised to so that it buys whole raw units of a token with few decimals
+    /// (see `_buyAmount`); the override funds S with it.
     struct Trade {
         uint8 kind;
         address pool;
@@ -98,6 +103,7 @@ contract TradeSimulator {
         address usdc;
         address router;
         uint256 amount;
+        uint256 maxAmount;
         ISimPoolManager.PoolKey key;
     }
 
@@ -121,11 +127,12 @@ contract TradeSimulator {
     /// The round trip. Only callable by this contract: Inspector's call is from S to S.
     function simulate(Trade calldata t) external returns (Result memory r) {
         require(msg.sender == address(this));
-        if (!_poolCanTrade(t)) {
-            r.status = POOL_CANT_TRADE;
+        (uint8 status, uint256 amountIn) = _preflight(t);
+        if (status != OK) {
+            r.status = status;
             return r;
         }
-        (uint8 outcome, uint256 a, uint256 b, uint256 c) = _leg(abi.encodeCall(this.buy, (t)), 3);
+        (uint8 outcome, uint256 a, uint256 b, uint256 c) = _leg(abi.encodeCall(this.buy, (t, amountIn)), 3);
         if (outcome != OK) {
             r.status = outcome == LEG_REVERTED ? BUY_REVERTED : BUY_OUT_OF_GAS;
             return r;
@@ -139,12 +146,13 @@ contract TradeSimulator {
         (r.sold, r.received) = (a, b);
     }
 
-    /// The buy leg: `t.amount` of USDC in. Only callable by this contract, from `simulate`.
-    function buy(Trade calldata t) external returns (uint256 spent, uint256 paidOut, uint256 bought) {
+    /// The buy leg: `amount` of USDC in (`t.amount`, or more for a token with few decimals; see `_buyAmount`). Only
+    /// callable by this contract, from `simulate`.
+    function buy(Trade calldata t, uint256 amount) external returns (uint256 spent, uint256 paidOut, uint256 bought) {
         require(msg.sender == address(this));
         uint256 usdcBefore = _balance(t.usdc);
         uint256 tokenBefore = _balance(t.token);
-        paidOut = _swap(t, t.usdc, t.token, t.amount, address(0));
+        paidOut = _swap(t, t.usdc, t.token, amount, address(0));
         spent = _less(usdcBefore, _balance(t.usdc));
         bought = _less(_balance(t.token), tokenBefore);
     }
@@ -241,36 +249,65 @@ contract TradeSimulator {
 
     /// Whether the pool can serve the buy at all, from its own state, before anything is sent. Only the pool's view
     /// functions are called, never the token's: a pool whose views revert or answer nothing usable can't trade.
-    function _poolCanTrade(Trade calldata t) private view returns (bool) {
+    function _preflight(Trade calldata t) private view returns (uint8, uint256) {
         if (t.kind == V2) {
             (bool ok, bytes memory ret) = t.pool.staticcall(abi.encodeWithSelector(ISimV2Pair.token0.selector));
-            if (!ok || ret.length != 32) return false;
+            if (!ok || ret.length != 32) return (POOL_CANT_TRADE, 0);
             bool inIsToken0 = abi.decode(ret, (address)) == t.usdc;
             (ok, ret) = t.pool.staticcall(abi.encodeWithSelector(ISimV2Pair.getReserves.selector));
-            if (!ok || ret.length != 96) return false;
+            if (!ok || ret.length != 96) return (POOL_CANT_TRADE, 0);
             (uint256 reserve0, uint256 reserve1,) = abi.decode(ret, (uint256, uint256, uint256));
             (uint256 reserveIn, uint256 reserveOut) = inIsToken0 ? (reserve0, reserve1) : (reserve1, reserve0);
-            return _amountOut(t.amount, reserveIn, reserveOut) > 0;
+            // Inspector sizes a v2 buy from the reserves itself (a whole raw unit at least).
+            return (_amountOut(t.amount, reserveIn, reserveOut) > 0 ? OK : POOL_CANT_TRADE, t.amount);
         }
         uint256 sqrtPrice;
         bool zeroForOne;
         if (t.kind == V3) {
             zeroForOne = t.usdc < t.token;
             (bool ok, bytes memory ret) = t.pool.staticcall(abi.encodeWithSignature("slot0()"));
-            if (!ok || ret.length < 32) return false;
+            if (!ok || ret.length < 32) return (POOL_CANT_TRADE, 0);
             sqrtPrice = abi.decode(ret, (uint256)) & type(uint160).max;
         } else if (t.kind == V4) {
             zeroForOne = t.usdc == t.key.currency0;
             bytes32 state = keccak256(abi.encodePacked(keccak256(abi.encode(t.key)), POOLS_SLOT));
             (bool ok, bytes memory ret) = t.pool.staticcall(abi.encodeWithSignature("extsload(bytes32)", state));
-            if (!ok || ret.length < 32) return false;
+            if (!ok || ret.length < 32) return (POOL_CANT_TRADE, 0);
             sqrtPrice = abi.decode(ret, (uint256)) & type(uint160).max;
         } else {
             // An unknown kind is no pool's answer: the buy leg reverts on it, as before.
-            return true;
+            return (OK, t.amount);
         }
-        if (sqrtPrice == 0) return false;
-        return zeroForOne ? sqrtPrice > MIN_SQRT_PRICE + 1 : sqrtPrice < MAX_SQRT_PRICE - 1;
+        if (sqrtPrice == 0) return (POOL_CANT_TRADE, 0);
+        if (zeroForOne ? sqrtPrice <= MIN_SQRT_PRICE + 1 : sqrtPrice >= MAX_SQRT_PRICE - 1) {
+            return (POOL_CANT_TRADE, 0);
+        }
+        return _buyAmount(t, sqrtPrice, zeroForOne);
+    }
+
+    /// Raw units of the token the buy aims for when `t.amount` would get fewer: few enough to stay cheap, enough that
+    /// rounding to whole units can't pass for a loss.
+    uint256 private constant TARGET_UNITS = 100;
+
+    /// What a v3, Slipstream or v4 buy spends: `t.amount`, raised for a token with so few decimals (or so high a price)
+    /// that `t.amount` would buy less than `TARGET_UNITS` raw units, to what buys that many at the pool's price, but never
+    /// past `t.maxAmount`. A pool can't pay out part of a raw unit, so a buy too small for one takes the USDC and pays out
+    /// nothing. When even two raw units cost more than `t.maxAmount`, the buy isn't tried: AMOUNT_OVER_LIMIT.
+    function _buyAmount(Trade calldata t, uint256 sqrtPrice, bool zeroForOne) private pure returns (uint8, uint256) {
+        // USDC (raw) per raw unit of the token at the pool's price, rounded up. sqrtPrice is sqrt(currency1 / currency0) in
+        // Q64.96. The token is currency1 when the buy is zeroForOne: a unit costs 1 / price; otherwise it costs price.
+        uint256 perUnit;
+        if (sqrtPrice >= 1 << 128) {
+            // price >= 2^64: when USDC is currency0 a unit costs next to nothing; otherwise more than any limit.
+            perUnit = zeroForOne ? 1 : type(uint256).max;
+        } else {
+            uint256 squared = sqrtPrice * sqrtPrice; // < 2^256
+            perUnit = zeroForOne ? (uint256(1) << 192) / squared + 1 : (squared >> 192) + 1;
+        }
+        if (perUnit > t.maxAmount / 2) return (AMOUNT_OVER_LIMIT, 0);
+        uint256 target = perUnit * TARGET_UNITS;
+        if (target <= t.amount) return (OK, t.amount);
+        return (OK, target < t.maxAmount ? target : t.maxAmount);
     }
 
     /// What a leg's self-call came to. Separate from the statuses above: `simulate` maps it to the leg's own.
