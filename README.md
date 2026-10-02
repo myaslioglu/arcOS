@@ -170,21 +170,31 @@ but does have privileged functions, both the ownership and privileges findings r
   so it is often far less than what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts
   as liquid from 1,000 units of USDC or EURC in the pool.
 - The trade check (check 10) buys the token with 10 USDC, or 0.1% of the pool's depth when that is
-  less (never under 0.01 USDC), from its deepest USDC pool and sells everything straight back into
-  the same pool. It is one `eth_call`: a small simulator contract
-  (`packages/contracts/src/sim/TradeSimulator.sol`) is placed at a throwaway address with a state
-  override, together with the USDC it spends, and swaps against the pool contracts directly, not
-  through a router. Nothing is signed or sent. A sell that reverts after the buy went through is a
-  fail ("Can't be sold"). A round trip that loses more than the pool's own fees for the two swaps
-  plus 3% is a warning; where the fee can change from swap to swap (a dynamic-fee or hooked v4
-  pool, Aerodrome) the line is 5%. A buy that reverts, a leg that runs out of the gas it is given,
-  and an RPC that won't run the simulation all read "unknown".
-- A token can tell a simulation from a real trade (the simulator is a contract, and the call comes
-  from an address that holds code), so a token written to behave differently for it can pass. A pass
-  says what one simulated buy and sell did at that block, against one pool; a rule the owner can
-  switch on later, or one that applies to other pools or larger amounts, isn't covered. A sell into
-  a Uniswap v3 pool also reverts for a token that arrives short (a transfer tax), because the pool
-  checks it was paid in full; that token can't be sold into that pool, and the finding says so.
+  less (never under 0.01 USDC), from its deepest USDC pool (one without a hook before one with) and
+  sells everything straight back into the same pool. It is one `eth_call`: a small simulator contract
+  (`packages/contracts/src/sim/TradeSimulator.sol`) is placed with a state override at a fresh random
+  address S, together with the USDC it spends and the gas the call prepays at the network's current
+  gas price, and a second copy of it at another fresh random address R acts as the router. It swaps
+  against the pool contracts directly. The buy pays the pool with a plain `transfer`; the sell moves
+  the token as a real sell does, with S approving R and R calling `transferFrom` into the pool.
+  Nothing is signed or sent.
+- How the round trip is judged: a buy the pool paid out for and of which no tokens arrived is a fail
+  ("Buying delivers no tokens"). A sell that reverts after the buy went through is a fail ("Can't be
+  sold") in a Uniswap v2 pair or a hookless v4 pool, where only the token can refuse it. A Uniswap v3
+  or Aerodrome pool checks it was paid in full, so it refuses a token that arrives short (a transfer
+  tax), and a v4 pool's hook can refuse a swap; when the sell reverts in one of those, Inspector runs a
+  second round trip in the deepest Uniswap v2 or hookless v4 USDC pool. It fails the token only if
+  that sell reverts too, or if there is no such pool, in which case the finding says why the first
+  pool may have refused it. Otherwise it warns and names both pools ("Selling into its deepest pool
+  (Uniswap v3 0x…) reverted; selling into the Uniswap v2 pair (0x…) went through"). A round trip that
+  loses more than the pool's own fees for the two swaps plus 3% is a warning; where the fee can change
+  from swap to swap (a dynamic-fee or hooked v4 pool, Aerodrome) the line is 5%. A buy that reverts or
+  that the pool pays nothing for, a leg that runs out of the gas it is given, and an RPC that won't
+  run the simulation (or read the gas price) all read "unknown".
+- A pass says what one simulated buy and sell did at that block, against one pool; a rule the owner
+  can switch on later, or one that applies to other pools or larger amounts, isn't covered. A token
+  can still tell the simulation from a real trade, and one written to behave differently for it can
+  pass (see Known limits for the ways it can).
 - Holder figures are only as complete as the explorer's index, and exclude burn addresses, known
   pools (Uniswap v4's PoolManager among them) and lock contracts. A list the explorer won't confirm
   is complete gives a floor, not a concentration.
@@ -215,6 +225,16 @@ but does have privileged functions, both the ownership and privileges findings r
   not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
+- Inspector's trade simulation (check 10) can still be told from a real trade. S and R are fresh
+  random addresses and the call carries the network's gas price, but: `tx.origin` (S) has code, which
+  a wallet's address doesn't; S and R are addresses the token has never seen, and R is no router it
+  knows, so a token that lets only known routers or wallets it has recorded sell can tell them apart;
+  the buy and the sell happen in one transaction, at one block and timestamp; and the sell is made
+  from a contract. A token can use any of these to pass the simulation and still trap real sellers. The other way round, a cooldown
+  between a buy and a sell, a rule against selling in the block of the buy, or an anti-bot rule
+  against contract callers reverts the simulated sell although a later sell from a wallet might go
+  through; the finding then says "Selling straight back, in the same transaction and from a contract,
+  reverted" rather than that no sell can ever succeed.
 - Liquidity lock detection only reads Uniswap v2 LP token balances. Positions in v3, v4 and Aerodrome
   pools can't be read without an index yet, so a token with only those pools reads "unknown" for it,
   and so does a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
