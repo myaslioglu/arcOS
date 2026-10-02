@@ -15,7 +15,7 @@ export class CallReverted extends Error {
 }
 
 export type Status = "pass" | "warn" | "fail" | "unknown";
-export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao";
+export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao" | "trade";
 
 export type Finding = {
   id: CheckId;
@@ -43,7 +43,7 @@ export type Report = {
    *   but a revert or -32602 invalid params; see rpc-errors.ts), on every endpoint the transport tried; or
    * - an explorer request ended in `ExplorerUnavailable`.
    * Never degraded: a revert or an empty answer (`CallReverted`), a call that set its own gas limit running out of it (a v4
-   * quote), -32602, a 404 from the explorer, and viem failing to decode what the node answered, since
+   * quote, the trade simulation), -32602, a 404 from the explorer, and viem failing to decode what the node answered, since
    * asking again returns the same. The findings mean what they always do; this
    * only says that some of the unknowns may be a network hiccup, so the report shouldn't be kept for long.
    */
@@ -109,6 +109,8 @@ export type Pool = {
   /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. "hook": the
    * pool has a hook, which runs inside any swap and so could fake a quote either way; it isn't quoted. */
   undecided?: "quote-unavailable" | "hook";
+  /** v3 only: the fee tier the factory was asked for, in hundredths of a bip (3000 is 0.3%). */
+  fee?: number;
   /** v4 only. */
   poolId?: Hex;
   key?: PoolKey;

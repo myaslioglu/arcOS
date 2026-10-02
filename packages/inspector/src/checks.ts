@@ -51,6 +51,10 @@
  *   evidence to compute a locked share from).
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
+ * - trade: no DEX is configured, pool discovery failed, no USDC pool was found, or the round trip
+ *   (see `checkTrade` and simulate.ts) didn't measure a sell: the buy reverted, a leg ran out of the
+ *   gas it was given, nothing was spent, or the RPC refused, ignored or failed the state-overridden
+ *   eth_call. Only a buy that went through followed by a sell that reverted is a `fail`.
  *
  * On top of all of that, ownership, privileges and prevrandao are statements about code, so a
  * `pass` from any of them is conditional on the engine having seen the code that will actually run
@@ -67,6 +71,7 @@ import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { NATIVE, readV4Pools, type V4Quote } from "./v4";
+import { STATUS, roundTripFee, simulateTrade, type TradeRun } from "./simulate";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -349,10 +354,10 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     uniswapAnswered = true;
     return answer;
   };
-  const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }): Promise<Pool | null> => {
+  const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }, fee?: number): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
     const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
-    return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH };
+    return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
   };
   // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
   // doesn't name, and v3 without fee tiers has no pool to look for.
@@ -365,7 +370,7 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
       v2Factory ? askFactory(v2Factory, v2FactoryAbi, "getPair", [address, quote.address]).then((pair) => add(pair, "v2", quote)) : null,
       Promise.all(
         v3Tiers.map(({ factory, fee }) =>
-          askFactory(factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote)),
+          askFactory(factory, v3FactoryAbi, "getPool", [address, quote.address, fee]).then((pool) => add(pool, "v3", quote, fee)),
         ),
       ),
     ]);
@@ -853,4 +858,101 @@ export function checkPrevrandao(input: InspectInput, logicCode: string | null, g
   return usesOpcode(logicCode, 0x44)
     ? finding("prevrandao", "warn", "Uses PREVRANDAO, which is always 0 on Arc", "Any randomness derived from it is predictable.", { evidenceUrl: "https://docs.arc.io/arc/references/evm-differences" })
     : finding("prevrandao", "pass", "Doesn't rely on on-chain randomness", "The PREVRANDAO opcode isn't used.");
+}
+
+/** A loss up to the pool's fees plus this much is the pool's doing, not the token's (ppm). */
+const TRADE_SLACK = 30_000n;
+/** The line for a pool whose fee can change from one swap to the next: a 5% loss (ppm). */
+const TRADE_LINE_VARIABLE_FEE = 50_000n;
+
+/** A USDC amount in 6 decimals: to at most 4 decimal places from 1 USDC up ("9.94"), all 6 below it ("0.009998"). Cut, not rounded. */
+function usdcAmount(units: bigint): string {
+  const whole = units / 1_000_000n;
+  const fraction = (units % 1_000_000n).toString().padStart(6, "0");
+  const shown = (whole === 0n ? fraction : fraction.slice(0, 4)).replace(/0+$/, "");
+  return shown ? `${whole.toLocaleString("en-US")}.${shown}` : whole.toLocaleString("en-US");
+}
+
+/** Parts per million as a percentage with at most one decimal, rounded half up: 103_000 is "10.3%", 1_000_000 is "100%",
+ * 400 is "under 0.1%". */
+const ppmPct = (ppm: bigint): string => {
+  const tenths = (ppm + 500n) / 1000n;
+  if (tenths === 0n && ppm > 0n) return "under 0.1%";
+  return tenths % 10n === 0n ? `${tenths / 10n}%` : `${tenths / 10n}.${tenths % 10n}%`;
+};
+
+const TRADE_UNKNOWN = "Couldn't simulate a trade";
+const SIMULATED = "Simulated in one eth_call against the pool itself; nothing was sent.";
+
+/**
+ * Check 10: buy the token with USDC from its deepest USDC pool and sell it straight back, in one eth_call (see simulate.ts).
+ * Only what that call measured is evidence:
+ * - the buy reverted, or either leg ran out of the gas it was given: `unknown`, since neither says anything about selling;
+ * - the buy went through and the sell reverted: `fail`, "Can't be sold";
+ * - both went through: the finding states the round trip's measured loss. It is a `warn` above the pool's own fees for the
+ *   two swaps plus 3%, or above 5% for a pool whose fee can change (a dynamic-fee or hooked v4 pool, or Aerodrome);
+ * - no DEX, no pool scan, no USDC pool, a pool too thin to measure, and an RPC that refused or ignored the state override or
+ *   failed: `unknown`.
+ */
+export async function checkTrade(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
+  if (!input.dex) return finding("trade", "unknown", "Trades aren't simulated on this network", "No DEX registry is configured here.");
+  if (scan === null) return finding("trade", "unknown", TRADE_UNKNOWN, "The network didn't answer the pool lookup.");
+  return tradeFinding(input, scan, await simulateTrade(input.reader, input.address, scan));
+}
+
+function tradeFinding(input: InspectInput, scan: PoolScan, run: TradeRun): Finding {
+  if (run.kind === "no-pool") {
+    const why = !scan.factoriesAnswered ? FACTORIES_SILENT : (silentNote(scan) ?? "No USDC pool was found to trade against.");
+    return finding("trade", "unknown", TRADE_UNKNOWN, why);
+  }
+  const { pool } = run;
+  const at = { evidenceUrl: `${input.explorerBase}/address/${pool.address}` };
+  const venue = VENUE[pool.version];
+  if (run.kind === "call-reverted") {
+    return finding("trade", "unknown", TRADE_UNKNOWN, "The simulation reverted or ran out of its gas as a whole, which says nothing about selling.", at);
+  }
+  if (run.kind === "no-answer") {
+    return finding("trade", "unknown", TRADE_UNKNOWN, "The RPC didn't run the simulation: it needs eth_call to accept a state override.", at);
+  }
+  if (run.kind === "call-failed") {
+    return finding("trade", "unknown", TRADE_UNKNOWN, "The RPC refused the simulation or didn't answer.", at);
+  }
+  const { result } = run;
+  const toSix = (raw: bigint) => (run.decimals === 18 ? raw / 10n ** 12n : raw);
+  const paid = usdcAmount(run.amount);
+  switch (result.status) {
+    case STATUS.buyReverted:
+      return finding("trade", "unknown", TRADE_UNKNOWN, `Buying with ${paid} USDC on ${venue} reverted, so selling couldn't be tried.`, at);
+    case STATUS.buyOutOfGas:
+      return finding("trade", "unknown", TRADE_UNKNOWN, `Buying on ${venue} used up all the gas the simulation gives it, so selling couldn't be tried.`, at);
+    case STATUS.sellOutOfGas:
+      return finding("trade", "unknown", TRADE_UNKNOWN, `Buying on ${venue} went through, and selling back used up all the gas the simulation gives it, which says nothing either way.`, at);
+    case STATUS.sellReverted:
+      return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${venue} went through; selling the tokens straight back into the same pool reverted.`, at);
+    case STATUS.ok:
+      break;
+    default:
+      return finding("trade", "unknown", TRADE_UNKNOWN, "The simulation answered with a status it never gives.", at);
+  }
+  if (result.spent === 0n) return finding("trade", "unknown", TRADE_UNKNOWN, `The buy on ${venue} took no USDC, so there is no round trip to measure.`, at);
+  const loss = result.received >= result.spent ? 0n : ((result.spent - result.received) * 1_000_000n) / result.spent;
+  const fees = roundTripFee(pool);
+  const line = fees === null ? TRADE_LINE_VARIABLE_FEE : fees + TRADE_SLACK;
+  const spent = usdcAmount(toSix(result.spent));
+  const back = usdcAmount(toSix(result.received));
+  const what =
+    result.bought === 0n
+      ? `Buying with ${spent} USDC on ${venue} delivered no tokens, so nothing could be sold back.`
+      : result.received > result.spent
+        ? `Bought with ${spent} USDC on ${venue} and sold straight back for ${back} USDC, more than went in.`
+        : `Bought with ${spent} USDC on ${venue} and sold straight back for ${back} USDC: ${ppmPct(loss)} lost.`;
+  const unsold = result.bought > 0n && result.sold < result.bought ? " Not every token bought could be sold back." : "";
+  const norm =
+    fees === null
+      ? "This pool's fee can change from one swap to the next, so up to 5% counts as fees."
+      : `The pool's fees for the two swaps come to ${ppmPct(fees)}.`;
+  const detail = `${what}${unsold} ${norm} ${SIMULATED}`;
+  return loss > line
+    ? finding("trade", "warn", `A round trip loses ${ppmPct(loss)}`, detail, at)
+    : finding("trade", "pass", "Bought and sold back in a simulation", detail, at);
 }
