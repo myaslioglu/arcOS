@@ -240,17 +240,16 @@ removed it, and every later deploy must work with the roles below alone.
 
    - No Firestore role: the workflow deploys no indexes and no rules (Deploying, above). Optional cleanup, for a setup
      that gave the deployer `roles/datastore.indexAdmin` on the project with the `arcos` condition of step 3: remove
-     that binding. A conditional binding is removed by its whole condition, title included, so first read the title it
-     was given (the second command prints it), then put it in place of `TITLE`:
+     that binding. `--all` removes every binding of that role for the deployer, whatever its condition, which is safe
+     because the deployer should hold none. The second command checks it: it should print nothing.
 
      ```bash
+     gcloud projects remove-iam-policy-binding arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
+       --role roles/datastore.indexAdmin --all
      gcloud projects get-iam-policy arcos-c80cf --flatten bindings \
        --filter 'bindings.role=roles/datastore.indexAdmin AND bindings.members:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com' \
        --format 'value(bindings.condition.title,bindings.condition.expression)'
-     gcloud projects remove-iam-policy-binding arcos-c80cf \
-       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
-       --role roles/datastore.indexAdmin \
-       --condition 'expression=resource.name=="projects/arcos-c80cf/databases/arcos",title=TITLE'
      ```
 
    - a custom role holding `run.services.getIamPolicy` and `run.services.setIamPolicy`, bound on the function's Cloud
