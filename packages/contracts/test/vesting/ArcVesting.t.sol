@@ -164,16 +164,28 @@ contract ArcVestingTest is VestingTestBase {
         w.renounceOwnership();
     }
 
-    /// Renouncing is OpenZeppelin's default and is kept. It leaves no owner to pay, so every later release reverts
-    /// and the tokens stay in the wallet for good. Pinned so the threat model sees it.
-    function test_renouncingOwnership_strandsTheTokens() public {
+    /// Renouncing is disabled (THREAT-MODEL V2, decided 2026-10-02): it would leave no owner to pay, so every later
+    /// release would revert and the tokens would stay in the wallet for good. It reverts for the owner and changes
+    /// nothing: releases keep paying the owner, and the wallet can still be transferred.
+    function test_renounceOwnership_alwaysReverts_releasesStillPayTheOwner() public {
         ArcVesting w = _createStandard(AMOUNT);
         vm.prank(bob);
+        vm.expectRevert(ArcVesting.RenounceDisabled.selector);
         w.renounceOwnership();
+        assertEq(w.owner(), bob);
+
         vm.warp(w.end());
-        vm.expectRevert(); // the token refuses a transfer to address(0)
+        uint256 before = token.balanceOf(bob);
         w.release(address(token));
-        assertEq(token.balanceOf(address(w)), AMOUNT);
+        assertEq(token.balanceOf(bob) - before, AMOUNT);
+        assertEq(token.balanceOf(address(w)), 0);
+
+        vm.prank(bob);
+        w.transferOwnership(carol);
+        vm.prank(carol);
+        vm.expectRevert(ArcVesting.RenounceDisabled.selector);
+        w.renounceOwnership();
+        assertEq(w.owner(), carol);
     }
 
     // ---------------------------------------------------------------------

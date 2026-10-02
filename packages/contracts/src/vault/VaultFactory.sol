@@ -16,7 +16,7 @@ import {PositionVault} from "./PositionVault.sol";
 /// @title VaultFactory
 /// @notice Creates one vault clone per lock and keeps the registry Inspector reads. Assets go straight from
 /// the user to their vault; the factory never holds them. The owner can only allow-list position managers:
-/// it has no power over any vault.
+/// it has no power over any vault, and it can't renounce ownership (that would freeze the allow-list for good).
 /// @dev Fees come from a FeeController and are paid as native value (`msg.value`, 18 decimals), like the other
 /// ARC.os contracts. The registries are discovery hints, not proofs. Anyone can lock any token for any owner by
 /// paying the flat fee, so a registry can be padded with entries nobody wants; read it in pages (`...Length` and
@@ -64,6 +64,7 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     error OwedNotCollected();
     error PositionNotReceived();
     error HookedPool();
+    error RenounceDisabled();
 
     constructor(address owner_, IFeeController feeController_) Ownable(owner_) {
         if (address(feeController_) == address(0)) revert ZeroFeeController();
@@ -161,6 +162,13 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         _requirePrincipal(manager, m.kind, tokenId);
         if (m.kind == PositionVault.Kind.V4) _requireNoHooks(manager, tokenId);
         emit PositionLocked(owner_, manager, tokenId, vault, unlockAt);
+    }
+
+    /// @notice Disabled. Renouncing would freeze the manager allow-list for good: no manager could ever be added, or
+    /// disallowed again if one turned out to be unsafe. Ownership can still be moved with `transferOwnership` and
+    /// `acceptOwnership`.
+    function renounceOwnership() public view override onlyOwner {
+        revert RenounceDisabled();
     }
 
     /// @notice Every vault made for `owner_` at creation, in order. Unbounded: prefer `vaultsOfLength` and
