@@ -94,6 +94,7 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
     getStorageAt: (address, slot) => watch(() => reader.getStorageAt(address, slot)),
     read: (address, abi, functionName, args, options) => watch(() => reader.read(address, abi, functionName, args, options)),
     blockNumber: () => watch(() => reader.blockNumber()),
+    callWithOverride: (call, overrides) => watch(() => reader.callWithOverride(call, overrides)),
   };
 }
 

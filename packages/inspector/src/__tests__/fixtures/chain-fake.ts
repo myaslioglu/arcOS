@@ -1,6 +1,6 @@
-import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, keccak256, parseAbi } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, keccak256, parseAbi, type Hex } from "viem";
 import { MULTICALL3, UNISWAP_V4 } from "@arcos/chain";
-import { CallReverted, type ChainReader } from "../../types";
+import { CallReverted, type ChainReader, type OverrideCall, type StateOverride } from "../../types";
 
 // The fake answers with its own copies of the ABIs, written out separately from the ones the engine uses: a wrong function
 // signature in the engine then fails a test instead of agreeing with itself.
@@ -12,6 +12,12 @@ const quoterAbi = parseAbi([
   "struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }",
   "struct QuoteExactSingleParams { PoolKey poolKey; bool zeroForOne; uint128 exactAmount; bytes hookData; }",
   "function quoteExactOutputSingle(QuoteExactSingleParams params) returns (uint256 amountIn, uint256 gasEstimate)",
+]);
+const simulatorAbi = parseAbi([
+  "struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }",
+  "struct Trade { uint8 kind; address pool; address token; address usdc; uint256 amount; PoolKey key; }",
+  "struct Result { uint8 status; uint256 spent; uint256 bought; uint256 sold; uint256 received; }",
+  "function simulate(Trade t) returns (Result r)",
 ]);
 const plainAbi = parseAbi([
   "function getPool(address,address,int24) view returns (address)",
@@ -49,6 +55,23 @@ export type FakeChain = {
   multicallReverts?: boolean;
   /** Multicall3's request fails at the transport level. */
   multicallError?: Error;
+  /** The trade simulation's answer. Absent: `0x`, as from a node that ignored the override. */
+  simulation?: FakeSimulation;
+};
+
+/** What the simulator returns, as the fake's own ABI copy decodes it. */
+export type SimResult = { status: number; spent: bigint; bought: bigint; sold: bigint; received: bigint };
+/**
+ * What the trade simulation's eth_call does: return a result; `{ reverts }` (the call itself reverted, or ran out of its gas:
+ * both reach the engine as a CallReverted); `{ fails }` rejects with that error as it is (a transport failure, or a node's
+ * refusal); `{ returns }` answers those raw bytes (`0x` is a node that ignored the override and ran no code).
+ */
+export type FakeSimulation = { result: SimResult } | { reverts: true } | { fails: Error } | { returns: Hex };
+/** One trade simulation the fake received, its calldata decoded with the fake's own ABI copy. */
+export type SimRecord = {
+  call: OverrideCall;
+  overrides: readonly StateOverride[];
+  trade: { kind: number; pool: string; token: string; usdc: string; amount: bigint; key: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string } };
 };
 
 /** What a fake reader was asked, in order (an `aggregate3` counts as one read). */
@@ -57,7 +80,7 @@ export type ReadRecord = { address: string; fn: string; args: readonly unknown[]
 export type BatchRecord = { calls: { target: string; fn: string; args: readonly unknown[] }[] };
 /** One quote request the fake's V4Quoter received. */
 export type QuoteRecord = { poolId: string; zeroForOne: boolean; exactAmount: bigint; gas: bigint | undefined };
-export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[] };
+export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[]; simulations: SimRecord[] };
 
 const lower = (a: string) => a.toLowerCase();
 /** UnexpectedRevertBytes(NotEnoughLiquidity(poolId)), laid out like the bytes read live (fixtures/quoter-reverts.ts). */
@@ -80,6 +103,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
   const asked: ReadRecord[] = [];
   const batches: BatchRecord[] = [];
   const quotes: QuoteRecord[] = [];
+  const simulations: SimRecord[] = [];
   const silent = new Set((f.silent ?? []).map(lower));
   const stateView = lower(UNISWAP_V4.stateView);
   const quoter = lower(UNISWAP_V4.quoter);
@@ -126,6 +150,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
     asked,
     batches,
     quotes,
+    simulations,
     getCode: async (a) => (f.code?.[lower(a)] as `0x${string}` | undefined) ?? null,
     getStorageAt: async () => null,
     read: async (address, _abi, fn, args = [], options) => {
@@ -154,5 +179,14 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
       return plain(address, fn, args);
     },
     blockNumber: async () => 123n,
+    callWithOverride: async (call, overrides) => {
+      const { args } = decodeFunctionData({ abi: simulatorAbi, data: call.data });
+      simulations.push({ call, overrides, trade: args[0] as SimRecord["trade"] });
+      const sim = f.simulation ?? { returns: "0x" };
+      if ("reverts" in sim) throw new CallReverted();
+      if ("fails" in sim) throw sim.fails;
+      if ("returns" in sim) return sim.returns;
+      return encodeFunctionResult({ abi: simulatorAbi, functionName: "simulate", result: sim.result });
+    },
   };
 }

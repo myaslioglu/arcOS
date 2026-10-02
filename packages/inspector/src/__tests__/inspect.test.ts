@@ -71,6 +71,8 @@ function reader(f: Fake): ChainReader {
       if (f.blockNumberError) throw f.blockNumberError;
       return 123n;
     },
+    // A node that ignores the override and runs no code.
+    callWithOverride: async () => "0x",
   };
 }
 

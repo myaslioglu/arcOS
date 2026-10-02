@@ -34,5 +34,20 @@ export function viemReader(client: PublicClient): ChainReader {
       client.readContract({ address, abi, functionName, args, ...(options?.gas === undefined ? {} : { gas: options.gas }) } as Parameters<PublicClient["readContract"]>[0])
         .catch(options?.gas === undefined ? mapReadError : mapCappedReadError),
     blockNumber: () => client.getBlockNumber(),
+    // With `account` and `gas` set, viem never folds this call into a multicall batch.
+    callWithOverride: async (call, overrides) => {
+      try {
+        const { data } = await client.call({
+          account: call.from,
+          to: call.to,
+          data: call.data,
+          gas: call.gas,
+          stateOverride: overrides.map((o) => ({ address: o.address, code: o.code, balance: o.balance })),
+        });
+        return data ?? "0x";
+      } catch (e) {
+        return mapCappedReadError(e);
+      }
+    },
   };
 }

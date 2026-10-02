@@ -11,17 +11,14 @@
  * and record its block here. Launch pools move within minutes (the native pool below had no liquidity about 12 minutes after its
  * `Initialize`), so those only assert that they are found and read.
  */
-import { createPublicClient, http, parseAbi } from "viem";
+import { parseAbi } from "viem";
 import { describe, expect, it } from "vitest";
-import { AERODROME, CHAINS, DEX, EURC, MULTICALL3, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
+import { AERODROME, DEX, EURC, MULTICALL3, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
 import { findPools } from "../src/checks";
 import { inspect } from "../src/inspect";
-import { viemReader } from "../src/reader";
-import type { ChainReader, ExtraPool, InspectInput, PoolScan } from "../src/types";
+import type { ExtraPool, InspectInput, PoolScan } from "../src/types";
+import { client, paced, reader } from "./arc";
 import { NATIVE, quoteInRange, quoterAbi, sqrtRatioAtTick, stateViewAbi, v4PoolId, v4PoolKey } from "../src/v4";
-
-const RPC = "https://rpc.mainnet.arc.io";
-const GAP_MS = 400;
 
 // --- Pinned pools (block = when it was read or emitted; Arc mainnet, 2026-09-29) ---
 
@@ -42,40 +39,6 @@ const HOOKED_POOL = {
 /** Aerodrome Slipstream, WETH / USDC, tick spacing 50. Read around block 23,411,000: tick -197361, liquidity 180,341,565,912,525,016, 521,640.40 USDC. */
 const WETH = "0x128cC466B61f542da60c70e3aA11c10e19B84EDB";
 const AERO_WETH_POOL = "0x6F302dECb49fB30B2D2c609BDD16e04e7Dd096FC";
-
-// --- The client, and the pacing every call goes through ---
-
-const client = createPublicClient({ chain: CHAINS.mainnet, transport: http(RPC, { retryCount: 0, timeout: 30_000 }) });
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-let nextSlot = 0;
-
-/** One call at a time, `GAP_MS` apart; a rate-limit answer (-32005) waits and tries again. */
-async function paced<T>(call: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    const now = Date.now();
-    const slot = Math.max(now, nextSlot);
-    nextSlot = slot + GAP_MS;
-    if (slot > now) await sleep(slot - now);
-    try {
-      return await call();
-    } catch (e) {
-      const said = `${(e as Error)?.message ?? ""} ${(e as { details?: string })?.details ?? ""}`;
-      if (attempt < 5 && /-32005|rate limit/i.test(said)) {
-        await sleep(1_500 * (attempt + 1));
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
-const inner = viemReader(client);
-const reader: ChainReader = {
-  getCode: (a) => paced(() => inner.getCode(a)),
-  getStorageAt: (a, slot) => paced(() => inner.getStorageAt(a, slot)),
-  read: (a, abi, fn, args, options) => paced(() => inner.read(a, abi, fn, args, options)),
-  blockNumber: () => paced(() => inner.blockNumber()),
-};
 
 const input = (address: `0x${string}`, dex: DexConfig | null, extraPools?: ExtraPool[]): InspectInput => ({
   address, network: "mainnet", reader, explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.arc.io", extraPools,
