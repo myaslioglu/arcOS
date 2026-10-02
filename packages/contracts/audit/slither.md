@@ -70,7 +70,7 @@ No finding from the reentrancy detectors that move value (`reentrancy-eth`, `ree
 ### Changes since the first run
 
 The 2026-10-02 contract changes (THREAT-MODEL Q21, Q7 and V2) added one finding and moved line numbers in
-`VaultFactory.sol` and `ArcVesting.sol`; the other 45 findings are the same ones, with the lines below updated:
+`VaultFactory.sol`; the other 45 findings are the same ones, with the lines below updated:
 - new: `unused-return` in `VaultFactory._requireNoHooks`, which reads only the PoolKey of `getPoolAndPositionInfo`;
 - the two `renounceOwnership` overrides (`view`, always reverting) and the `HookedPool` check raised nothing else.
 
@@ -98,7 +98,7 @@ Line numbers are the file's own, as Slither printed them.
 | `VaultFactory._requirePrincipal`: `owed0`, `owed1` (`src/vault/VaultFactory.sol` lines 255-256) | **Justified, intended.** They are set from `positions()` for a v3 position (line 258). A v4 position has no `tokensOwed`, so for `Kind.V4` they stay zero on purpose and the `OwedNotCollected` check (line 263) passes. Tested both ways in `test/vault/PositionFactory.t.sol`. |
 | `DeployR1.deploy`: `present` (`script/DeployR1.s.sol` line 84) | **Justified.** A `bool[5] memory` is zero-initialised, and the first loop (line 86) assigns every element before it is read. |
 
-### `unused-return` (12)
+### `unused-return` (13)
 
 | Finding | Triage |
 |---|---|

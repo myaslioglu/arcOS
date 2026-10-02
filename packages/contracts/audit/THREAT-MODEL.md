@@ -86,22 +86,22 @@ https://www.halborn.com/blog/post/explained-the-gempad-hack-december-2024
 **DxSale, late May 2026, about $7.3M**, on BNB Chain. A 2021 (v1) locker contract held the LP tokens of more than 1,400
 pools. BlockSec traces the drain to its `unlockToken`: the lock period was checked with an `if` rather than a `require`,
 the locked amount was not zeroed after a withdrawal, and the balance check read the contract's whole balance rather than
-the caller's lock, so one lock could be withdrawn again and again until the shared balance was gone. BlockSec and
-rekt.news also report that the locker's owner key had passed to the attacker, who used it to set the lock fee; BlockSec
-judges that this helped but was not needed. *Here:* `withdraw` sends only what the vault itself holds (its live balance,
+the caller's lock, so one lock could be withdrawn again and again until the shared balance was gone. rekt.news
+reports that the locker's owner key had passed to the attacker; BlockSec reports the attacker used it to set the lock
+fee and says the key compromise was not a prerequisite. *Here:* `withdraw` sends only what the vault itself holds (its live balance,
 or its one NFT), only at or after `unlockAt`, and only when the vault's owner calls it; the time check reverts
 (`StillLocked`). There are no books to leave unzeroed: a repeated withdrawal finds nothing left to send. The
 VaultFactory owner has no power over any vault, and a fee change reaches new locks only.
 Sources: https://blocksec.com/blog/web3-security-dxsale-squidrouter-more, https://rekt.news/dxsale-rekt
 
-**Team Finance, 27 October 2022, $15.8M** in rekt.news's tally (early reports said $14.5M), on Ethereum. Team
-Finance's liquidity-lock contract had a `migrate` function, added so projects could move locked Uniswap v2 liquidity
-to v3. By locking a token in the contract, the attacker got past `migrate`'s validation, then migrated other
-projects' locked v2 liquidity, held by the same contract, into v3 pools they had set up at a skewed price, and kept
-the difference that the migration refunded. The function had been in an audit's scope. *Here:* there is no
-migrate, rescue or admin function; nothing moves a lock's asset into a new pool or to anyone but the vault's owner,
-and `packages/chain/src/__tests__/abis.test.ts` pins every vault's exact function list.
-Sources: https://rekt.news/teamfinance-rekt, https://halborn.com/explained-the-team-finance-hack-october-2022/
+**Team Finance, 27 October 2022, $15.8M** per rekt.news, citing PeckShield (Halborn puts it at about $14.5M), on
+Ethereum. Team Finance's liquidity-lock contract had a `migrate` function, added so projects could move locked Uniswap
+v2 liquidity to v3. By locking a token in the contract, the attacker got past `migrate`'s validation, then migrated
+other projects' locked v2 liquidity, held by the same contract, into v3 pools they had set up at a skewed price, and
+kept the difference that the migration refunded. The function had been in an audit's scope. *Here:* there is no migrate,
+rescue or admin function; nothing moves a lock's asset into a new pool or to anyone but the vault's owner, and
+`packages/chain/src/__tests__/abis.test.ts` pins every vault's exact function list. Sources:
+https://rekt.news/teamfinance-rekt, https://halborn.com/explained-the-team-finance-hack-october-2022/
 
 The attack classes, and what this design does to each:
 
