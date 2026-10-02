@@ -551,6 +551,143 @@ describe("deploy.yml, the functions and the indexes", () => {
   });
 });
 
+// The manifest the functions build wrote decides what the CLI deploys, and that build ran the project's code. So the
+// deploy job checks it with jq before it signs in, and refuses anything but the one scheduled function it expects.
+describe("deploy.yml, the check of the functions manifest", () => {
+  const JOBS = "arcos-jobs@arcos-c80cf.iam.gserviceaccount.com";
+  /** The manifest the build writes today (functions/src/__tests__/bundle.test.ts runs the real one through this check). */
+  const good = () => ({
+    specVersion: "v1alpha1",
+    endpoints: {
+      arcosIndexer: {
+        availableMemoryMb: 512,
+        timeoutSeconds: 120,
+        minInstances: null,
+        maxInstances: 1,
+        ingressSettings: null,
+        concurrency: 1,
+        serviceAccountEmail: JOBS,
+        vpc: null,
+        platform: "gcfv2",
+        region: ["europe-west4"],
+        secretEnvironmentVariables: [{ key: "BLOCKSCOUT_API_KEY" }],
+        labels: {},
+        scheduleTrigger: { schedule: "every 1 minutes", retryConfig: { retryCount: 0 }, timeZone: "Etc/UTC" },
+        entryPoint: "arcosIndexer",
+      },
+    },
+    params: [{ type: "secret", name: "BLOCKSCOUT_API_KEY" }],
+    requiredAPIs: [{ api: "cloudscheduler.googleapis.com", reason: "Needed for scheduled functions." }],
+    extensions: {},
+  });
+  const step = () => steps("deploy").find((s) => /- name: Check the functions manifest$/m.test(s));
+  /** The step's literal env values. */
+  const stepEnv = () => Object.fromEntries([...step().matchAll(/^ {10}([A-Z_]+): (\S+)$/gm)].map((m) => [m[1], m[2]]));
+
+  /** Runs the step's script as Actions would, on `text` as the downloaded functions.yaml (none when null). */
+  function check(text) {
+    const [script, ...rest] = runScripts(step());
+    expect(rest).toEqual([]);
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-manifest-"));
+    fs.mkdirSync(path.join(temp, "bundle-functions"));
+    if (text !== null) fs.writeFileSync(path.join(temp, "bundle-functions", "functions.yaml"), text);
+    const env = { PATH: process.env.PATH, RUNNER_TEMP: temp, ...stepEnv() };
+    const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { env, encoding: "utf8" });
+    fs.rmSync(temp, { recursive: true, force: true });
+    return { status: run.status, stdout: run.stdout };
+  }
+  const json = (manifest) => JSON.stringify(manifest, null, 2);
+  /** The good manifest with `change` applied to it. */
+  const changed = (change) => {
+    const manifest = good();
+    change(manifest, manifest.endpoints.arcosIndexer);
+    return json(manifest);
+  };
+  const refused = (text, message) => {
+    const result = check(text);
+    expect(result.status, message.source).not.toBe(0);
+    expect(result.stdout).toMatch(/^::error::functions\.yaml .*, so nothing is deployed/m);
+    expect(result.stdout).toMatch(message);
+  };
+
+  it("runs after the scan and before the bundle is put in place and the sign-in, only when the functions deploy", () => {
+    const list = steps("deploy");
+    const at = (pattern) => list.findIndex((s) => pattern.test(s));
+    const index = at(/- name: Check the functions manifest$/m);
+    expect(index).toBeGreaterThan(at(/scripts\/scan-bundle\.mjs/));
+    expect(index).toBeLessThan(at(/Put the functions bundle in place/));
+    expect(index).toBeLessThan(at(/uses: google-github-actions\/auth@/));
+    expect(step()).toMatch(/^ {8}if: env\.DEPLOY_FUNCTIONS == 'true'$/m);
+    expect(stepEnv()).toEqual({ JOBS_ACCOUNT: JOBS, FUNCTIONS_REGION: "europe-west4", FUNCTIONS_SECRET: "BLOCKSCOUT_API_KEY" });
+  });
+
+  it("uses jq and the shell only: no node, no npm, no project script", () => {
+    const [script] = runScripts(step());
+    expect(script).not.toMatch(/\b(node|npm|npx)\b|scripts\//);
+    expect(script).toMatch(/\bjq -e\b/);
+    expect(script).not.toMatch(/\$\{\{/);
+  });
+
+  it("passes the manifest the build writes, and says what it deploys", () => {
+    const result = check(json(good()));
+    expect(result.status, result.stdout).toBe(0);
+    expect(result.stdout).toMatch(/^functions\.yaml: arcosIndexer, scheduled, as arcos-jobs@arcos-c80cf\.iam\.gserviceaccount\.com, in europe-west4\.$/m);
+    // Optional keys may be absent.
+    expect(check(changed((m, e) => (delete m.extensions, delete m.params, delete e.secretEnvironmentVariables))).status).toBe(0);
+    expect(check(changed((m) => (m.extensions = []))).status).toBe(0);
+  });
+
+  it("refuses a file that is missing, empty, not JSON, or more than one document", () => {
+    refused(null, /is not one JSON object/);
+    refused("", /is not one JSON object/);
+    refused("specVersion: v1alpha1\nendpoints: {}\n", /is not one JSON object/);
+    refused(`${json(good())}\n${json(good())}`, /is not one JSON object/);
+    refused("[]", /is not one JSON object/);
+    refused(json({ specVersion: "v1alpha1" }), /declares no endpoints/);
+    refused(json({ ...good(), endpoints: {} }), /declares no endpoints/);
+  });
+
+  it("refuses an endpoint whose name doesn't start with arcos", () => {
+    refused(changed((m, e) => (m.endpoints = { indexer: e })), /doesn't start with arcos/);
+    refused(changed((m, e) => (m.endpoints.otherIndexer = e)), /doesn't start with arcos/);
+  });
+
+  it("refuses an endpoint that runs as another account, under either key the CLI reads", () => {
+    refused(changed((m, e) => (e.serviceAccountEmail = "other@arcos-c80cf.iam.gserviceaccount.com")), /an account other than arcos-jobs@/);
+    refused(changed((m, e) => delete e.serviceAccountEmail), /an account other than arcos-jobs@/);
+    refused(changed((m, e) => (e.serviceAccount = "other@arcos-c80cf.iam.gserviceaccount.com")), /an account other than arcos-jobs@/);
+    expect(check(changed((m, e) => (e.serviceAccount = JOBS))).status).toBe(0);
+  });
+
+  it("refuses any trigger but a schedule, beside it or in its place", () => {
+    for (const trigger of ["httpsTrigger", "callableTrigger", "eventTrigger", "taskQueueTrigger", "blockingTrigger", "dataConnectGraphqlTrigger"]) {
+      refused(changed((m, e) => (e[trigger] = {})), /triggered by something other than a schedule alone/);
+      refused(changed((m, e) => ((e[trigger] = {}), delete e.scheduleTrigger)), /triggered by something other than a schedule alone/);
+    }
+    refused(changed((m, e) => delete e.scheduleTrigger), /triggered by something other than a schedule alone/);
+    refused(changed((m, e) => (e.scheduleTrigger = "every 1 minutes")), /triggered by something other than a schedule alone/);
+  });
+
+  it("refuses a region other than europe-west4, or more than one", () => {
+    refused(changed((m, e) => (e.region = ["us-central1"])), /outside europe-west4/);
+    refused(changed((m, e) => (e.region = ["europe-west4", "us-central1"])), /outside europe-west4/);
+    refused(changed((m, e) => delete e.region), /outside europe-west4/);
+  });
+
+  it("refuses extensions and lifecycle hooks", () => {
+    refused(changed((m) => (m.extensions = { "an-extension": { ref: "x/y@1.0.0", params: {} } })), /declares extensions/);
+    refused(changed((m) => (m.lifecycleHooks = {})), /declares lifecycle hooks/);
+  });
+
+  it("refuses a param or a secret other than the secret BLOCKSCOUT_API_KEY", () => {
+    refused(changed((m) => m.params.push({ type: "string", name: "BLOCKSCOUT_API_KEY" })), /a param other than the secret BLOCKSCOUT_API_KEY/);
+    refused(changed((m) => (m.params = [{ type: "secret", name: "OTHER_KEY" }])), /a param other than the secret BLOCKSCOUT_API_KEY/);
+    refused(changed((m) => (m.params = [{ type: "int", name: "INSPECT_PER_TICK" }])), /a param other than the secret BLOCKSCOUT_API_KEY/);
+    refused(changed((m, e) => e.secretEnvironmentVariables.push({ key: "OTHER_KEY" })), /a secret other than BLOCKSCOUT_API_KEY/);
+    refused(changed((m, e) => (e.secretEnvironmentVariables = [{ key: "BLOCKSCOUT_API_KEY", secret: "OTHER_KEY" }])), /a secret other than BLOCKSCOUT_API_KEY/);
+  });
+});
+
 describe("the Firebase CLI the deploy runs", () => {
   const tools = "tools/firebase";
   const cli = `${tools}/node_modules/.bin/firebase`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // as a pattern

@@ -1,6 +1,7 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { INDEXER_OPTIONS } from "../indexer/schedule";
@@ -58,6 +59,47 @@ describe("the built codebase", () => {
     expect(external.length).toBeGreaterThan(0);
     for (const id of external) expect(id).toMatch(/^firebase-(functions|admin)(\/|$)/);
     expect(bundle).not.toMatch(/\brequire\(["']firebase-tools/);
+  });
+});
+
+describe("the manifest, as the deploy job checks it", () => {
+  /** The deploy job's "Check the functions manifest" step: its script, and its literal env values. */
+  function manifestCheck(): { script: string; env: Record<string, string> } {
+    const workflow = readFileSync(path.join(ROOT, "../.github/workflows/deploy.yml"), "utf8");
+    const start = workflow.indexOf("      - name: Check the functions manifest\n");
+    expect(start).toBeGreaterThan(0);
+    const rest = workflow.slice(start + 1);
+    const text = rest.slice(0, rest.search(/^ {6}- /m));
+    const env = Object.fromEntries([...text.matchAll(/^ {10}([A-Z_]+): (\S+)$/gm)].map((m) => [m[1]!, m[2]!]));
+    const lines = text.split("\n");
+    const from = lines.findIndex((line) => /^ {8}run: \|$/.test(line));
+    expect(from).toBeGreaterThan(0);
+    const script = lines
+      .slice(from + 1)
+      .filter((line) => line.startsWith("          ") || line.trim() === "")
+      .map((line) => line.slice(10))
+      .join("\n");
+    return { script, env };
+  }
+
+  // The same jq checks, on the manifest this build wrote: a change to the function that the deploy would refuse fails here
+  // first, in CI, before anything reaches the deploy job.
+  it("passes the manifest the build writes", () => {
+    const { script, env } = manifestCheck();
+    expect(Object.keys(env).sort()).toEqual(["FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
+    const temp = mkdtempSync(path.join(os.tmpdir(), "functions-manifest-"));
+    try {
+      mkdirSync(path.join(temp, "bundle-functions"));
+      cpSync(path.join(out, "functions.yaml"), path.join(temp, "bundle-functions", "functions.yaml"));
+      const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+        env: { PATH: process.env.PATH, RUNNER_TEMP: temp, ...env },
+        encoding: "utf8",
+      });
+      expect(run.status, `${run.stdout}${run.stderr}`).toBe(0);
+      expect(run.stdout).toMatch(/^functions\.yaml: arcosIndexer, scheduled, as arcos-jobs@/m);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 });
 
