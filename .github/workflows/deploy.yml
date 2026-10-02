@@ -103,7 +103,8 @@ jobs:
 
   # Builds the bundle of each site this run deploys, which the deploy job scans: one leg per site, as `plan` chose. It
   # installs the project's dependencies and runs the Next.js build, so it gets no credential of any kind: a read-only
-  # token, no environment, no secret, no variable. It runs beside `checks`, and `deploy` waits for both. fail-fast is off so one site's failure doesn't cancel the other's build, whose log is then there to read.
+  # token, no environment, no secret, no variable. It runs beside `checks`, and `deploy` waits for both. fail-fast is
+  # off so one site's failure doesn't cancel the other's build, whose log is then there to read.
   bundle:
     name: Build the ${{ matrix.site }} bundle
     runs-on: ubuntu-24.04

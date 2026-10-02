@@ -231,7 +231,7 @@ describe("deploy.yml, the two sites", () => {
   const MATRIX = "${{ fromJSON(needs.plan.outputs.sites) }}";
   const deployStep = (id) => steps("deploy").find((s) => new RegExp(`^ {8}id: ${id}$`, "m").test(s));
 
-  it("lets a manual run pick the sites, both by default, and a push has no choice: both", () => {
+  it("lets a manual run pick the sites, both by default; a push has no input (plan decides)", () => {
     const triggers = deploy.slice(deploy.indexOf("\non:"), deploy.indexOf("\nconcurrency:"));
     expect(triggers).toMatch(/ {6}targets:\n {8}description: .+\n {8}type: choice\n {8}options:\n {10}- both\n {10}- mainnet\n {10}- testnet\n {8}default: both\n/);
   });
