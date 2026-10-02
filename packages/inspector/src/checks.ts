@@ -784,10 +784,10 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
   const undecided = pools.filter((p) => p.liquid === null);
   if (undecided.length > 0) {
     const why = [
-      undecided.some((p) => p.undecided === "hook-delta")
-        ? `A Uniswap v4 pool was quoted, but its hook can change what a swap pays, so the quote can't be trusted without a trade simulation.`
+      undecided.some((p) => p.undecided === "hook")
+        ? `A Uniswap v4 pool has a hook, which can change what a swap pays, so its liquidity can't be judged without a trade simulation.`
         : null,
-      undecided.some((p) => p.undecided !== "hook-delta") ? `The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.` : null,
+      undecided.some((p) => p.undecided !== "hook") ? `The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.` : null,
       silent,
     ].filter((x): x is string => x !== null);
     return finding("liquidity", "unknown", "Couldn't verify Uniswap v4 liquidity", why.join(" "), { evidenceUrl: `${input.explorerBase}/address/${undecided[0]!.address}` });

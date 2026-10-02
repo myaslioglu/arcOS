@@ -18,7 +18,16 @@ const HOOK = "0x94f8be2402C0e2eb65F3218a7282A5301371E044"; // a real launch hook
 /** Hook addresses carry their permissions in the low 14 bits (v4-core Hooks.sol): 0x80 BEFORE_SWAP, 0x40 AFTER_SWAP, 0x08 BEFORE_SWAP_RETURNS_DELTA, 0x04 AFTER_SWAP_RETURNS_DELTA. */
 const hookWith = (flags: string): `0x${string}` => `0x${"1".repeat(36)}${flags}`;
 const PLAIN_HOOK = hookWith("00c0"); // swap hooks that return no delta
-const DELTA_HOOKS = { "before-swap delta": hookWith("0088"), "after-swap delta": hookWith("0044"), "both deltas": hookWith("00cc") };
+/** Every kind of hook, down to one with no swap permission at all: any of them leaves a pool undecided. */
+const HOOKS = {
+  "before-swap (it can add liquidity just in time)": hookWith("0080"),
+  "after-swap": hookWith("0040"),
+  "before- and after-swap": PLAIN_HOOK,
+  "before-swap delta": hookWith("0088"),
+  "after-swap delta": hookWith("0044"),
+  "both deltas": hookWith("00cc"),
+  "no swap permission": hookWith("0001"),
+};
 const PLAIN = "0x63a9059cbb00"; // PUSH4 transfer, STOP: a token with nothing privileged in it
 const USD = { address: USDC, symbol: "USDC" };
 const EUR = { address: EURC.mainnet, symbol: "EURC" };
@@ -146,7 +155,7 @@ describe("Uniswap v4 discovery", () => {
       const scan = await findPools(inputFor(chain, v4Only, TOKEN, [{ version: "v4", key: hooked }]));
       expect(slots(chain)).toHaveLength(11);
       expect(scan.pools).toHaveLength(1);
-      expect(scan.pools[0]).toMatchObject({ version: "v4", poolId: v4PoolId(hooked), key: hooked, liquid: true });
+      expect(scan.pools[0]).toMatchObject({ version: "v4", poolId: v4PoolId(hooked), key: hooked, liquid: null, undecided: "hook" });
     });
 
     it("ignores a pool it can't use, and a pool it already reads: a duplicate, a standard key, unsorted currencies, another token's pool, a pool against a non-quote, a fee or spacing out of range, a malformed address", async () => {
@@ -231,10 +240,10 @@ describe("Uniswap v4 discovery", () => {
 
 // --- The findings ---
 
-const run = (f: FakeChain, dex: DexConfig | null, token: `0x${string}` = TOKEN, explorer: ExplorerSource | null = null): Promise<Report> =>
+const run = (f: FakeChain, dex: DexConfig | null, token: `0x${string}` = TOKEN, explorer: ExplorerSource | null = null, extraPools?: ExtraPool[]): Promise<Report> =>
   inspect({
     address: token, network: "mainnet", reader: fakeChain({ code: { [token]: PLAIN }, ...f }), explorer, dex, knownLockers: [],
-    explorerBase: "https://explorer.test", now: () => new Date("2026-09-29T00:00:00Z"),
+    explorerBase: "https://explorer.test", now: () => new Date("2026-09-29T00:00:00Z"), extraPools,
   });
 const find = (r: Report, id: Finding["id"]) => r.findings.find((x) => x.id === id)!;
 
@@ -506,28 +515,22 @@ describe("a v4 quote's outcome", () => {
     expect(pool).toMatchObject({ liquid: null, undecided: "quote-unavailable" });
   });
 
-  it("is liquid only for a hook that can't return a delta: none, or a swap hook without the delta flags", async () => {
-    for (const hooks of [NATIVE, PLAIN_HOOK, hookWith("0080"), hookWith("0040")]) {
-      const key = v4PoolKey(USDC, EURC.mainnet, 500, 10, hooks);
-      expect(await scanOf(at1251(), key), hooks).toMatchObject({ liquid: true });
-    }
+  it("is liquid from a quote only for a pool without a hook", async () => {
+    expect(await scanOf(at1251(), v4PoolKey(USDC, EURC.mainnet, 500, 10, NATIVE))).toMatchObject({ liquid: true });
   });
 
-  // v4-core Hooks.sol: BEFORE_SWAP_RETURNS_DELTA_FLAG = 1 << 3 and AFTER_SWAP_RETURNS_DELTA_FLAG = 1 << 2 in the address's low 14 bits.
-  // A before-swap delta can claim the whole exact output without paying it (V4Quoter reverts before the settlement check); an
-  // after-swap delta re-prices what the swapper owes. Either way the quote isn't the pool's own answer.
-  it.each(Object.entries(DELTA_HOOKS))("never counts a quote through a hook with a %s as liquid: quoted but unverified", async (_, hooks) => {
+  // A hook runs inside the swap the quote simulates, so whatever the quote says is the hook's say as much as the pool's. A
+  // before-swap hook can add liquidity just in time and take it out again, a returns-delta hook can claim the output without
+  // the pool paying it (V4Quoter reverts before the settlement check), and any swap hook can revert with NotEnoughLiquidity.
+  it.each(Object.entries(HOOKS))("leaves a pool undecided whatever its quote would say, and doesn't ask, when its hook is %s", async (_, hooks) => {
     const key = v4PoolKey(USDC, EURC.mainnet, 10000, 200, hooks);
-    const pool = await scanOf(at1251(), key);
-    expect(pool).toMatchObject({ liquid: null, undecided: "hook-delta" });
-    expect(pool.depth).toBeGreaterThan(0n);
-  });
-
-  it("still calls a delta hook's pool short when even its own quote says it can't pay", async () => {
-    const key = v4PoolKey(USDC, EURC.mainnet, 10000, 200, DELTA_HOOKS["both deltas"]);
-    const chain = fakeChain({ v4: listed([key, at1251({ quote: undefined })]) });
-    const [pool] = (await findPools(inputFor(chain, v4Only, EURC.mainnet, [{ version: "v4", key }]))).pools;
-    expect(pool).toMatchObject({ liquid: false });
+    for (const quote of [undefined, { reverts: NOT_ENOUGH_LIQUIDITY }, { amountIn: 1n }] as const) {
+      const chain = fakeChain({ v4: listed([key, at1251({ quote })]) });
+      const [pool] = (await findPools(inputFor(chain, v4Only, EURC.mainnet, [{ version: "v4", key }]))).pools;
+      expect(pool).toMatchObject({ liquid: null, undecided: "hook" });
+      expect(pool!.depth).toBeGreaterThan(0n);
+      expect(chain.quotes).toEqual([]);
+    }
   });
 
   it("gives each pool's quote its own failure: one that fails leaves the others' answers alone", async () => {
@@ -559,10 +562,10 @@ describe("the liquidity finding when a v4 pool's liquidity is undecided", () => 
       extraPools,
     });
 
-  it("reads unknown, quoted but unverified, when the only pool that can be quoted has a hook that returns a delta", async () => {
+  it("reads unknown when the only pool has a hook", async () => {
     const r = await runWith({ v4: listed([delta, at1251()]) }, v4Only, extra);
     expect(find(r, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't verify Uniswap v4 liquidity" });
-    expect(find(r, "liquidity").detail).toContain("hook can change what a swap pays");
+    expect(find(r, "liquidity").detail).toContain("has a hook, which can change what a swap pays");
     expect(find(r, "liquidity").detail).toContain("trade simulation");
   });
 
@@ -576,11 +579,14 @@ describe("the liquidity finding when a v4 pool's liquidity is undecided", () => 
     const pass = await runWith({ reads: v3Pool, v4: listed([delta, at1251()]) }, uniswapAll, extra);
     expect(find(pass, "liquidity")).toMatchObject({ status: "pass", title: "5,000 USDC of liquidity on Uniswap v3" });
 
-    const thin = await runWith({ v4: listed([key, at1251({ quote: undefined })], [delta, at1251({ quote: undefined })]) }, v4Only, extra);
+    const thin = await runWith({ v4: listed([key, at1251({ quote: undefined })]) }, v4Only);
     expect(find(thin, "liquidity")).toMatchObject({ status: "warn", title: "Thin liquidity" });
 
-    const mixed = await runWith({ v4: listed([key, at1251({ quote: undefined })], [delta, at1251()]) }, v4Only, extra);
-    expect(find(mixed, "liquidity").status).toBe("unknown");
+    // A hooked pool's "can't pay" is the hook's as much as the pool's, so it is never the evidence for "thin".
+    for (const hooked of [at1251({ quote: undefined }), at1251()]) {
+      const mixed = await runWith({ v4: listed([key, at1251({ quote: undefined })], [delta, hooked]) }, v4Only, extra);
+      expect(find(mixed, "liquidity").status).toBe("unknown");
+    }
   });
 });
 
@@ -596,7 +602,7 @@ describe("the lp-lock finding beside a deeper pool", () => {
     [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
     [readKey(PAIR, "balanceOf", [DEAD])]: lpBurned,
   });
-  const lpLock = async (f: FakeChain) => find(await run(f, both), "lp-lock");
+  const lpLock = async (f: FakeChain, extraPools?: ExtraPool[]) => find(await run(f, both, TOKEN, null, extraPools), "lp-lock");
   const v3With = (depth: bigint) => ({ [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: POOL, [readKey(USDC, "balanceOf", [POOL])]: depth });
   const aeroWith = (depth: bigint) => ({ [readKey(AERODROME.clFactory, "getPool", [TOKEN, USDC, 50])]: POOL, [readKey(USDC, "balanceOf", [POOL])]: depth });
   const key = v4PoolKey(TOKEN, USDC, 500, 10);
@@ -622,6 +628,12 @@ describe("the lp-lock finding beside a deeper pool", () => {
     expect(liquid.detail).toBe("A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.");
     const undecided = await lpLock({ reads: pair(100n, 5_000_000_000n), v4: listed([key, at1251({ quote: { reverts: EMPTY_INNER_REASON } })]) });
     expect(undecided.status).toBe("unknown");
+  });
+
+  it("never passes beside a hooked v4 pool, even one whose hook says it can't pay", async () => {
+    const hooked = v4PoolKey(TOKEN, USDC, 10000, 200, HOOKS["before-swap (it can add liquidity just in time)"]);
+    const f = await lpLock({ reads: pair(100n, 5_000_000_000n), v4: listed([hooked, at1251({ quote: undefined })]) }, [{ version: "v4", key: hooked }]);
+    expect(f).toMatchObject({ status: "unknown", fixAppId: null });
   });
 
   it("passes beside a v4 pool that decisively can't pay, when the pair is liquid", async () => {

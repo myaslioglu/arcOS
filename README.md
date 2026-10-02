@@ -161,9 +161,9 @@ but does have privileged functions, both the ownership and privileges findings r
   signature appear in neither list isn't detected.
 - A Uniswap v4 pool counts as liquid when the v4 quoter can pay out 1,000 units of the quote
   currency, USDC or EURC, from it, each quote within a gas limit of its own. It counts as thin only
-  when the quoter says the pool itself hasn't enough liquidity; a quote that fails any other way, or
-  one through a hook that can return a swap delta (and so claim the output without the pool paying
-  it), reads "unknown" until a trade simulation can judge it. Next to that, Inspector shows what
+  when the quoter says the pool itself hasn't enough liquidity; a quote that fails any other way reads
+  "unknown". A pool with a hook reads "unknown" too, until a trade simulation can judge it: the hook
+  runs inside the swap, so it could make a quote say either. Next to that, Inspector shows what
   is "in range": what the pool's active liquidity holds between the current price and the edge of its
   current tick range. That is an exact figure for that range and no more, so it is often far less than
   what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts as liquid from 1,000 units of

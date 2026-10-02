@@ -88,13 +88,13 @@ export type Pool = {
   depth: bigint;
   /**
    * The pool alone can pay out 1,000 units of the quote currency. v2, v3 and Aerodrome: `depth` is at least that. v4: a
-   * V4Quoter exact-output quote for that amount succeeded and no hook could have faked it. `null` is undecided (see
-   * `undecided`); `false` is only ever the pool's own "not enough liquidity".
+   * pool without a hook, and a V4Quoter exact-output quote for that amount succeeded. `null` is undecided (see `undecided`);
+   * `false` is only ever a hookless pool's own "not enough liquidity".
    */
   liquid: boolean | null;
-  /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. "hook-delta": it
-   * paid, but through a hook that can return a delta, which can claim the output without the pool holding it. */
-  undecided?: "quote-unavailable" | "hook-delta";
+  /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. "hook": the
+   * pool has a hook, which runs inside any swap and so could fake a quote either way; it isn't quoted. */
+  undecided?: "quote-unavailable" | "hook";
   /** v4 only. */
   poolId?: Hex;
   key?: PoolKey;

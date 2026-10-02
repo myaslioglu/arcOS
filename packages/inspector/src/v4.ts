@@ -173,12 +173,13 @@ const UNEXPECTED_REVERT_BYTES = "0x6190b2b0";
 /** `NotEnoughLiquidity(bytes32 poolId)`: the pool's own "I can't pay that". */
 const NOT_ENOUGH_LIQUIDITY = "0x7a5ed734";
 /**
- * v4-core `src/libraries/Hooks.sol`: a hook's permissions are the low 14 bits of its address, and
- * `BEFORE_SWAP_RETURNS_DELTA_FLAG = 1 << 3`, `AFTER_SWAP_RETURNS_DELTA_FLAG = 1 << 2`. A before-swap delta can claim the
- * exact output without the pool paying it (V4Quoter reverts with the quote before the settlement check); an after-swap delta
- * re-prices what the swapper owes.
+ * A pool with a hook is never judged from a quote. The hook runs inside the swap the quote simulates (v4-core
+ * `src/libraries/Hooks.sol`), so the quote is the hook's answer as much as the pool's: a before-swap hook (1 << 7) can add
+ * liquidity just in time and take it out again, a returns-delta hook (1 << 3, 1 << 2) can claim the output without the pool
+ * paying it (V4Quoter reverts with the quote before the settlement check), and any swap hook can revert with
+ * NotEnoughLiquidity. So "liquid" would be fakeable, and so would "thin". Only the zero address is no hook.
  */
-const HOOK_DELTA_FLAGS = 0b1100n;
+const hasHook = (key: PoolKey): boolean => BigInt(key.hooks) !== 0n;
 
 /** True only for the pool's own NotEnoughLiquidity, for this pool: anything else (an inner out-of-gas, another error) says nothing. */
 function isPoolShort(data: Hex | null, poolId: Hex): boolean {
@@ -198,9 +199,9 @@ function isPoolShort(data: Hex | null, poolId: Hex): boolean {
  * 2. For each pool that exists, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call
  *    with `QUOTE_GAS`: a quote walks tick words, so one pool that plants an empty tick-spacing-1 range would starve the
  *    others in a shared call, and its failure stays its own. Only the pool's own NotEnoughLiquidity means it can't pay
- *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable"). A quote
- *    through a hook that can return a delta is unverified, since the hook can claim the output without the pool paying it
- *    (`liquid: null`, "hook-delta"). `depth` is the in-range amount, shown as such; it doesn't decide anything.
+ *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable"). A pool with
+ *    a hook isn't quoted at all: whatever its quote said would be the hook's to fake, so it is undecided (`liquid: null`,
+ *    "hook") until a trade simulation can judge it. `depth` is the in-range amount, shown as such; it doesn't decide anything.
  * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure there rejects.
  */
 export async function readV4Pools(a: {
@@ -243,11 +244,12 @@ export async function readV4Pools(a: {
     live.map(async (c): Promise<Pool> => {
       const held = quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: c.liquidity, quoteIsCurrency0: c.quoteIsCurrency0 });
       const base = { address: a.v4.poolManager, version: "v4" as const, quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), poolId: c.id, key: c.key };
+      if (hasHook(c.key)) return { ...base, liquid: null, undecided: "hook" };
       try {
         // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
         const params = { poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" };
         await a.reader.read(a.v4.quoter, quoterAbi, "quoteExactOutputSingle", [params], { gas: QUOTE_GAS });
-        return (BigInt(c.key.hooks) & HOOK_DELTA_FLAGS) !== 0n ? { ...base, liquid: null, undecided: "hook-delta" } : { ...base, liquid: true };
+        return { ...base, liquid: true };
       } catch (e) {
         if (e instanceof CallReverted && isPoolShort(e.data, c.id)) return { ...base, liquid: false };
         return { ...base, liquid: null, undecided: "quote-unavailable" };
