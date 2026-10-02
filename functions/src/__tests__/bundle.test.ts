@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { INDEXER_OPTIONS } from "../indexer/schedule";
@@ -57,6 +58,30 @@ describe("the built codebase", () => {
     expect(external.length).toBeGreaterThan(0);
     for (const id of external) expect(id).toMatch(/^firebase-(functions|admin)(\/|$)/);
     expect(bundle).not.toMatch(/\brequire\(["']firebase-tools/);
+  });
+});
+
+describe("the manifest, as the pinned Firebase CLI reads it", () => {
+  // tools/firebase: the CLI the deploy job runs (installed with `npm ci --ignore-scripts --prefix tools/firebase`).
+  const tools = path.resolve(ROOT, "../tools/firebase");
+  const installed = existsSync(path.join(tools, "node_modules/firebase-tools/package.json"));
+
+  it.runIf(installed)("is read from functions.yaml, without loading the code, as one schedule-triggered endpoint", async () => {
+    const cliRequire = createRequire(path.join(tools, "package.json"));
+    const before = process.noDeprecation;
+    process.noDeprecation = true; // one of the CLI's dependencies loads Node's deprecated punycode
+    const discovery = cliRequire("firebase-tools/lib/deploy/functions/runtimes/discovery") as {
+      detectFromYaml(dir: string, project: string, runtime: string): Promise<{ endpoints: Record<string, Record<string, unknown>> } | undefined>;
+    };
+    process.noDeprecation = before;
+    const build = await discovery.detectFromYaml(out, "demo-arcos", "nodejs22");
+    expect(Object.keys(build?.endpoints ?? {})).toEqual(["arcosIndexer"]);
+    expect(build!.endpoints.arcosIndexer).toMatchObject({
+      platform: "gcfv2",
+      region: ["europe-west4"],
+      serviceAccount: INDEXER_OPTIONS.serviceAccount,
+      scheduleTrigger: { schedule: "every 1 minutes", timeZone: "Etc/UTC" },
+    });
   });
 });
 
