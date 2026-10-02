@@ -192,7 +192,7 @@ function isPoolShort(data: Hex | null, poolId: Hex): boolean {
 }
 
 /**
- * `token`'s v4 pools against each quote currency: two round trips for the state, then one quote per pool that exists.
+ * `token`'s v4 pools against each quote currency: one round trip for the state, then one quote per pool that exists, all at once.
  * 1. One multicall of `StateView.getSlot0` and `getLiquidity` for every candidate: the standard hookless keys and the
  *    index's pools. A pool whose `sqrtPriceX96` is 0 was never initialised.
  * 2. For each pool that exists, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call

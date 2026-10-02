@@ -68,10 +68,10 @@ public explorer, which refuses the server on mainnet, so the list answers "Could
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
 and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the
-network.
-build`. `npm run test:emulator -w @arcos/data` runs the Firestore suite against the local emulator;
-it needs Java 21 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase
-CLI in `tools/firebase`, which the root install leaves out: install it once with
+network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
+test:emulator -w @arcos/data` runs the Firestore suite against the local emulator; it needs Java 21
+or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase CLI in
+`tools/firebase`, which the root install leaves out: install it once with
 `npm ci --ignore-scripts --prefix tools/firebase`.
 
 The end-to-end smoke suite (`e2e/`, Playwright in Chromium) runs against a production build: `NEXT_PUBLIC_ARC_NETWORK=mainnet npm run build` (CI builds with
@@ -160,7 +160,10 @@ but does have privileged functions, both the ownership and privileges findings r
 - Privileged functions are recognised by selector and by verified-ABI name; one whose name and
   signature appear in neither list isn't detected.
 - A Uniswap v4 pool counts as liquid when the v4 quoter can pay out 1,000 units of the quote
-  currency, USDC or EURC, from it, through the pool's own hooks. Next to that, Inspector shows what
+  currency, USDC or EURC, from it, each quote within a gas limit of its own. It counts as thin only
+  when the quoter says the pool itself hasn't enough liquidity; a quote that fails any other way, or
+  one through a hook that can return a swap delta (and so claim the output without the pool paying
+  it), reads "unknown" until a trade simulation can judge it. Next to that, Inspector shows what
   is "in range": what the pool's active liquidity holds between the current price and the edge of its
   current tick range. That is an exact figure for that range and no more, so it is often far less than
   what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts as liquid from 1,000 units of
@@ -196,7 +199,8 @@ but does have privileged functions, both the ownership and privileges findings r
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
 - Liquidity lock detection only reads Uniswap v2 LP token balances. Positions in v3, v4 and Aerodrome
-  pools can't be read without an index yet, so a token with only those pools reads "unknown" for it.
+  pools can't be read without an index yet, so a token with only those pools reads "unknown" for it,
+  and so does a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
   Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
   the name.
