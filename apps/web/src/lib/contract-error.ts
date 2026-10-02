@@ -165,6 +165,10 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
   ZeroAmount: () => "An amount in this batch is zero.",
   ReentrancyGuardReentrantCall: () => "That action is already in progress.",
 
+  // --- VaultFactory (R1). Its other errors are mapped when the Vault app ships; RenounceDisabled is declared on
+  // VaultFactory and ArcVesting too, with the same meaning, so the FeeController sentence above serves all three. ---
+  HookedPool: () => "This position is in a Uniswap v4 pool with hooks, which can't be locked.",
+
   // --- Shared between TokenFactory and Multisend (declared identically in both ABIs) ---
   FeeTransferFailed: () => "The fee couldn't be forwarded to the fee recipient. Try again later.",
   ZeroFeeController: () => "The fee controller address can't be zero.",
