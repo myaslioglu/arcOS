@@ -583,3 +583,57 @@ describe("the liquidity finding when a v4 pool's liquidity is undecided", () => 
     expect(find(mixed, "liquidity").status).toBe("unknown");
   });
 });
+
+describe("the lp-lock finding beside a deeper pool", () => {
+  const DEAD = "0x000000000000000000000000000000000000dead";
+  const PAIR = "0x4444444444444444444444444444444444444444";
+  const both = { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4, aero: AERODROME } satisfies DexConfig;
+  const pair = (lpBurned: bigint, depth: bigint) => ({
+    ...noPools(both, TOKEN),
+    [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
+    [readKey(USDC, "balanceOf", [PAIR])]: depth,
+    [readKey(PAIR, "totalSupply", [])]: 100n,
+    [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
+    [readKey(PAIR, "balanceOf", [DEAD])]: lpBurned,
+  });
+  const lpLock = async (f: FakeChain) => find(await run(f, both), "lp-lock");
+  const v3With = (depth: bigint) => ({ [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: POOL, [readKey(USDC, "balanceOf", [POOL])]: depth });
+  const aeroWith = (depth: bigint) => ({ [readKey(AERODROME.clFactory, "getPool", [TOKEN, USDC, 50])]: POOL, [readKey(USDC, "balanceOf", [POOL])]: depth });
+  const key = v4PoolKey(TOKEN, USDC, 500, 10);
+
+  it("passes when the burned pair is the token's deepest pool (as it always did)", async () => {
+    expect(await lpLock({ reads: { ...pair(100n, 5_000_000_000n), ...v3With(500_000_000n) } })).toMatchObject({ status: "pass", fixAppId: null });
+    expect(await lpLock({ reads: pair(100n, 5_000_000_000n) })).toMatchObject({ status: "pass" });
+  });
+
+  it("reads unknown when a deeper Uniswap v3 pool's positions can't be read, though the small pair is burned", async () => {
+    const f = await lpLock({ reads: { ...pair(100n, 500_000_000n), ...v3With(5_000_000_000n) } });
+    expect(f).toMatchObject({ status: "unknown", fixAppId: null, detail: "The deepest pool is a Uniswap v3 position, which can't be read without an index yet." });
+  });
+
+  it("says the same of a deeper Aerodrome pool", async () => {
+    const f = await lpLock({ reads: { ...pair(100n, 500_000_000n), ...aeroWith(5_000_000_000n) } });
+    expect(f).toMatchObject({ status: "unknown", detail: "The deepest pool is an Aerodrome position, which can't be read without an index yet." });
+  });
+
+  it("can't rank a v4 pool by its in-range figure, so a v4 pool that may hold more blocks the pass", async () => {
+    const liquid = await lpLock({ reads: pair(100n, 5_000_000_000n), v4: listed([key, at1251()]) });
+    expect(liquid).toMatchObject({ status: "unknown", fixAppId: null });
+    expect(liquid.detail).toBe("A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.");
+    const undecided = await lpLock({ reads: pair(100n, 5_000_000_000n), v4: listed([key, at1251({ quote: { reverts: EMPTY_INNER_REASON } })]) });
+    expect(undecided.status).toBe("unknown");
+  });
+
+  it("passes beside a v4 pool that decisively can't pay, when the pair is liquid", async () => {
+    expect((await lpLock({ reads: pair(100n, 5_000_000_000n), v4: listed([key, at1251({ quote: undefined })]) })).status).toBe("pass");
+  });
+
+  it("still fails an unlocked pair whatever else exists: the v2 LP is a fact", async () => {
+    const f = await lpLock({ reads: { ...pair(10n, 500_000_000n), ...v3With(5_000_000_000n) } });
+    expect(f).toMatchObject({ status: "fail", title: "Liquidity isn't locked", fixAppId: "vault" });
+  });
+
+  it("treats an equally deep pool as no rival", async () => {
+    expect((await lpLock({ reads: { ...pair(100n, 5_000_000_000n), ...v3With(5_000_000_000n) } })).status).toBe("pass");
+  });
+});
