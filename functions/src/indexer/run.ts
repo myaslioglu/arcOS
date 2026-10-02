@@ -3,6 +3,7 @@ import type { Address, NetworkId } from "@arcos/chain";
 import { v4PoolKeys, type IndexerDoc, type TokenDoc } from "@arcos/data";
 import { indexedPools } from "@arcos/data/server";
 import type { ExtraPool, PoolScan, Report } from "@arcos/inspector";
+import { errorFields, nameOf } from "./errors";
 import { decodeLogs, sourcesFor } from "./events";
 import { afterFailure, expired, pickQueue } from "./queue";
 import { bestPoolOf, summarize } from "./report";
@@ -90,9 +91,6 @@ export type RunResult =
 
 const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
-/** The error's name only: a node's or an explorer's message could carry its URL. */
-const nameOf = (e: unknown): string => (e instanceof Error ? e.name : "unknown");
-
 /**
  * One indexer run (design 1.3, "One arcosIndexer run"):
  * 1. reads indexer/{network} and takes the run's lease, and stops if it is paused or halted, or if another run's lease is
@@ -177,7 +175,7 @@ async function leased(
         span = shrink(width, e.suggested);
         continue;
       }
-      log.warn("arcosIndexer window failed", { from: window.from, to: window.to, error: nameOf(e) });
+      log.warn("arcosIndexer window failed", { from: window.from, to: window.to, ...errorFields(e) });
       break;
     }
     windows++;
@@ -241,13 +239,13 @@ async function leased(
           // No contract at the address: asking again won't change that.
           const next = name === "NotAContract" ? { ...expired(token.inspect), attempts: token.inspect.attempts + 1 } : afterFailure(token.inspect);
           await setInspect(db, token, next);
-          log.warn("arcosIndexer inspection failed", { error: name, attempts: next.attempts });
+          log.warn("arcosIndexer inspection failed", { ...errorFields(e), attempts: next.attempts });
         }
       }
     }
   } catch (e) {
     error = nameOf(e);
-    log.error("arcosIndexer inspections stopped", { error });
+    log.error("arcosIndexer inspections stopped", errorFields(e));
   }
 
   // 6. The Radar feeds, then the end of the run, which gives the lease back.
@@ -256,7 +254,7 @@ async function leased(
     feeds = await updateFeeds(db, network, [...changed.values()], now());
   } catch (e) {
     error ??= nameOf(e);
-    log.error("arcosIndexer feeds failed", { error: nameOf(e) });
+    log.error("arcosIndexer feeds failed", errorFields(e));
   }
   await finishRun(db, network, now(), { day: today, calls: spent - before }, runId);
 

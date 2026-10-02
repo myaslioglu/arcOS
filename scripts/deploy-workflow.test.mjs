@@ -909,7 +909,7 @@ describe("the end-to-end smoke job in ci.yml", () => {
 describe("docs/OPERATIONS.md, the CLI version run by npx", () => {
   it("runs the version pinned in tools/firebase/package.json", () => {
     const pinned = JSON.parse(read("tools/firebase/package.json")).dependencies["firebase-tools"];
-    const used = [...read("docs/OPERATIONS.md").matchAll(/npx -y firebase-tools@(\S+)/g)].map((m) => m[1]);
+    const used = [...read("docs/OPERATIONS.md").matchAll(/npx -y firebase-tools@([^\s`]+)/g)].map((m) => m[1]);
     expect(used.length).toBeGreaterThan(0);
     for (const version of used) expect(version).toBe(pinned);
   });

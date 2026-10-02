@@ -59,11 +59,12 @@ the Inspector reads that as "no indexed pools".
    back if it is still this run's.
 
 Once the window phase (steps 2 to 4) is over, steps 6 and 7 run whatever fails in step 5, and a failure in step 6
-doesn't stop step 7; the error's name is in the run's log line (`error`). Before that, they don't: a run that can't read
-the head, halts, or fails to write a window's pools, tokens or cursor ends there, with no feed update and no
-`lastRunAt`. It has spent no explorer call yet, so the day's count loses nothing, and the next run reads the window
-again. Such a run gives the lease back on its way out (best effort), and a run that died holding it leaves a lease that
-expires on its own.
+doesn't stop step 7; the error's name is in the run's log line (`error`), with its `code` when it has one, and, for a
+Firestore error, its `details` cut to 200 characters (never the message, which could carry a node's URL). Before that,
+they don't: a run that can't read the head, halts, or fails to write a window's pools, tokens or cursor ends there,
+with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's count loses nothing, and the
+next run reads the window again. Such a run gives the lease back on its way out (best effort), and a run that died
+holding it leaves a lease that expires on its own.
 
 The indexer records pools, not their depth: `pools.depthUsdc` and `pools.sampledAt` stay `null` in R1. A token's best
 pool and its depth come from its inspection (`tokens.bestPool`).
@@ -136,12 +137,13 @@ again.
 
 ## Setting it up
 
-Once, before `ARCOS_FUNCTIONS_READY` is set. The deployer is `arcos-deployer@arcos-c80cf.iam.gserviceaccount.com`
-([DEPLOYING.md](DEPLOYING.md)). Its roles below come from what the pinned Firebase CLI (`tools/firebase`) calls when it
-deploys a scheduled 2nd-gen function, and from what the first functions deploy (2026-10-02) was refused; the files named
-are under `tools/firebase/node_modules/firebase-tools/lib`. The deployer doesn't hold `roles/editor`: the owner granted
-it for a while to get the first deploy through, then removed it, and every later deploy must work with the roles below
-alone.
+Once, before the first functions deploy. The deploy workflow refuses `targets: functions` until the repository
+variable `ARCOS_FUNCTIONS_READY` is `true`, so the variable is set (step 7) before that deploy (step 8). The deployer is
+`arcos-deployer@arcos-c80cf.iam.gserviceaccount.com` ([DEPLOYING.md](DEPLOYING.md)). Its roles below come from what the
+pinned Firebase CLI (`tools/firebase`) calls when it deploys a scheduled 2nd-gen function, and from what the first
+functions deploy (2026-10-02) was refused; the files named are under `tools/firebase/node_modules/firebase-tools/lib`.
+The deployer doesn't hold `roles/editor`: the owner granted it for a while to get the first deploy through, then
+removed it, and every later deploy must work with the roles below alone.
 
 1. The database `arcos` exists, with its rules and indexes deployed once (the Firestore foundation's steps).
 2. A budget alert on the billing account: `arcos` pays from its first operation.
@@ -189,7 +191,8 @@ alone.
 
      ```bash
      gcloud projects add-iam-policy-binding arcos-c80cf \
-       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" --role roles/firebase.viewer
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" --role roles/firebase.viewer \
+       --condition=None
      ```
 
    - a custom role holding `secretmanager.secrets.get`, `secretmanager.versions.get` and
@@ -226,7 +229,7 @@ alone.
      `deploy/functions/release/fabricator.js` `createV2Function`, `gcp/run.js` `setInvokerCreate`), and an update reads
      it and sets it only when the binding differs (`fabricator.js` `updateV2Function`, `gcp/run.js`
      `setInvokerUpdate`). Not `roles/run.admin` on the project: that would let the deployer change every Cloud Run
-     service of the other services in the project. A project binding limited by an IAM condition on the service's name
+     service in the project. A project binding limited by an IAM condition on the service's name
      (`resource.name.startsWith(".../services/arcos")`) was tried and did not match: the first deploy was refused with
      "Failed to set the IAM Policy on the Service
      projects/arcos-c80cf/locations/europe-west4/services/arcosindexer". The binding on the service replaces it.
@@ -237,7 +240,18 @@ alone.
        --permissions run.services.getIamPolicy,run.services.setIamPolicy --stage GA
      ```
 
-     The service exists only once the function does, so its two bindings come after the first deploy (below).
+     The service exists only once the function does, so its two bindings come after the first deploy (step 8).
+
+     Optional cleanup, for a setup that made the earlier conditional project binding of this role: remove it, if it
+     exists.
+
+     ```bash
+     gcloud projects remove-iam-policy-binding arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
+       --role projects/arcos-c80cf/roles/arcosRunInvokerAdmin \
+       --condition 'expression=resource.name.startsWith("projects/arcos-c80cf/locations/europe-west4/services/arcos"),title=arcos Cloud Run services only'
+     ```
+
    - No Artifact Registry role (see step 6).
 6. The cleanup policy of the functions' image repository, set by the owner. In Cloud Shell, which has no
    `tools/firebase`, run the CLI at the version pinned in `tools/firebase/package.json`:
@@ -246,16 +260,22 @@ alone.
    npx -y firebase-tools@15.32.0 functions:artifacts:setpolicy --location europe-west4 --project arcos-c80cf
    ```
 
+   npx pins the CLI's version but not its dependency tree (that is what `tools/firebase/package-lock.json` does for the
+   workflow), which is fine for a one-off command the owner runs.
+
    After a deploy, the CLI reads the `gcf-artifacts` repository of `europe-west4` to check its cleanup policy
    (`deploy/functions/release/index.js`, `setupArtifactCleanupPolicies`). The deployer can't read it, so that check
    fails quietly and the deploy goes on; the policy is never set by the deploy. (A deployer that could read the
    repository, as under `roles/editor`, would find no policy and, non-interactive, stop the deploy with an error.)
    Without it, old images pile up and are billed. The repository is created by the first functions build: if the
    command says it doesn't exist yet, run it again right after the first deploy.
-7. The first deploy, in two runs (Actions, Deploy, Run workflow, `targets: functions`):
+7. The repository variable `ARCOS_FUNCTIONS_READY` set to `true`.
+8. The first deploy, in two runs (Actions, Deploy, Run workflow, `targets: functions`):
    1. The first run creates the function and then fails at "set invoker": the deployer has no binding on a service that
       didn't exist a moment before. `arcosIndexer` then exists with no `roles/run.invoker` binding and no Scheduler job
-      (the CLI creates the job after the function's create step, which didn't finish), so nothing runs.
+      (the CLI creates the job after the function's create step, which didn't finish), so nothing runs. Until the
+      owner adds the bindings below, a push to `main` also deploys the functions (after the sites) and fails at "set
+      invoker" the same way.
    2. The owner adds the two bindings on the service: the deployer's custom role, and `roles/run.invoker` for
       `arcos-jobs@`:
 
@@ -274,7 +294,6 @@ alone.
    its invoker binding with a policy that replaces the service's whole policy (`setInvokerCreate`), so no binding can be
    placed ahead of it. If the function is ever deleted and created again, its service is new, and the same two runs
    apply.
-8. The repository variable `ARCOS_FUNCTIONS_READY` set to `true`.
 
 The deploy log's warning "Couldn't find firebase-functions package in your source code" is expected: the deploy hands
 the CLI the built bundle without its `node_modules`, and Cloud Build installs the packages.
@@ -290,9 +309,6 @@ To check on the next deploy, the first without `roles/editor`:
 - The first deploy logged that it ensured `arcos-jobs@` access to `BLOCKSCOUT_API_KEY`. The CLI logs that whether or
   not it wrote the binding, so check step 3's binding is in place (the command in step 3). Later deploys don't touch the
   secret's policy while `arcos-jobs@` already runs the function.
-- On a codebase's first deploy only, the CLI also checks the project's IAM policy for the Pub/Sub and Compute service
-  agents' roles (`deploy/functions/checkIam.js` `ensureServiceAgentRoles`). Later deploys skip it, since `arcosIndexer`
-  exists.
 - Any other refusal names its permission: add it to the narrowest role above that fits, never `roles/editor`.
 
 After the first deploy, check the Scheduler job (below): its OIDC account must be `arcos-jobs@`. It is fixed when the job
