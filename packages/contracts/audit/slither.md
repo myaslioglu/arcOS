@@ -1,6 +1,6 @@
 # Slither: 4rc.OS R1 contracts
 
-**Result: 45 findings on the in-scope code, none a defect.** 33 are in the contracts and 12 in the deployment
+**Result: 46 findings on the in-scope code, none a defect.** 34 are in the contracts and 12 in the deployment
 script. Each one is triaged below: none needed a fix, and each is justified with a reason and a code reference.
 Nothing in the contract sources was changed for this report.
 
@@ -10,11 +10,12 @@ Nothing in the contract sources was changed for this report.
 |---|---|
 | Slither | 0.11.6 (`slither-analyzer` from PyPI; crytic-compile 0.4.2, solc-select 1.2.0), in a throwaway virtualenv |
 | Compiler | solc 0.8.30, `--optimize --optimize-runs 200 --evm-version cancun` (the settings in `foundry.toml`) |
-| Source | the draft's base commit, `main` at `5ad18ee` (see `SCOPE.md`) |
+| Source | the contracts after the owner's decisions of 2026-10-02, branch `audit-decisions` at `134d01f` (see `SCOPE.md`). The first run was on the draft's base commit, `main` at `5ad18ee` |
 | Detectors | all 102 that ship with 0.11.6; none excluded |
-| Date | 2026-09-30 |
+| Date | 2026-10-02 (first run 2026-09-30) |
 
-From `packages/contracts`, with `forge` on `PATH` (crytic-compile reads `forge config` even in solc mode):
+From `packages/contracts`, with `forge` on `PATH` (crytic-compile reads `forge config` even in solc mode; the npm
+install puts it at `node_modules/@foundry-rs/forge-linux-amd64/bin/forge` on Linux):
 
 ```sh
 python3 -m venv /tmp/slither-venv
@@ -54,17 +55,24 @@ The foundry route also reported 20 findings in R0's `Multisend` and `TokenFactor
 | `arbitrary-send-eth` | High | Medium | 2 | 0 | justified |
 | `incorrect-equality` | Medium | High | 1 | 0 | justified |
 | `uninitialized-local` | Medium | Medium | 2 | 1 | justified |
-| `unused-return` | Medium | Medium | 10 | 2 | justified |
+| `unused-return` | Medium | Medium | 11 | 2 | justified |
 | `missing-zero-check` | Low | Medium | 2 | 0 | justified |
 | `calls-loop` | Low | Medium | 0 | 8 | justified |
 | `reentrancy-benign` | Low | Medium | 2 | 0 | justified |
 | `timestamp` | Low | Medium | 8 | 0 | justified |
 | `assembly` | Informational | High | 1 | 0 | justified |
 | `low-level-calls` | Informational | High | 5 | 1 | justified |
-| **Total** | | | **33** | **12** | 0 fixed, 45 justified, 0 open |
+| **Total** | | | **34** | **12** | 0 fixed, 46 justified, 0 open |
 
 No finding from the reentrancy detectors that move value (`reentrancy-eth`, `reentrancy-no-eth`), and none from
 `arbitrary-send-erc20`, `controlled-delegatecall`, `unprotected-upgrade`, `suicidal` or `uninitialized-state`.
+
+### Changes since the first run
+
+The 2026-10-02 contract changes (THREAT-MODEL Q21, Q7 and V2) added one finding and moved line numbers in
+`VaultFactory.sol`; the other 45 findings are the same ones, with the lines below updated:
+- new: `unused-return` in `VaultFactory._requireNoHooks`, which reads only the PoolKey of `getPoolAndPositionInfo`;
+- the two `renounceOwnership` overrides (`view`, always reverting) and the `HookedPool` check raised nothing else.
 
 ## Triage
 
@@ -87,21 +95,22 @@ Line numbers are the file's own, as Slither printed them.
 
 | Finding | Triage |
 |---|---|
-| `VaultFactory._requirePrincipal`: `owed0`, `owed1` (`src/vault/VaultFactory.sol` lines 242-243) | **Justified, intended.** They are set from `positions()` for a v3 position (line 245). A v4 position has no `tokensOwed`, so for `Kind.V4` they stay zero on purpose and the `OwedNotCollected` check (line 250) passes. Tested both ways in `test/vault/PositionFactory.t.sol`. |
+| `VaultFactory._requirePrincipal`: `owed0`, `owed1` (`src/vault/VaultFactory.sol` lines 255-256) | **Justified, intended.** They are set from `positions()` for a v3 position (line 258). A v4 position has no `tokensOwed`, so for `Kind.V4` they stay zero on purpose and the `OwedNotCollected` check (line 263) passes. Tested both ways in `test/vault/PositionFactory.t.sol`. |
 | `DeployR1.deploy`: `present` (`script/DeployR1.s.sol` line 84) | **Justified.** A `bool[5] memory` is zero-initialised, and the first loop (line 86) assigns every element before it is read. |
 
-### `unused-return` (12)
+### `unused-return` (13)
 
 | Finding | Triage |
 |---|---|
-| `VaultFactory` constructor ignores `feeOf(LOCK_FLAT)`, `feeOf(LOCK_LP_BPS)`, `feeOf(LOCK_FEE_SHARE_BPS)` (`src/vault/VaultFactory.sol` lines 71-73) | **Justified, intended.** These calls are probes: `feeOf` reverts `UnknownKey` for a missing key, and a factory built before its keys exist would be dead for good, since the controller is immutable. The value is read again on every call. Tested by `test_constructor_probesEachFeeKey_revertsWhenMissing`. |
+| `VaultFactory` constructor ignores `feeOf(LOCK_FLAT)`, `feeOf(LOCK_LP_BPS)`, `feeOf(LOCK_FEE_SHARE_BPS)` (`src/vault/VaultFactory.sol` lines 73-75) | **Justified, intended.** These calls are probes: `feeOf` reverts `UnknownKey` for a missing key, and a factory built before its keys exist would be dead for good, since the controller is immutable. The value is read again on every call. Tested by `test_constructor_probesEachFeeKey_revertsWhenMissing`. |
 | `VestingFactory` constructor ignores `feeOf(VEST_FLAT)` (`src/vesting/VestingFactory.sol` line 56) | **Justified.** The same probe (`test_constructor_probesTheFeeKey_revertsWhenMissing` in `test/vesting/VestingFactory.t.sol`). |
 | `ProPass` constructor ignores `feeOf(PRO_MONTHLY)` (`src/ProPass.sol` line 31) | **Justified.** The same probe (`test_constructor_probesTheFeeKey_revertsWhenMissing` in `test/ProPass.t.sol`). |
 | `PositionVault.currencies` reads only `token0`, `token1` of v3 `positions()` (`src/vault/PositionVault.sol` line 107) | **Justified.** Destructuring that keeps the two fields needed. |
 | `PositionVault.currencies` ignores `info` from v4 `getPoolAndPositionInfo` (line 109) | **Justified.** Only the `PoolKey`'s currencies are needed; `info` packs the tick range and subscriber flag. |
 | `PositionVault.liquidity` reads only `liquidity` of v3 `positions()` (line 117) | **Justified.** Destructuring. |
 | `PositionVault._collectV3` ignores `collect`'s `(amount0, amount1)` (lines 180-185) | **Justified, intended.** `_split` then splits the vault's whole balance of each currency (lines 127-128, 201). That also covers value that reached the vault another way, which the vault cannot tell from a fee (lines 121-122). Using the returned amounts would leave such value stuck. |
-| `VaultFactory._requirePrincipal` reads `liquidity`, `tokensOwed0`, `tokensOwed1` of v3 `positions()` (line 245) | **Justified.** Destructuring. |
+| `VaultFactory._requirePrincipal` reads `liquidity`, `tokensOwed0`, `tokensOwed1` of v3 `positions()` (line 258) | **Justified.** Destructuring. |
+| `VaultFactory._requireNoHooks` ignores `info` from v4 `getPoolAndPositionInfo` (line 268) | **Justified.** Only the `PoolKey`'s `hooks` field is needed, as in `PositionVault.currencies`. New with the Q21 fix. |
 | `DeployR1.deploy` ignores the call mode and `tx.origin` from `vm.readCallers()` (`script/DeployR1.s.sol` line 77) | **Justified.** Only the broadcasting sender is needed. |
 | `DeployR1._checkKey` ignores the pending value from `pendingOf` (line 165) | **Justified.** The check needs only "no change pending". `FeeController` sets and clears `pendingValue` and `pendingAt` together (`setFee`, `applyPending`), so `pendingAt == 0` means nothing is pending. |
 
@@ -123,8 +132,8 @@ Line numbers are the file's own, as Slither printed them.
 
 | Finding | Triage |
 |---|---|
-| `VaultFactory.lockToken` writes the registries after calling the fee recipient (`_takeFlatFee`) and the new clone's `initialize` (`src/vault/VaultFactory.sol` lines 99-126) | **Justified.** `lockToken` is `nonReentrant` (transient guard), so a recipient that calls back into `lockToken` or `lockPosition` reverts (`test_lockToken_isNonReentrant_forAReenteringFeeRecipient`). The factory's only other state-changing function is `setManager`, which is `onlyOwner`. The `initialize` callee is a clone of the factory's own implementation, made in this call. The write order matters only to a reader of `isVault` or the registries during the call (THREAT-MODEL Q6). |
-| `VaultFactory.lockPosition`, the same pattern (lines 138-159) | **Justified.** The same reasons. The `currencies()` read and the NFT transfer in `lockPosition` go to the allow-listed manager, and the call is `nonReentrant`. |
+| `VaultFactory.lockToken` writes the registries after calling the fee recipient (`_takeFlatFee`) and the new clone's `initialize` (`src/vault/VaultFactory.sol` lines 101-128) | **Justified.** `lockToken` is `nonReentrant` (transient guard), so a recipient that calls back into `lockToken` or `lockPosition` reverts (`test_lockToken_isNonReentrant_forAReenteringFeeRecipient`). The factory's only other state-changing function is `setManager`, which is `onlyOwner`. The `initialize` callee is a clone of the factory's own implementation, made in this call. The write order matters only to a reader of `isVault` or the registries during the call (THREAT-MODEL Q6). |
+| `VaultFactory.lockPosition`, the same pattern (lines 143-165) | **Justified.** The same reasons. The `currencies()` read, the NFT transfer and the principal and hooks reads in `lockPosition` go to the allow-listed manager, and the call is `nonReentrant`. |
 
 ### `timestamp` (8)
 
@@ -149,8 +158,8 @@ Line numbers are the file's own, as Slither printed them.
 
 | Finding | Triage |
 |---|---|
-| `VaultFactory._takeFlatFee`: `feeTo.call{value: fee}("")` (`src/vault/VaultFactory.sol` line 261) | **Justified.** The native fee to the owner-set recipient; `ok` is checked and a failure reverts `FeeTransferFailed`. |
-| `VaultFactory._isV2Pair`: three `staticcall`s to the token (lines 271-273) | **Justified, intended.** Shape detection must survive a token that lacks these functions or reverts, so it can't use typed calls. `staticcall` can't change state. A hostile token can only make its own lock more expensive (THREAT-MODEL Q18). |
+| `VaultFactory._takeFlatFee`: `feeTo.call{value: fee}("")` (`src/vault/VaultFactory.sol` line 280) | **Justified.** The native fee to the owner-set recipient; `ok` is checked and a failure reverts `FeeTransferFailed`. |
+| `VaultFactory._isV2Pair`: three `staticcall`s to the token (lines 290-292) | **Justified, intended.** Shape detection must survive a token that lacks these functions or reverts, so it can't use typed calls. `staticcall` can't change state. A hostile token can only make its own lock more expensive (THREAT-MODEL Q18). |
 | `PositionVault._split`: `payable(owner).call{value: toOwner}("")` (`src/vault/PositionVault.sol` line 211) | **Justified.** Pays the owner's native share. `ok` is checked, and a failure reverts `NativeTransferFailed`, so the owner's value is never silently dropped. An owner who can't receive native value can't collect until ownership moves (THREAT-MODEL Q26). |
 | `ProPass.subscribe`: the fee to the recipient (`src/ProPass.sol` line 57) | **Justified.** Checked; reverts `FeeTransferFailed`. |
 | `VestingFactory.createVesting`: the fee to the recipient (`src/vesting/VestingFactory.sol` line 102) | **Justified.** Checked; reverts `FeeTransferFailed`. |

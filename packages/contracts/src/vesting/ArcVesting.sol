@@ -8,19 +8,20 @@ import {VestingWalletCliff} from "@openzeppelin/contracts/finance/VestingWalletC
 /// @notice OpenZeppelin's audited linear vesting with a cliff, for ERC-20 tokens. One wallet per schedule. Nothing
 /// vests before `cliff()`; from then on `amount * (now - start) / duration` has vested, rounded down, and everything
 /// has vested at `end()`. Anyone may call `release(token)`, and the tokens always go to the wallet's owner. Nobody
-/// else can release or redirect them, and there is no admin.
-/// @dev The one change to OpenZeppelin's contract: the native-value path is closed. On Arc, USDC is one balance
-/// with two views (native, 18 decimals, and ERC-20 at 0x3600..., 6 decimals), so USDC vested through its ERC-20 view
-/// is also this wallet's native balance. OpenZeppelin keeps separate books for the two views, and its own NatSpec
-/// warns that on such a chain the beneficiary can release the same asset through both and take more than has
-/// vested. So `receive` refuses value, `release()` always reverts, and `releasable()` and the native
-/// `vestedAmount(uint64)` are always zero. Native value that
-/// arrives anyway (USDC's ERC-20 view, `selfdestruct`) is released through `release(token)` in its ERC-20 view.
+/// else can release or redirect them, and there is no admin. The owner can't renounce ownership.
+/// @dev Two changes to OpenZeppelin's contract. `renounceOwnership` always reverts (see the warning below). And the
+/// native-value path is closed: on Arc, USDC is one balance with two views (native, 18 decimals, and ERC-20 at
+/// 0x3600..., 6 decimals), so USDC vested through its ERC-20 view is also this wallet's native balance. OpenZeppelin
+/// keeps separate books for the two views, and its own NatSpec warns that on such a chain the beneficiary can release
+/// the same asset through both and take more than has vested. So `receive` refuses value, `release()` always reverts,
+/// and `releasable()` and the native `vestedAmount(uint64)` are always zero. Native value that arrives anyway (USDC's
+/// ERC-20 view, `selfdestruct`) is released through `release(token)` in its ERC-20 view.
 ///
 /// WARNING (OpenZeppelin's own): the wallet is `Ownable(beneficiary)` and ownership moves in one step, so the
 /// beneficiary can transfer, and so sell, the wallet with its unvested tokens. Readers must treat `owner()` as the
-/// beneficiary, not the address the wallet was created for. `renounceOwnership` leaves no one to pay: later releases
-/// then revert (the tokens stay in the wallet for good), or burn them for a token that accepts the zero address.
+/// beneficiary, not the address the wallet was created for. `renounceOwnership` is disabled: it would leave no one
+/// to pay, so later releases would revert (the tokens staying in the wallet for good), or burn them for a token that
+/// accepts the zero address.
 ///
 /// What has vested is computed from the wallet's live balance plus what it has released, so tokens sent after
 /// creation follow the same schedule. A token that rebases down after a release can make that total smaller than
@@ -30,6 +31,7 @@ import {VestingWalletCliff} from "@openzeppelin/contracts/finance/VestingWalletC
 /// A token that takes a cut on transfer takes it on the way out too.
 contract ArcVesting is VestingWalletCliff {
     error NativeValueNotSupported();
+    error RenounceDisabled();
 
     /// @dev Reverts `OwnableInvalidOwner` for a zero beneficiary and `InvalidCliffDuration` for a cliff longer than
     /// the duration. `cliffSeconds` is counted from `start`.
@@ -51,6 +53,12 @@ contract ArcVesting is VestingWalletCliff {
     /// @notice Always zero: nothing is releasable as native value.
     function releasable() public pure override returns (uint256) {
         return 0;
+    }
+
+    /// @notice Disabled: renouncing would leave the wallet with no one to pay. The owner can still transfer the wallet
+    /// with `transferOwnership`.
+    function renounceOwnership() public view override onlyOwner {
+        revert RenounceDisabled();
     }
 
     /// @notice Always zero: native value never vests here. OpenZeppelin's version would report this wallet's native

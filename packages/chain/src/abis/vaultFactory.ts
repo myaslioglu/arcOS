@@ -310,7 +310,7 @@ export const vaultFactoryAbi = [
     "name": "renounceOwnership",
     "inputs": [],
     "outputs": [],
-    "stateMutability": "nonpayable"
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -653,6 +653,11 @@ export const vaultFactoryAbi = [
   },
   {
     "type": "error",
+    "name": "HookedPool",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InsufficientBalance",
     "inputs": [
       {
@@ -717,6 +722,11 @@ export const vaultFactoryAbi = [
   {
     "type": "error",
     "name": "ReentrancyGuardReentrantCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RenounceDisabled",
     "inputs": []
   },
   {
