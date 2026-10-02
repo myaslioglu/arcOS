@@ -2,7 +2,17 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const OUT = new URL("../out/", import.meta.url);
 const DEST = new URL("../../chain/src/abis/", import.meta.url);
-const CONTRACTS = { FeeController: "feeController", TokenFactory: "tokenFactory", Multisend: "multisend" };
+const CONTRACTS = {
+  FeeController: "feeController",
+  TokenFactory: "tokenFactory",
+  Multisend: "multisend",
+  LockVault: "lockVault",
+  VaultFactory: "vaultFactory",
+  PositionVault: "positionVault",
+  ArcVesting: "arcVesting",
+  VestingFactory: "vestingFactory",
+  ProPass: "proPass",
+};
 
 mkdirSync(DEST, { recursive: true });
 for (const [contract, file] of Object.entries(CONTRACTS)) {

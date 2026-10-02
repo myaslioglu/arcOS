@@ -1,9 +1,19 @@
 name: Deploy
 
-# Deploys https://4rcos.com to Firebase App Hosting (project arcos-c80cf, backend arcos) from GitHub Actions. No key
-# file exists anywhere: the job signs in through Workload Identity Federation and a service account (see
-# docs/DEPLOYING.md), and the deploy runs only after the checks pass and the owner approves it in the `production`
-# environment, which allows the main branch only.
+# Deploys https://4rcos.com (backend arcos) and https://testnet.4rcos.com (backend arcos-testnet) to Firebase App
+# Hosting, project arcos-c80cf, from GitHub Actions. No key file exists anywhere: the deploy job signs in through
+# Workload Identity Federation and a service account (see docs/DEPLOYING.md), and it runs only after the checks and the
+# bundle builds pass and the owner approves it in the `production` environment, which allows the main branch only.
+#
+# Both sites come from the same commit under one approval. A push to main deploys both; a manual run can pick one
+# (`targets`). The mainnet site goes first, and the testnet deploy starts only after it has succeeded, so a testnet
+# failure never touches 4rc.OS. A bundle that fails to build stops the whole run before approval, nothing deployed; to
+# ship 4rc.OS while the testnet build is broken, run the workflow by hand with `targets: mainnet`.
+#
+# The jobs are split by what they may touch. `checks` and `bundle` install the project's dependencies and run its build,
+# which is third-party code, so they hold no credential. `deploy` holds the credential and runs no project code: only
+# first-party actions and the SHA-pinned auth action, the bundle as data, the scan script from its own checkout and the
+# Firebase CLI installed from its lockfile. It restores no cache.
 on:
   push:
     branches: [main]
@@ -13,6 +23,14 @@ on:
         description: Sign in to Google Cloud and list the App Hosting backends, but deploy nothing
         type: boolean
         default: false
+      targets:
+        description: Which sites to build and deploy (a push to main deploys both, mainnet first)
+        type: choice
+        options:
+          - both
+          - mainnet
+          - testnet
+        default: both
 
 # One deploy at a time. A run that starts while another waits for approval or deploys queues behind it (a newer
 # waiting run replaces an older waiting one), and a deploy that has started is never cancelled halfway.
@@ -29,11 +47,9 @@ defaults:
     shell: bash
 
 env:
-  # Pinned exactly: this CLI runs with the deploy credential. npx pins the package, not the packages it depends on, so
-  # bump it on purpose, read the release notes, and run the dry run before the next real deploy.
-  FIREBASE_TOOLS_VERSION: "15.32.0"
   FIREBASE_PROJECT: arcos-c80cf
   APPHOSTING_BACKEND: arcos
+  APPHOSTING_TESTNET_BACKEND: arcos-testnet
 
 jobs:
   # The same checks a pull request runs (ci.yml, called as a reusable workflow): typecheck, lint, tests, build, audit.
@@ -42,20 +58,20 @@ jobs:
     permissions:
       contents: read
 
-  deploy:
-    name: Deploy to production
-    needs: checks
-    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
-    if: github.ref == 'refs/heads/main'
+  # Builds the bundle of each site this run deploys, which the deploy job scans: one leg per site. It installs the
+  # project's dependencies and runs the Next.js build, so it gets no credential of any kind: a read-only token, no
+  # environment, no secret. It runs beside `checks`, and `deploy` waits for both. A push has no inputs, so it builds both
+  # sites. fail-fast is off so one site's failure doesn't cancel the other's build, whose log is then there to read.
+  bundle:
+    name: Build the ${{ matrix.site }} bundle
     runs-on: ubuntu-24.04
-    # Under the hour an access token lives: the Firebase CLI asks for one when it starts and never renews it.
-    timeout-minutes: 45
-    environment:
-      name: production
-      url: https://4rcos.com
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        site: ${{ fromJSON(inputs.targets == 'mainnet' && '["mainnet"]' || inputs.targets == 'testnet' && '["testnet"]' || '["mainnet", "testnet"]') }}
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -70,21 +86,111 @@ jobs:
 
       - run: npm ci
 
-      # The build settings come from the file App Hosting reads, so this bundle and the site's can't drift apart.
-      # Only NEXT_PUBLIC_ values pass; the script refuses anything else and never passes a secret.
-      - name: Read the build settings from apps/web/apphosting.yaml
-        run: node scripts/apphosting-env.mjs | tee -a "$GITHUB_ENV"
+      # The build settings come from the files App Hosting reads, so this bundle and the site's can't drift apart:
+      # apps/web/apphosting.yaml for mainnet, with apphosting.testnet.yaml merged over it for testnet, as App Hosting
+      # merges it for the backend whose environment name is testnet. An empty name reads the base file alone. Only
+      # NEXT_PUBLIC_ values pass; the script refuses anything else and never passes a secret.
+      - name: Read the build settings from the App Hosting files
+        env:
+          APPHOSTING_ENVIRONMENT: ${{ matrix.site == 'testnet' && 'testnet' || '' }}
+        run: node scripts/apphosting-env.mjs --environment "$APPHOSTING_ENVIRONMENT" | tee -a "$GITHUB_ENV"
 
-      - name: Build the mainnet bundle
+      # A bundle for the wrong network would ship the wrong site under this one's name.
+      - name: The settings must be this site's network
+        env:
+          SITE: ${{ matrix.site }}
+        run: test "$NEXT_PUBLIC_ARC_NETWORK" = "$SITE"
+
+      - name: Build the bundle
         run: npm run build -w @arcos/web
+
+      # Build output only: the two paths share apps/web/.next, so the artifact holds static/ and server/. Hidden files
+      # are kept so the scan sees every file the build made. One day is plenty (the deploy job takes it within this
+      # run), and overwrite lets a re-run of this job replace the artifact of the first attempt.
+      - name: Keep the bundle for the deploy job
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.site }}
+          path: |
+            apps/web/.next/static
+            apps/web/.next/server
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # The only job with a credential. It runs nothing from the project's dependencies and nothing of the project's build:
+  # the bundle arrives as data, and the scan script comes from this job's own checkout, never from the bundle.
+  deploy:
+    name: Deploy to production
+    needs: [checks, bundle]
+    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Each deploy step stays under the hour an access token lives: the Firebase CLI asks for one when it starts and
+    # never renews it. The job has room for both.
+    timeout-minutes: 90
+    environment:
+      name: production
+      url: https://4rcos.com
+    permissions:
+      contents: read
+      id-token: write
+    # Which sites this run deploys. A push has no inputs, so both.
+    env:
+      DEPLOY_MAINNET: ${{ inputs.targets != 'testnet' }}
+      DEPLOY_TESTNET: ${{ inputs.targets != 'mainnet' }}
+    # Whether the mainnet deploy succeeded, for the smoke job: it checks 4rc.OS even when the testnet deploy after it failed.
+    outputs:
+      mainnet: ${{ steps.deploy-mainnet.outcome }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No cache: root package.json names a packageManager, which makes setup-node restore an npm cache by default, and
+      # any job on main that runs install scripts could have written that cache. Restoring it here would put files an
+      # earlier job controlled next to the credential.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # Outside the workspace on purpose: the Firebase CLI uploads the workspace as the source, and a bundle is not
+      # source. By name, so a bundle this run deploys and the build didn't make fails here.
+      - name: Download the mainnet bundle
+        if: env.DEPLOY_MAINNET == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: bundle-mainnet
+          path: ${{ runner.temp }}/bundle-mainnet
+
+      - name: Download the testnet bundle
+        if: env.DEPLOY_TESTNET == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: bundle-testnet
+          path: ${{ runner.temp }}/bundle-testnet
 
       # App Hosting builds the site again from the source this job uploads, so this scan looks at a build of the same
       # commit, lockfile and settings, not at the very files that run. It fails on any match, and when the patterns are
-      # missing (see scripts/scan-bundle.mjs). The patterns are a secret, so they aren't in the repo.
-      - name: Scan the bundle for strings that must not ship
+      # missing (see scripts/scan-bundle.mjs). The patterns are a secret, so they aren't in the repo. One step scans every
+      # bundle this run deploys, so the secret is in one step only.
+      - name: Scan the bundles for strings that must not ship
         env:
           BUNDLE_DENY_PATTERNS: ${{ secrets.BUNDLE_DENY_PATTERNS }}
-        run: node scripts/scan-bundle.mjs apps/web/.next/static apps/web/.next/server
+        run: |
+          dirs=()
+          if [ "$DEPLOY_MAINNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-mainnet/static" "$RUNNER_TEMP/bundle-mainnet/server"); fi
+          if [ "$DEPLOY_TESTNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-testnet/static" "$RUNNER_TEMP/bundle-testnet/server"); fi
+          node scripts/scan-bundle.mjs "${dirs[@]}"
+
+      # The Firebase CLI runs with the deploy credential, so its whole dependency tree is locked, not only its version:
+      # tools/firebase holds the exact version and a lockfile with an integrity hash for every package. (npx would
+      # resolve the tree afresh on every run.) Install scripts are off, so nothing from the tree runs until the CLI
+      # does. To bump it: change that folder, read the release notes, run the dry run before the next real deploy.
+      - name: Install the Firebase CLI from its lockfile
+        run: npm ci --ignore-scripts --prefix tools/firebase
 
       # Nothing uses the access token asked for here: the Firebase CLI reads the credentials file this step leaves.
       # Asking makes this step prove the whole sign-in, acting as the service account included, and name the stage
@@ -103,27 +209,43 @@ jobs:
         run: git check-ignore --quiet -- "$GOOGLE_GHA_CREDS_PATH"
 
       # Two reads, nothing written. They prove the sign-in and the deployer's Service Usage and App Hosting read rights;
-      # the Storage rights are first used by the deploy itself. The table should list the backend `arcos`, with no
-      # repository (it deploys from source).
+      # the Storage rights are first used by the deploy itself. The table should list the backends `arcos` and
+      # `arcos-testnet`, with no repository (they deploy from source).
       - name: Dry run, list the App Hosting backends
         if: ${{ inputs.dry_run }}
-        env:
-          npm_config_ignore_scripts: "true"
-        run: npx --yes "firebase-tools@${FIREBASE_TOOLS_VERSION}" apphosting:backends:list --project "$FIREBASE_PROJECT" --non-interactive
+        run: tools/firebase/node_modules/.bin/firebase apphosting:backends:list --project "$FIREBASE_PROJECT" --non-interactive
 
-      # No --force: with it, a backend that can't be found is skipped and the CLI still reports success.
-      # npm_config_ignore_scripts keeps install scripts of the CLI's dependencies from running in this job.
-      - name: Deploy to App Hosting
-        if: ${{ !inputs.dry_run }}
-        env:
-          npm_config_ignore_scripts: "true"
-        run: npx --yes "firebase-tools@${FIREBASE_TOOLS_VERSION}" deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
+      # No --force: with it, a backend that can't be found is skipped and the CLI still reports success. Without it, and
+      # non-interactive, the CLI stops with an error there instead of creating one.
+      - name: Deploy the mainnet site to App Hosting
+        id: deploy-mainnet
+        if: ${{ !inputs.dry_run && env.DEPLOY_MAINNET == 'true' }}
+        timeout-minutes: 40
+        run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
 
-  # No credentials here: it only reads the public site.
+      # App Hosting picks a backend's settings by its environment name. Without `testnet`, arcos-testnet would be built
+      # from apphosting.yaml alone: a copy of 4rc.OS, its fee recipient included. So the testnet deploy reads it first
+      # (nothing written), after the mainnet deploy, so this check can only ever stop the testnet one.
+      - name: The testnet backend's environment name must be testnet
+        if: ${{ !inputs.dry_run && env.DEPLOY_TESTNET == 'true' }}
+        run: |
+          name="$(tools/firebase/node_modules/.bin/firebase apphosting:backends:get "$APPHOSTING_TESTNET_BACKEND" --project "$FIREBASE_PROJECT" --non-interactive --json | jq -r '.result.environment // ""')"
+          if [ "$name" != testnet ]; then echo "::error::$APPHOSTING_TESTNET_BACKEND has the environment name '$name', not 'testnet' (docs/DEPLOYING.md, The testnet site)"; exit 1; fi
+
+      # After the mainnet deploy, and only once it has succeeded (or wasn't asked for): a step after a failed one doesn't
+      # run. Its own upload of the same source, built by App Hosting with apps/web/apphosting.testnet.yaml merged in.
+      - name: Deploy the testnet site to App Hosting
+        id: deploy-testnet
+        if: ${{ !inputs.dry_run && env.DEPLOY_TESTNET == 'true' }}
+        timeout-minutes: 40
+        run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_TESTNET_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
+
+  # No credentials here: it only reads the public site. It checks 4rc.OS whenever its deploy succeeded, the testnet deploy
+  # after it included or not; a run that deployed only the testnet site skips it (scripts/smoke.mjs reads mainnet).
   smoke:
     name: Smoke checks
     needs: deploy
-    if: ${{ !inputs.dry_run }}
+    if: ${{ !cancelled() && !inputs.dry_run && needs.deploy.outputs.mainnet == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

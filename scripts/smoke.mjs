@@ -4,7 +4,8 @@
 //   /api/pulse                         answers 200 with exactly 1,024 gas-used ratios, each a number from 0 to 1
 //   /api/approvals?owner=<address>     answers 200 with at least one approval row
 // A rollout that has just finished can take a moment (cold instances, the CDN), so the checks repeat, all three each
-// round, until one round passes or about two minutes have gone by.
+// round, until one round passes or about two minutes have gone by. The approvals check reads a public contract's
+// allowances, which anyone can change, so a failure of that one alone should be confirmed by hand.
 //
 //   node scripts/smoke.mjs [--base https://4rcos.com] [--budget-seconds 120] [--interval-seconds 10]
 //
@@ -13,7 +14,11 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const DEFAULT_BASE = "https://4rcos.com";
-/** An address that has approvals on Arc mainnet (Multicall3's, which many tokens have been approved for). */
+/**
+ * An owner that has approvals on Arc mainnet: Multicall3. The route lists the allowances an owner has granted to
+ * spenders (so these are Multicall3's own, not allowances given to it). Multicall3 is permissionless: anyone can add or
+ * zero those allowances, so a failed approvals check does not prove the deploy is bad. Confirm it by hand first.
+ */
 export const APPROVALS_OWNER = "0xcA11bde05977b3631167028862bE2a173976CA11";
 export const PULSE_RATIOS = 1024;
 

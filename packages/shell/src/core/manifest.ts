@@ -2,11 +2,11 @@ import type { ComponentType } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { DesktopWindow, WindowAction, WindowSize } from "./types";
 
-// Only "token" can be decoded today (see dnd.ts's decodeDragItem). Widen this together with
-// DragItem and its decoder when a manifest actually needs to declare one of the other kinds —
-// otherwise a future manifest could declare a kind that highlights a drop target and then silently
-// swallows every drop on it.
-export type DropKind = "token";
+// Every kind here has a decoder in dnd.ts (decodeDragItem). Widen this together with DragItem and
+// its decoder, never alone — otherwise a manifest could declare a kind that highlights a drop target
+// and then silently swallows every drop on it. "approval" is Revoke's row; no manifest accepts it on
+// an icon today (Revoke's own trash area takes it).
+export type DropKind = "token" | "approval";
 export type AppCategory = "system" | "trust" | "create" | "trade";
 
 export const CATEGORY_ORDER: AppCategory[] = ["system", "trust", "create", "trade"];

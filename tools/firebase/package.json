@@ -1,0 +1,8 @@
+{
+  "name": "arcos-firebase-cli",
+  "private": true,
+  "description": "The Firebase CLI at one exact version, with its whole dependency tree locked in package-lock.json. .github/workflows/deploy.yml installs and runs it, and so do @arcos/data's tests and emulator suite (ci.yml, emulator.yml). Not an npm workspace of the repo root, so the root install never installs it.",
+  "dependencies": {
+    "firebase-tools": "15.32.0"
+  }
+}

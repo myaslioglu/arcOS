@@ -1,8 +1,8 @@
 import type { Address } from "@arcos/chain";
 import { describe, expect, it } from "vitest";
 import { poolFromDoc, poolToDoc, tokenFromDoc, tokenToDoc, watchStateFromDoc, watchStateToDoc } from "../converters";
-import { DataError } from "../errors";
 import type { PoolRecord, TokenRecord, WatchStateRecord } from "../docs";
+import { refusal } from "./helpers/refusal";
 import { at } from "./helpers/timestamp";
 
 const TOKEN_MIXED = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01" as Address;
@@ -14,17 +14,6 @@ const ZERO = "0x0000000000000000000000000000000000000000" as Address;
 const POOL32 = `0x${"ab".repeat(32)}`;
 const POOL32_UPPER = `0x${"AB".repeat(32)}`;
 const BIG = 123_456_789_012_345_678_901_234n;
-
-/** The code of the DataError a call refused with; fails the test when it throws anything else, or nothing. */
-function refusalCode(run: () => unknown): string {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(DataError);
-    return (error as DataError).code;
-  }
-  throw new Error("expected the call to throw");
-}
 
 const fullToken = (): TokenRecord => ({
   network: "mainnet",
@@ -97,12 +86,12 @@ describe("tokenToDoc", () => {
   });
 
   it("refuses a bad network, address, pool id or amount, by code", () => {
-    expect(refusalCode(() => tokenToDoc({ ...fullToken(), network: "other" as never }))).toBe("network");
-    expect(refusalCode(() => tokenToDoc({ ...fullToken(), address: "0x1" as Address }))).toBe("address");
-    expect(refusalCode(() => tokenToDoc({ ...fullToken(), creator: "nope" as Address }))).toBe("address");
-    expect(refusalCode(() => tokenToDoc({ ...fullToken(), totalSupply: -1n }))).toBe("amount");
+    expect(refusal(() => tokenToDoc({ ...fullToken(), network: "other" as never })).code).toBe("network");
+    expect(refusal(() => tokenToDoc({ ...fullToken(), address: "0x1" as Address })).code).toBe("address");
+    expect(refusal(() => tokenToDoc({ ...fullToken(), creator: "nope" as Address })).code).toBe("address");
+    expect(refusal(() => tokenToDoc({ ...fullToken(), totalSupply: -1n })).code).toBe("amount");
     const bestPool = { id: "0x12", version: "v2" as const, depthUsdc: 1n };
-    expect(refusalCode(() => tokenToDoc({ ...fullToken(), bestPool }))).toBe("pool-id");
+    expect(refusal(() => tokenToDoc({ ...fullToken(), bestPool })).code).toBe("pool-id");
   });
 });
 
@@ -121,7 +110,7 @@ describe("tokenFromDoc", () => {
 
   it("refuses a stored amount that is not decimal digits", () => {
     const doc = { ...tokenToDoc(fullToken()), totalSupply: "1.5" };
-    expect(refusalCode(() => tokenFromDoc(doc))).toBe("amount");
+    expect(refusal(() => tokenFromDoc(doc)).code).toBe("amount");
   });
 });
 
@@ -177,10 +166,10 @@ describe("pools", () => {
   });
 
   it("refuse a bad pool id, a bad key address and a bad amount, by code", () => {
-    expect(refusalCode(() => poolToDoc({ ...v2Pool(), poolId: "0x12" }))).toBe("pool-id");
+    expect(refusal(() => poolToDoc({ ...v2Pool(), poolId: "0x12" })).code).toBe("pool-id");
     const key = { ...v4Pool().key!, hooks: "nope" as Address };
-    expect(refusalCode(() => poolToDoc({ ...v4Pool(), key }))).toBe("address");
-    expect(refusalCode(() => poolToDoc({ ...v2Pool(), depthUsdc: -5n }))).toBe("amount");
+    expect(refusal(() => poolToDoc({ ...v4Pool(), key })).code).toBe("address");
+    expect(refusal(() => poolToDoc({ ...v2Pool(), depthUsdc: -5n })).code).toBe("amount");
   });
 });
 
@@ -232,9 +221,9 @@ describe("watch state", () => {
   });
 
   it("refuses a bad token, owner, pool or amount, by code", () => {
-    expect(refusalCode(() => watchStateToDoc({ ...firstSight(), token: "0x1" as Address }))).toBe("address");
-    expect(refusalCode(() => watchStateToDoc({ ...fullState(), owner: "nope" as Address }))).toBe("address");
-    expect(refusalCode(() => watchStateToDoc({ ...fullState(), bestPool: "0x12" }))).toBe("pool-id");
-    expect(refusalCode(() => watchStateToDoc({ ...fullState(), bestPoolDepth: -1n }))).toBe("amount");
+    expect(refusal(() => watchStateToDoc({ ...firstSight(), token: "0x1" as Address })).code).toBe("address");
+    expect(refusal(() => watchStateToDoc({ ...fullState(), owner: "nope" as Address })).code).toBe("address");
+    expect(refusal(() => watchStateToDoc({ ...fullState(), bestPool: "0x12" })).code).toBe("pool-id");
+    expect(refusal(() => watchStateToDoc({ ...fullState(), bestPoolDepth: -1n })).code).toBe("amount");
   });
 });

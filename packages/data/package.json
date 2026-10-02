@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:emulator": "firebase emulators:exec --only firestore --project demo-arcos \"vitest run --config vitest.emulator.config.ts\"",
+    "test:emulator": "../../tools/firebase/node_modules/.bin/firebase emulators:exec --only firestore --project demo-arcos \"vitest run --config vitest.emulator.config.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,7 +19,6 @@
   "devDependencies": {
     "@types/node": "^22",
     "fast-check": "^4.10.2",
-    "firebase-tools": "15.32.0",
     "typescript": "^5",
     "vitest": "^4.1.11"
   }

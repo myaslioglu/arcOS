@@ -5,7 +5,7 @@ import { getPublicClient } from "@wagmi/core";
 import { encodeErrorResult, encodeFunctionResult, multicall3Abi, parseAbi, type PublicClient } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { CallReverted, viemReader } from "@arcos/inspector";
-import { WALLETCONNECT_METADATA, connectorLabel, isWalletConnect, visibleConnectors, wagmiConfig } from "../wagmi";
+import { WALLETCONNECT_METADATA, connectorLabel, isWalletConnect, visibleConnectors, wagmiConfig, walletConnectMetadata } from "../wagmi";
 
 type FakeConnector = { id: string; name: string };
 
@@ -169,6 +169,11 @@ describe("wagmiConfig's WalletConnect connector", () => {
 });
 
 describe("WALLETCONNECT_METADATA", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
   it("names the site the way wallets show it", () => {
     expect(WALLETCONNECT_METADATA.name).toBe("4rc.OS");
     expect(WALLETCONNECT_METADATA.description).toBe("Small token tools on Arc, as a desktop.");
@@ -183,6 +188,30 @@ describe("WALLETCONNECT_METADATA", () => {
     expect(origin).toBe(WALLETCONNECT_METADATA.url);
     const appDir = fileURLToPath(new URL("../../app", import.meta.url));
     expect(readdirSync(appDir).filter((f) => f.replace(/\.(tsx|ts)$/, "") === pathname.slice(1))).toEqual(["apple-icon.tsx"]);
+  });
+
+  // Wallets show the url, and WalletConnect's verify service checks it against the page's origin, so each site gives its
+  // own: https://4rcos.com on mainnet, https://testnet.4rcos.com on testnet, from NEXT_PUBLIC_SITE_URL.
+  it("takes the url and the icon from the site URL the build was given", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://testnet.4rcos.com");
+    const { WALLETCONNECT_METADATA: testnet } = await import("../wagmi");
+    expect(testnet.url).toBe("https://testnet.4rcos.com");
+    expect(testnet.icons).toEqual(["https://testnet.4rcos.com/apple-icon"]);
+    expect(testnet.name).toBe("4rc.OS");
+  });
+
+  it("uses the site URL's origin, whatever path or slash it ends with", () => {
+    expect(walletConnectMetadata("https://4rcos.com/").url).toBe("https://4rcos.com");
+    expect(walletConnectMetadata("https://testnet.4rcos.com/x/").icons).toEqual(["https://testnet.4rcos.com/apple-icon"]);
+  });
+
+  it("falls back to https://4rcos.com without a site URL, or with one that isn't an http(s) URL", () => {
+    for (const value of [undefined, "", "  ", "not a url", "javascript:alert(1)", "ftp://4rcos.com"]) {
+      const metadata = walletConnectMetadata(value);
+      expect(metadata.url, JSON.stringify(value)).toBe("https://4rcos.com");
+      expect(metadata.icons, JSON.stringify(value)).toEqual(["https://4rcos.com/apple-icon"]);
+    }
   });
 });
 

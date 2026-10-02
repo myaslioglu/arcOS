@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { decodeFunctionData, encodeAbiParameters, erc20Abi, getAddress, pad, toEventSelector, type Address, type Hex } from "viem";
-import { ARCOS } from "@arcos/chain";
+import { ARCOS, PERMIT2 } from "@arcos/chain";
 import {
   APPROVAL_TOPIC,
   ApprovalsUnavailable,
@@ -10,7 +10,6 @@ import {
   MAX_PAIRS,
   MULTICALL_BUDGET,
   MULTICALL_TIME_BUDGET_MS,
-  PERMIT2,
   SWAP_ADAPTER,
   UNLIMITED,
   approvalPairs,
@@ -234,7 +233,7 @@ describe("approvalPairs", () => {
   it("keeps ERC-20 approvals only: exactly three topics", () => {
     const erc721 = logOf(rawLog(TOKEN_B, SPENDER_Y, 11, 0, [pad("0x07", { size: 32 })]));
     expect(approvalPairs(OWNER, [logOf(rawLog(TOKEN_A, SPENDER_X, 10)), erc721])).toEqual([
-      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -246,8 +245,8 @@ describe("approvalPairs", () => {
       rawLog(TOKEN_B, SPENDER_Y, 15),
     ].map(logOf);
     expect(approvalPairs(OWNER, logs)).toEqual([
-      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 30 },
-      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 15 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 30, lastApprovalLogIndex: 1 },
+      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 15, lastApprovalLogIndex: 0 },
     ]);
   });
 
@@ -278,6 +277,7 @@ describe("liveApprovals", () => {
     expect(await liveApprovals(OWNER, pairs, aggregate, canary, "mainnet")).toEqual({
       approvals: [
         {
+          kind: "erc20",
           token: TOKEN_A,
           symbol: "AAA",
           name: "Token A",
@@ -288,6 +288,7 @@ describe("liveApprovals", () => {
           lastApprovalBlock: 30,
         },
         {
+          kind: "erc20",
           token: TOKEN_B,
           symbol: "BBB",
           name: "Token B",
@@ -357,7 +358,7 @@ describe("liveApprovals", () => {
     const canary = rpcUp();
     const { approvals, truncated } = await liveApprovals(OWNER, pairs, poisoned, canary, "mainnet");
     expect(approvals).toEqual([
-      { token: TOKEN_B, symbol: "BBB", name: "Token B", decimals: 6, spender: SPENDER_X, spenderLabel: null, allowance: "9", lastApprovalBlock: 10 },
+      { kind: "erc20", token: TOKEN_B, symbol: "BBB", name: "Token B", decimals: 6, spender: SPENDER_X, spenderLabel: null, allowance: "9", lastApprovalBlock: 10 },
     ]);
     expect(truncated).toBe(true);
     expect(poisoned.mock.calls.length).toBeLessThanOrEqual(MULTICALL_BUDGET);
@@ -447,9 +448,10 @@ describe("liveApprovals", () => {
     });
     const { approvals, truncated } = await liveApprovals(OWNER, pairsMixed, poisoned, rpcUp(), "mainnet");
     expect(approvals).toEqual([
-      { token: TOKEN_MIXED, symbol: "MIX", name: "Token", decimals: 8, spender: SPENDER_X, spenderLabel: null, allowance: "4", lastApprovalBlock: 40 },
-      { token: TOKEN_B, symbol: "BBB", name: "Token", decimals: 8, spender: SPENDER_X, spenderLabel: null, allowance: "9", lastApprovalBlock: 30 },
+      { kind: "erc20", token: TOKEN_MIXED, symbol: "MIX", name: "Token", decimals: 8, spender: SPENDER_X, spenderLabel: null, allowance: "4", lastApprovalBlock: 40 },
+      { kind: "erc20", token: TOKEN_B, symbol: "BBB", name: "Token", decimals: 8, spender: SPENDER_X, spenderLabel: null, allowance: "9", lastApprovalBlock: 30 },
       {
+        kind: "erc20",
         token: TOKEN_MIXED.toLowerCase() as Address,
         symbol: "MIX",
         name: "Token",
@@ -710,5 +712,15 @@ describe("loadApprovals", () => {
     } finally {
       dateNow.mockRestore();
     }
+  });
+});
+
+describe("approvalPairs within one block", () => {
+  it("keeps each pair's latest log index, and lists pairs from the same block newest first by log index", () => {
+    const logs = [rawLog(TOKEN_A, SPENDER_X, 10, 2), rawLog(TOKEN_B, SPENDER_Y, 10, 3), rawLog(TOKEN_A, SPENDER_X, 10, 1)].map(logOf);
+    expect(approvalPairs(OWNER, logs)).toEqual([
+      { token: TOKEN_B, spender: SPENDER_Y, lastApprovalBlock: 10, lastApprovalLogIndex: 3 },
+      { token: TOKEN_A, spender: SPENDER_X, lastApprovalBlock: 10, lastApprovalLogIndex: 2 },
+    ]);
   });
 });

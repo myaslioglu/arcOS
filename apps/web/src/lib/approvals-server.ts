@@ -30,7 +30,8 @@ const cache = processGlobal("approvals.cache", () => ttlCache<ApprovalsAnswer>(6
 const gate = processGlobal("approvals.gate", () => inFlightGate(4, () => new ApprovalsBusy()));
 
 /**
- * The owner's live ERC-20 approvals. The logs come from Blockscout's PRO API with the Inspector's key when one is set
+ * The owner's live approvals: ERC-20 allowances, single NFTs' approvals, operators and Permit2 allowances. A clean
+ * lookup makes three explorer requests (see `loadApprovals`). The logs come from Blockscout's PRO API with the Inspector's key when one is set
  * (`BLOCKSCOUT_API_KEY`, read on each call and sent only as a bearer header), else from the network's public explorer,
  * which refuses servers on mainnet. Explorer requests wait their turn on the Inspector's pacer, each ends after 8 s
  * (explorer-fetch.ts), and the whole lookup after 15 s (deadline.ts). The allowances and token details come from
@@ -58,7 +59,13 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
       return withDeadline(
         loadApprovals(owner, {
           network: activeNetwork(),
+          // Three scans, one request at a time on the shared pacer: Approval events (ERC-20 and single NFTs),
+          // ApprovalForAll events (operators), and Permit2's own events. A clean lookup makes one request each.
           readPage: (fromBlock) => readLogsPage(logsPageUrl(api.url, owner, fromBlock), fetchFn, api.apiKey),
+          readOperatorPage: (fromBlock) => readLogsPage(logsPageUrl(api.url, owner, fromBlock, "operator"), fetchFn, api.apiKey),
+          readPermit2Page: (fromBlock) => readLogsPage(logsPageUrl(api.url, owner, fromBlock, "permit2"), fetchFn, api.apiKey),
+          // Multicall3's getCurrentBlockTimestamp(), in the same aggregate3 call, drops an expired Permit2 allowance.
+          clock: multicall3,
           aggregate: async (calls) => {
             // A backstop: once the 15 s deadline has aborted this lookup, no further attempt starts. With the one
             // clock loadApprovals keeps, MULTICALL_TIME_BUDGET_MS (9 s from the lookup's start) already stops every

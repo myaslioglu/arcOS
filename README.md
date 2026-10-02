@@ -70,7 +70,16 @@ build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it re
 and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the
 network.
 build`. `npm run test:emulator -w @arcos/data` runs the Firestore suite against the local emulator;
-it needs Java 21 or newer and no credentials.
+it needs Java 21 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase
+CLI in `tools/firebase`, which the root install leaves out: install it once with
+`npm ci --ignore-scripts --prefix tools/firebase`.
+
+The end-to-end smoke suite (`e2e/`, Playwright in Chromium) runs against a production build: `NEXT_PUBLIC_ARC_NETWORK=mainnet npm run build` (CI builds with
+the settings in `apps/web/apphosting.yaml`), then `npm run test:e2e`, which starts `next start` on port 3100 and stops it
+afterwards. Outside CI it reuses a server already listening on 3100, so stop any `next dev` there first. It needs the browser once
+(`npx playwright install chromium`), or `E2E_CHROMIUM_PATH` set to a Chromium you already have. The `/t/<address>` and
+`/badge/<address>` cases read the chain when they run and still pass when that read fails. `npm run typecheck:e2e` checks
+the suite's types; `npm run lint` covers it too.
 
 ## Repo layout
 
@@ -177,11 +186,13 @@ but does have privileged functions, both the ownership and privileges findings r
 - Drop approves exactly the total a run needs, but a run that stops early (a refused signature, an
   unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until a
   later run uses it or you revoke it in Revoke.
-- Revoke lists ERC-20 approvals only: NFT approvals and Permit2's own allowances come later, and it
-  revokes one approval at a time.
-- Revoke's list reads at most 5 pages of 1,000 approval logs and considers at most 500 (token,
-  spender) pairs, the most recent first; a wallet with more history than that may not see its oldest
-  approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
+- Revoke lists ERC-20 allowances, single NFTs' approvals, operators (ERC-721 and ERC-1155
+  `setApprovalForAll`) and Permit2 allowances. "Revoke all" sends one transaction per approval, one
+  after another, and every Permit2 pair in a single `lockdown`; it stops at the first one that fails.
+- Revoke's list reads at most 5 pages of 1,000 Approval logs, 2 pages of ApprovalForAll logs and 2
+  pages of Permit2's logs (three explorer requests for most wallets), and considers at most 500
+  approvals of every kind together, the most recent first; a wallet with more history than that may
+  not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
 - Liquidity lock detection only reads Uniswap v2 LP token balances. Positions in v3, v4 and Aerodrome
