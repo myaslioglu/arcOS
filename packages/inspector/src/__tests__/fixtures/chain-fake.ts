@@ -15,7 +15,7 @@ const quoterAbi = parseAbi([
 ]);
 const simulatorAbi = parseAbi([
   "struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }",
-  "struct Trade { uint8 kind; address pool; address token; address usdc; address router; uint256 amount; PoolKey key; }",
+  "struct Trade { uint8 kind; address pool; address token; address usdc; address router; uint256 amount; uint256 maxAmount; PoolKey key; }",
   "struct Result { uint8 status; uint256 spent; uint256 paidOut; uint256 bought; uint256 sold; uint256 received; }",
   "function simulate(Trade t) returns (Result r)",
 ]);
@@ -77,7 +77,7 @@ export type SimRecord = {
   call: OverrideCall;
   overrides: readonly StateOverride[];
   trade: {
-    kind: number; pool: string; token: string; usdc: string; router: string; amount: bigint;
+    kind: number; pool: string; token: string; usdc: string; router: string; amount: bigint; maxAmount: bigint;
     key: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string };
   };
 };

@@ -128,8 +128,10 @@ describe("trade simulation: which pool, how much, and the call", () => {
     const { trade, overrides } = chain.simulations[0]!;
     expect(trade).toMatchObject({ kind: 2, pool: UNISWAP_V4.poolManager, token: TOKEN, usdc: NATIVE, amount: 10n * 10n ** 18n });
     expect(trade.key).toMatchObject({ currency0: NATIVE, currency1: TOKEN, fee: 3000, tickSpacing: 60, hooks: NATIVE });
-    // One balance: 10 USDC native is the same 10 USDC the ERC-20 view shows.
-    expect(overrides[0]!.balance).toBe(10n * 10n ** 18n + PREPAID);
+    // One balance: native USDC is the same USDC the ERC-20 view shows. S holds what the buy may be raised to for a token with
+    // few decimals: 2% of the pool's 20,000 USDC, 400 USDC.
+    expect(trade.maxAmount).toBe(400n * 10n ** 18n);
+    expect(overrides[0]!.balance).toBe(400n * 10n ** 18n + PREPAID);
   });
 
   it("pays a v4 pool against the USDC ERC-20 in its 6 decimals", async () => {
@@ -537,7 +539,7 @@ describe("trade simulation: a liquid decoy can't hide a thinner real pool", () =
     const launch: Pool = { ...v4Pool(0n, USDC, 10_000, 200), liquid: false };
     const sim = (trade: { pool: string }) =>
       lower(trade.pool) === lower(DUST) ? withStatus(5, { spent: 0n, paidOut: 0n, bought: 0n })
-      : lower(trade.pool) === lower(UNISWAP_V4.poolManager) ? withStatus(0, { paidOut: 0n, bought: 0n, sold: 0n, received: 0n })
+      : lower(trade.pool) === lower(UNISWAP_V4.poolManager) ? withStatus(0, { spent: 0n, paidOut: 0n, bought: 0n, sold: 0n, received: 0n })
       : roundTrip(TEN, 9_940_000n);
     const { f, chain } = await run(sim, v3Pool(50_000n * USDC_UNITS, 3000), dust, launch);
     expect(chain.simulations).toHaveLength(3);
@@ -585,6 +587,47 @@ describe("trade simulation: a liquid decoy can't hide a thinner real pool", () =
       const { f } = await run(refusesIn(DUST), v2Pool(1_000n * USDC_UNITS), real);
       expect(f.status).not.toBe("pass");
       expect(f).toMatchObject({ status: "warn" });
+    });
+  });
+
+  describe("a token with few decimals, whose test buy is too small for one raw unit", () => {
+    // The pool takes the USDC and pays out nothing: rounding, which the token's decimals bring about. That counts.
+    const roundsToNothing = (where: string, spent: bigint) => (trade: { pool: string }) =>
+      lower(trade.pool) === lower(where) ? withStatus(0, { spent, paidOut: 0n, bought: 0n, sold: 0n, received: 0n }) : roundTrip(TEN, 9_940_000n);
+
+    it("never passes behind a decoy when a 0-decimal v4 launch pool pays nothing for 0.01 USDC", async () => {
+      const launch: Pool = { ...v4Pool(0n, USDC, 10_000, 200), liquid: false };
+      const { f } = await run(roundsToNothing(UNISWAP_V4.poolManager, 10_000n), decoy, launch);
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+    });
+
+    it("never passes when that pool is liquid", async () => {
+      const liquidLaunch = v4Pool(0n, USDC, 10_000, 200);
+      expect(liquidLaunch.liquid).toBe(true);
+      const { f } = await run(roundsToNothing(UNISWAP_V4.poolManager, 10_000n), decoy, liquidLaunch);
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+    });
+
+    it("never passes behind a decoy when a 900-USDC v3 pool pays nothing for 0.9 USDC", async () => {
+      const thinV3: Pool = { ...v3Pool(900n * USDC_UNITS, 10_000), liquid: false };
+      const { f } = await run(roundsToNothing(POOL, 900_000n), decoy, thinV3);
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+    });
+
+    it("never passes when one raw unit costs more than the most the simulation buys with", async () => {
+      const overLimit = (trade: { pool: string }) =>
+        lower(trade.pool) === lower(POOL) ? withStatus(6, { spent: 0n, paidOut: 0n, bought: 0n }) : roundTrip(TEN, 9_940_000n);
+      const { f } = await run(overLimit, decoy, v3Pool(900n * USDC_UNITS, 10_000));
+      expect(f).toMatchObject({ status: "warn", title: "A pool couldn't be measured" });
+      expect(f.detail).toMatch(/one raw unit of the token costs more/i);
+    });
+
+    it("passes an honest 0-decimal token whose buy the simulator raised to buy whole units", async () => {
+      // The simulator raised 10 USDC to 100 USDC, which bought 9 whole units; selling them brought back 99.4 USDC.
+      const honest = { result: { status: 0, spent: 100n * USDC_UNITS, paidOut: 9n, bought: 9n, sold: 9n, received: 99_400_000n } };
+      const { f, chain } = await run(honest, v3Pool(50_000n * USDC_UNITS, 3000));
+      expect(chain.simulations[0]!.trade.maxAmount).toBe(1_000n * USDC_UNITS);
+      expect(f).toMatchObject({ status: "pass" });
     });
   });
 

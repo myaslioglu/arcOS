@@ -1132,6 +1132,9 @@ function attemptFinding(input: InspectInput, run: TradeAttempt, label: string): 
   if (run.kind === "timed-out") {
     return finding("trade", "unknown", TRADE_UNKNOWN, "The simulation didn't answer in time.", at);
   }
+  if (run.kind === "ran" && run.result.status === STATUS.amountOverLimit) {
+    return finding("trade", "unknown", TRADE_UNKNOWN, `One raw unit of the token costs more at the pool's price, on ${VENUE[pool.version]}, than the most the simulation buys with there, so it wasn't bought.`, at);
+  }
   if (run.kind === "ran" && run.result.status === STATUS.poolCantTrade) {
     return finding("trade", "unknown", TRADE_UNKNOWN, `The pool on ${VENUE[pool.version]} can't serve a buy: it has no liquidity at its price, or gives nothing for the amount.`, at);
   }

@@ -78,7 +78,7 @@ export const MIN_TEST_AMOUNT = 10_000n;
 const KIND = { v2: 0, v3: 1, aero: 1, v4: 2 } as const;
 
 /** TradeSimulator's statuses. */
-export const STATUS = { ok: 0, buyReverted: 1, buyOutOfGas: 2, sellReverted: 3, sellOutOfGas: 4, poolCantTrade: 5 } as const;
+export const STATUS = { ok: 0, buyReverted: 1, buyOutOfGas: 2, sellReverted: 3, sellOutOfGas: 4, poolCantTrade: 5, amountOverLimit: 6 } as const;
 
 /** One part in a million: fees are counted in these, as Uniswap counts them (3000 is 0.3%). */
 const PPM = 1_000_000n;
@@ -173,6 +173,7 @@ export function buyDidNotTrade(attempt: TradeAttempt): boolean {
   return (
     r.status === STATUS.buyReverted ||
     r.status === STATUS.poolCantTrade ||
+    r.status === STATUS.amountOverLimit ||
     (r.status === STATUS.ok && (r.spent === 0n || (r.paidOut === 0n && r.bought === 0n)))
   );
 }
@@ -180,14 +181,15 @@ export function buyDidNotTrade(attempt: TradeAttempt): boolean {
 /**
  * Whether a round trip's buy couldn't trade on the pool's account alone, which nothing the token does can bring about: the
  * simulator found the pool can't serve the buy before sending anything (`poolCantTrade`: a v2 pair whose reserves give
- * nothing, a pool with no active liquidity, no price or its price at the limit), or the pool paid nothing out. Only such
- * a pool may be left out of the finding. A buy that reverted, or took no USDC though the pool paid out, may be the token's
- * doing and always counts.
+ * nothing, a pool with no price or its price at the limit), or the pool took nothing and paid nothing out. Only such a
+ * pool may be left out of the finding. Everything else may be the token's doing and counts: a buy that reverted; one
+ * that took USDC and paid nothing out (a buy too small for one raw unit of a token with few decimals rounds to nothing);
+ * one that took no USDC though the pool paid out (a refund); a buy one raw unit of costs more than the limit.
  */
 export function poolCouldNotTrade(attempt: TradeAttempt): boolean {
   if (attempt.kind !== "ran") return false;
   const r = attempt.result;
-  return r.status === STATUS.poolCantTrade || (r.status === STATUS.ok && r.paidOut === 0n && r.bought === 0n);
+  return r.status === STATUS.poolCantTrade || (r.status === STATUS.ok && r.spent === 0n && r.paidOut === 0n);
 }
 
 /**
@@ -390,6 +392,10 @@ function withPoolDeadline(pool: Pool, attempt: Promise<TradeAttempt>, end: numbe
  */
 async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPrice: bigint): Promise<TradeAttempt> {
   const amount = tradeAmount(pool) ?? testAmount(pool);
+  // A v3, Slipstream or v4 buy may be raised, in the simulator, to buy whole raw units of a token with few decimals, up to
+  // `unitBuyLimit`; S is funded for that. A v2 buy is sized here (`tradeAmount`).
+  const limit = unitBuyLimit(pool.depth);
+  const maxAmount = pool.version === "v2" || limit < amount ? amount : limit;
   const usdc = usdcOf(pool, token)!;
   const native = lower(usdc) === lower(NATIVE);
   const decimals = native ? 18 : 6;
@@ -401,6 +407,7 @@ async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPri
     usdc,
     router,
     amount: native ? amount * 10n ** 12n : amount,
+    maxAmount: native ? maxAmount * 10n ** 12n : maxAmount,
     key: pool.version === "v4" ? pool.key! : NO_KEY,
   };
   let answer: `0x${string}`;
@@ -416,7 +423,7 @@ async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPri
       // One balance, two views: past the prepaid gas, this is `amount` USDC in the ERC-20's 6 decimals and in native's 18
       // alike. R needs only the code.
       [
-        { address: simulator, code: tradeSimulatorRuntime, balance: amount * 10n ** 12n + TRADE_GAS * gasPrice },
+        { address: simulator, code: tradeSimulatorRuntime, balance: maxAmount * 10n ** 12n + TRADE_GAS * gasPrice },
         { address: router, code: tradeSimulatorRuntime },
       ],
     );

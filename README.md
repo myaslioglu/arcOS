@@ -226,14 +226,19 @@ but does have privileged functions, both the ownership and privileges findings r
   couldn't trade on its own account, which nothing the token does can bring about: before sending
   anything the simulator checks the pool's own state (a v2 pair whose reserves give nothing for the
   amount; a v3, Aerodrome or v4 pool with no price, or its price already at the swap's limit) and
-  reports "pool can't trade", or the pool paid nothing out. So a dust pool can't cost an honest token
-  its pass. Everything else counts, in any pool: a buy that reverts (the token may refuse a buyer it
-  can tell is simulated, one with code, say) reads "unknown" and caps a pass, and a sell blocked after
-  a buy went through fails the token. A pool left out is no measurement: when it is deeper than a
-  pool measured, it caps a pass as an untried deeper pool does. Any fail is a fail. Otherwise the worst warning, or the
-  largest loss, is shown, and the result is a pass only when every round trip counted passed, one of
-  them in a liquid pool, and nothing below applies; each of these caps it at a warning, named in the
-  finding:
+  reports "pool can't trade", or the pool took no USDC and paid nothing out. So a dust pool can't cost
+  an honest token its pass. A pool that took USDC and paid nothing out does count: a token with few
+  decimals can make a small buy round to nothing. Before buying in a v3, Aerodrome or v4 pool, the
+  simulator raises the buy, at the pool's price, to what buys about 100 raw units of the token when
+  the test amount would buy fewer, up to the larger of 20 USDC and 2% of the pool's USDC and never
+  over 1,000 USDC; when even two units cost more, the pool isn't bought in and counts as "unknown".
+  Everything else counts, in any pool: a buy that reverts (the token may refuse a buyer it can tell is
+  simulated, one with code, say) reads "unknown" and caps a pass, and a sell blocked after a buy went
+  through fails the token. A pool left out is no measurement: when it is deeper than a pool measured,
+  it caps a pass as an untried deeper pool does. Any fail is a fail. Otherwise the worst warning, or
+  the largest loss, is shown, and the result is a pass only when every round trip counted passed, one
+  of them in a liquid pool, and nothing below applies; each of these caps it at a warning, named in
+  the finding:
   - a pool counted whose round trip read "unknown" (a buy the token may have refused or undone in a
     liquid pool, say, by rejecting a recipient with code or refunding the USDC);
   - more pools to try than the six tried ("7 pools; 6 were tried");
@@ -281,6 +286,10 @@ but does have privileged functions, both the ownership and privileges findings r
   not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
+- The trade check sees each pool as it is at that block. A pool whose price is parked at its limit
+  while the inspection runs reads "pool can't trade" and is left out (when it is the deepest, it caps
+  as a deeper pool not measured); a token whose real market is a pool moved there for the moment of
+  the inspection, and back after, can pass on its other pools.
 - A Uniswap v3 or Aerodrome pool's depth is still read from its USDC balance, which anyone can raise
   by sending it USDC, so a pool with no liquidity can read as liquid. Its round trip then can't trade
   and reads "unknown", which caps an honest token's pass at a warning.
