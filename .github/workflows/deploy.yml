@@ -316,28 +316,40 @@ jobs:
           if [ "${#dirs[@]}" -gt 0 ]; then node scripts/scan-bundle.mjs "${dirs[@]}"; fi
 
       # The manifest decides what the CLI deploys, and the build that wrote it ran the project's code, so the deploy job
-      # checks it before signing in, with jq (on the runner already), never with project code: one document; every
-      # endpoint named arcos*, run as arcos-jobs@ (under both of the account keys the CLI reads), triggered by a schedule
-      # and by nothing else, in europe-west4 only; no extensions and no lifecycle hooks; and no param, and no secret, but
-      # BLOCKSCOUT_API_KEY. Anything else, or a file jq can't read, fails here.
+      # checks it before signing in, with jq (on the runner already), never with project code: one document; the one
+      # endpoint arcosIndexer, gcfv2, run as arcos-jobs@ (under both of the account keys the CLI reads), triggered by a
+      # schedule and by nothing else, in europe-west4 only, with no VPC, no environment variables and the default
+      # ingress; no extensions, no lifecycle hooks and no required roles; required APIs only from the CLI's standard list
+      # (FUNCTIONS_APIS, STANDARD_APIS in firebase-tools' deploy/functions/prepare.js), which it enables without asking;
+      # and no param, and no secret, but BLOCKSCOUT_API_KEY. Anything else, or a file jq can't read, fails here.
       - name: Check the functions manifest
         if: env.DEPLOY_FUNCTIONS == 'true'
         env:
+          FUNCTIONS_ENDPOINT: arcosIndexer
           JOBS_ACCOUNT: arcos-jobs@arcos-c80cf.iam.gserviceaccount.com
           FUNCTIONS_REGION: europe-west4
           FUNCTIONS_SECRET: BLOCKSCOUT_API_KEY
+          FUNCTIONS_APIS: cloudfunctions.googleapis.com,runtimeconfig.googleapis.com,cloudbuild.googleapis.com,artifactregistry.googleapis.com,run.googleapis.com,eventarc.googleapis.com,pubsub.googleapis.com,storage.googleapis.com,secretmanager.googleapis.com,cloudscheduler.googleapis.com,cloudtasks.googleapis.com
         run: |
           manifest="$RUNNER_TEMP/bundle-functions/functions.yaml"
           fail() { echo "::error::functions.yaml $1, so nothing is deployed (docs/OPERATIONS.md, Deploying)."; exit 1; }
-          check() { jq -e --arg account "$JOBS_ACCOUNT" --arg region "$FUNCTIONS_REGION" --arg secret "$FUNCTIONS_SECRET" "$1" "$manifest" > /dev/null; }
+          check() {
+            jq -e --arg endpoint "$FUNCTIONS_ENDPOINT" --arg account "$JOBS_ACCOUNT" --arg region "$FUNCTIONS_REGION" \
+              --arg secret "$FUNCTIONS_SECRET" --arg apis "$FUNCTIONS_APIS" "$1" "$manifest" > /dev/null
+          }
           jq -e -s 'length == 1 and (.[0] | type == "object")' "$manifest" > /dev/null || fail "is not one JSON object"
-          check '.endpoints | type == "object" and length > 0' || fail "declares no endpoints"
-          check '.endpoints | keys | all(startswith("arcos"))' || fail "declares an endpoint whose name doesn't start with arcos"
+          check '.endpoints | type == "object" and keys == [$endpoint]' || fail "declares endpoints other than $FUNCTIONS_ENDPOINT alone"
+          check '.endpoints | all(.platform == "gcfv2")' || fail "declares an endpoint that is not gcfv2"
           check '.endpoints | all(.serviceAccountEmail == $account and ((has("serviceAccount") | not) or .serviceAccount == $account))' || fail "runs an endpoint as an account other than $JOBS_ACCOUNT"
           check '.endpoints | all((keys | map(select(endswith("Trigger")))) == ["scheduleTrigger"] and (.scheduleTrigger | type == "object"))' || fail "declares an endpoint triggered by something other than a schedule alone"
           check '.endpoints | all(.region == [$region])' || fail "declares an endpoint outside $FUNCTIONS_REGION"
+          check '.endpoints | all(.vpc == null)' || fail "puts an endpoint on a VPC"
+          check '.endpoints | all((.environmentVariables // {}) == {})' || fail "gives an endpoint environment variables"
+          check '.endpoints | all(.ingressSettings == null)' || fail "sets an endpoint's ingress"
           check '(.extensions // {}) | length == 0' || fail "declares extensions"
           check 'has("lifecycleHooks") | not' || fail "declares lifecycle hooks"
+          check 'has("requiredRoles") | not' || fail "declares required roles"
+          check '($apis | split(",")) as $standard | (.requiredAPIs // []) | all(.api as $api | $standard | any(. == $api))' || fail "requires an API outside the CLI's standard list"
           check '(.params // []) | all(.type == "secret" and .name == $secret)' || fail "declares a param other than the secret $FUNCTIONS_SECRET"
           check '.endpoints | all((.secretEnvironmentVariables // []) | all(.key == $secret and (.secret // $secret) == $secret))' || fail "gives an endpoint a secret other than $FUNCTIONS_SECRET"
           echo "functions.yaml: $(jq -r '.endpoints | keys | join(", ")' "$manifest"), scheduled, as $JOBS_ACCOUNT, in $FUNCTIONS_REGION."

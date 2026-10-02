@@ -618,13 +618,27 @@ describe("deploy.yml, the check of the functions manifest", () => {
     expect(index).toBeLessThan(at(/Put the functions bundle in place/));
     expect(index).toBeLessThan(at(/uses: google-github-actions\/auth@/));
     expect(step()).toMatch(/^ {8}if: env\.DEPLOY_FUNCTIONS == 'true'$/m);
-    expect(stepEnv()).toEqual({ JOBS_ACCOUNT: JOBS, FUNCTIONS_REGION: "europe-west4", FUNCTIONS_SECRET: "BLOCKSCOUT_API_KEY" });
+    expect(stepEnv()).toMatchObject({ FUNCTIONS_ENDPOINT: "arcosIndexer", JOBS_ACCOUNT: JOBS, FUNCTIONS_REGION: "europe-west4", FUNCTIONS_SECRET: "BLOCKSCOUT_API_KEY" });
+    expect(Object.keys(stepEnv()).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
+  });
+
+  // The CLI enables a required API on the standard list without asking (deploy/functions/prepare.js,
+  // ensureAllRequiredAPIsEnabled); the check allows that list and nothing else, so it must be the pinned CLI's.
+  const prepare = path.join(root, "tools/firebase/node_modules/firebase-tools/lib/deploy/functions/prepare.js");
+  it.runIf(fs.existsSync(prepare))("allows exactly the pinned CLI's STANDARD_APIS as required APIs", () => {
+    const list = fs.readFileSync(prepare, "utf8").match(/const STANDARD_APIS = \[([^\]]*)\]/);
+    expect(list, "prepare.js declares STANDARD_APIS").not.toBeNull();
+    const standard = [...list[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(standard.length).toBeGreaterThan(5);
+    expect(stepEnv().FUNCTIONS_APIS.split(",")).toEqual(standard);
   });
 
   it("uses jq and the shell only: no node, no npm, no project script", () => {
     const [script] = runScripts(step());
     expect(script).not.toMatch(/\b(node|npm|npx)\b|scripts\//);
     expect(script).toMatch(/\bjq -e\b/);
+    // Each rule is its own jq check with its own message, and a failed check stops the step.
+    expect(script.match(/\|\| fail "/g).length).toBe(15);
     expect(script).not.toMatch(/\$\{\{/);
   });
 
@@ -643,13 +657,43 @@ describe("deploy.yml, the check of the functions manifest", () => {
     refused("specVersion: v1alpha1\nendpoints: {}\n", /is not one JSON object/);
     refused(`${json(good())}\n${json(good())}`, /is not one JSON object/);
     refused("[]", /is not one JSON object/);
-    refused(json({ specVersion: "v1alpha1" }), /declares no endpoints/);
-    refused(json({ ...good(), endpoints: {} }), /declares no endpoints/);
+    refused(json({ specVersion: "v1alpha1" }), /endpoints other than arcosIndexer alone/);
+    refused(json({ ...good(), endpoints: {} }), /endpoints other than arcosIndexer alone/);
   });
 
-  it("refuses an endpoint whose name doesn't start with arcos", () => {
-    refused(changed((m, e) => (m.endpoints = { indexer: e })), /doesn't start with arcos/);
-    refused(changed((m, e) => (m.endpoints.otherIndexer = e)), /doesn't start with arcos/);
+  it("refuses any endpoint set but arcosIndexer alone, even one named arcos*", () => {
+    refused(changed((m, e) => (m.endpoints = { indexer: e })), /endpoints other than arcosIndexer alone/);
+    refused(changed((m, e) => (m.endpoints.otherIndexer = e)), /endpoints other than arcosIndexer alone/);
+    refused(changed((m, e) => (m.endpoints.arcosOther = e)), /endpoints other than arcosIndexer alone/);
+    refused(changed((m, e) => (m.endpoints = { arcosindexer: e })), /endpoints other than arcosIndexer alone/);
+  });
+
+  it("refuses an endpoint that isn't gcfv2", () => {
+    refused(changed((m, e) => (e.platform = "gcfv1")), /not gcfv2/);
+    refused(changed((m, e) => (e.platform = "run")), /not gcfv2/);
+    refused(changed((m, e) => delete e.platform), /not gcfv2/);
+  });
+
+  it("refuses a VPC, environment variables or an ingress setting", () => {
+    refused(changed((m, e) => (e.vpc = { connector: "projects/arcos-c80cf/locations/europe-west4/connectors/c", egressSettings: "ALL_TRAFFIC" })), /puts an endpoint on a VPC/);
+    refused(changed((m, e) => (e.environmentVariables = { INSPECT_PER_TICK: "50" })), /environment variables/);
+    refused(changed((m, e) => (e.ingressSettings = "ALLOW_INTERNAL_ONLY")), /sets an endpoint's ingress/);
+    refused(changed((m, e) => (e.ingressSettings = "ALLOW_ALL")), /sets an endpoint's ingress/);
+    // As the build writes them today: vpc and ingressSettings null, no environment variables.
+    expect(check(changed((m, e) => (delete e.vpc, delete e.ingressSettings, (e.environmentVariables = {})))).status).toBe(0);
+  });
+
+  it("refuses required roles, even none", () => {
+    refused(changed((m) => (m.requiredRoles = ["roles/owner"])), /declares required roles/);
+    refused(changed((m) => (m.requiredRoles = [])), /declares required roles/);
+  });
+
+  it("refuses a required API outside the CLI's standard list", () => {
+    refused(changed((m) => m.requiredAPIs.push({ api: "iam.googleapis.com", reason: "x" })), /an API outside the CLI's standard list/);
+    refused(changed((m) => (m.requiredAPIs = [{ api: "cloudscheduler.googleapis.com.evil", reason: "x" }])), /an API outside the CLI's standard list/);
+    refused(changed((m) => (m.requiredAPIs = [{ reason: "no api" }])), /an API outside the CLI's standard list/);
+    expect(check(changed((m) => (m.requiredAPIs = [{ api: "cloudtasks.googleapis.com", reason: "x" }, { api: "run.googleapis.com", reason: "y" }]))).status).toBe(0);
+    expect(check(changed((m) => delete m.requiredAPIs)).status).toBe(0);
   });
 
   it("refuses an endpoint that runs as another account, under either key the CLI reads", () => {

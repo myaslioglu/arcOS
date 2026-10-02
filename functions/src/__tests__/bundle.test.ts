@@ -86,7 +86,7 @@ describe("the manifest, as the deploy job checks it", () => {
   // first, in CI, before anything reaches the deploy job.
   it("passes the manifest the build writes", () => {
     const { script, env } = manifestCheck();
-    expect(Object.keys(env).sort()).toEqual(["FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
+    expect(Object.keys(env).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
     const temp = mkdtempSync(path.join(os.tmpdir(), "functions-manifest-"));
     try {
       mkdirSync(path.join(temp, "bundle-functions"));
