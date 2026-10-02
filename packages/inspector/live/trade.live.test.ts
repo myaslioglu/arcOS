@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { DEX, EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
 import { checkTrade, findPools } from "../src/checks";
 import { inspect } from "../src/inspect";
-import { SIMULATOR, simulateTrade, STATUS } from "../src/simulate";
+import { simulateTrade, simulatorAddresses, STATUS } from "../src/simulate";
 import type { InspectInput, PoolScan } from "../src/types";
 import { reader } from "./arc";
 
@@ -58,8 +58,14 @@ const TAX_TOKEN = "0xe60e2bcd092b78092a4a4010de1ccaadf5c03cca";
 const SELL_WHITELIST_TOKEN = "0xdb07d187ed6ba6790ec1fc473a386fa1106db697";
 
 describe("check 10 on Arc mainnet, read-only", () => {
-  it("places the simulator at an address with no code of its own", async () => {
-    expect(await reader.getCode(SIMULATOR)).toBeNull();
+  it("places the simulator and its router at fresh addresses with no code of their own", async () => {
+    const { simulator, router } = simulatorAddresses();
+    expect(await reader.getCode(simulator)).toBeNull();
+    expect(await reader.getCode(router)).toBeNull();
+  });
+
+  it("reads a gas price for the call, which the simulator's balance prepays", async () => {
+    expect(await reader.gasPrice()).toBeGreaterThan(0n);
   });
 
   it("round-trips an honest token through a Uniswap v2 pair for no more than the pair's two fees", async () => {

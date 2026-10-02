@@ -1,7 +1,7 @@
 /**
  * The live suites' one client for Arc mainnet's public RPC, and the pacing every call goes through: one call at a time,
  * `GAP_MS` apart, with a back-off when the node says -32005. Only read-only methods are ever sent (eth_call, eth_getCode,
- * eth_getStorageAt, eth_blockNumber); no transaction, no key.
+ * eth_getStorageAt, eth_blockNumber, eth_gasPrice); no transaction, no key.
  */
 import { createPublicClient, http } from "viem";
 import { CHAINS } from "@arcos/chain";
@@ -41,5 +41,6 @@ export const reader: ChainReader = {
   getStorageAt: (a, slot) => paced(() => inner.getStorageAt(a, slot)),
   read: (a, abi, fn, args, options) => paced(() => inner.read(a, abi, fn, args, options)),
   blockNumber: () => paced(() => inner.blockNumber()),
+  gasPrice: () => paced(() => inner.gasPrice()),
   callWithOverride: (call, overrides) => paced(() => inner.callWithOverride(call, overrides)),
 };

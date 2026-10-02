@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AERODROME, EURC as EURC_TOKEN, UNISWAP_V4, USDC, tradeSimulatorRuntime, type DexConfig } from "@arcos/chain";
 import { checkTrade } from "../checks";
 import { inspect } from "../inspect";
-import { SIMULATOR, TRADE_GAS } from "../simulate";
+import { TRADE_GAS, isOrdinaryAddress, randomAddress, simulatorAddresses } from "../simulate";
 import type { InspectInput, Pool, PoolScan } from "../types";
 import { NATIVE, v4PoolId, v4PoolKey } from "../v4";
-import { fakeChain, type FakeChain, type FakeReader, type SimResult } from "./fixtures/chain-fake";
+import { fakeChain, type FakeChain, type FakeReader, type FakeSimulation, type SimResult } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const PAIR = "0x4444444444444444444444444444444444444444";
@@ -24,6 +24,7 @@ const input = (reader: FakeReader, d: DexConfig | null = dex): InspectInput => (
 const scanOf = (...pools: Pool[]): PoolScan => ({ pools, factoriesAnswered: true, silent: [] });
 
 const USDC_UNITS = 1_000_000n;
+const lower = (a: string) => a.toLowerCase();
 const v2Pool = (depth: bigint, over: Partial<Pool> = {}): Pool => ({ address: PAIR, version: "v2", quote: "USDC", depth, liquid: depth >= 1_000n * USDC_UNITS, ...over });
 const v3Pool = (depth: bigint, fee: number): Pool => ({ address: POOL, version: "v3", quote: "USDC", depth, liquid: true, fee });
 const aeroPool = (depth: bigint): Pool => ({ address: POOL, version: "aero", quote: "USDC", depth, liquid: true });
@@ -32,14 +33,16 @@ const v4Pool = (depth: bigint, quote: `0x${string}`, fee: number, tickSpacing: n
   return { address: UNISWAP_V4.poolManager, version: "v4", quote: "USDC", depth, liquid: hooks ? null : true, key, poolId: v4PoolId(key), ...(hooks ? { undecided: "hook" as const } : {}) };
 };
 
-/** A round trip of `spent` that came back as `received`, every token bought sold. */
-const roundTrip = (spent: bigint, received: bigint, bought = 5n * 10n ** 18n): FakeChain["simulation"] => ({
-  result: { status: 0, spent, bought, sold: bought, received },
+/** A round trip of `spent` that came back as `received`, every token the pool paid out arriving and sold. */
+const roundTrip = (spent: bigint, received: bigint, bought = 5n * 10n ** 18n): FakeSimulation => ({
+  result: { status: 0, spent, paidOut: bought, bought, sold: bought, received },
 });
-const withStatus = (status: number, over: Partial<SimResult> = {}): FakeChain["simulation"] => ({
-  result: { status, spent: 10n * USDC_UNITS, bought: 5n * 10n ** 18n, sold: 0n, received: 0n, ...over },
+const withStatus = (status: number, over: Partial<SimResult> = {}): FakeSimulation => ({
+  result: { status, spent: 10n * USDC_UNITS, paidOut: 5n * 10n ** 18n, bought: 5n * 10n ** 18n, sold: 0n, received: 0n, ...over },
 });
 const TEN = 10n * USDC_UNITS;
+/** The fake's gas price (20 gwei) times the call's gas: what S is funded with on top of the test amount, to prepay the gas. */
+const PREPAID = TRADE_GAS * 20_000_000_000n;
 
 describe("trade simulation: which pool, how much, and the call", () => {
   it("trades against the deepest USDC pool in one eth_call from S to S, with the simulator's code and the USDC at S", async () => {
@@ -47,16 +50,51 @@ describe("trade simulation: which pool, how much, and the call", () => {
     await checkTrade(input(chain), scanOf(v2Pool(50_000n * USDC_UNITS), v3Pool(20_000n * USDC_UNITS, 3000)));
     expect(chain.simulations).toHaveLength(1);
     const [sim] = chain.simulations;
-    expect(sim!.call).toMatchObject({ from: SIMULATOR, to: SIMULATOR, gas: TRADE_GAS });
-    expect(sim!.overrides).toEqual([{ address: SIMULATOR, code: tradeSimulatorRuntime, balance: TEN * 10n ** 12n }]);
+    const S = sim!.call.from;
+    const R = sim!.trade.router;
+    expect(sim!.call).toMatchObject({ to: S, gas: TRADE_GAS });
+    expect(lower(R)).not.toBe(lower(S));
+    // S holds the test amount plus the gas the call prepays; R, the router, only the code.
+    expect(sim!.overrides).toEqual([
+      { address: S, code: tradeSimulatorRuntime, balance: TEN * 10n ** 12n + PREPAID },
+      { address: R, code: tradeSimulatorRuntime },
+    ]);
     expect(sim!.trade).toMatchObject({ kind: 0, pool: PAIR, token: TOKEN, usdc: USDC, amount: TEN });
+  });
+
+  it("sets the call's gas price to the network's, so tx.gasprice isn't the 0 of a bare eth_call", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n), gasPrice: 160_000_000_000n });
+    await checkTrade(input(chain), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    const [sim] = chain.simulations;
+    expect(sim!.call.gasPrice).toBe(160_000_000_000n);
+    expect(sim!.overrides[0]!.balance).toBe(TEN * 10n ** 12n + TRADE_GAS * 160_000_000_000n);
+  });
+
+  it("is unknown, and simulates nothing, when the gas price can't be read", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n), gasPrice: new Error("ETIMEDOUT") });
+    const f = await checkTrade(input(chain), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    expect(f).toMatchObject({ id: "trade", status: "unknown" });
+    expect(chain.simulations).toHaveLength(0);
+  });
+
+  it("runs from a fresh random S, with a fresh router R, every time", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    await checkTrade(input(chain), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    await checkTrade(input(chain), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    const [a, b] = chain.simulations;
+    expect(lower(a!.call.from)).not.toBe(lower(b!.call.from));
+    expect(lower(a!.trade.router)).not.toBe(lower(b!.trade.router));
+    for (const sim of [a!, b!]) {
+      expect(isOrdinaryAddress(sim.call.from)).toBe(true);
+      expect(isOrdinaryAddress(sim.trade.router as `0x${string}`)).toBe(true);
+    }
   });
 
   it("tests with 10 USDC, or 0.1% of the pool's depth when that is less", async () => {
     const chain = fakeChain({ simulation: roundTrip(5n * USDC_UNITS, 4_970_000n) });
     await checkTrade(input(chain), scanOf(v2Pool(5_000n * USDC_UNITS)));
     expect(chain.simulations[0]!.trade.amount).toBe(5n * USDC_UNITS);
-    expect(chain.simulations[0]!.overrides[0]!.balance).toBe(5n * 10n ** 18n);
+    expect(chain.simulations[0]!.overrides[0]!.balance).toBe(5n * 10n ** 18n + PREPAID);
   });
 
   it("never trades against an EURC pool: only USDC can be put at S", async () => {
@@ -90,7 +128,7 @@ describe("trade simulation: which pool, how much, and the call", () => {
     expect(trade).toMatchObject({ kind: 2, pool: UNISWAP_V4.poolManager, token: TOKEN, usdc: NATIVE, amount: 10n * 10n ** 18n });
     expect(trade.key).toMatchObject({ currency0: NATIVE, currency1: TOKEN, fee: 3000, tickSpacing: 60, hooks: NATIVE });
     // One balance: 10 USDC native is the same 10 USDC the ERC-20 view shows.
-    expect(overrides[0]!.balance).toBe(10n * 10n ** 18n);
+    expect(overrides[0]!.balance).toBe(10n * 10n ** 18n + PREPAID);
   });
 
   it("pays a v4 pool against the USDC ERC-20 in its 6 decimals", async () => {
@@ -135,8 +173,19 @@ describe("trade simulation: what the round trip means", () => {
     }
   });
 
-  it("warns that everything is lost when the buy delivered no tokens", async () => {
-    const f = await judge(roundTrip(TEN, 0n, 0n));
+  it("fails a token that delivered none of what the pool paid out for the buy", async () => {
+    const f = await judge(withStatus(0, { paidOut: 5n * 10n ** 18n, bought: 0n, sold: 0n, received: 0n }));
+    expect(f).toMatchObject({ id: "trade", status: "fail", title: "Buying delivers no tokens" });
+    expect(f.detail).toMatch(/the pool paid out, but none of the tokens arrived/);
+  });
+
+  it("is unknown when the pool paid nothing out for the buy: that is the pool's doing, not the token's", async () => {
+    const f = await judge(withStatus(0, { paidOut: 0n, bought: 0n, sold: 0n, received: 0n }));
+    expect(f).toMatchObject({ id: "trade", status: "unknown" });
+  });
+
+  it("warns that everything is lost when the tokens bought sell back for nothing", async () => {
+    const f = await judge(roundTrip(TEN, 0n));
     expect(f.status).toBe("warn");
     expect(f.title).toMatch(/100%/);
   });
@@ -144,7 +193,7 @@ describe("trade simulation: what the round trip means", () => {
   it("fails a token whose buy went through and whose sell reverted", async () => {
     const f = await judge(withStatus(3));
     expect(f).toMatchObject({ id: "trade", status: "fail", title: "Can't be sold" });
-    expect(f.detail).toMatch(/reverted/);
+    expect(f.detail).toMatch(/Selling straight back, in the same transaction and from a contract, reverted\./);
   });
 
   it.each([
@@ -158,6 +207,101 @@ describe("trade simulation: what the round trip means", () => {
 
   it("is unknown when nothing was spent: there is no round trip to measure", async () => {
     expect((await judge(roundTrip(0n, 0n))).status).toBe("unknown");
+  });
+});
+
+describe("trade simulation: a sell the pool itself can refuse", () => {
+  const deepV3 = v3Pool(50_000n * USDC_UNITS, 3000);
+  const shallowV2 = v2Pool(5_000n * USDC_UNITS);
+  /** The first round trip (against `first`) reverts on selling; any other answers `second`. */
+  const byPool = (first: string, second: FakeSimulation) => (trade: { pool: string }) =>
+    lower(trade.pool) === lower(first) ? withStatus(3) : second;
+  const run = async (simulation: FakeChain["simulation"], ...pools: Pool[]) => {
+    const chain = fakeChain({ simulation });
+    const f = await checkTrade(input(chain), scanOf(...pools));
+    return { f, chain };
+  };
+
+  it("warns, naming both pools, when the sell reverted in a v3 pool and went through in the v2 pair", async () => {
+    const { f, chain } = await run(byPool(POOL, roundTrip(5n * USDC_UNITS, 4_970_000n)), deepV3, shallowV2);
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL, PAIR]);
+    expect(lower(chain.simulations[0]!.call.from)).not.toBe(lower(chain.simulations[1]!.call.from));
+    expect(f).toMatchObject({ id: "trade", status: "warn", title: "Can't be sold into its deepest pool" });
+    expect(f.detail).toMatch(/^Selling into its deepest pool \(Uniswap v3 0x7777…7777\) reverted; selling into the Uniswap v2 pair \(0x4444…4444\) went through \(5 USDC came back as 4\.97\)\./);
+    expect(f.detail).toMatch(/refuse a token that arrives short \(a transfer tax\)/);
+  });
+
+  it("fails, naming both pools, when the sell reverts in the v2 pair too", async () => {
+    const { f, chain } = await run(withStatus(3), deepV3, shallowV2);
+    expect(chain.simulations).toHaveLength(2);
+    expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+    expect(f.detail).toMatch(/Uniswap v3 0x7777…7777.*the Uniswap v2 pair \(0x4444…4444\)/);
+  });
+
+  it("warns, without a pass, when the second round trip couldn't be completed", async () => {
+    for (const second of [withStatus(1), withStatus(4), { reverts: true } as const, { returns: "0x" } as const]) {
+      const { f } = await run(byPool(POOL, second), deepV3, shallowV2);
+      expect(f).toMatchObject({ status: "warn", title: "Can't be sold into its deepest pool" });
+      expect(f.detail).toMatch(/couldn't be completed/);
+    }
+  });
+
+  it("retries in the deepest hookless v4 pool when there is no v2 pair", async () => {
+    const v4 = v4Pool(1_000n * USDC_UNITS, USDC, 3000, 60);
+    const { f, chain } = await run(byPool(POOL, roundTrip(TEN, 9_940_000n)), deepV3, v4);
+    expect(chain.simulations[1]!.trade).toMatchObject({ kind: 2, pool: UNISWAP_V4.poolManager });
+    expect(f.status).toBe("warn");
+    expect(f.detail).toMatch(/the hookless Uniswap v4 pool \(0x/);
+  });
+
+  it.each([
+    ["a Uniswap v3 pool", v3Pool(50_000n * USDC_UNITS, 3000), /Uniswap v3 pools refuse a token that arrives short \(a transfer tax\)/],
+    ["an Aerodrome pool", aeroPool(50_000n * USDC_UNITS), /Aerodrome pools refuse a token that arrives short \(a transfer tax\)/],
+    ["a hooked v4 pool", v4Pool(50_000n * USDC_UNITS, USDC, 3000, 60, HOOK), /hook runs inside every swap/],
+  ])("still fails when the only pool is %s, and says why such a pool can refuse a sell", async (_, pool, why) => {
+    const { f, chain } = await run(withStatus(3), pool);
+    expect(chain.simulations).toHaveLength(1);
+    expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+    expect(f.detail).toMatch(why);
+    expect(f.detail).toMatch(/no Uniswap v2 or hookless Uniswap v4 USDC pool to try selling into instead/);
+  });
+
+  it("doesn't retry a sell that reverted in a v2 pair or a hookless v4 pool: only the token can have refused it", async () => {
+    for (const pool of [v2Pool(50_000n * USDC_UNITS), v4Pool(50_000n * USDC_UNITS, USDC, 3000, 60)]) {
+      const { f, chain } = await run(withStatus(3), pool, v2Pool(1_000n * USDC_UNITS, { address: "0x9999999999999999999999999999999999999999" }));
+      expect(chain.simulations).toHaveLength(1);
+      expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+    }
+  });
+
+  it("trades against a pool without a hook before a deeper one with", async () => {
+    const { chain } = await run(roundTrip(TEN, 9_940_000n), v4Pool(90_000n * USDC_UNITS, USDC, 3000, 60, HOOK), shallowV2);
+    expect(chain.simulations[0]!.trade.pool).toBe(PAIR);
+  });
+});
+
+describe("trade simulation: the simulator's addresses", () => {
+  it("draws 20 random bytes for each address, and never a mostly-zero one (a precompile, a system or a low address)", () => {
+    const draws = [new Uint8Array(20), new Uint8Array(20).fill(0x36, 0, 1), new Uint8Array(20).fill(0xab)];
+    let i = 0;
+    const address = randomAddress((b) => b.set(draws[i++]!));
+    expect(lower(address)).toBe(`0x${"ab".repeat(20)}`);
+    expect(i).toBe(3);
+  });
+
+  it("accepts an address with up to three zero bytes, and not one with four", () => {
+    expect(isOrdinaryAddress(`0x000000${"ab".repeat(17)}`)).toBe(true);
+    expect(isOrdinaryAddress(`0x00000000${"ab".repeat(16)}`)).toBe(false);
+    expect(isOrdinaryAddress("0x3600000000000000000000000000000000000000")).toBe(false);
+    expect(isOrdinaryAddress("0x0000000000000000000000000000000000000001")).toBe(false);
+  });
+
+  it("never gives S and R the same address", () => {
+    const draws = [0x11, 0x11, 0x22];
+    let i = 0;
+    const { simulator, router } = simulatorAddresses((b) => b.fill(draws[i++]!));
+    expect(lower(simulator)).toBe(`0x${"11".repeat(20)}`);
+    expect(lower(router)).toBe(`0x${"22".repeat(20)}`);
   });
 });
 

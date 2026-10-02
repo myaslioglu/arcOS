@@ -71,6 +71,7 @@ function reader(f: Fake): ChainReader {
       if (f.blockNumberError) throw f.blockNumberError;
       return 123n;
     },
+    gasPrice: async () => 1n,
     // A node that ignores the override: the simulator never runs (trade.test.ts covers what it says).
     callWithOverride: async () => "0x",
   };

@@ -17,6 +17,7 @@ function aggregator(answer: Answer[] | Error) {
     getCode: async () => null,
     getStorageAt: async () => null,
     blockNumber: async () => 1n,
+    gasPrice: async () => 1n,
     callWithOverride: async () => {
       throw new Error("multicall never simulates");
     },

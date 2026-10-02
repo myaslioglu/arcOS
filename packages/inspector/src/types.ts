@@ -63,6 +63,8 @@ export interface ChainReader {
    */
   read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[], options?: { gas?: bigint }): Promise<unknown>;
   blockNumber(): Promise<bigint>;
+  /** The network's current gas price (eth_gasPrice), in wei. */
+  gasPrice(): Promise<bigint>;
   /**
    * One eth_call with some accounts' state replaced for that call only (the RPC's third parameter): the trade simulation's
    * code and USDC balance at a throwaway address. Resolves with what the call returned, `0x` included (code that never ran,
@@ -73,8 +75,8 @@ export interface ChainReader {
   callWithOverride(call: OverrideCall, overrides: readonly StateOverride[]): Promise<Hex>;
 }
 
-/** The call `ChainReader.callWithOverride` makes. */
-export type OverrideCall = { from: Address; to: Address; data: Hex; gas: bigint };
+/** The call `ChainReader.callWithOverride` makes, at `gasPrice` (wei per gas), which `from` must hold enough to prepay. */
+export type OverrideCall = { from: Address; to: Address; data: Hex; gas: bigint; gasPrice: bigint };
 /** One account's state for one call: its code, its native balance (in wei), or both. */
 export type StateOverride = { address: Address; code?: Hex; balance?: bigint };
 

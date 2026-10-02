@@ -15,8 +15,8 @@ const quoterAbi = parseAbi([
 ]);
 const simulatorAbi = parseAbi([
   "struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }",
-  "struct Trade { uint8 kind; address pool; address token; address usdc; uint256 amount; PoolKey key; }",
-  "struct Result { uint8 status; uint256 spent; uint256 bought; uint256 sold; uint256 received; }",
+  "struct Trade { uint8 kind; address pool; address token; address usdc; address router; uint256 amount; PoolKey key; }",
+  "struct Result { uint8 status; uint256 spent; uint256 paidOut; uint256 bought; uint256 sold; uint256 received; }",
   "function simulate(Trade t) returns (Result r)",
 ]);
 const plainAbi = parseAbi([
@@ -55,12 +55,17 @@ export type FakeChain = {
   multicallReverts?: boolean;
   /** Multicall3's request fails at the transport level. */
   multicallError?: Error;
-  /** The trade simulation's answer. Absent: `0x`, as from a node that ignored the override. */
-  simulation?: FakeSimulation;
+  /**
+   * The trade simulation's answer. Absent: `0x`, as from a node that ignored the override. A function answers each call by
+   * the pool it trades against (a round trip retried on a second pool is a second call).
+   */
+  simulation?: FakeSimulation | ((trade: SimRecord["trade"]) => FakeSimulation);
+  /** What eth_gasPrice answers (default 20 gwei), or the error it fails with. */
+  gasPrice?: bigint | Error;
 };
 
 /** What the simulator returns, as the fake's own ABI copy decodes it. */
-export type SimResult = { status: number; spent: bigint; bought: bigint; sold: bigint; received: bigint };
+export type SimResult = { status: number; spent: bigint; paidOut: bigint; bought: bigint; sold: bigint; received: bigint };
 /**
  * What the trade simulation's eth_call does: return a result; `{ reverts }` (the call itself reverted, or ran out of its gas:
  * both reach the engine as a CallReverted); `{ fails }` rejects with that error as it is (a transport failure, or a node's
@@ -71,7 +76,10 @@ export type FakeSimulation = { result: SimResult } | { reverts: true } | { fails
 export type SimRecord = {
   call: OverrideCall;
   overrides: readonly StateOverride[];
-  trade: { kind: number; pool: string; token: string; usdc: string; amount: bigint; key: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string } };
+  trade: {
+    kind: number; pool: string; token: string; usdc: string; router: string; amount: bigint;
+    key: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string };
+  };
 };
 
 /** What a fake reader was asked, in order (an `aggregate3` counts as one read). */
@@ -179,10 +187,15 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
       return plain(address, fn, args);
     },
     blockNumber: async () => 123n,
+    gasPrice: async () => {
+      if (f.gasPrice instanceof Error) throw f.gasPrice;
+      return f.gasPrice ?? 20_000_000_000n;
+    },
     callWithOverride: async (call, overrides) => {
       const { args } = decodeFunctionData({ abi: simulatorAbi, data: call.data });
-      simulations.push({ call, overrides, trade: args[0] as SimRecord["trade"] });
-      const sim = f.simulation ?? { returns: "0x" };
+      const trade = args[0] as SimRecord["trade"];
+      simulations.push({ call, overrides, trade });
+      const sim = (typeof f.simulation === "function" ? f.simulation(trade) : f.simulation) ?? { returns: "0x" };
       if ("reverts" in sim) throw new CallReverted();
       if ("fails" in sim) throw sim.fails;
       if ("returns" in sim) return sim.returns;

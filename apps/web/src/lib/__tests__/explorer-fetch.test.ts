@@ -106,6 +106,7 @@ describe("an inspection whose explorer requests were cut off", () => {
       throw new CallReverted();
     },
     blockNumber: async () => 1n,
+    gasPrice: async () => 1n,
     callWithOverride: async () => {
       throw new CallReverted();
     },

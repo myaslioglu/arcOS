@@ -181,16 +181,16 @@ describe("viemReader().read: a gas-capped read that runs out of gas", () => {
 });
 
 // The trade simulation is one eth_call from S to S, with S's code and balance replaced for that call only. The reader sends it
-// as it is, with its gas limit, and maps the answer the way it maps a gas-capped read.
+// as it is, with its gas limit and gas price, and maps the answer the way it maps a gas-capped read.
 describe("viemReader().callWithOverride", () => {
   afterEach(() => vi.unstubAllGlobals());
   const S = "0x00000000000000000000000000000000000a4c05" as const;
-  const call = { from: S, to: S, data: "0x12345678" as const, gas: 5_000_000n };
+  const call = { from: S, to: S, data: "0x12345678" as const, gas: 5_000_000n, gasPrice: 160_000_000_000n };
   const overrides = [{ address: S, code: "0x6001600055" as const, balance: 10n ** 19n }];
   const client = () => createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
   const answer = (body: object) => vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, ...body }));
 
-  it("sends from, to, data, the gas limit and the state override, and resolves with what the call returned", async () => {
+  it("sends from, to, data, the gas limit, the gas price and the state override, and resolves with what the call returned", async () => {
     const bodies: { method: string; params: unknown[] }[] = [];
     vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
       bodies.push(JSON.parse(init.body));
@@ -200,9 +200,19 @@ describe("viemReader().callWithOverride", () => {
     expect(bodies).toHaveLength(1);
     expect(bodies[0]!.method).toBe("eth_call");
     const [tx, block, state] = bodies[0]!.params as [Record<string, string>, string, Record<string, Record<string, string>>];
-    expect(tx).toMatchObject({ from: S, to: S, data: "0x12345678", gas: "0x4c4b40" });
+    expect(tx).toMatchObject({ from: S, to: S, data: "0x12345678", gas: "0x4c4b40", gasPrice: "0x2540be4000" });
     expect(block).toBe("latest");
     expect(state).toEqual({ [S]: { code: "0x6001600055", balance: "0x8ac7230489e80000" } });
+  });
+
+  it("reads the gas price with eth_gasPrice", async () => {
+    const methods: string[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      methods.push(JSON.parse(init.body).method);
+      return Response.json({ jsonrpc: "2.0", id: 1, result: "0x2540be4000" });
+    });
+    expect(await viemReader(client()).gasPrice()).toBe(160_000_000_000n);
+    expect(methods).toEqual(["eth_gasPrice"]);
   });
 
   it("resolves with an empty answer as it is: the caller decides what code that didn't run means", async () => {
