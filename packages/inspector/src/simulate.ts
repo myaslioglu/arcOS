@@ -29,23 +29,31 @@ export function isOrdinaryAddress(address: Address): boolean {
   return hex.length === 40 && zeros < 4;
 }
 
-/** 20 random bytes as a checksummed address, drawn again until `isOrdinaryAddress` accepts it. */
+/** How many draws an address gets before giving up: a working random source needs one, almost always. */
+const MAX_DRAWS = 100;
+
+/**
+ * 20 random bytes as a checksummed address, drawn again until `isOrdinaryAddress` accepts it. Throws after `MAX_DRAWS` draws,
+ * so a source that keeps giving the same bytes can't loop forever.
+ */
 export function randomAddress(fill: (bytes: Uint8Array) => void = (b) => crypto.getRandomValues(b)): Address {
-  for (;;) {
+  for (let draw = 0; draw < MAX_DRAWS; draw++) {
     const bytes = new Uint8Array(20);
     fill(bytes);
     const address = `0x${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}` as Address;
     if (isOrdinaryAddress(address)) return getAddress(address);
   }
+  throw new Error("the random source gave no usable address");
 }
 
-/** A fresh S and R, never the same address. */
+/** A fresh S and R, never the same address. Throws, as `randomAddress` does, after `MAX_DRAWS` draws for R. */
 export function simulatorAddresses(fill?: (bytes: Uint8Array) => void): SimulatorAddresses {
   const simulator = randomAddress(fill);
-  for (;;) {
+  for (let draw = 0; draw < MAX_DRAWS; draw++) {
     const router = randomAddress(fill);
     if (lower(router) !== lower(simulator)) return { simulator, router };
   }
+  throw new Error("the random source gave no second address");
 }
 
 /**
@@ -96,8 +104,9 @@ const deepest = (pools: Pool[]): Pool | null => (pools.length === 0 ? null : poo
 
 /**
  * The pool to trade against: the deepest that trades USDC, the only currency the override can fund, a pool without a hook
- * before one with. Depth is what discovery read: v2, v3 and Aerodrome's USDC balance; v4's USDC in range at the current
- * price, a lower figure, so a v4 pool is picked over another kind only when even that is deeper. `null` when there is none.
+ * before one with. Depth is what discovery read: v3 and Aerodrome's USDC balance; v4's USDC in range at the current
+ * price, a lower figure, so a v4 pool is picked over another kind only when even that is deeper. A v2 pair's is its USDC
+ * reserve, not its balance, so USDC sent to an empty pair without a `sync` can't make it the deepest. `null` when there is none.
  */
 export function tradePool(scan: PoolScan, token: Address): Pool | null {
   const usable = scan.pools.filter((p) => usdcOf(p, token) !== null);
@@ -113,9 +122,19 @@ export function poolCanRefuseSell(pool: Pool): boolean {
   return pool.version === "v3" || pool.version === "aero" || hooked(pool);
 }
 
-/** Where a sell refused by `refused` is tried again: the deepest Uniswap v2 or hookless v4 USDC pool. `null` when there is none. */
+/**
+ * Where a sell refused by `refused` is tried again: the deepest Uniswap v2 or hookless v4 USDC pool that can actually trade,
+ * one discovery found liquid (1,000 USDC in a v2 pair's reserves, or a v4 quote paid out) and whose depth covers the test
+ * amount. Anyone can create an empty pair or pool for nothing, and its failed buy must not stand in for a sell that went
+ * through. `null` when there is none.
+ */
 export function fallbackPool(scan: PoolScan, token: Address, refused: Pool): Pool | null {
-  return deepest(scan.pools.filter((p) => p !== refused && usdcOf(p, token) !== null && !poolCanRefuseSell(p)));
+  const amount = testAmount(refused);
+  return deepest(
+    scan.pools.filter(
+      (p) => p !== refused && usdcOf(p, token) !== null && !poolCanRefuseSell(p) && p.liquid === true && p.depth >= amount,
+    ),
+  );
 }
 
 /** 10 USDC, or 0.1% of the pool's depth when that is less, but never under `MIN_TEST_AMOUNT`. In 6 decimals. */

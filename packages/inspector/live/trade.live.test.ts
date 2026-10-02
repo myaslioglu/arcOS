@@ -133,7 +133,7 @@ describe("check 10 on Arc mainnet, read-only", () => {
     const f = await checkTrade(input(V3_SELL_REVERTS), scan);
     expect(f).toMatchObject({ id: "trade", status: "fail", title: "Can't be sold" });
     expect(f.detail).toMatch(/Uniswap v3 pools refuse a token that arrives short \(a transfer tax\)/);
-    expect(f.detail).toMatch(/no Uniswap v2 or hookless Uniswap v4 USDC pool to try selling into instead/);
+    expect(f.detail).toMatch(/no Uniswap v2 or hookless Uniswap v4 USDC pool that trades to try selling into instead/);
   });
 
   it("inspects the honest v2 token end to end: check 10 passes in the report", async () => {

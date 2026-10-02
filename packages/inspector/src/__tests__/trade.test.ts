@@ -5,7 +5,7 @@ import { inspect } from "../inspect";
 import { TRADE_GAS, isOrdinaryAddress, randomAddress, simulatorAddresses } from "../simulate";
 import type { InspectInput, Pool, PoolScan } from "../types";
 import { NATIVE, v4PoolId, v4PoolKey } from "../v4";
-import { fakeChain, type FakeChain, type FakeReader, type FakeSimulation, type SimResult } from "./fixtures/chain-fake";
+import { fakeChain, v2PairReads, type FakeChain, type FakeReader, type FakeSimulation, type SimResult } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const PAIR = "0x4444444444444444444444444444444444444444";
@@ -238,11 +238,45 @@ describe("trade simulation: a sell the pool itself can refuse", () => {
     expect(f.detail).toMatch(/Uniswap v3 0x7777…7777.*the Uniswap v2 pair \(0x4444…4444\)/);
   });
 
-  it("warns, without a pass, when the second round trip couldn't be completed", async () => {
-    for (const second of [withStatus(1), withStatus(4), { reverts: true } as const, { returns: "0x" } as const]) {
+  it("warns, without a pass, when the second round trip couldn't be completed for a reason that isn't the token's", async () => {
+    for (const second of [withStatus(2), withStatus(4), { reverts: true } as const, { returns: "0x" } as const]) {
       const { f } = await run(byPool(POOL, second), deepV3, shallowV2);
       expect(f).toMatchObject({ status: "warn", title: "Can't be sold into its deepest pool" });
       expect(f.detail).toMatch(/couldn't be completed/);
+    }
+  });
+
+  it("says the pool gave nothing back, not that nothing was bought, when the second buy delivered tokens no sell was sent for", async () => {
+    const { f } = await run(byPool(POOL, withStatus(0, { sold: 0n, received: 0n })), deepV3, shallowV2);
+    expect(f.status).toBe("warn");
+    expect(f.detail).toMatch(/the pool would give nothing back for the tokens bought, so no sell was sent/);
+    expect(f.detail).not.toMatch(/bought nothing/);
+  });
+
+  it("keeps the fail when the second pool's buy reverted or the pool paid nothing out: that pool doesn't trade", async () => {
+    for (const second of [withStatus(1), withStatus(0, { paidOut: 0n, bought: 0n, sold: 0n, received: 0n }), withStatus(0, { spent: 0n })]) {
+      const { f, chain } = await run(byPool(POOL, second), deepV3, shallowV2);
+      expect(chain.simulations).toHaveLength(2);
+      expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
+      expect(f.detail).toMatch(/Buying from the Uniswap v2 pair \(0x4444…4444\) to try selling there instead (reverted|got nothing), so it has no other pool that trades to sell into\./);
+    }
+  });
+
+  it("fails with the evidence when the second pool paid out for the buy and no tokens arrived", async () => {
+    const { f } = await run(byPool(POOL, withStatus(0, { paidOut: 5n * 10n ** 18n, bought: 0n, sold: 0n, received: 0n })), deepV3, shallowV2);
+    expect(f).toMatchObject({ status: "fail", title: "Buying delivers no tokens" });
+    expect(f.detail).toMatch(/Uniswap v3 0x7777…7777.*the Uniswap v2 pair \(0x4444…4444\).*none of the tokens arrived/);
+  });
+
+  it("never retries in a pool that can't trade: an empty or thin v2 pair, or a v4 pool whose depth is under the test amount", async () => {
+    // Anyone can create a pair for nothing; its buy reverting must not turn the v3 pool's sell revert into a warning.
+    const empty = v2Pool(0n);
+    const thin = v2Pool(900n * USDC_UNITS);
+    const shallowV4 = v4Pool(5n * USDC_UNITS, USDC, 3000, 60);
+    for (const other of [empty, thin, shallowV4]) {
+      const { f, chain } = await run(byPool(POOL, withStatus(1)), deepV3, other);
+      expect(chain.simulations.map((s) => s.trade.pool)).toEqual([POOL]);
+      expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
     }
   });
 
@@ -263,7 +297,7 @@ describe("trade simulation: a sell the pool itself can refuse", () => {
     expect(chain.simulations).toHaveLength(1);
     expect(f).toMatchObject({ status: "fail", title: "Can't be sold" });
     expect(f.detail).toMatch(why);
-    expect(f.detail).toMatch(/no Uniswap v2 or hookless Uniswap v4 USDC pool to try selling into instead/);
+    expect(f.detail).toMatch(/no Uniswap v2 or hookless Uniswap v4 USDC pool that trades to try selling into instead/);
   });
 
   it("doesn't retry a sell that reverted in a v2 pair or a hookless v4 pool: only the token can have refused it", async () => {
@@ -281,6 +315,11 @@ describe("trade simulation: a sell the pool itself can refuse", () => {
 });
 
 describe("trade simulation: the simulator's addresses", () => {
+  it("gives up, instead of looping forever, when the random source keeps giving unusable or equal bytes", () => {
+    expect(() => randomAddress((b) => b.fill(0))).toThrow();
+    expect(() => simulatorAddresses((b) => b.fill(0x11))).toThrow();
+  });
+
   it("draws 20 random bytes for each address, and never a mostly-zero one (a precompile, a system or a low address)", () => {
     const draws = [new Uint8Array(20), new Uint8Array(20).fill(0x36, 0, 1), new Uint8Array(20).fill(0xab)];
     let i = 0;
@@ -331,7 +370,7 @@ describe("trade simulation in a report", () => {
     inspect({
       ...input(fakeChain({
         code: { [TOKEN]: PLAIN },
-        reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR, [`${USDC}.balanceOf(${PAIR})`]: 50_000n * USDC_UNITS },
+        reads: { [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR, ...v2PairReads(PAIR, USDC, TOKEN, 50_000n * USDC_UNITS) },
         simulation,
       }), { quoteTokens: [{ address: USDC, symbol: "USDC" }], v2Factory: V2 }),
       now: () => new Date("2026-10-02T00:00:00Z"),

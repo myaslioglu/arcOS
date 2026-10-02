@@ -170,7 +170,8 @@ but does have privileged functions, both the ownership and privileges findings r
   so it is often far less than what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts
   as liquid from 1,000 units of USDC or EURC in the pool.
 - The trade check (check 10) buys the token with 10 USDC, or 0.1% of the pool's depth when that is
-  less (never under 0.01 USDC), from its deepest USDC pool (one without a hook before one with) and
+  less (never under 0.01 USDC), from its deepest USDC pool (one without a hook before one with; a v2
+  pair's depth is its USDC reserve, not its balance) and
   sells everything straight back into the same pool. It is one `eth_call`: a small simulator contract
   (`packages/contracts/src/sim/TradeSimulator.sol`) is placed with a state override at a fresh random
   address S, together with the USDC it spends and the gas the call prepays at the network's current
@@ -183,10 +184,13 @@ but does have privileged functions, both the ownership and privileges findings r
   sold") in a Uniswap v2 pair or a hookless v4 pool, where only the token can refuse it. A Uniswap v3
   or Aerodrome pool checks it was paid in full, so it refuses a token that arrives short (a transfer
   tax), and a v4 pool's hook can refuse a swap; when the sell reverts in one of those, Inspector runs a
-  second round trip in the deepest Uniswap v2 or hookless v4 USDC pool. It fails the token only if
-  that sell reverts too, or if there is no such pool, in which case the finding says why the first
-  pool may have refused it. Otherwise it warns and names both pools ("Selling into its deepest pool
-  (Uniswap v3 0x…) reverted; selling into the Uniswap v2 pair (0x…) went through"). A round trip that
+  second round trip in the deepest Uniswap v2 or hookless v4 USDC pool that can trade: one found
+  liquid (1,000 USDC in a v2 pair's reserves, or a v4 quote paid out) and deep enough for the test
+  amount, since anyone can create an empty pair. It fails the token if that sell reverts too, if
+  there is no such pool or its buy reverts or gets nothing (the finding then says why the first pool
+  may have refused the sell), or if that buy delivers no tokens. Otherwise it warns and names both
+  pools ("Selling into its deepest pool (Uniswap v3 0x…) reverted; selling into the Uniswap v2 pair
+  (0x…) went through"). A round trip that
   loses more than the pool's own fees for the two swaps plus 3% is a warning; where the fee can change
   from swap to swap (a dynamic-fee or hooked v4 pool, Aerodrome) the line is 5%. A buy that reverts or
   that the pool pays nothing for, a leg that runs out of the gas it is given, and an RPC that won't
