@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getAddress, isAddress } from "viem";
 import {
-  AERODROME, ARCOS, BURN_ADDRESSES, DEX, EURC, KNOWN_LOCKERS, MULTICALL3, PERMIT2, UNISWAP_V4, UNIVERSAL_ROUTERS, USDC, type Address, type DexConfig,
+  AERODROME, ARCOS, BURN_ADDRESSES, CIRBTC, DEX, EURC, KNOWN_LOCKERS, MULTICALL3, PERMIT2, UNISWAP_V4, UNIVERSAL_ROUTERS, USDC, type Address, type DexConfig,
 } from "../addresses";
 import { checkArcosAddresses } from "../addressSanity";
 import { CHAINS } from "../chains";
@@ -18,7 +18,7 @@ const inDex = (dex: DexConfig | null) =>
     : [];
 
 const all = [
-  USDC, MULTICALL3, EURC.mainnet, EURC.testnet, ...BURN_ADDRESSES, ...KNOWN_LOCKERS.mainnet, ...KNOWN_LOCKERS.testnet,
+  USDC, MULTICALL3, EURC.mainnet, EURC.testnet, CIRBTC.mainnet, CIRBTC.testnet, ...BURN_ADDRESSES, ...KNOWN_LOCKERS.mainnet, ...KNOWN_LOCKERS.testnet,
   ...inDex(DEX.mainnet), ...inDex(DEX.testnet),
   ...Object.values(ARCOS).flatMap((c) => (c ? Object.values(c).filter((a): a is Address => a != null) : [])),
   PERMIT2, ...UNIVERSAL_ROUTERS.mainnet, ...UNIVERSAL_ROUTERS.testnet,
