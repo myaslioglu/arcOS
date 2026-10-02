@@ -258,7 +258,7 @@ async function leased(
     error ??= nameOf(e);
     log.error("arcosIndexer feeds failed", { error: nameOf(e) });
   }
-  await finishRun(db, network, now(), { day: today, count: spent }, runId);
+  await finishRun(db, network, now(), { day: today, calls: spent - before }, runId);
 
   return {
     status: "ran",

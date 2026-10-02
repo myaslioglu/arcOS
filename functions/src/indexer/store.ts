@@ -126,9 +126,29 @@ type Found = { record: TokenRecord; pooled: boolean };
  * A pool doc is the mark that its sighting is fully handled: a pool that exists is never handled again. So the token
  * writes (the new tokens and the requeues) are committed first and the pools after them, in that order across batches;
  * a crash between the two leaves the pools missing, and the window read again requeues their tokens.
+ * New docs are created, never set: a token another run created (and maybe inspected) since the reads is not
+ * overwritten. Such a create fails, and the window is read and written once more, leaving that doc alone.
  * `batchSize` is for the tests.
  */
 export async function recordWindow(
+  db: Firestore,
+  network: NetworkId,
+  sightings: readonly Sighting[],
+  options: { inspect: boolean; now: number; batchSize?: number },
+): Promise<WindowResult> {
+  try {
+    return await writeWindow(db, network, sightings, options);
+  } catch (e) {
+    // Another run created one of these docs between the reads and the writes: read again, and write what is still new.
+    if (!alreadyExists(e)) throw e;
+    return writeWindow(db, network, sightings, options);
+  }
+}
+
+/** Firestore's ALREADY_EXISTS (gRPC code 6), which a create of an existing doc fails with. */
+const alreadyExists = (e: unknown): boolean => typeof e === "object" && e !== null && (e as { code?: unknown }).code === 6;
+
+async function writeWindow(
   db: Firestore,
   network: NetworkId,
   sightings: readonly Sighting[],
@@ -193,7 +213,7 @@ export async function recordWindow(
     const snap = tokenSnaps[i]!;
     if (!snap.exists) {
       const doc = tokenToDoc({ ...record, inspect: newInspect(options.inspect, pooled, now) });
-      writes.push((batch) => batch.set(ref, doc));
+      writes.push((batch) => batch.create(ref, doc));
       changed.push(doc);
       created++;
       return;
@@ -207,7 +227,7 @@ export async function recordWindow(
   // Last: the pools, the marks that the tokens above are written.
   for (const id of newPools) {
     const doc = pools.get(id)!;
-    writes.push((batch) => batch.set(db.collection(COLLECTIONS.pools).doc(id), doc));
+    writes.push((batch) => batch.create(db.collection(COLLECTIONS.pools).doc(id), doc));
   }
   await commitAll(db, writes, options.batchSize);
   return { pools: newPools.size, tokens: created, requeued, changed };
@@ -232,19 +252,31 @@ export async function halt(db: Firestore, network: NetworkId, reason: string): P
   await indexerRef(db, network).update({ halted: reason });
 }
 
-/** The end of a run: when it ran, the explorer calls spent today, and the lease given back if it is still this run's. */
+/**
+ * The end of a run, in one transaction: `lastRunAt` (never moved back), the explorer calls this run spent added to what
+ * the doc holds for that UTC day, and the lease given back if it is still this run's. Adding, rather than writing the
+ * count the run started from plus its own, keeps the calls of a run that overlapped this one (one that outlived its
+ * lease) in the day's count.
+ */
 export async function finishRun(
   db: Firestore,
   network: NetworkId,
   now: number,
-  explorerCalls: IndexerDoc["explorerCalls"],
+  spent: { day: string; calls: number },
   runId: string,
 ): Promise<void> {
   const ref = indexerRef(db, network);
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
-    const mine = snap.exists && leaseOf(snap.data() as IndexerDoc).runId === runId;
-    tx.update(ref, { lastRunAt: Timestamp.fromMillis(now), explorerCalls, ...(mine ? { runningUntil: null, runId: null } : {}) });
+    if (!snap.exists) return;
+    const doc = snap.data() as IndexerDoc;
+    const mine = leaseOf(doc).runId === runId;
+    const stored = doc.explorerCalls;
+    // A later day already counted by another run: this run's calls belong to a day that is over.
+    const explorerCalls =
+      stored.day === spent.day ? { day: spent.day, count: stored.count + spent.calls } : stored.day > spent.day ? stored : { day: spent.day, count: spent.calls };
+    const lastRunAt = Math.max(doc.lastRunAt?.toMillis() ?? 0, now);
+    tx.update(ref, { lastRunAt: Timestamp.fromMillis(lastRunAt), explorerCalls, ...(mine ? { runningUntil: null, runId: null } : {}) });
   });
 }
 

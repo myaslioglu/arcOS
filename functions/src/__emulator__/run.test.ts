@@ -21,7 +21,7 @@ import { arcosDb } from "@arcos/data/server";
 import type { Pool } from "@arcos/inspector";
 import { decodeLogs, sourcesFor, type RawLog } from "../indexer/events";
 import { LIMITS, runIndexer, type InspectToken, type RunResult } from "../indexer/run";
-import { LEASE_MS, rebuiltFeed, recordWindow, writeCursor } from "../indexer/store";
+import { LEASE_MS, rebuiltFeed, recordWindow, utcDay, writeCursor } from "../indexer/store";
 import { BACKFILL_BLOCKS } from "../indexer/windows";
 import { USDC_LOWER, ZERO, addr, created, fakeChain, fakeInspector, fakeNow, fakeReport, timeOf, v3Pool, v4Pool, type FakeChainOptions } from "./fakes";
 
@@ -404,6 +404,61 @@ describe("a crash inside a window", () => {
       expect(await tokenDoc(B), `crash at ${crashAt}`).toMatchObject({ inspect: { state: "queued" } });
       expect(await count(COLLECTIONS.pools)).toBe(3);
     }
+  });
+});
+
+describe("a run that overlaps another", () => {
+  it("doesn't overwrite a token another run created between its reads and its writes", async () => {
+    const window = decodeLogs([v3Pool(START + 2, A, POOL_A), created(START + 3, B, "BEE")], sourcesFor("mainnet"));
+    const inspected = { inspect: { state: "done", priority: INSPECT_PRIORITY.bare, attempts: 0, queuedAt: null }, radar: { liquid: false, passing: true } };
+    let raced = false;
+    // The other run creates B (and inspects it) just before this run's first commit.
+    const racing = wrapped((target, prop) => {
+      if (prop !== "batch") return undefined;
+      return () => {
+        const batch = target.batch();
+        const commit = batch.commit.bind(batch);
+        batch.commit = async () => {
+          if (!raced) {
+            raced = true;
+            await recordWindow(target, "mainnet", decodeLogs([created(START + 3, B, "BEE")], sourcesFor("mainnet")), { inspect: true, now: clock.now() });
+            await target.collection(COLLECTIONS.tokens).doc(tokenId("mainnet", B)).update(inspected);
+          }
+          return commit();
+        };
+        return batch;
+      };
+    });
+    const result = await recordWindow(racing, "mainnet", window, { inspect: true, now: clock.now() });
+    expect(raced).toBe(true);
+    expect(result).toMatchObject({ pools: 1, tokens: 1 }); // the second pass: A and its pool; B was there
+    expect(await tokenDoc(B)).toMatchObject(inspected);
+    expect(await tokenDoc(A)).toMatchObject({ inspect: { state: "queued" } });
+    expect(await count(COLLECTIONS.pools)).toBe(1);
+  });
+
+  it("adds its explorer calls to the day's count, and leaves a lease another run took over alone", async () => {
+    const today = utcDay(clock.now());
+    await startAt(START, { explorerCalls: { day: today, count: 3 } });
+    const chain = fakeChain({ head: START + 10, logs: [v3Pool(START + 5, A, POOL_A)] });
+    const logs = chain.logs;
+    const later = clock.now() + 10_000;
+    // While this run reads its window, another takes the lease over and spends 4 calls of its own.
+    chain.logs = async (filter) => {
+      await db.collection(COLLECTIONS.indexer).doc("mainnet").update({
+        runId: "other",
+        runningUntil: Timestamp.fromMillis(clock.now() + LEASE_MS),
+        explorerCalls: { day: today, count: 7 },
+        lastRunAt: Timestamp.fromMillis(later),
+      });
+      return logs(filter);
+    };
+    const result = ran(await run(chain, fakeInspector({ [A]: { report: fakeReport(A, 2, false) } }, 2), { inspectPerTick: 1, explorerDailyBudget: 5_000 }));
+    expect(result.explorerCalls).toBe(2);
+    const doc = await indexerDoc();
+    expect(doc).toMatchObject({ explorerCalls: { day: today, count: 9 }, runId: "other" });
+    expect(doc.runningUntil).not.toBeNull();
+    expect(doc.lastRunAt!.toMillis()).toBe(later);
   });
 });
 
