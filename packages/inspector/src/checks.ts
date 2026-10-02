@@ -73,7 +73,7 @@ import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { NATIVE, readV4Pools, type V4Quote } from "./v4";
-import { STATUS, buyDidNotTrade, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type SkipCause, type TradeAttempt, type TradeRun } from "./simulate";
+import { MIN_DEPTH, STATUS, buyDidNotTrade, orderDepth, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type SkipCause, type TradeAttempt, type TradeRun } from "./simulate";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -314,8 +314,8 @@ export async function beaconImplementation(reader: ChainReader, beacon: Address 
   }
 }
 
-/** 1,000 units of a 6-decimal quote token: what a pool must hold, or on v4 must pay out to a quote, to count as liquid. */
-const MIN_DEPTH = 1_000_000_000n;
+// MIN_DEPTH, 1,000 units of a 6-decimal quote token (what a pool must hold, or on v4 must pay out to a quote, to count as
+// liquid), is defined in simulate.ts, which also orders the trade check's pools by it.
 
 /** Distinguishes "the factory reverted" from "the factory answered the zero address". */
 const REVERTED = Symbol("factory call reverted");
@@ -1010,7 +1010,8 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
  * that paid nothing out (which the token can't cause) is passed over freely; any other cause (a revert, a buy that took no
  * USDC though the pool paid out) may be the token refusing or undoing a buy it can tell is simulated. So does any pool of
  * the scan deeper than the one measured that wasn't traded against (hooked, against EURC, not liquid, or past the cap),
- * skipped or not: either caps the finding at `warn`, never `pass` (a `fail` stays one), and is named. Only what was measured
+ * skipped or not: either caps the finding at `warn`, never `pass` (a `fail` stays one), and is named. Above both, the one
+ * rule for a pass: the pool measured is liquid and no other pool of the scan is liquid or undecided. Only what was measured
  * is evidence:
  * - no pool tried could trade, or either leg ran out of the gas it was given: `unknown`, since neither says anything about
  *   selling;
@@ -1032,31 +1033,47 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   if (run.kind === "no-pool") return f;
   const skipped = run.skipped ?? [];
   const untried = run.untriedDeeper ?? [];
-  if (skipped.length === 0 && untried.length === 0) return f;
   const deepest = deepestLabel(run);
   const capping = skipped.find((s) => s.tokenMayHaveCaused);
   const untriedNote =
     untried.length > 0
       ? ` ${capitalized(listWith("and", untried.map(untriedName)))}, deeper than the pool measured, ${untried.length === 1 ? "was" : "were"} never traded against: Inspector trades only against USDC pools, without a hook first.`
       : "";
-  // A buy the token may have refused or undone (one it can tell is simulated, from a buyer with code, say), or a deeper
-  // pool never traded against, where the token's real trading could be, leaves a round trip measured elsewhere short of a
-  // pass: it is capped at a warning.
-  if ((capping || untried.length > 0) && f.status === "pass") {
+  // The one rule for a pass: the pool measured is liquid, and no other pool the scan found is liquid or undecided. A pool
+  // that could be where the token's real trading is, but wasn't measured, leaves a round trip elsewhere short of a pass. On
+  // top of it, a buy the token may have refused or undone (one it can tell is simulated, from a buyer with code, say), or a
+  // deeper pool never traded against, caps it too. Each is capped at a warning, never turned into a fail.
+  const otherLive = scan.pools.filter((p) => p !== run.pool && (p.liquid === true || p.liquid === null));
+  const measuredThin = run.pool.liquid !== true;
+  if (f.status === "pass" && (capping || untried.length > 0 || otherLive.length > 0 || measuredThin)) {
     const where = (p: Pool) => (p === skipped[0]?.pool ? `${deepest} (${poolName(p)})` : `a deeper pool (${poolName(p)})`);
     const title = capping
       ? `Buying in ${capping.pool === skipped[0]!.pool ? deepest : "a deeper pool"} ${SKIP_TITLE[capping.cause]}`
-      : "A deeper pool wasn't traded against";
+      : untried.length > 0
+        ? "A deeper pool wasn't traded against"
+        : measuredThin
+          ? run.pool.liquid === null ? "Measured on a pool of undecided liquidity" : "Measured on a thin pool"
+          : "Another liquid pool wasn't measured";
     const lead = capping
       ? `Buying with ${usdcAmount(capping.amount)} USDC in ${where(capping.pool)} ${SKIP_VERB[capping.cause]}; a round trip on ${poolName(run.pool)} went through. `
       : skipped.length > 0
         ? `Buying in ${listWith("and", skipped.map((s) => where(s.pool)))} couldn't trade (${listWith("and", skipped.map((s) => SKIP_NOTE[s.cause]))}); a round trip on ${poolName(run.pool)} went through. `
         : "";
+    const named = new Set<Pool>([...skipped.map((s) => s.pool), ...untried]);
+    const unnamed = otherLive.filter((p) => !named.has(p));
+    const liveNote =
+      unnamed.length > 0
+        ? ` ${capitalized(listWith("and", unnamed.map((p) => `${untriedName(p)} (${p.liquid === true ? "liquid" : "liquidity undecided"})`)))} ${unnamed.length === 1 ? "wasn't" : "weren't"} traded against.`
+        : "";
+    const thinNote = measuredThin
+      ? ` It was measured on ${run.pool.liquid === null ? "a pool whose liquidity is undecided" : "a thin pool"} (${poolName(run.pool)}, ${usdcAmount(run.pool.depth)} ${run.pool.quote}${run.pool.version === "v4" ? " in range" : ""}).`
+      : "";
     const why = capping
       ? " A token can refuse or undo a buy it can tell is simulated, so a round trip measured elsewhere after that is never a pass."
-      : " The token's real trading may be in a pool that wasn't traded against, so this is never a pass.";
-    return { ...f, status: "warn", title, detail: `${lead}${f.detail}${untriedNote}${why}` };
+      : " A pass needs the round trip measured on a liquid pool, with no other liquid or undecided pool beside it.";
+    return { ...f, status: "warn", title, detail: `${lead}${f.detail}${thinNote}${untriedNote}${liveNote}${why}` };
   }
+  if (skipped.length === 0 && untried.length === 0) return f;
   if (skipped.length === 0) return { ...f, detail: `${f.detail}${untriedNote}` };
   const deeper = `the deeper ${skipped.length === 1 ? "pool" : "pools"} ${listWith("and", skipped.map((s) => `${poolName(s.pool)} (${SKIP_NOTE[s.cause]})`))}`;
   const note =
@@ -1073,13 +1090,11 @@ const untriedName = (p: Pool): string => (p.quote === "USDC" ? poolName(p) : `${
 
 /**
  * What to call the first pool the trade check tried: "its deepest pool", unless the scan found a deeper one it doesn't
- * trade against (hooked, or against EURC), when it is "its deepest USDC pool without a hook" (or "its deepest USDC pool"
- * when that one has a hook itself).
+ * trade against (hooked, against EURC, not liquid), when it is "the deepest pool the check trades against".
  */
 function deepestLabel(run: Exclude<TradeRun, { kind: "no-pool" }>): string {
   const first = run.skipped?.[0]?.pool ?? run.pool;
-  if (!(run.untriedDeeper ?? []).some((p) => p.depth > first.depth)) return "its deepest pool";
-  return first.version === "v4" && first.key && BigInt(first.key.hooks) !== 0n ? "its deepest USDC pool" : "its deepest USDC pool without a hook";
+  return (run.untriedDeeper ?? []).some((p) => orderDepth(p) > orderDepth(first)) ? "the deepest pool the check trades against" : "its deepest pool";
 }
 
 /** Why a pool was passed over, as a note ("its buy reverted") and in a title ("Buying in its deepest pool reverted"). */

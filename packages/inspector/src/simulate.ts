@@ -99,11 +99,28 @@ function usdcOf(pool: Pool, token: Address): Address | null {
 /** A v4 pool with a hook, which runs inside every swap. */
 const hooked = (pool: Pool): boolean => pool.version === "v4" && pool.key !== undefined && BigInt(pool.key.hooks) !== 0n;
 
-/** The deepest of `pools`, or `null` when there is none. */
-const deepest = (pools: Pool[]): Pool | null => (pools.length === 0 ? null : pools.reduce((a, b) => (b.depth > a.depth ? b : a)));
+/** 1,000 USDC (6 decimals): what a pool must be able to pay out to count as liquid. */
+export const MIN_DEPTH = 1_000_000_000n;
 
-/** `pools`, deepest first. */
-const byDepth = (pools: Pool[]): Pool[] => [...pools].sort((a, b) => (b.depth > a.depth ? 1 : b.depth < a.depth ? -1 : 0));
+/**
+ * The depth the trade check orders and compares pools by: `depth`, except that a v4 pool found liquid counts as at least
+ * `MIN_DEPTH`. A v4 pool's depth is only what is in range at the current price, which can be near 0 in a pool whose quote
+ * paid out 1,000 USDC, so it would otherwise come after a thin pair. EURC is compared 1:1 with USDC.
+ */
+export function orderDepth(pool: Pool): bigint {
+  return pool.version === "v4" && pool.liquid === true && pool.depth < MIN_DEPTH ? MIN_DEPTH : pool.depth;
+}
+
+/** The deepest of `pools` (by `orderDepth`), or `null` when there is none. */
+const deepest = (pools: Pool[]): Pool | null =>
+  pools.length === 0 ? null : pools.reduce((a, b) => (orderDepth(b) > orderDepth(a) ? b : a));
+
+/** `pools`, deepest first (by `orderDepth`). */
+const byDepth = (pools: Pool[]): Pool[] =>
+  [...pools].sort((a, b) => {
+    const [da, db] = [orderDepth(a), orderDepth(b)];
+    return db > da ? 1 : db < da ? -1 : 0;
+  });
 
 /** The most pools a buy is tried in: the deepest, and two more when a buy can't trade in the one before. */
 export const MAX_TRADE_POOLS = 3;
@@ -157,7 +174,12 @@ export function fallbackPool(scan: PoolScan, token: Address, refused: Pool, excl
   return deepest(
     scan.pools.filter(
       (p) =>
-        p !== refused && !exclude.includes(p) && usdcOf(p, token) !== null && !poolCanRefuseSell(p) && p.liquid === true && p.depth >= amount,
+        p !== refused &&
+        !exclude.includes(p) &&
+        usdcOf(p, token) !== null &&
+        !poolCanRefuseSell(p) &&
+        p.liquid === true &&
+        orderDepth(p) >= amount,
     ),
   );
 }
@@ -269,7 +291,7 @@ export async function simulateTrade(reader: ChainReader, token: Address, scan: P
   // liquid, or one past the cap. The token's real trading could be there, so it caps the finding as a refused buy does.
   const measured = first.pool;
   const tried = new Set<Pool>([...skipped.map((s) => s.pool), measured]);
-  const untriedDeeper = scan.pools.filter((p) => !tried.has(p) && p.depth > measured.depth);
+  const untriedDeeper = scan.pools.filter((p) => !tried.has(p) && orderDepth(p) > orderDepth(measured));
   const extra = { ...(skipped.length > 0 ? { skipped } : {}), ...(untriedDeeper.length > 0 ? { untriedDeeper } : {}) };
   const run: TradeRun = { ...first, ...extra };
   if (first.kind !== "ran" || first.result.status !== STATUS.sellReverted || !poolCanRefuseSell(first.pool)) return run;

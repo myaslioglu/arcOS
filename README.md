@@ -199,7 +199,7 @@ but does have privileged functions, both the ownership and privileges findings r
   it blocks sells into: "Buying with 10 USDC in its deepest pool (Uniswap v3 0x…) reverted; a round
   trip on Uniswap v2 0x… went through". So does any pool the scan found deeper than the one measured
   that wasn't traded against, whether or not anything was passed over: a hooked v4 pool, a pool
-  against EURC (its depth compared as about USD), one that isn't liquid, or a v2 pair with USDC
+  against EURC (its depth compared 1:1 with USDC), one that isn't liquid, or a v2 pair with USDC
   `sync`ed in and no tokens; the finding names it. A fail stays a fail. The cost of these rules: an
   honest token loses its pass to a warning when an indexed hooked pool or an EURC pool is deeper than
   its USDC pool, or when someone donates USDC to make a decoy deepest (a v3 pool never initialized,
@@ -224,6 +224,14 @@ but does have privileged functions, both the ownership and privileges findings r
   round trip that brings nothing back loses 100% and is a warning too. A buy that no pool tried could
   trade (it reverted, took no USDC, or the pool paid nothing out), a leg that runs out of the gas it is
   given, and an RPC that won't run the simulation (or read the gas price) all read "unknown".
+- A pass needs two things beyond a round trip that went through within the loss line: the pool it was
+  measured on was found liquid, and no other pool the scan found (of any kind, against any quote,
+  hooked or not) is liquid or of undecided liquidity. Anything else is a warning that names the
+  measured pool and why ("It was measured on a thin pool (Uniswap v2 0x…, 27 USDC)", "Uniswap v4
+  pool 0x… (liquid) wasn't traded against"). So a token whose round trip is measured on a pair under
+  1,000 USDC, or that has a second liquid pool, gets a warning at best. For ordering and comparing,
+  a hookless v4 pool found liquid counts as at least 1,000 USDC, since its depth is only what is in
+  range at the current price; EURC is compared 1:1 with USDC.
 - A pass says what one simulated buy and sell did at that block, against one pool; a rule the owner
   can switch on later, or one that applies to other pools or larger amounts, isn't covered. A token
   can still tell the simulation from a real trade, and one written to behave differently for it can
@@ -263,8 +271,11 @@ but does have privileged functions, both the ownership and privileges findings r
   passed over when its buy can't trade, but it can push a real pool past the three the check tries.
 - The trade check never trades against a hooked v4 pool when a pool without a hook trades USDC, nor
   against a pool whose quote isn't USDC (EURC): the override can fund only USDC, and a hook runs
-  inside the swap. Those pools only count for the cap above: one deeper than the pool measured
-  makes a pass a warning.
+  inside the swap. Those pools only count for the caps above: one deeper than the pool measured, or
+  one that is liquid or undecided, makes a pass a warning.
+- Pools the scan never finds neither trade nor cap: pools against other quote tokens than USDC and
+  EURC, pools on other DEXes, and hooked or unusual-fee v4 pools no index lists. A token whose real
+  market is in such a pool can still pass on the pool Inspector did find.
 - Inspector's trade simulation (check 10) can still be told from a real trade. S and R are fresh
   random addresses and the call carries the network's gas price, but: `tx.origin` (S) has code, which
   a wallet's address doesn't; S and R are addresses the token has never seen, and R is no router it
