@@ -42,10 +42,14 @@ describe("firebase.json: Firestore", () => {
 describe("firebase.json: functions", () => {
   it("has no functions entry outside the codebase arcos, and every exported function name starts with arcos", () => {
     const entry = path.join(ROOT, FUNCTIONS_ENTRY);
-    // Nothing to scan until the functions codebase exists (design task A6). A missing entry passes only while
-    // firebase.json has no functions entry; the check itself is tested below.
+    // A missing entry file passes only while firebase.json has no functions entry; the check itself is tested below.
     const scan = existsSync(entry) ? scanExports(readFileSync(entry, "utf8")) : null;
     expect(checkFunctions(config, scan)).toEqual([]);
+  });
+
+  it("deploys the one codebase arcos, from the bundle folder, on Node 22, and exports the indexer by name", () => {
+    expect(config.functions).toEqual([{ codebase: "arcos", source: FUNCTIONS_SOURCE, runtime: "nodejs22", ignore: ["node_modules"] }]);
+    expect(scanExports(readFileSync(path.join(ROOT, FUNCTIONS_ENTRY), "utf8"))).toEqual({ names: ["arcosIndexer"], unresolved: [] });
   });
 
   describe("the check itself", () => {
