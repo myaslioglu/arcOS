@@ -45,10 +45,10 @@ const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?
 // missing buffer bounds check).
 //
 // Since wagmi 3 the provider is an optional peer of wagmi's connector, so apps/web/package.json pins it itself, exactly at
-// @walletconnect/ethereum-provider 2.21.8: the last release under Apache-2.0. From 2.21.9 on, @walletconnect/* and
-// @reown/* ship under Reown's own community licence instead (a proprietary licence with usage thresholds), which this
-// MIT repo doesn't take on. scripts/walletconnect-licence.mjs (run by the web tests) fails if the lockfile ever resolves past
-// that line.
+// @walletconnect/ethereum-provider 2.21.8: the last release under Apache-2.0. From 2.21.9 on, WalletConnect's packages
+// (and @reown/appkit from 1.8.3) ship under Reown's own community licence instead (a proprietary licence with usage
+// thresholds), which this MIT repo doesn't take on. scripts/walletconnect-licence.mjs (run by the web tests) fails if the
+// lockfile ever resolves past that line.
 //
 // The provider is a dynamic import, so it sits in a chunk of its own, and lazyWalletConnect keeps wagmi from loading it
 // until a visitor picks WalletConnect (or a reload restores a WalletConnect session). injected() alone still discovers

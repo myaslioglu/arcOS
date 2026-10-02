@@ -222,6 +222,7 @@ Built with help from [Claude](https://www.anthropic.com/claude), Anthropic's AI 
 MIT — see [LICENSE](./LICENSE).
 
 WalletConnect is pinned at `@walletconnect/ethereum-provider` 2.21.8, the last release under Apache-2.0. Later releases of
-`@walletconnect/*` (2.21.9 on) and `@reown/*` (AppKit 1.8 on) moved to Reown's own community licence, which is not an
-open-source one. `scripts/walletconnect-licence.mjs` runs with the web tests and fails if `package-lock.json` ever resolves a
-package of either scope past that line or under a licence that isn't permissive.
+WalletConnect's packages (2.21.9 on) and of `@reown/appkit` (1.8.3 on) moved to Reown's own community licence, which is
+not an open-source one. `scripts/walletconnect-licence.mjs` runs with the web tests and fails if `package-lock.json` ever
+resolves a WalletConnect package at 2.21.9 or later, an `@reown/*` package at 1.8.0 or later (a margin below 1.8.3, to be
+safe), or a package of either scope under a licence that isn't permissive.
