@@ -60,12 +60,25 @@ export function extraPoolsFrom(answer: unknown): ExtraPool[] {
   return out;
 }
 
-/** The index can't be read right now: it failed or timed out a moment ago, or this server has no Firestore. */
+/**
+ * The index can't be read right now: it failed or timed out a moment ago, or this server has no Firestore. `cause` is
+ * the read's own error when one failed (a Firestore error carries a gRPC `code`: 7 is PERMISSION_DENIED, 16
+ * UNAUTHENTICATED, 5 NOT_FOUND for the database, 4 DEADLINE_EXCEEDED, 14 UNAVAILABLE); the route logs that code only.
+ */
 export class IndexUnavailable extends Error {
-  constructor(message = "The pool index can't be read right now.") {
-    super(message);
+  constructor(message = "The pool index can't be read right now.", options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "IndexUnavailable";
   }
+}
+
+/** The `code` of an error's cause when it is a number or a short word (a gRPC status, a JSON-RPC code, `ECONNRESET`). */
+export function causeCode(e: unknown): number | string | undefined {
+  const cause = e instanceof Error ? (e.cause as { code?: unknown } | undefined) : undefined;
+  const code = typeof cause === "object" && cause !== null ? cause.code : undefined;
+  if (typeof code === "number" && Number.isFinite(code)) return code;
+  if (typeof code === "string" && /^[\w.-]{1,64}$/.test(code)) return code;
+  return undefined;
 }
 
 /**
@@ -112,9 +125,9 @@ export function indexedPoolsSource({
             clearTimeout(timer);
             resolve(docs);
           },
-          () => {
+          (e: unknown) => {
             clearTimeout(timer);
-            reject(new IndexUnavailable());
+            reject(new IndexUnavailable(undefined, { cause: e }));
           },
         );
       });

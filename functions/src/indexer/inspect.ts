@@ -22,9 +22,38 @@ export class ExplorerBudgetSpent extends Error {
   }
 }
 
-/** A fetch that spends one call of `budget` per request, and refuses once there is none left. */
-export function budgetedFetch(budget: ExplorerBudget, fetchFn: typeof fetch = fetch): typeof fetch {
-  return (input, init) => (budget.spend() ? fetchFn(input, init) : Promise.reject(new ExplorerBudgetSpent()));
+/** Thrown in place of an explorer request while the explorer's last answer was a refusal (a 429 or a 402). */
+export class ExplorerRefused extends Error {
+  constructor() {
+    super("The explorer refused the last request; waiting before asking again.");
+    this.name = "ExplorerRefused";
+  }
+}
+
+/** How long no explorer request is sent after a refusal: an inspector's whole deadline, and a bit more. */
+export const REFUSAL_COOLDOWN_MS = 60_000;
+
+/** When the explorer last refused a request, kept across runs on one instance (liveInspector keeps one). */
+export type Refusals = { until: number; now?: () => number };
+
+/**
+ * A fetch that spends one call of `budget` per request, and refuses once there is none left. It also reads what the
+ * explorer answers: a 429 (too many requests) or a 402 (the plan's quota, or its payment, is gone) starts a cooldown of
+ * REFUSAL_COOLDOWN_MS during which no request is sent, and a 402 spends the rest of the day's budget as well, so no run
+ * today asks again. The website reads the same plan with the same key, and the quota it has left is its to spend.
+ */
+export function budgetedFetch(budget: ExplorerBudget, fetchFn: typeof fetch = fetch, refusals: Refusals = { until: 0 }): typeof fetch {
+  const now = refusals.now ?? Date.now;
+  return async (input, init) => {
+    if (now() < refusals.until) throw new ExplorerRefused();
+    if (!budget.spend()) throw new ExplorerBudgetSpent();
+    const res = await fetchFn(input, init);
+    if (res.status === 429 || res.status === 402) {
+      refusals.until = now() + REFUSAL_COOLDOWN_MS;
+      if (res.status === 402) budget.exhaust();
+    }
+    return res;
+  };
 }
 
 /** At most one explorer request starts every 250 ms: 4 a second, the web server's pace (Blockscout allows 5). */
@@ -58,11 +87,13 @@ export function liveInspector(options: { network: NetworkId; apiKey?: string; cl
   const client = options.client ?? inspectionClient(chain, endpointHealth(), outOfGasIsNodeAnswer);
   const api = proExplorerApi(chain.id, options.apiKey);
   const turn = spacedTurns();
+  // One record for the instance: a refusal in one run holds the next run's requests too.
+  const refusals: Refusals = { until: 0 };
   return async (address, extraPools, budget) => {
     const controller = new AbortController();
     let scan: PoolScan | null = null;
     const explorer =
-      api && budget ? blockscoutSource(api.url, explorerFetch(turn, controller.signal, budgetedFetch(budget, options.fetchFn)), api.apiKey) : null;
+      api && budget ? blockscoutSource(api.url, explorerFetch(turn, controller.signal, budgetedFetch(budget, options.fetchFn, refusals)), api.apiKey) : null;
     const report = await withDeadline(
       inspect({
         address,

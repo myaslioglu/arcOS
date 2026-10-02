@@ -5,6 +5,7 @@ const { cachedApprovals } = vi.hoisted(() => ({ cachedApprovals: vi.fn() }));
 vi.mock("@/lib/approvals-server", () => ({ cachedApprovals }));
 
 import { GET } from "@/app/api/approvals/route";
+import { ApprovalsUnavailable } from "@/lib/approvals";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
 const get = (query: string, ip = "198.51.100.7") =>
@@ -46,6 +47,16 @@ describe("GET /api/approvals", () => {
     expect(await res.json()).toEqual({ error: "Couldn't load approvals. Try again in a minute." });
     expect(errorSpy).toHaveBeenCalledWith("approvals failed", "Error");
     expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs the HTTP status the explorer answered, and nothing of its message, when that is what failed", async () => {
+    cachedApprovals.mockRejectedValueOnce(new ApprovalsUnavailable("The explorer answered 402.", 402));
+    expect((await get(`?owner=${OWNER}`)).status).toBe(503);
+    expect(errorSpy).toHaveBeenLastCalledWith("approvals failed", "ApprovalsUnavailable", 402);
+    cachedApprovals.mockRejectedValueOnce(new ApprovalsUnavailable("The RPC isn't answering."));
+    expect((await get(`?owner=${OWNER}`)).status).toBe(503);
+    expect(errorSpy).toHaveBeenLastCalledWith("approvals failed", "ApprovalsUnavailable");
+    expect(errorSpy).toHaveBeenCalledTimes(2);
   });
 
   it("limits each client to 20 lookups a minute", async () => {

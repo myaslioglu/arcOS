@@ -6,6 +6,7 @@ const { indexedPools } = vi.hoisted(() => ({ indexedPools: vi.fn<(token: string)
 vi.mock("@/lib/indexed-pools-server", () => ({ indexedPools }));
 
 import { GET } from "@/app/api/pools/[token]/route";
+import { IndexUnavailable } from "@/lib/indexed-pools";
 
 const TOKEN = "0x470f09ae20163d5e243f6530fb328912a8fcb099";
 const KEY = { currency0: "0x0000000000000000000000000000000000000000", currency1: TOKEN, fee: 10_000, tickSpacing: 200, hooks: "0x83139c02ee291298baef473a775c2e996c066044" } as const;
@@ -59,6 +60,16 @@ describe("GET /api/pools/[token]", () => {
     expect(res.status).toBe(503);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(log).toHaveBeenCalledWith("pools failed", "IndexUnavailable");
+    log.mockRestore();
+  });
+
+  it("logs the read's own error code, a gRPC status, with the 503, and never its message", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const denied = Object.assign(new Error("7 PERMISSION_DENIED: Missing or insufficient permissions on projects/arcos-c80cf/databases/arcos"), { code: 7 });
+    indexedPools.mockRejectedValue(new IndexUnavailable(undefined, { cause: denied }));
+    expect((await get(TOKEN)).status).toBe(503);
+    expect(log).toHaveBeenCalledWith("pools failed", "IndexUnavailable", 7);
+    expect(log.mock.calls.flat().some((v) => String(v).includes("arcos-c80cf"))).toBe(false);
     log.mockRestore();
   });
 

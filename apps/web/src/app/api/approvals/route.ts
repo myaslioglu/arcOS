@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAddress, isAddress } from "viem";
+import { ApprovalsUnavailable } from "@/lib/approvals";
 import { cachedApprovals } from "@/lib/approvals-server";
 import { clientKey, rateLimiter } from "@/lib/rate-limit";
 
@@ -27,8 +28,12 @@ export async function GET(req: Request) {
     // no-store: the server keeps each owner's answer for 60 s; a CDN copy would outlive a revoke.
     return NextResponse.json(await cachedApprovals(getAddress(owner)), { headers: NO_STORE });
   } catch (e) {
-    // The error's name only: an explorer's or a node's message is never logged whole (the key is never in one anyway).
-    console.error("approvals failed", e instanceof Error ? e.name : "unknown");
+    // The error's name only, and the HTTP status the explorer answered when that is what failed (approvals.ts,
+    // ApprovalsUnavailable): an explorer's or a node's message is never logged whole (the key is never in one anyway).
+    // In the logs: `approvals failed ApprovalsUnavailable 402` is the explorer plan's quota spent, 429 its rate limit,
+    // 401 or 403 a refused key; without a status, the RPC or the multicall.
+    const status = e instanceof ApprovalsUnavailable && typeof e.status === "number" ? e.status : undefined;
+    console.error("approvals failed", e instanceof Error ? e.name : "unknown", ...(status === undefined ? [] : [status]));
     return NextResponse.json({ error: "Couldn't load approvals. Try again in a minute." }, { status: 503, headers: NO_STORE });
   }
 }

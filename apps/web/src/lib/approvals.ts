@@ -83,9 +83,17 @@ export const SWAP_ADAPTER: Record<NetworkId, Address> = {
   testnet: "0xBBD70b01a1CAbc96d5b7b129Ae1AAabdf50dd40b",
 };
 
-/** The explorer or the multicall couldn't answer: the route says "Couldn't load approvals". */
+/**
+ * The explorer or the multicall couldn't answer: the route says "Couldn't load approvals". `status` is the HTTP status
+ * the explorer answered with, when that is what failed (a 402 is Blockscout's PRO API saying the plan's quota or
+ * payment is gone, a 429 its per-second limit, a 401 or 403 a refused key); null otherwise. The route logs it: a
+ * number says which of these it was, and carries nothing of the key or the URL.
+ */
 export class ApprovalsUnavailable extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly status: number | null = null,
+  ) {
     super(message);
     this.name = "ApprovalsUnavailable";
   }
@@ -212,7 +220,7 @@ export async function readLogsPage(url: string, fetchFn: typeof fetch, apiKey?: 
   const headers: Record<string, string> = { accept: "application/json" };
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   const res = await fetchFn(url, { headers });
-  if (!res.ok) throw new ApprovalsUnavailable(`The explorer answered ${res.status}.`);
+  if (!res.ok) throw new ApprovalsUnavailable(`The explorer answered ${res.status}.`, res.status);
   let body: unknown;
   try {
     body = await res.json();

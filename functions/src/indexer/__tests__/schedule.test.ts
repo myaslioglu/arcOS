@@ -19,13 +19,13 @@ describe("INDEXER_OPTIONS", () => {
 
 describe("indexerSettings", () => {
   it("defaults to 3 inspections a run and 5,000 explorer calls a day", () => {
-    expect(indexerSettings({})).toEqual({ inspectPerTick: 3, explorerDailyBudget: 5_000 });
+    expect(indexerSettings({})).toEqual({ inspectPerTick: 3, explorerDailyBudget: 3_000 });
   });
 
   it("takes whole numbers from the environment, and ignores anything else", () => {
     expect(indexerSettings({ INSPECT_PER_TICK: " 5 ", EXPLORER_DAILY_BUDGET: "0" })).toEqual({ inspectPerTick: 5, explorerDailyBudget: 0 });
     for (const bad of ["", "-1", "1.5", "1e3", "abc", "99999999"]) {
-      expect(indexerSettings({ INSPECT_PER_TICK: bad, EXPLORER_DAILY_BUDGET: bad })).toEqual({ inspectPerTick: 3, explorerDailyBudget: 5_000 });
+      expect(indexerSettings({ INSPECT_PER_TICK: bad, EXPLORER_DAILY_BUDGET: bad })).toEqual({ inspectPerTick: 3, explorerDailyBudget: 3_000 });
     }
   });
 });
