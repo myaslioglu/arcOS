@@ -57,9 +57,26 @@ export type AppManifest = {
   pinned?: boolean;
   /** Listed but not live yet: greyed, and it opens a small "work in progress" window instead of the app. */
   comingSoon?: boolean;
+  /** A short tag beside the app's name on its tile, its row and its menu entry, such as "Soon". A grey app is tagged
+   * "Soon" on its own, so it needs none. */
+  tag?: string;
   /** A grey app's two or three sentences on what it will do, shown in its "work in progress" window. */
   details?: string[];
 };
+
+/** The tag beside an app's name, if any: "Soon" for a grey app, otherwise its manifest's `tag`. */
+export function appTag(m: Pick<AppManifest, "comingSoon" | "tag">): string | null {
+  return m.comingSoon ? "Soon" : (m.tag ?? null);
+}
+
+/**
+ * An app's accessible name where it is listed: its name, with "work in progress" for a grey app, or its tag for a
+ * tagged one ("<name>, <tag>"), so the tag reaches a screen reader as the tile shows it.
+ */
+export function appLabel(m: Pick<AppManifest, "name" | "comingSoon" | "tag">): string {
+  if (m.comingSoon) return `${m.name}, work in progress`;
+  return m.tag ? `${m.name}, ${m.tag.toLowerCase()}` : m.name;
+}
 
 export type Registry = { list: AppManifest[]; byId: Map<string, AppManifest> };
 

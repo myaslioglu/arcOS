@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef } from "react";
-import { CATEGORY_HUE, CATEGORY_LABEL, CATEGORY_ORDER, appHue, type AppManifest, type DragItem } from "../core";
+import { CATEGORY_HUE, CATEGORY_LABEL, CATEGORY_ORDER, appHue, appLabel, appTag, type AppManifest, type DragItem } from "../core";
 import { useRegistry } from "./registry";
 import { useDropTarget } from "./dnd";
 
@@ -72,6 +72,7 @@ function AppIcon({
   const { over, props } = useDropTarget(m.comingSoon ? undefined : m.acceptsDrop, (item) => {
     if (ref.current) onDropItem(m.id, item, ref.current);
   });
+  const tag = appTag(m);
 
   return (
     <button
@@ -80,7 +81,7 @@ function AppIcon({
       onClick={(e) => onOpen(m.id, e.currentTarget)}
       data-soon={m.comingSoon ? "true" : undefined}
       data-drop={over ? "over" : undefined}
-      aria-label={m.name}
+      aria-label={appLabel(m)}
       className="os-icon"
       style={{ "--os-hue": appHue(m) } as React.CSSProperties}
       {...props}
@@ -89,6 +90,7 @@ function AppIcon({
         <m.icon size={20} aria-hidden />
       </span>
       <span className="os-icon-name">{m.name}</span>
+      {tag && <span className="os-soon">{tag}</span>}
     </button>
   );
 }
