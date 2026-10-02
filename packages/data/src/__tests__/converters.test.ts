@@ -29,7 +29,7 @@ const fullToken = (): TokenRecord => ({
   bestPool: { id: POOL32_UPPER, version: "v4", depthUsdc: 2_500_000_000n },
   report: { passed: 6, total: 8, counts: { pass: 6, warn: 1, fail: 0, unknown: 1 }, block: 23_400_100, at: at(1_790_000_100_000) },
   radar: { liquid: true, passing: true },
-  inspect: { state: "done", priority: 1, attempts: 1 },
+  inspect: { state: "done", priority: 1, attempts: 1, queuedAt: null },
   launchpad: "factory",
 });
 
@@ -47,7 +47,7 @@ const bareToken = (): TokenRecord => ({
   bestPool: null,
   report: null,
   radar: { liquid: false, passing: false },
-  inspect: { state: "queued", priority: 0, attempts: 0 },
+  inspect: { state: "queued", priority: 0, attempts: 0, queuedAt: at(1_790_000_000_000) },
   launchpad: null,
 });
 

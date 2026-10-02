@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { processGlobal } from "../process-global";
-import { endpointHealth } from "../rpc-transport";
+import { endpointHealth } from "@arcos/inspector";
 import { approvalsRpcClient, explorerPacer, serverRpcClient } from "../server-rpc";
 
 describe("server-rpc", () => {

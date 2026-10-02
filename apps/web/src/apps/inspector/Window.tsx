@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
 import { isAddress } from "viem";
-import { activeChain, explorerUrl, type Address } from "@arcos/chain";
+import { activeChain, activeNetwork, explorerUrl, type Address } from "@arcos/chain";
 import { NotAContract, inspect } from "@arcos/inspector";
 import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
+import { fetchExtraPools } from "@/lib/indexed-pools";
 import { inspectInput } from "@/lib/inspect-input";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
@@ -30,7 +31,9 @@ export default function InspectorWindow({ winId, params }: AppProps) {
     // never on a cache hit — so reopening a window onto an already-cached report never re-fires
     // the analytics event.
     queryFn: async () => {
-      const r = await inspect(inspectInput(token!, client!));
+      // The index's pools for the token (hooked v4 pools among them), from the site; only mainnet has an index.
+      const extraPools = activeNetwork() === "mainnet" ? await fetchExtraPools(token!) : [];
+      const r = await inspect(inspectInput(token!, client!, undefined, undefined, extraPools));
       trackEvent("inspect_run", { passed: r.passed, total: r.total });
       return r;
     },

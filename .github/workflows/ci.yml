@@ -62,9 +62,11 @@ jobs:
 
       # The JS/TS workspaces' own vitest suites. @arcos/contracts' "test" script is `forge test`,
       # run as its own step below instead, so a Solidity failure and a TS failure are never
-      # conflated in the same step's output. @arcos/data's emulator suite runs in emulator.yml.
+      # conflated in the same step's output. The emulator suites of @arcos/data and @arcos/functions
+      # run in emulator.yml. @arcos/functions' unit tests include a real build of its bundle and the
+      # manifest the deploy reads.
       - name: Test (JS workspaces)
-        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector --workspace=@arcos/data
+        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector --workspace=@arcos/data --workspace=@arcos/functions
 
       # The contracts scripts run forge through packages/contracts/scripts/forge.mjs: the npm `forge`
       # command (@foundry-rs/forge 1.7.1) exits 0 even when a test fails, which kept this step green.
@@ -88,6 +90,10 @@ jobs:
       # The pinned Firebase CLI is not a root workspace, so the root audit doesn't see it.
       - name: npm audit of the Firebase CLI (high/critical)
         run: npm audit --audit-level=high --prefix tools/firebase
+
+      # The two packages Cloud Build installs for the functions, from functions/deploy's own lockfile.
+      - name: npm audit of the functions' deployed packages (high/critical)
+        run: npm audit --audit-level=high --prefix functions/deploy
 
   # The end-to-end smoke suite (e2e/smoke.spec.ts) in a real browser against a production build, beside the checks
   # above rather than after them. Built with the settings in apps/web/apphosting.yaml, like https://4rcos.com. The /t and /badge cases read the chain

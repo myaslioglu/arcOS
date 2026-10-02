@@ -2,7 +2,7 @@
   "name": "arc-os",
   "private": true,
   "packageManager": "npm@11.19.1",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": ["apps/*", "packages/*", "functions"],
   "engines": { "node": "^22.22.2" },
   "scripts": {
     "dev": "npm run dev -w @arcos/web",

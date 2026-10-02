@@ -1,5 +1,5 @@
 import { createTransport, http, type Chain, type EIP1193RequestFn, type Transport } from "viem";
-import { isNodeAnswer } from "@arcos/inspector";
+import { isNodeAnswer } from "./rpc-errors";
 
 /** viem's per-request timeout for one attempt at one URL. */
 const ATTEMPT_MS = 3_000;

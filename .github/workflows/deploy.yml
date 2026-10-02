@@ -1,7 +1,8 @@
 name: Deploy
 
 # Deploys https://4rcos.com (backend arcos) and https://testnet.4rcos.com (backend arcos-testnet) to Firebase App
-# Hosting, project arcos-c80cf, from GitHub Actions. No key file exists anywhere: the deploy job signs in through
+# Hosting, and the functions codebase arcos (arcosIndexer) with the Firestore indexes of the arcos database, project
+# arcos-c80cf, from GitHub Actions. No key file exists anywhere: the deploy job signs in through
 # Workload Identity Federation and a service account (see docs/DEPLOYING.md), and it runs only after the checks and the
 # bundle builds pass and the owner approves it in the `production` environment, which allows the main branch only.
 #
@@ -12,6 +13,15 @@ name: Deploy
 # and the testnet deploy starts only after it has succeeded, so a testnet failure never touches 4rc.OS. A bundle that
 # fails to build stops the whole run before approval, nothing deployed; to ship 4rc.OS while the testnet build is broken,
 # run the workflow by hand with `targets: mainnet`.
+#
+# The functions and the indexes (docs/OPERATIONS.md) take part only once the repository variable ARCOS_FUNCTIONS_READY is
+# `true`, which the owner sets after the database, the account arcos-jobs@ and the deployer's roles exist. From then on a
+# push deploys them after the sites, from the same commit; a manual run can deploy either alone (`targets: functions` or
+# `targets: indexes`). The functions are built in a job without a credential, like the sites: the bundle and the manifest
+# firebase-functions writes from it (functions/deploy/functions.yaml), which the CLI reads instead of loading the code.
+# The deploy job checks that manifest with jq before it signs in. On a push, a functions build that fails stops the sites
+# too, like any bundle: the deploy job waits for every build of the run, so nothing deploys. To ship the sites while the
+# functions build is broken, run the workflow by hand with `targets: both` (or `mainnet`), which builds no functions.
 #
 # The jobs are split by what they may touch. `plan` reads only the inputs and that variable, checks nothing out and
 # holds no token. `checks` and `bundle` install the project's dependencies and run its build, which is third-party code,
@@ -28,12 +38,14 @@ on:
         type: boolean
         default: false
       targets:
-        description: Which sites to build and deploy (a push to main deploys both, mainnet first; testnet needs ARCOS_TESTNET_READY)
+        description: What to build and deploy (a push to main deploys both sites, mainnet first, then the indexes and the functions; testnet needs ARCOS_TESTNET_READY, functions and indexes ARCOS_FUNCTIONS_READY)
         type: choice
         options:
           - both
           - mainnet
           - testnet
+          - functions
+          - indexes
         default: both
 
 # One deploy at a time. A run that starts while another waits for approval or deploys queues behind it (a newer
@@ -56,9 +68,10 @@ env:
   APPHOSTING_TESTNET_BACKEND: arcos-testnet
 
 jobs:
-  # Chooses the sites this run builds and deploys, from the `targets` input and the repository variable
-  # ARCOS_TESTNET_READY, before anything is built. A push has no inputs (TARGETS is empty): both sites once the variable is
-  # exactly `true`, 4rc.OS alone with a notice until then. A manual run that asks for the testnet site while the variable
+  # Chooses what this run builds and deploys, from the `targets` input and the repository variables ARCOS_TESTNET_READY
+  # and ARCOS_FUNCTIONS_READY, before anything is built. A push has no inputs (TARGETS is empty): both sites once the
+  # testnet variable is exactly `true`, 4rc.OS alone with a notice until then; and the indexes and the functions once the
+  # functions variable is exactly `true`, with a notice until then. A manual run that asks for something whose variable
   # isn't `true` fails here, so it never deploys less than it asked for. No checkout, no token, no project code.
   plan:
     name: Choose the sites
@@ -69,17 +82,24 @@ jobs:
       sites: ${{ steps.plan.outputs.sites }}
       mainnet: ${{ steps.plan.outputs.mainnet }}
       testnet: ${{ steps.plan.outputs.testnet }}
+      functions: ${{ steps.plan.outputs.functions }}
+      indexes: ${{ steps.plan.outputs.indexes }}
     steps:
-      - name: Choose the sites
+      - name: Choose the sites, the functions and the indexes
         id: plan
         env:
           TARGETS: ${{ inputs.targets }}
           TESTNET_READY: ${{ vars.ARCOS_TESTNET_READY }}
+          FUNCTIONS_READY: ${{ vars.ARCOS_FUNCTIONS_READY }}
         run: |
+          functions=false; indexes=false
           case "$TARGETS" in
-            "" | both) mainnet=true; testnet=true ;;
+            "") mainnet=true; testnet=true; functions=true; indexes=true ;;
+            both) mainnet=true; testnet=true ;;
             mainnet) mainnet=true; testnet=false ;;
             testnet) mainnet=false; testnet=true ;;
+            functions) mainnet=false; testnet=false; functions=true ;;
+            indexes) mainnet=false; testnet=false; indexes=true ;;
             *) echo "::error::Unknown targets '$TARGETS'"; exit 1 ;;
           esac
           if [ "$testnet" = true ] && [ "$TESTNET_READY" != true ]; then
@@ -90,10 +110,19 @@ jobs:
             echo "::notice::ARCOS_TESTNET_READY is not true, so this run builds and deploys 4rc.OS only (docs/DEPLOYING.md, The testnet site)."
             testnet=false
           fi
+          if { [ "$functions" = true ] || [ "$indexes" = true ]; } && [ "$FUNCTIONS_READY" != true ]; then
+            if [ -n "$TARGETS" ]; then
+              echo "::error::The functions and the indexes aren't set up yet: the repository variable ARCOS_FUNCTIONS_READY is not true (docs/OPERATIONS.md, Setting it up)."
+              exit 1
+            fi
+            echo "::notice::ARCOS_FUNCTIONS_READY is not true, so this run deploys neither the functions nor the indexes (docs/OPERATIONS.md, Setting it up)."
+            functions=false; indexes=false
+          fi
           if [ "$mainnet" = true ] && [ "$testnet" = true ]; then sites='["mainnet","testnet"]'
           elif [ "$mainnet" = true ]; then sites='["mainnet"]'
-          else sites='["testnet"]'; fi
-          { echo "sites=$sites"; echo "mainnet=$mainnet"; echo "testnet=$testnet"; } >> "$GITHUB_OUTPUT"
+          elif [ "$testnet" = true ]; then sites='["testnet"]'
+          else sites='[]'; fi
+          { echo "sites=$sites"; echo "mainnet=$mainnet"; echo "testnet=$testnet"; echo "functions=$functions"; echo "indexes=$indexes"; } >> "$GITHUB_OUTPUT"
 
   # The same checks a pull request runs (ci.yml, called as a reusable workflow): typecheck, lint, tests, build, audit.
   checks:
@@ -109,6 +138,8 @@ jobs:
     name: Build the ${{ matrix.site }} bundle
     runs-on: ubuntu-24.04
     needs: plan
+    # A run of the functions or the indexes alone builds no site, and a matrix can't be empty.
+    if: needs.plan.outputs.sites != '[]'
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -163,13 +194,58 @@ jobs:
           retention-days: 1
           overwrite: true
 
+  # Builds the functions codebase arcos, when this run deploys it, with no credential of any kind, like the sites'
+  # bundles: functions/deploy/index.js (esbuild) and functions/deploy/functions.yaml, the manifest the functions SDK writes
+  # from that bundle. The deploy job hands both to the CLI as data: with the manifest there, the deploy doesn't load the
+  # code to find the functions.
+  functions-bundle:
+    name: Build the functions bundle
+    runs-on: ubuntu-24.04
+    needs: plan
+    if: needs.plan.outputs.functions == 'true'
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # The same npm as ci.yml, for the same install.
+      - run: npm install -g npm@11.19.1
+
+      - run: npm ci
+
+      - name: Build the functions bundle and its manifest
+        run: npm run build -w @arcos/functions
+
+      # The two built files only: package.json, its lockfile and .npmrc come from the deploy job's own checkout.
+      - name: Keep the functions bundle for the deploy job
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-functions
+          path: |
+            functions/deploy/index.js
+            functions/deploy/functions.yaml
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   # The only job with a credential. It runs nothing from the project's dependencies and nothing of the project's build:
   # the bundle arrives as data, and the scan script comes from this job's own checkout, never from the bundle.
   deploy:
     name: Deploy to production
-    needs: [plan, checks, bundle]
-    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing.
-    if: github.ref == 'refs/heads/main'
+    needs: [plan, checks, bundle, functions-bundle]
+    # Belt and braces with the environment's branch rule: a manual run from another branch deploys nothing. A bundle job
+    # this run didn't need is skipped, which must not skip the deploy; one that failed or was cancelled stops it.
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && !cancelled() && needs.plan.result == 'success' && needs.checks.result == 'success'
+      && (needs.bundle.result == 'success' || needs.bundle.result == 'skipped')
+      && (needs.functions-bundle.result == 'success' || needs.functions-bundle.result == 'skipped') }}
     runs-on: ubuntu-24.04
     # Each deploy step stays under the hour an access token lives: the Firebase CLI asks for one when it starts and
     # never renews it. The job has room for both.
@@ -184,6 +260,8 @@ jobs:
     env:
       DEPLOY_MAINNET: ${{ needs.plan.outputs.mainnet }}
       DEPLOY_TESTNET: ${{ needs.plan.outputs.testnet }}
+      DEPLOY_FUNCTIONS: ${{ needs.plan.outputs.functions }}
+      DEPLOY_INDEXES: ${{ needs.plan.outputs.indexes }}
     # Whether the mainnet deploy succeeded, for the smoke job: it checks 4rc.OS even when the testnet deploy after it failed.
     outputs:
       mainnet: ${{ steps.deploy-mainnet.outcome }}
@@ -216,6 +294,13 @@ jobs:
           name: bundle-testnet
           path: ${{ runner.temp }}/bundle-testnet
 
+      - name: Download the functions bundle
+        if: env.DEPLOY_FUNCTIONS == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: bundle-functions
+          path: ${{ runner.temp }}/bundle-functions
+
       # App Hosting builds the site again from the source this job uploads, so this scan looks at a build of the same
       # commit, lockfile and settings, not at the very files that run. It fails on any match, and when the patterns are
       # missing (see scripts/scan-bundle.mjs). The patterns are a secret, so they aren't in the repo. One step scans every
@@ -227,7 +312,53 @@ jobs:
           dirs=()
           if [ "$DEPLOY_MAINNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-mainnet/static" "$RUNNER_TEMP/bundle-mainnet/server"); fi
           if [ "$DEPLOY_TESTNET" = true ]; then dirs+=("$RUNNER_TEMP/bundle-testnet/static" "$RUNNER_TEMP/bundle-testnet/server"); fi
-          node scripts/scan-bundle.mjs "${dirs[@]}"
+          if [ "$DEPLOY_FUNCTIONS" = true ]; then dirs+=("$RUNNER_TEMP/bundle-functions"); fi
+          if [ "${#dirs[@]}" -gt 0 ]; then node scripts/scan-bundle.mjs "${dirs[@]}"; fi
+
+      # The manifest decides what the CLI deploys, and the build that wrote it ran the project's code, so the deploy job
+      # checks it before signing in, with jq (on the runner already), never with project code: one document; the one
+      # endpoint arcosIndexer, gcfv2, run as arcos-jobs@ (under both of the account keys the CLI reads), triggered by a
+      # schedule and by nothing else, in europe-west4 only, with no VPC, no environment variables and the default
+      # ingress; no extensions, no lifecycle hooks and no required roles; required APIs only from the CLI's standard list
+      # (FUNCTIONS_APIS, STANDARD_APIS in firebase-tools' deploy/functions/prepare.js), which it enables without asking;
+      # and no param, and no secret, but BLOCKSCOUT_API_KEY. Anything else, or a file jq can't read, fails here.
+      - name: Check the functions manifest
+        if: env.DEPLOY_FUNCTIONS == 'true'
+        env:
+          FUNCTIONS_ENDPOINT: arcosIndexer
+          JOBS_ACCOUNT: arcos-jobs@arcos-c80cf.iam.gserviceaccount.com
+          FUNCTIONS_REGION: europe-west4
+          FUNCTIONS_SECRET: BLOCKSCOUT_API_KEY
+          FUNCTIONS_APIS: cloudfunctions.googleapis.com,runtimeconfig.googleapis.com,cloudbuild.googleapis.com,artifactregistry.googleapis.com,run.googleapis.com,eventarc.googleapis.com,pubsub.googleapis.com,storage.googleapis.com,secretmanager.googleapis.com,cloudscheduler.googleapis.com,cloudtasks.googleapis.com
+        run: |
+          manifest="$RUNNER_TEMP/bundle-functions/functions.yaml"
+          fail() { echo "::error::functions.yaml $1, so nothing is deployed (docs/OPERATIONS.md, Deploying)."; exit 1; }
+          check() {
+            jq -e --arg endpoint "$FUNCTIONS_ENDPOINT" --arg account "$JOBS_ACCOUNT" --arg region "$FUNCTIONS_REGION" \
+              --arg secret "$FUNCTIONS_SECRET" --arg apis "$FUNCTIONS_APIS" "$1" "$manifest" > /dev/null
+          }
+          jq -e -s 'length == 1 and (.[0] | type == "object")' "$manifest" > /dev/null || fail "is not one JSON object"
+          check '.endpoints | type == "object" and keys == [$endpoint]' || fail "declares endpoints other than $FUNCTIONS_ENDPOINT alone"
+          check '.endpoints | all(.platform == "gcfv2")' || fail "declares an endpoint that is not gcfv2"
+          check '.endpoints | all(.serviceAccountEmail == $account and ((has("serviceAccount") | not) or .serviceAccount == $account))' || fail "runs an endpoint as an account other than $JOBS_ACCOUNT"
+          check '.endpoints | all((keys | map(select(endswith("Trigger")))) == ["scheduleTrigger"] and (.scheduleTrigger | type == "object"))' || fail "declares an endpoint triggered by something other than a schedule alone"
+          check '.endpoints | all(.region == [$region])' || fail "declares an endpoint outside $FUNCTIONS_REGION"
+          check '.endpoints | all(.vpc == null)' || fail "puts an endpoint on a VPC"
+          check '.endpoints | all((.environmentVariables // {}) == {})' || fail "gives an endpoint environment variables"
+          check '.endpoints | all(.ingressSettings == null)' || fail "sets an endpoint's ingress"
+          check '(.extensions // {}) | length == 0' || fail "declares extensions"
+          check 'has("lifecycleHooks") | not' || fail "declares lifecycle hooks"
+          check 'has("requiredRoles") | not' || fail "declares required roles"
+          check '($apis | split(",")) as $standard | (.requiredAPIs // []) | all(.api as $api | $standard | any(. == $api))' || fail "requires an API outside the CLI's standard list"
+          check '(.params // []) | all(.type == "secret" and .name == $secret)' || fail "declares a param other than the secret $FUNCTIONS_SECRET"
+          check '.endpoints | all((.secretEnvironmentVariables // []) | all(.key == $secret and (.secret // $secret) == $secret))' || fail "gives an endpoint a secret other than $FUNCTIONS_SECRET"
+          echo "functions.yaml: $(jq -r '.endpoints | keys | join(", ")' "$manifest"), scheduled, as $JOBS_ACCOUNT, in $FUNCTIONS_REGION."
+
+      # The scanned files go where firebase.json's functions source is, beside the package.json, lockfile and .npmrc of
+      # this job's own checkout. A copy, no code run; App Hosting's uploads leave both files out (firebase.json).
+      - name: Put the functions bundle in place
+        if: env.DEPLOY_FUNCTIONS == 'true'
+        run: cp "$RUNNER_TEMP/bundle-functions/index.js" "$RUNNER_TEMP/bundle-functions/functions.yaml" functions/deploy/
 
       # The Firebase CLI runs with the deploy credential, so its whole dependency tree is locked, not only its version:
       # tools/firebase holds the exact version and a lockfile with an integrity hash for every package. (npx would
@@ -283,6 +414,24 @@ jobs:
         if: ${{ !inputs.dry_run && env.DEPLOY_TESTNET == 'true' }}
         timeout-minutes: 40
         run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_TESTNET_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
+
+      # The composite indexes and field overrides of firestore/arcos.indexes.json, for the arcos database only (the only
+      # one firebase.json lists). Without the force flag an index the file no longer names is left in place, never deleted. The
+      # rules are not deployed here: the owner deploys firestore/arcos.rules by hand, and the deployer has no rules role.
+      - name: Deploy the Firestore indexes
+        id: deploy-indexes
+        if: ${{ !inputs.dry_run && env.DEPLOY_INDEXES == 'true' }}
+        timeout-minutes: 15
+        run: tools/firebase/node_modules/.bin/firebase deploy --only firestore:indexes --project "$FIREBASE_PROJECT" --non-interactive
+
+      # The functions codebase arcos, from functions/deploy: the CLI reads functions.yaml, uploads the folder, and Cloud
+      # Build installs the two external packages from its lockfile with install scripts off. Only this codebase: a
+      # function of another codebase is never touched.
+      - name: Deploy the functions
+        id: deploy-functions
+        if: ${{ !inputs.dry_run && env.DEPLOY_FUNCTIONS == 'true' }}
+        timeout-minutes: 30
+        run: tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --project "$FIREBASE_PROJECT" --non-interactive
 
   # No credentials here: it only reads the public site. It checks 4rc.OS whenever its deploy succeeded, the testnet deploy
   # after it included or not; a run that deployed only the testnet site skips it (scripts/smoke.mjs reads mainnet).

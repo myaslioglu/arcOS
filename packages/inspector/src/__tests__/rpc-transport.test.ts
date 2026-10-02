@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, createTransport, type EIP1193RequestFn, type Transport } from "viem";
 import { CHAINS } from "@arcos/chain";
-import { inspect, viemReader } from "@arcos/inspector";
+import { inspect } from "../inspect";
+import { viemReader } from "../reader";
 import { endpointHealth, outOfGasIsNodeAnswer, rpcTransport } from "../rpc-transport";
 
 type Built = ReturnType<ReturnType<typeof rpcTransport>>;

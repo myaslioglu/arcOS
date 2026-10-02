@@ -53,7 +53,12 @@ function mapToken<A, B>(token: TokenFields<A>, amount: (input: A) => B): TokenFi
       at: report.at,
     })),
     radar: { liquid: token.radar.liquid, passing: token.radar.passing },
-    inspect: { state: token.inspect.state, priority: token.inspect.priority, attempts: token.inspect.attempts },
+    inspect: {
+      state: token.inspect.state,
+      priority: token.inspect.priority,
+      attempts: token.inspect.attempts,
+      queuedAt: token.inspect.queuedAt,
+    },
     launchpad: token.launchpad,
   };
 }

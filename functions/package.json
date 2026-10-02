@@ -1,0 +1,28 @@
+{
+  "name": "@arcos/functions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "test:emulator": "../tools/firebase/node_modules/.bin/firebase emulators:exec --only firestore --project demo-arcos \"vitest run --config vitest.emulator.config.ts\"",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@arcos/chain": "file:../packages/chain",
+    "@arcos/data": "file:../packages/data",
+    "@arcos/inspector": "file:../packages/inspector",
+    "firebase-admin": "14.5.0",
+    "firebase-functions": "7.4.0",
+    "viem": "2.56.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "esbuild": "0.28.2",
+    "fast-check": "^4.10.2",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  }
+}
