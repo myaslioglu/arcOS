@@ -15,6 +15,21 @@ function topVisible(windows: DesktopWindow[]): DesktopWindow | undefined {
   return best;
 }
 
+/** How many cascade slots windowRect cycles through. */
+const CASCADE_SLOTS = 8;
+
+/**
+ * The cascade slot for a new window: the lowest one no open window still at
+ * its default place (no remembered rect) holds, so a new window never lands
+ * exactly on one. With every slot held, the count of open windows decides, as
+ * before; the cycle keeps windowRect's drift from the centre short.
+ */
+function nextCascade(windows: DesktopWindow[]): number {
+  const held = new Set(windows.filter((w) => w.rect === null).map((w) => w.cascade));
+  for (let slot = 0; slot < CASCADE_SLOTS; slot++) if (!held.has(slot)) return slot;
+  return windows.length % CASCADE_SLOTS;
+}
+
 /**
  * Pure window manager. Language-free on purpose: callers resolve `title`
  * themselves (from the app's manifest — see `openActionFor`) before
@@ -60,9 +75,7 @@ export function windowReducer(state: WindowState, action: WindowAction): WindowS
         z: zTop,
         minimized: false,
         maximized: false,
-        // Eight cascade slots, then round again: windowRect drifts each slot
-        // further from the centre, and the cycle keeps that drift short.
-        cascade: state.windows.length % 8,
+        cascade: nextCascade(state.windows),
         rect: null,
       };
       return { windows: [...state.windows, win], activeId: win.winId, seq, zTop };
