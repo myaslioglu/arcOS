@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@arcos/chain": "file:../../packages/chain",
+    "@arcos/data": "file:../../packages/data",
     "@arcos/inspector": "file:../../packages/inspector",
     "@arcos/shell": "file:../../packages/shell",
     "@circle-fin/adapter-viem-v2": "^1.18.0",

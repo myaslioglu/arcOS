@@ -4,7 +4,7 @@ import { robotsHeaders } from "./src/lib/site";
 import { enforcedHeaders, reportOnlyHeaders } from "./src/lib/security-headers";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@arcos/shell", "@arcos/chain", "@arcos/inspector"],
+  transpilePackages: ["@arcos/shell", "@arcos/chain", "@arcos/inspector", "@arcos/data"],
   // The security headers of every answer: the enforced set, and the full content security policy in report-only mode
   // (src/lib/security-headers.ts). Different header names, so neither rule overrides the other. On the testnet site only,
   // X-Robots-Tag keeps every answer out of search engines (src/lib/site.ts).

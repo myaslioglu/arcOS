@@ -1,6 +1,7 @@
 import "server-only";
 import { activeChain, type Address } from "@arcos/chain";
 import { explorerFetch, inspect, proExplorerApi, withDeadline, type Report } from "@arcos/inspector";
+import { extraPoolsFor } from "./indexed-pools-server";
 import { inspectInput } from "./inspect-input";
 import { processGlobal } from "./process-global";
 import { inFlightGate } from "./rate-limit";
@@ -58,10 +59,13 @@ export function cachedInspection(address: Address): Promise<Report> {
   // Each inspection has its own controller: when its deadline passes, its explorer requests stop,
   // and no other inspection's do.
   return cache.get(address.toLowerCase(), () =>
-    gate.run(() => {
+    gate.run(async () => {
+      // The index's pools for this token, hooked v4 pools among them (at most 1.5 s, none when the index can't be read;
+      // see indexed-pools.ts). The 15 s deadline starts after it.
+      const extraPools = await extraPoolsFor(address);
       const controller = new AbortController();
       const fetchFn = explorerFetch(explorerTurn, controller.signal);
-      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi)), controller);
+      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools)), controller);
     }),
   );
 }

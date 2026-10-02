@@ -1,12 +1,14 @@
 import type { PublicClient } from "viem";
 import { ARCOS, DEX, KNOWN_LOCKERS, activeChain, activeNetwork, type Address } from "@arcos/chain";
-import { blockscoutSource, viemReader, type ExplorerApi, type InspectInput } from "@arcos/inspector";
+import { blockscoutSource, viemReader, type ExplorerApi, type ExtraPool, type InspectInput } from "@arcos/inspector";
 
 export function inspectInput(
   address: Address,
   client: PublicClient,
   fetchFn: typeof fetch = fetch,
   explorerApi?: ExplorerApi,
+  /** The index's pools for this token (indexed-pools.ts), read besides the ones discovery finds. */
+  extraPools?: ExtraPool[],
 ): InspectInput {
   const network = activeNetwork();
   const explorer = activeChain().blockExplorers?.default;
@@ -22,5 +24,6 @@ export function inspectInput(
     explorerBase: explorer?.url ?? "",
     // A token our own TokenFactory made counts as source-verified through the factory (see checkVerified).
     arcosTokenFactory: ARCOS[network]?.tokenFactory ?? null,
+    ...(extraPools && extraPools.length > 0 ? { extraPools } : {}),
   };
 }
