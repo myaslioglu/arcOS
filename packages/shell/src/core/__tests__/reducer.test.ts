@@ -59,6 +59,33 @@ describe("windowReducer", () => {
     expect(s.activeId).toBe("w-2");
   });
 
+  it("never gives a new window the slot of an open one still at its default place", () => {
+    let s = initialWindowState();
+    for (const id of ["app-a", "app-b", "app-c"]) s = windowReducer(s, open(id));
+    s = windowReducer(s, { type: "close", winId: "w-2" });
+    s = windowReducer(s, open("app-d"));
+    const third = s.windows.find((w) => w.winId === "w-3")!;
+    const fresh = s.windows.find((w) => w.winId === "w-4")!;
+    expect(fresh.cascade).not.toBe(third.cascade);
+    // The lowest slot left free: the closed window's.
+    expect(fresh.cascade).toBe(1);
+  });
+
+  it("reuses the slot of a window that was moved off its default place", () => {
+    let s = initialWindowState();
+    s = windowReducer(s, open("app-a"));
+    s = windowReducer(s, open("app-b"));
+    s = windowReducer(s, { type: "set-rect", winId: "w-1", rect: { left: 40, top: 40, width: 400, height: 300 } });
+    s = windowReducer(s, open("app-c"));
+    expect(s.windows.find((w) => w.winId === "w-3")!.cascade).toBe(0);
+  });
+
+  it("falls back to the count of open windows when all eight slots are taken", () => {
+    let s = initialWindowState();
+    for (let i = 0; i < 9; i++) s = windowReducer(s, open(`app-${i}`));
+    expect(s.windows.map((w) => w.cascade)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 0]);
+  });
+
   it("de-dupes open on appId+instanceKey: focuses, restores and lifts", () => {
     let s = initialWindowState();
     s = windowReducer(s, open("app-a"));
