@@ -172,6 +172,14 @@ export const QUOTE_GAS = 2_000_000n;
 const UNEXPECTED_REVERT_BYTES = "0x6190b2b0";
 /** `NotEnoughLiquidity(bytes32 poolId)`: the pool's own "I can't pay that". */
 const NOT_ENOUGH_LIQUIDITY = "0x7a5ed734";
+/**
+ * v4-core `src/libraries/Hooks.sol`: a hook's permissions are the low 14 bits of its address, and
+ * `BEFORE_SWAP_RETURNS_DELTA_FLAG = 1 << 3`, `AFTER_SWAP_RETURNS_DELTA_FLAG = 1 << 2`. A before-swap delta can claim the
+ * exact output without the pool paying it (V4Quoter reverts with the quote before the settlement check); an after-swap delta
+ * re-prices what the swapper owes.
+ */
+const HOOK_DELTA_FLAGS = 0b1100n;
+
 /** True only for the pool's own NotEnoughLiquidity, for this pool: anything else (an inner out-of-gas, another error) says nothing. */
 function isPoolShort(data: Hex | null, poolId: Hex): boolean {
   if (!data || lower(data).slice(0, 10) !== UNEXPECTED_REVERT_BYTES) return false;
@@ -190,8 +198,9 @@ function isPoolShort(data: Hex | null, poolId: Hex): boolean {
  * 2. For each pool that exists, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call
  *    with `QUOTE_GAS`: a quote walks tick words, so one pool that plants an empty tick-spacing-1 range would starve the
  *    others in a shared call, and its failure stays its own. Only the pool's own NotEnoughLiquidity means it can't pay
- *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable").
- *    `depth` is the in-range amount, shown as such; it doesn't decide anything.
+ *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable"). A quote
+ *    through a hook that can return a delta is unverified, since the hook can claim the output without the pool paying it
+ *    (`liquid: null`, "hook-delta"). `depth` is the in-range amount, shown as such; it doesn't decide anything.
  * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure there rejects.
  */
 export async function readV4Pools(a: {
@@ -238,7 +247,7 @@ export async function readV4Pools(a: {
         // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
         const params = { poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" };
         await a.reader.read(a.v4.quoter, quoterAbi, "quoteExactOutputSingle", [params], { gas: QUOTE_GAS });
-        return { ...base, liquid: true };
+        return (BigInt(c.key.hooks) & HOOK_DELTA_FLAGS) !== 0n ? { ...base, liquid: null, undecided: "hook-delta" } : { ...base, liquid: true };
       } catch (e) {
         if (e instanceof CallReverted && isPoolShort(e.data, c.id)) return { ...base, liquid: false };
         return { ...base, liquid: null, undecided: "quote-unavailable" };

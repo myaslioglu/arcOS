@@ -169,7 +169,9 @@ describe("Arc mainnet, read-only", () => {
     const given = await findPools(input(token, v4Only, [{ version: "v4", key: HOOKED_POOL.key }]));
     const pool = given.pools.find((p) => p.poolId === HOOKED_POOL.id);
     expect(pool, `pool ${HOOKED_POOL.id}`).toMatchObject({ version: "v4", quote: "USDC", key: HOOKED_POOL.key });
-    expect(pool!.liquid === null || typeof pool!.liquid === "boolean").toBe(true);
+    // Its hook (flags 0x2044) has AFTER_SWAP_RETURNS_DELTA, so a quote through it is never taken as liquidity.
+    expect(pool!.liquid).not.toBe(true);
+    if (pool!.liquid === null) expect(pool!.undecided).toBe("hook-delta");
   });
 
   it("bounds each quote's gas: the empty USDC/EURC spacing-1 pool runs out and reads undecided, never thin, and the honest pool beside it still quotes", async () => {
