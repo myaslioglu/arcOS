@@ -56,11 +56,20 @@ describe("the real apps/web/apphosting.testnet.yaml, merged over apphosting.yaml
     expect(merged.filter((e) => e.secret !== undefined)).toEqual([]);
     const key = merged.find((e) => e.variable === "BLOCKSCOUT_API_KEY");
     expect(key).toMatchObject({ value: "none", availability: ["RUNTIME"] });
+    // Without the session secret, the testnet site has no sign-in key and sign-in answers 503 there.
+    const session = merged.find((e) => e.variable === "ARCOS_SESSION_SECRET");
+    expect(session).toMatchObject({ value: "none", availability: ["RUNTIME"] });
   });
 
   it("changes only what differs from mainnet: every other value is the base file's", () => {
     const testnet = parseEnv(fs.readFileSync(realTestnetFile, "utf8")).map((e) => e.variable).sort();
-    expect(testnet).toEqual(["BLOCKSCOUT_API_KEY", "NEXT_PUBLIC_ARC_NETWORK", "NEXT_PUBLIC_FEE_RECIPIENT", "NEXT_PUBLIC_SITE_URL"]);
+    expect(testnet).toEqual([
+      "ARCOS_SESSION_SECRET",
+      "BLOCKSCOUT_API_KEY",
+      "NEXT_PUBLIC_ARC_NETWORK",
+      "NEXT_PUBLIC_FEE_RECIPIENT",
+      "NEXT_PUBLIC_SITE_URL",
+    ]);
   });
 });
 
