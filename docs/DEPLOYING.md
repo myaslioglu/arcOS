@@ -59,9 +59,12 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
      quietly dropping the testnet site, so a manual run never deploys less than it was asked to.
    - Once it is `true`, both legs run as described here.
 
-   The same run can also deploy the Firestore indexes and the functions (`arcosIndexer`), after the sites. They are
-   gated the same way, by `ARCOS_FUNCTIONS_READY`, and `targets: indexes` or `targets: functions` deploys either alone
-   ([OPERATIONS.md](OPERATIONS.md#deploying)). A manual run of the sites never deploys them.
+   The same run can also deploy the functions (`arcosIndexer`), after the sites. They are gated the same way, by
+   `ARCOS_FUNCTIONS_READY`, and `targets: functions` deploys them alone ([OPERATIONS.md](OPERATIONS.md#deploying)). A
+   manual run of the sites never deploys them. The workflow never deploys the Firestore indexes or rules: the pinned
+   CLI compiles the rules through the Rules API even for `--only firestore:indexes`, and the deployer has no rules
+   permission, on purpose. The owner deploys both by hand with `firebase deploy --only firestore:arcos`, as in the
+   Firestore foundation's steps ([OPERATIONS.md](OPERATIONS.md#deploying)).
 
    The order keeps the testnet site from breaking 4rc.OS:
    - A bundle that fails to build, either one, stops the run before approval, and nothing is deployed. To ship 4rc.OS
@@ -111,7 +114,7 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
 - **Google Cloud**: a workload identity provider that accepts tokens only from this repository's `production`
   environment, and a deployer service account with App Hosting Developer, Service Usage Consumer and Storage Bucket
   Viewer on the project, and Storage Object Creator on the bucket that holds uploaded source. It has no key. The same
-  roles cover both backends (see [The testnet site](#the-testnet-site)). The functions and the indexes need more roles,
+  roles cover both backends (see [The testnet site](#the-testnet-site)). The functions need more roles,
   listed in [OPERATIONS.md](OPERATIONS.md#setting-it-up).
 - **Two App Hosting backends** in `europe-west4`, both listed in `firebase.json` with the root `apps/web`: `arcos`
   (https://4rcos.com), which runs as `arcos-web@` and has no environment name, so it reads `apphosting.yaml` alone; and

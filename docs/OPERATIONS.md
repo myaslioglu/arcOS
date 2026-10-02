@@ -102,9 +102,26 @@ The indexer never writes `paused` or `inspect`. Change them only between runs (a
 ## Deploying
 
 With the repository variable `ARCOS_FUNCTIONS_READY` set to `true`, every push to `main` deploys, after the sites and
-under the same approval, the Firestore indexes (`firebase deploy --only firestore:indexes`) and then the functions
-(`firebase deploy --only functions:arcos`). A manual run can deploy either alone: Actions, Deploy, Run workflow, with
-`targets: indexes` or `targets: functions`. The rules (`firestore/arcos.rules`) are not deployed by the workflow.
+under the same approval, the functions (`firebase deploy --only functions:arcos`). A manual run can deploy them alone:
+Actions, Deploy, Run workflow, with `targets: functions`. `--only functions:arcos` keeps the CLI's functions target
+alone (`filterTargets.js`), so the deploy never reads or writes Firestore: only a Firestore-triggered function would
+make it look up a database, and the manifest check below allows a schedule only.
+
+The workflow deploys neither the Firestore indexes (`firestore/arcos.indexes.json`) nor the rules
+(`firestore/arcos.rules`). The owner deploys both by hand, from a clean checkout of `main`, as in the Firestore
+foundation's steps:
+
+```bash
+npm ci --ignore-scripts --prefix tools/firebase
+tools/firebase/node_modules/.bin/firebase deploy --only firestore:arcos --project arcos-c80cf
+```
+
+The reason is the pinned CLI: even with `--only firestore:indexes`, its Firestore deploy adds the rules file and
+compiles it through the Rules API (`firebaserules.googleapis.com/.../projects/arcos-c80cf:test`,
+`deploy/firestore/prepare.js`; `--only` decides only whether the rules are released). The deployer has no rules
+permission, on purpose, so every indexes deploy from the workflow failed with a 403 there, and the functions deploy
+after it never ran. Deploy the indexes after a change to `firestore/arcos.indexes.json`, before the code that needs
+them; without `--force` an index the file no longer names is left in place, never deleted.
 
 The functions are built in a job without a credential: `npm run build -w @arcos/functions` bundles
 [functions/src](../functions/src) with esbuild into `functions/deploy/index.js` and writes
@@ -128,7 +145,6 @@ By hand, from a clean checkout of `main`, the same deploy is:
 npm ci
 npm run build -w @arcos/functions
 npm ci --ignore-scripts --prefix tools/firebase
-tools/firebase/node_modules/.bin/firebase deploy --only firestore:indexes --project arcos-c80cf
 tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --project arcos-c80cf
 ```
 
@@ -222,7 +238,20 @@ removed it, and every later deploy must work with the roles below alone.
      gcloud iam roles update arcosSecretDeployReader --project arcos-c80cf --add-permissions secretmanager.secrets.get
      ```
 
-   - `roles/datastore.indexAdmin` on the project, with the same `arcos` condition as above: the indexes;
+   - No Firestore role: the workflow deploys no indexes and no rules (Deploying, above). Optional cleanup, for a setup
+     that gave the deployer `roles/datastore.indexAdmin` on the project with the `arcos` condition of step 3: remove
+     that binding. `--all` removes every binding of that role for the deployer, whatever its condition, which is safe
+     because the deployer should hold none. The second command checks it: it should print nothing.
+
+     ```bash
+     gcloud projects remove-iam-policy-binding arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
+       --role roles/datastore.indexAdmin --all
+     gcloud projects get-iam-policy arcos-c80cf --flatten bindings \
+       --filter 'bindings.role=roles/datastore.indexAdmin AND bindings.members:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com' \
+       --format 'value(bindings.condition.title,bindings.condition.expression)'
+     ```
+
    - a custom role holding `run.services.getIamPolicy` and `run.services.setIamPolicy`, bound on the function's Cloud
      Run service `arcosindexer` itself, never on the project. The CLI lets `arcos-jobs@` invoke the function through
      the `roles/run.invoker` binding on that service: a create sets the service's policy (`run.services.setIamPolicy`,
