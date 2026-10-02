@@ -130,11 +130,12 @@ whoever runs it.
 
 ## How Inspector decides things
 
-Inspector runs eight checks against a token's contract: source verification, ownership,
+Inspector runs nine checks against a token's contract: source verification, ownership,
 privileged functions (mint, blacklist, fee, limit, pause), proxy upgradeability, holder
-concentration, liquidity, liquidity lock, and reliance on `PREVRANDAO`. It reports "N of 8 checks
+concentration, liquidity, liquidity lock, reliance on `PREVRANDAO`, and a simulated buy and sell
+(check 10; a vesting check 9 is still to come). It reports "N of 9 checks
 pass" plus an evidence link per finding — never a numeric score — and, whenever some checks
-couldn't be resolved, says so explicitly ("5 of 8 checks pass · 3 couldn't be checked") rather than
+couldn't be resolved, says so explicitly ("5 of 9 checks pass · 4 couldn't be checked") rather than
 folding an unknown into either a pass or a fail. A missing or unreadable owner never turns a
 privileged function into a "can't be called" pass: if the contract has no `owner()`/`getOwner()`
 but does have privileged functions, both the ownership and privileges findings read "unknown", not
@@ -162,12 +163,28 @@ but does have privileged functions, both the ownership and privileges findings r
 - A Uniswap v4 pool counts as liquid when the v4 quoter can pay out 1,000 units of the quote
   currency, USDC or EURC, from it, each quote within a gas limit of its own. It counts as thin only
   when the quoter says the pool itself hasn't enough liquidity; a quote that fails any other way reads
-  "unknown". A pool with a hook reads "unknown" too, until a trade simulation can judge it: the hook
-  runs inside the swap, so it could make a quote say either. Next to that, Inspector shows what
-  is "in range": what the pool's active liquidity holds between the current price and the edge of its
-  current tick range. That is an exact figure for that range and no more, so it is often far less than
-  what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts as liquid from 1,000 units of
-  USDC or EURC in the pool.
+  "unknown". A pool with a hook reads "unknown" too: the hook runs inside the swap, so it could make
+  a quote say either, and the trade simulation's few USDC say nothing about 1,000. Next to that,
+  Inspector shows what is "in range": what the pool's active liquidity holds between the current
+  price and the edge of its current tick range. That is an exact figure for that range and no more,
+  so it is often far less than what the pool can pay out. A Uniswap v2, v3 or Aerodrome pool counts
+  as liquid from 1,000 units of USDC or EURC in the pool.
+- The trade check (check 10) buys the token with 10 USDC, or 0.1% of the pool's depth when that is
+  less (never under 0.01 USDC), from its deepest USDC pool and sells everything straight back into
+  the same pool. It is one `eth_call`: a small simulator contract
+  (`packages/contracts/src/sim/TradeSimulator.sol`) is placed at a throwaway address with a state
+  override, together with the USDC it spends, and swaps against the pool contracts directly, not
+  through a router. Nothing is signed or sent. A sell that reverts after the buy went through is a
+  fail ("Can't be sold"). A round trip that loses more than the pool's own fees for the two swaps
+  plus 3% is a warning; where the fee can change from swap to swap (a dynamic-fee or hooked v4
+  pool, Aerodrome) the line is 5%. A buy that reverts, a leg that runs out of the gas it is given,
+  and an RPC that won't run the simulation all read "unknown".
+- A token can tell a simulation from a real trade (the simulator is a contract, and the call comes
+  from an address that holds code), so a token written to behave differently for it can pass. A pass
+  says what one simulated buy and sell did at that block, against one pool; a rule the owner can
+  switch on later, or one that applies to other pools or larger amounts, isn't covered. A sell into
+  a Uniswap v3 pool also reverts for a token that arrives short (a transfer tax), because the pool
+  checks it was paid in full; that token can't be sold into that pool, and the finding says so.
 - Holder figures are only as complete as the explorer's index, and exclude burn addresses, known
   pools (Uniswap v4's PoolManager among them) and lock contracts. A list the explorer won't confirm
   is complete gives a floor, not a concentration.
