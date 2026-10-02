@@ -173,8 +173,8 @@ contract TradeSimulatorTest is Test {
         assertEq(r.received, 0);
     }
 
-    function test_v2_aBuyThePairGivesNothingForIsABuyRevertAndPaysNothing() public {
-        // A pair holding one token unit: 10 USDC buys nothing of it, so the buy reverts before paying.
+    function test_v2_aPairThatGivesNothingForTheBuyIsAPoolThatCantTrade() public {
+        // A pair holding one token unit: 10 USDC buys nothing of it, which the pair's reserves say before anything is sent.
         MockV2Pair pair = new MockV2Pair(address(usdc), address(token));
         usdc.mint(address(pair), 10_000e6);
         token.seed(address(pair), 1);
@@ -182,7 +182,7 @@ contract TradeSimulatorTest is Test {
         token.setPool(address(pair));
         TradeSimulator.Result memory r =
             _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
-        assertEq(r.status, sim.BUY_REVERTED());
+        assertEq(r.status, sim.POOL_CANT_TRADE());
         assertEq(r.spent, 0);
         assertEq(usdc.balanceOf(S), AMOUNT);
     }
@@ -258,7 +258,65 @@ contract TradeSimulatorTest is Test {
         assertEq(usdc.balanceOf(S), AMOUNT);
     }
 
+    function test_v3_aPoolWithNoPriceOrAtItsPriceLimitIsAPoolThatCantTrade() public {
+        MockV3Pool pool = _v3(3000);
+        bool usdcIsToken0 = address(usdc) < address(token);
+        // Buying the token moves the price toward the limit on the USDC side.
+        uint160 atLimit =
+            usdcIsToken0 ? 4_295_128_740 : 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_341;
+        uint160[2] memory prices = [atLimit, 0];
+        for (uint256 i; i < 2; i++) {
+            pool.setState(prices[i], 1e18);
+            TradeSimulator.Result memory r =
+                _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+            assertEq(r.status, sim.POOL_CANT_TRADE());
+            assertEq(usdc.balanceOf(S), AMOUNT);
+        }
+    }
+
+    function test_v3_aPoolWithNoActiveLiquidityIsStillTraded() public {
+        // A single-sided launch pool sits outside its range with no liquidity active; a buy moves the price into it.
+        MockV3Pool pool = _v3(3000);
+        pool.setState(uint160(1 << 96), 0);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.OK());
+    }
+
+    function test_v3_aBuyTheTokenRefusesIsABuyRevertNotAPoolThatCantTrade() public {
+        MockV3Pool pool = _v3(3000);
+        token.setBlockContractBuyers(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.BUY_REVERTED());
+    }
+
+    function test_v2_aBuyTheTokenRefusesIsABuyRevertNotAPoolThatCantTrade() public {
+        MockV2Pair pair = _v2();
+        token.setBlockContractBuyers(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.BUY_REVERTED());
+    }
+
     // --- v4 ---
+
+    function test_v4_aPoolAtItsPriceLimitIsAPoolThatCantTrade() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+        bool zeroForOne = key.currency0 == address(usdc);
+        manager.setState(
+            key, zeroForOne ? 4_295_128_740 : 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_341, 1e18
+        );
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.POOL_CANT_TRADE());
+    }
+
+    function test_v4_aBuyTheTokenRefusesIsABuyRevertNotAPoolThatCantTrade() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+        token.setBlockContractBuyers(true);
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.BUY_REVERTED());
+    }
 
     function test_v4_nativeUsdcHonestToken() public {
         (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(0), 3000);
@@ -323,12 +381,12 @@ contract TradeSimulatorTest is Test {
         assertEq(r.status, sim.SELL_REVERTED());
     }
 
-    function test_v4_aPoolThatCantPayIsABuyRevert() public {
+    function test_v4_aPoolWithNoPriceOrLiquidityIsAPoolThatCantTrade() public {
         MockPoolManager manager = new MockPoolManager();
         token.setPool(address(manager));
         TradeSimulator.Result memory r =
             _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, _key(address(usdc), 3000)), 5_000_000);
-        assertEq(r.status, sim.BUY_REVERTED());
+        assertEq(r.status, sim.POOL_CANT_TRADE());
         assertEq(r.spent, 0);
         assertEq(usdc.balanceOf(S), AMOUNT);
     }

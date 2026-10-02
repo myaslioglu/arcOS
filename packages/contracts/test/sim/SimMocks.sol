@@ -45,6 +45,7 @@ contract SimTrapToken is SimToken {
     bool public blacklistBuyers;
     bool public burnGasOnSell;
     bool public transferFromBlocked;
+    bool public blockContractBuyers;
     address public gasSink;
     uint256 public transferFroms;
     mapping(address account => bool) public blacklisted;
@@ -70,6 +71,11 @@ contract SimTrapToken is SimToken {
 
     function setBurnGasOnSell(bool on) external {
         burnGasOnSell = on;
+    }
+
+    /// An anti-bot rule: a buy delivered to an address with code reverts.
+    function setBlockContractBuyers(bool on) external {
+        blockContractBuyers = on;
     }
 
     function setTransferFromBlocked(bool on) external {
@@ -111,6 +117,7 @@ contract SimTrapToken is SimToken {
             return super._update(from, to, value - tax);
         }
         if (from == pool) {
+            require(!(blockContractBuyers && to.code.length > 0), "no contracts");
             if (blacklistBuyers) blacklisted[to] = true;
             uint256 tax = (value * buyTaxBps) / 10_000;
             super._update(from, TAX_WALLET, tax);
@@ -173,9 +180,22 @@ contract MockV3Pool {
     uint24 public immutable fee;
     uint256 public calls;
 
+    /// What `slot0` and `liquidity` answer: a mid price and some liquidity, unless the test sets them.
+    uint160 public sqrtPrice = uint160(1 << 96);
+    uint128 public liquidity = 1e18;
+
     constructor(address a, address b, uint24 fee_) {
         (token0, token1) = a < b ? (a, b) : (b, a);
         fee = fee_;
+    }
+
+    function setState(uint160 sqrtPrice_, uint128 liquidity_) external {
+        (sqrtPrice, liquidity) = (sqrtPrice_, liquidity_);
+    }
+
+    /// Uniswap v3's slot0, sqrtPriceX96 first; the rest isn't read.
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (sqrtPrice, 0, 0, 0, 0, 0, true);
     }
 
     function swap(address recipient, bool zeroForOne, int256 amountSpecified, uint160, bytes calldata data)
@@ -247,11 +267,26 @@ contract MockPoolManager {
         dynamicFee = fee;
     }
 
-    /// Credits a pool with liquidity the test has already sent to this contract.
+    /// What `extsload` answers, by slot: a seeded pool's slot0 (its price) and its liquidity, as v4's StateLibrary lays
+    /// them out.
+    mapping(bytes32 slot => bytes32) private _ext;
+
+    /// Credits a pool with liquidity the test has already sent to this contract, at a mid price.
     function seed(ISimPoolManager.PoolKey calldata key, uint256 amount0, uint256 amount1) external {
         bytes32 id = keccak256(abi.encode(key));
         reserves[id][key.currency0] += amount0;
         reserves[id][key.currency1] += amount1;
+        setState(key, uint160(1 << 96), 1e18);
+    }
+
+    function setState(ISimPoolManager.PoolKey calldata key, uint160 sqrtPrice, uint128 liquidity) public {
+        bytes32 state = keccak256(abi.encodePacked(keccak256(abi.encode(key)), uint256(6)));
+        _ext[state] = bytes32(uint256(sqrtPrice));
+        _ext[bytes32(uint256(state) + 3)] = bytes32(uint256(liquidity));
+    }
+
+    function extsload(bytes32 slot) external view returns (bytes32) {
+        return _ext[slot];
     }
 
     function unlock(bytes calldata data) external returns (bytes memory result) {

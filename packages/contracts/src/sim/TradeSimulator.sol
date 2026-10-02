@@ -70,6 +70,12 @@ contract TradeSimulator {
     uint8 public constant BUY_OUT_OF_GAS = 2;
     uint8 public constant SELL_REVERTED = 3;
     uint8 public constant SELL_OUT_OF_GAS = 4;
+    /// The pool itself can't serve the buy, checked before anything is sent: a v2 pair whose reserves give nothing for the
+    /// amount, a v3, Slipstream or v4 pool with no price or its price at the swap's limit. Nothing the token does can bring
+    /// this about, so Inspector may leave such a pool out. (Active liquidity of 0 isn't one: a single-sided launch pool
+    /// sits outside its range with none active, and a buy moves the price into it. A pool with no liquidity anywhere pays
+    /// nothing out, which Inspector reads from the result.)
+    uint8 public constant POOL_CANT_TRADE = 5;
 
     uint8 public constant V2 = 0;
     uint8 public constant V3 = 1;
@@ -115,6 +121,10 @@ contract TradeSimulator {
     /// The round trip. Only callable by this contract: Inspector's call is from S to S.
     function simulate(Trade calldata t) external returns (Result memory r) {
         require(msg.sender == address(this));
+        if (!_poolCanTrade(t)) {
+            r.status = POOL_CANT_TRADE;
+            return r;
+        }
         (uint8 outcome, uint256 a, uint256 b, uint256 c) = _leg(abi.encodeCall(this.buy, (t)), 3);
         if (outcome != OK) {
             r.status = outcome == LEG_REVERTED ? BUY_REVERTED : BUY_OUT_OF_GAS;
@@ -224,6 +234,44 @@ contract TradeSimulator {
     }
 
     // --- internals ---
+
+    /// v4's PoolManager keeps its pools in a mapping at this slot; a pool's state starts at keccak256(id, slot), with its
+    /// slot0 (the price in its low 160 bits) first, as v4-core's StateLibrary, and the StateView that uses it, read it.
+    uint256 private constant POOLS_SLOT = 6;
+
+    /// Whether the pool can serve the buy at all, from its own state, before anything is sent. Only the pool's view
+    /// functions are called, never the token's: a pool whose views revert or answer nothing usable can't trade.
+    function _poolCanTrade(Trade calldata t) private view returns (bool) {
+        if (t.kind == V2) {
+            (bool ok, bytes memory ret) = t.pool.staticcall(abi.encodeWithSelector(ISimV2Pair.token0.selector));
+            if (!ok || ret.length != 32) return false;
+            bool inIsToken0 = abi.decode(ret, (address)) == t.usdc;
+            (ok, ret) = t.pool.staticcall(abi.encodeWithSelector(ISimV2Pair.getReserves.selector));
+            if (!ok || ret.length != 96) return false;
+            (uint256 reserve0, uint256 reserve1,) = abi.decode(ret, (uint256, uint256, uint256));
+            (uint256 reserveIn, uint256 reserveOut) = inIsToken0 ? (reserve0, reserve1) : (reserve1, reserve0);
+            return _amountOut(t.amount, reserveIn, reserveOut) > 0;
+        }
+        uint256 sqrtPrice;
+        bool zeroForOne;
+        if (t.kind == V3) {
+            zeroForOne = t.usdc < t.token;
+            (bool ok, bytes memory ret) = t.pool.staticcall(abi.encodeWithSignature("slot0()"));
+            if (!ok || ret.length < 32) return false;
+            sqrtPrice = abi.decode(ret, (uint256)) & type(uint160).max;
+        } else if (t.kind == V4) {
+            zeroForOne = t.usdc == t.key.currency0;
+            bytes32 state = keccak256(abi.encodePacked(keccak256(abi.encode(t.key)), POOLS_SLOT));
+            (bool ok, bytes memory ret) = t.pool.staticcall(abi.encodeWithSignature("extsload(bytes32)", state));
+            if (!ok || ret.length < 32) return false;
+            sqrtPrice = abi.decode(ret, (uint256)) & type(uint160).max;
+        } else {
+            // An unknown kind is no pool's answer: the buy leg reverts on it, as before.
+            return true;
+        }
+        if (sqrtPrice == 0) return false;
+        return zeroForOne ? sqrtPrice > MIN_SQRT_PRICE + 1 : sqrtPrice < MAX_SQRT_PRICE - 1;
+    }
 
     /// What a leg's self-call came to. Separate from the statuses above: `simulate` maps it to the leg's own.
     uint8 private constant LEG_REVERTED = 1;
