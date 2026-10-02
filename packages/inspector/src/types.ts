@@ -68,8 +68,8 @@ export interface ChainReader {
 export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
 
 /**
- * A pool the caller already knows about, read live next to the ones discovery finds. The index supplies them (A6): that is
- * how a v4 pool with hooks, or a fee outside the standard five, gets seen. Nothing fills them yet.
+ * A pool the caller already knows about, read live next to the ones discovery finds. The index supplies them (pools/ in Firestore): that is
+ * how a v4 pool with hooks, or a fee outside the standard five, gets seen.
  */
 export type ExtraPool = { version: "v4"; key: PoolKey };
 
@@ -129,7 +129,12 @@ export type InspectInput = {
   /** The 4rc.OS TokenFactory on this network. A token it created (`isArcosToken`) runs one of the factory's fixed
    * templates, whose source is published with the factory's verified source. */
   arcosTokenFactory?: Address | null;
-  /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index; nothing fills it yet. */
+  /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */
   extraPools?: ExtraPool[];
+  /**
+   * Called once with what the pool lookup found, or null when it failed, before the findings are made from it. The indexer
+   * stores the best pool from it (`bestPool`), so it needs no second lookup. A hook that throws changes nothing.
+   */
+  onPools?: (scan: PoolScan | null) => void;
   now?: () => Date;
 };

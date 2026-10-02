@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AERODROME, EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
-import { findPools } from "../checks";
+import { bestPool, findPools } from "../checks";
 import { inspect } from "../inspect";
 import type { ExplorerSource, Holder } from "../explorer";
-import type { ExtraPool, Finding, InspectInput, Report } from "../types";
+import type { ExtraPool, Finding, InspectInput, PoolScan, Report } from "../types";
 import { NATIVE, QUOTE_CONCURRENCY, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
 import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, NOT_ENOUGH_LIQUIDITY_OTHER_POOL, NOT_ENOUGH_LIQUIDITY_POOL, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
 import { fakeChain, readKey, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
@@ -345,6 +345,39 @@ describe("the liquidity finding for v4 pools", () => {
     const r = await run({ multicallError: new Error("ETIMEDOUT") }, v4Only);
     expect(find(r, "liquidity")).toMatchObject({ status: "unknown", title: "Couldn't read liquidity pools" });
     expect(r.degraded).toBe(true);
+  });
+});
+
+describe("onPools: the pool lookup, handed to the caller", () => {
+  const key = v4PoolKey(TOKEN, USDC, 500, 10);
+  const withHook = (onPools: InspectInput["onPools"]) =>
+    inspect({
+      address: TOKEN, network: "mainnet", reader: fakeChain({ code: { [TOKEN]: PLAIN }, v4: listed([key, at1251()]) }), explorer: null,
+      dex: v4Only, knownLockers: [], explorerBase: "https://explorer.test", now: () => new Date("2026-09-29T00:00:00Z"), onPools,
+    });
+
+  it("gets the very scan the findings were made from, once, and bestPool picks the pool the liquidity finding names", async () => {
+    const seen: (PoolScan | null)[] = [];
+    const r = await withHook((scan) => seen.push(scan));
+    expect(seen).toHaveLength(1);
+    const pool = bestPool(seen[0]!.pools);
+    expect(pool).toMatchObject({ version: "v4", liquid: true, poolId: v4PoolId(key) });
+    expect(find(r, "liquidity").status).toBe("pass");
+  });
+
+  it("gets null when the lookup failed, and a hook that throws changes nothing in the report", async () => {
+    const seen: (PoolScan | null)[] = [];
+    const failing = await inspect({
+      address: TOKEN, network: "mainnet", reader: fakeChain({ code: { [TOKEN]: PLAIN }, multicallError: new Error("ETIMEDOUT") }), explorer: null,
+      dex: v4Only, knownLockers: [], explorerBase: "https://explorer.test", onPools: (scan) => seen.push(scan),
+    });
+    expect(seen).toEqual([null]);
+    expect(find(failing, "liquidity").status).toBe("unknown");
+    const quiet = await withHook(undefined);
+    const loud = await withHook(() => {
+      throw new Error("the caller's own bug");
+    });
+    expect(loud.findings).toEqual(quiet.findings);
   });
 });
 

@@ -6,6 +6,8 @@ export * from "./reader";
 export * from "./rpc-errors";
 export * from "./label";
 export * from "./inspect";
+export { bestPool } from "./checks";
+export { NATIVE, v4PoolId, v4PoolKey } from "./v4";
 // The server-side plumbing the site and the functions share: the RPC transport with its cooldowns, the inspection
 // client over it, the explorer request wrapper, the deadline and the Blockscout PRO API endpoints.
 export * from "./deadline";

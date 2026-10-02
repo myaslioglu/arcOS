@@ -347,7 +347,17 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     ask<TokenInfo | null>(() => explorer!.token(address)),
     ask<HolderPage | null>(() => explorer!.topHolders(address)),
     resolveOwner(reader, address, selectors),
-    findPools(input).catch(() => null),
+    findPools(input)
+      .catch(() => null)
+      .then((scan) => {
+        // The caller's hook sees the scan the findings are made from; nothing it does can change them.
+        try {
+          input.onPools?.(scan);
+        } catch {
+          // ignored on purpose
+        }
+        return scan;
+      }),
     reader.blockNumber().catch(() => null),
     input.arcosTokenFactory
       ? reader.read(input.arcosTokenFactory, tokenFactoryAbi, "isArcosToken", [address]).then((v) => v === true).catch(() => null)
