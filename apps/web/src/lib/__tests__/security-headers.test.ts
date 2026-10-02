@@ -253,22 +253,44 @@ describe("reportOnlyHeaders", () => {
 });
 
 describe("next.config.ts", () => {
-  it("applies both header sets to every path", async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("applies both header sets to every path, and nothing else on mainnet", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
     const rules = await nextConfig.headers!();
     expect(rules.map((r) => r.source)).toEqual(["/:path*", "/:path*"]);
     const applied = rules.flatMap((r) => r.headers);
     const expected = [...enforcedHeaders(), ...reportOnlyHeaders({ dev: process.env.NODE_ENV === "development" })];
     expect(applied).toEqual(expected);
+    expect(applied.map((h) => h.key.toLowerCase())).not.toContain("x-robots-tag");
+  });
+
+  // The page metadata says noindex in HTML; the header says it for every answer, the API routes and images included.
+  it("adds X-Robots-Tag: noindex, nofollow to every path on testnet", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
+    const rules = await nextConfig.headers!();
+    expect(rules.map((r) => r.source)).toEqual(["/:path*", "/:path*", "/:path*"]);
+    expect(rules[2].headers).toEqual([{ key: "X-Robots-Tag", value: "noindex, nofollow" }]);
+    expect(rules.slice(0, 2).flatMap((r) => r.headers)).toEqual([
+      ...enforcedHeaders(),
+      ...reportOnlyHeaders({ dev: process.env.NODE_ENV === "development" }),
+    ]);
   });
 
   it("sends upgrade-insecure-requests in no header, enforced or report-only", async () => {
-    for (const { key, value } of (await nextConfig.headers!()).flatMap((r) => r.headers)) {
-      expect(`${key}: ${value}`, key).not.toContain("upgrade-insecure-requests");
+    for (const network of ["mainnet", "testnet"]) {
+      vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+      for (const { key, value } of (await nextConfig.headers!()).flatMap((r) => r.headers)) {
+        expect(`${key}: ${value}`, key).not.toContain("upgrade-insecure-requests");
+      }
     }
   });
 
   it("gives no header key to two rules, since the last rule for a key would win", async () => {
-    const keys = (await nextConfig.headers!()).flatMap((r) => r.headers.map((h) => h.key.toLowerCase()));
-    expect(new Set(keys).size).toBe(keys.length);
+    for (const network of ["mainnet", "testnet"]) {
+      vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+      const keys = (await nextConfig.headers!()).flatMap((r) => r.headers.map((h) => h.key.toLowerCase()));
+      expect(new Set(keys).size, network).toBe(keys.length);
+    }
   });
 });

@@ -329,44 +329,66 @@ text matches this if it happens to come up while running the rest of this sectio
 ## Revoke
 
 54. Open Revoke with no wallet connected. Expect an "Address to look up" field with a "Look" button, the sentence
-    "Connect a wallet, or paste an address to look." with an "Open Wallet" button under it, and at the bottom "Token
-    approvals only. NFT and Permit2 approvals come later." Type `nope` and click Look: `That isn't an address.` appears
-    under the field.
+    "Connect a wallet, or paste an address to look." with an "Open Wallet" button under it, and at the bottom "Lists
+    token allowances, NFT approvals and Permit2 allowances. Each revoke is a transaction your wallet confirms." Type
+    `nope` and click Look: `That isn't an address.` appears under the field.
 55. Paste the address of a wallet that has approved a token and click Look. Expect "Loading approvals…", then
     `Viewing 0x12…ab. Only its own wallet can revoke.` above one row for each live approval: the token as
-    `SYMBOL · 0x12…ab` over its name, the allowance ("Unlimited", or the amount at the token's decimals), and "Spender:"
-    with the spender's name (Permit2, for one) or "Unknown contract", plus its short address. A spender with no name has
-    an "Inspect" button that opens Inspector on it. There are no Revoke buttons. A wallet with none reads "No active token
+    `SYMBOL · 0x12…ab` over its kind and name ("Token · …", "NFT · …", "All items · …" or "Permit2 · …"), what it
+    allows ("Unlimited" or the amount at the token's decimals; "NFT #7" for one NFT; "Every item" for an operator; a
+    Permit2 allowance's amount with "Expires YYYY-MM-DD" under it), and "Spender:" with the spender's name (Permit2, for
+    one) or "Unknown contract", plus its short address. A spender with no name has an "Inspect" button that opens
+    Inspector on it. There are no Revoke buttons, no "Revoke all" and no trash area. A wallet with none reads "No active
     approvals." A list that can't be read says "Couldn't load approvals. Try again in a minute." with a "Try again"
     button, and one that was cut short says "This list may be incomplete: some approvals couldn't be read."
 56. Connect a wallet on Arc that has an approval to spare (for a test, the allowance a Drop leaves when its second batch
-    is rejected, item 27), and open Revoke, or click "My wallet". The list is the wallet's own, with no "Viewing" line and
-    a "Revoke" button on each row. Click one: the button reads "Waiting for your wallet…", every Revoke button is
-    disabled, and the wallet shows one transaction, `approve(spender, 0)` on that token, of no value. Confirm it. Expect
-    the row to disappear and, if focus was lost, keyboard focus on the next row's Revoke button (on the list itself when
-    none is left). A reload of the tab doesn't bring the row back.
+    is rejected, item 27), and open Revoke, or click "My wallet". The list is the wallet's own, with no "Viewing" line
+    and a "Revoke" button on each row. Click one: the button reads "Waiting for your wallet…", every Revoke button is
+    disabled, and the wallet shows one transaction, `approve(spender, 0)` on that token, of no value. Confirm it: the
+    button reads "Waiting for confirmation…" until the transaction is mined. Expect the row to disappear and, if focus
+    was lost, keyboard focus on the next row's Revoke button (on the list itself when none is left). A reload of the tab
+    doesn't bring the row back.
 57. Refuse a revoke in the wallet: the row stays, `You cancelled the request in your wallet.` appears under it, and its
     button works again. With the wallet on another network Revoke shows "Your wallet is on another network." and a
     "Switch to Arc" button ("Switch to Arc Testnet" on testnet) in place of the list, and nothing is sent.
+58. The other kinds, from a wallet that has approved one NFT (`approve` on an ERC-721), set an operator
+    (`setApprovalForAll` on a collection) and holds a Permit2 allowance (a swap through the Universal Router leaves
+    one). Each has its own row, as step 55 describes. Revoke each and read the wallet's transaction, of no value every
+    time: one NFT is `approve(0x0000…0000, id)` on the collection; an operator is `setApprovalForAll(operator, false)`
+    on the collection; a Permit2 allowance is `lockdown([(token, spender)])` on Permit2
+    (`0x000000000022D473030F116dDEE9F6B43aC78BA3`). Each row disappears once confirmed.
+59. Revoke all: with two or more rows, "Revoke all (N)" shows above the list. Click it. Expect "Revoking 1 of N…" and
+    "Keep this tab open until it finishes. You can close this window; the revokes continue." The wallet asks for one
+    transaction at a time, in list order, with every Permit2 row in a single `lockdown` last; each row disappears as
+    its transaction confirms. Close Revoke mid-run and open it again: the progress line is still there. Refuse one in
+    the wallet: the run stops there, the sentence appears under that row, and the rows after it stay, with their
+    buttons working again.
+60. Stop: during Revoke all, click "Stop after this one". The progress line ends "… Stopping after this
+    one.", the button is disabled, the transaction under way finishes, and the wallet asks for nothing more. The button
+    stays while the run has steps to go, even once the list is down to one row.
+61. The trash area: with one row or more, "Drop an approval here to revoke it." shows above the list (under "Revoke
+    all" when that shows). Drag a row onto it: the area is outlined while the row is over it, and the drop does what
+    the row's Revoke button does (the same wallet prompt, the same row). While viewing another address there is no
+    trash area, and a row dropped from another Revoke window starts nothing unless this list shows it.
 
 ## Terminal
 
-58. Open Terminal (in the System tray, or search for it with Ctrl K). Expect `4rc.OS terminal. Type help for the
+62. Open Terminal (in the System tray, or search for it with Ctrl K). Expect `4rc.OS terminal. Type help for the
     commands.`, the prompt `4rc:~$` with a field showing `help` as its placeholder, and the hint "Tab completes · ↑
     history · Ctrl L clears" (shown in capitals). Type `help`: one line for each of the 13 commands, with what it does: `help`, `open [app]`,
     `inspect <address>`, `approvals [address]`, `balance [address]`, `block`, `gas`, `whoami`, `theme light|dark|system`,
     `roadmap`, `clear`, `history` and `about`. Type `nosuchcommand`: `Unknown command: nosuchcommand. Type help.`
-59. It reads the chain, with no wallet needed. `block` answers `Block <number> · <n> s ago · <n> transactions`. `gas`
+63. It reads the chain, with no wallet needed. `block` answers `Block <number> · <n> s ago · <n> transactions`. `gas`
     answers `Base fee: <n> gwei` and what a plain USDC transfer costs at it. `balance <address>` answers `0x12…ab: <n>
     USDC` as a link to that address on the explorer. `balance` alone, with no wallet connected, answers `No wallet
     connected. Try balance <address>.` `whoami` answers `No wallet connected`, or the connected address and `On Arc`
     (`On Arc Testnet` on testnet).
-60. It opens apps. `open` lists every app id, with "(work in progress)" beside the grey ones. `open swap` opens Swap and
+64. It opens apps. `open` lists every app id, with "(work in progress)" beside the grey ones. `open swap` opens Swap and
     answers `Opened Swap.` `inspect <token address>` opens Inspector on it, `approvals` opens Revoke for the connected
     wallet (`approvals <address>` for another), and `roadmap` lists the apps on the way with their stages. `theme dark`
     answers `Theme set to dark.` and changes the theme (`theme system` follows the device again). Tab completes a command
     or an app id, ↑ and ↓ walk this window's history, and Ctrl L clears the screen.
-61. It never signs or sends anything. Connect a wallet, run every command above once, and confirm the wallet opens no
+65. It never signs or sends anything. Connect a wallet, run every command above once, and confirm the wallet opens no
     prompt for any of them.
 
 ## WalletConnect (phone wallets)
@@ -375,17 +397,17 @@ Needs `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (set for https://4rcos.com in `apps
 a wallet that speaks WalletConnect (Trust Wallet, MetaMask or Binance Wallet). The domain allowlist in the Reown
 dashboard limits where that project ID works, so test on https://4rcos.com, not on localhost.
 
-62. On a phone, or in a desktop browser with no wallet extension, open Wallet. Expect one button, "WalletConnect (phone
+66. On a phone, or in a desktop browser with no wallet extension, open Wallet. Expect one button, "WalletConnect (phone
     wallets)"; with a browser wallet installed it is the last button, below that wallet's own. Reload the page and look
     at the browser's network panel: nothing goes to walletconnect.org or web3modal.org until the button is clicked.
-63. Click it. Expect "Waiting for your wallet…" and WalletConnect's modal, with a QR code ("Scan this QR Code with your
+67. Click it. Expect "Waiting for your wallet…" and WalletConnect's modal, with a QR code ("Scan this QR Code with your
     phone"), "Copy link" and the wallet list. Choose your wallet and approve the connection in it. The modal closes and
     the Wallet window shows "WalletConnect", the address, the network ("Arc") and the balance, with a "Disconnect"
     button. Run one paid action (a Revoke costs the least): the request reaches the phone, is signed there, and the app
     shows the result as it does for a browser wallet.
-64. Open the modal again and close it before a wallet answers, with its ✕ or with Escape: `You cancelled the request in
+68. Open the modal again and close it before a wallet answers, with its ✕ or with Escape: `You cancelled the request in
     your wallet.` appears in the Wallet window, and the window itself stays open (Escape closed the modal first).
-65. While connected, reload the page: the session comes back with no click. Click "Disconnect" and reload: the network
+69. While connected, reload the page: the session comes back with no click. Click "Disconnect" and reload: the network
     panel shows no request to walletconnect.org, so a session that has ended costs nothing more. If the WalletConnect
     code can't load (offline, or a page left open across a deploy) the Wallet window says `WalletConnect couldn't load.
     Reload the page and try again.`

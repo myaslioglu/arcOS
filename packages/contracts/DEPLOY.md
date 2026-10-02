@@ -25,8 +25,8 @@ needs to change.
 the batch, including rows that go on to fail (and get refunded, for native; left with the sender, for
 ERC-20) — it is not reduced or refunded for failed rows.
 
-One question about a blocklisted recipient in a native drop (`Multisend.sendNative`) is still open. It is the first
-entry under "Open questions", at the end of this file.
+One question about a blocklisted recipient in a native drop (`Multisend.sendNative`) is still open. It is recorded
+under "Open questions", at the end of this file, as the entry about a blocklisted native-value recipient.
 
 ## Alternative: sign in a browser wallet (no key export)
 
@@ -174,6 +174,284 @@ This is the on-chain half of the address sanity check. The off-chain half — th
 are each well-formed, checksummed, non-zero and pairwise distinct — is `checkArcosAddresses` in
 `packages/chain/src/addressSanity.ts` (pure, unit-tested, no RPC call, no network needed).
 
+## R1: Vault, Vesting and ProPass (testnet)
+
+`script/DeployR1.s.sol` adds R1's five fee keys to R0's FeeController, deploys `VaultFactory`, `VestingFactory` and
+`ProPass`, and allow-lists Uniswap v4's PositionManager in the VaultFactory. The keys come first: each constructor
+reads its keys and reverts if one is missing. Testnet has no Uniswap v3, so v4 is the only manager allowed there.
+
+| Key | Fee | Cap | Read by |
+|---|---|---|---|
+| `LOCK_FLAT` | 30 USDC (`30e18`) | 150 USDC | VaultFactory, per lock |
+| `LOCK_LP_BPS` | 50 bps (0.5%) | 100 bps | VaultFactory, share of a v2 LP token lock |
+| `LOCK_FEE_SHARE_BPS` | 200 bps (2%) | 500 bps | VaultFactory, share of a locked position's collected fees |
+| `VEST_FLAT` | 20 USDC (`20e18`) | 100 USDC | VestingFactory, per schedule |
+| `PRO_MONTHLY` | 9 USDC (`9e18`) | 29 USDC | ProPass, per month |
+
+Flat fees are native USDC at 18 decimals, like R0's. A fee can later go down at once, or up to its cap after
+`FeeController.DELAY` (48 hours); a cap never changes.
+
+The addresses the commands below use. Each was read on chain on 2026-09-30 (`cast codesize`, `cast call`):
+
+| What | Address | Checked |
+|---|---|---|
+| FeeController (R0, testnet) | `0xC470753e83c151a6A4A360869270291A6ED70d99` | 2,209 bytes of code; `DELAY()` = 172800; R0's three keys read back; the TokenFactory's `feeController()` returns it |
+| Uniswap v4 PositionManager (testnet) | `0x6049c9a0e26405C0985f9E3685C87d0aE917f82B` | 23,877 bytes of code; `poolManager()` = `0x8366a39CC670B4001A1121B8F6A443A643e40951`; `name()` = "Uniswap v4 Positions NFT". The same address as `test/fork/ArcUniswap.sol` on mainnet |
+| Project wallet | `0x463A81a017326E9029DcCA2a2d9AA42599Bef12c` | no code (a plain account) |
+
+The mainnet v3 NonfungiblePositionManager address has no code on testnet.
+
+Today the testnet FeeController is owned by the personal wallet that deployed R0, and its fee recipient is not the
+project wallet. Both move to the project wallet first. After that, the project wallet signs everything for R1.
+
+### Owner steps, in order
+
+All commands run from `packages/contracts`, and each block pastes as is into zsh (the macOS default) or bash: no
+comments on command lines, and every expected value is in the text or a table next to its block. Each `cast send` and
+the deployment can be signed with a keystore key (`--account <name>`) or in the browser wallet
+(`--browser --browser-disable-open`, then the steps under "Alternative: sign in a browser wallet" above: open
+http://127.0.0.1:9545, one transaction per page load, never reload before the receipt shows success). Replace each
+`<...>` placeholder before running its line.
+
+    export ETH_RPC_URL=https://rpc.testnet.arc.io
+    export FEES=0xC470753e83c151a6A4A360869270291A6ED70d99
+    export PROJECT=0x463A81a017326E9029DcCA2a2d9AA42599Bef12c
+    export V4_PM=0x6049c9a0e26405C0985f9E3685C87d0aE917f82B
+
+`cast` reads the testnet RPC from `ETH_RPC_URL`, so the `cast` commands below carry no `--rpc-url`; the `forge`
+commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
+
+1. **Testnet USDC for the project wallet.** https://faucet.circle.com → Arc Testnet → USDC, sent to `$PROJECT`. The
+   deployment needs about 0.4 USDC of gas (8.3 million gas at about 48 gwei in the dry run). The T1 check in step 7
+   pays `VEST_FLAT` (20 USDC, which comes back, since the project wallet is the fee recipient) plus 1 USDC, so hold at
+   least 25 USDC before step 7. The faucet sends 20 USDC per request and one request every 2 hours, so that takes two
+   requests, 2 hours apart.
+
+2. **The personal wallet hands over the FeeController, once.** Signed by the personal wallet (the one that owns it
+   today):
+
+       npx cast send $FEES "transferOwnership(address)" $PROJECT --account <personal-keystore>
+
+   Check: `npx cast call $FEES "pendingOwner()(address)"` prints `$PROJECT`. The personal wallet stays the owner until
+   step 3.
+
+3. **The project wallet accepts ownership.** From here on, everything is signed by the project wallet:
+
+       npx cast send $FEES "acceptOwnership()" --account <project-keystore>
+
+   Check: `npx cast call $FEES "owner()(address)"` prints `$PROJECT` and `npx cast call $FEES "pendingOwner()(address)"`
+   prints the zero address.
+
+4. **The project wallet becomes the fee recipient:**
+
+       npx cast send $FEES "setRecipient(address)" $PROJECT --account <project-keystore>
+
+   Check: `npx cast call $FEES "recipient()(address)"` prints `$PROJECT`. (Q20 below: the recipient must stay a plain
+   account.)
+
+5. **Dry run, then deploy.** The dry run has no `--broadcast`: it signs nothing and sends nothing.
+
+       export ARCOS_FEE_CONTROLLER=$FEES ARCOS_V4_POSITION_MANAGER=$V4_PM
+       npx forge script script/DeployR1.s.sol --rpc-url arc_testnet --sender $PROJECT
+
+   It must print the same `== Logs ==` as below and end with `SIMULATION COMPLETE`. The dry run's plan,
+   `broadcast/DeployR1.s.sol/5042002/dry-run/run-latest.json`, holds nine transactions: five `addKey`, three contract
+   creations (VaultFactory, VestingFactory, ProPass) and `setManager`. Then deploy, with a keystore key:
+
+       npx forge script script/DeployR1.s.sol --rpc-url arc_testnet --broadcast --slow \
+         --account <project-keystore> --sender $PROJECT
+
+   or in the browser wallet (nine page loads, one per transaction):
+
+       npx forge script script/DeployR1.s.sol --rpc-url arc_testnet --broadcast --slow \
+         --browser --browser-disable-open --sender $PROJECT
+
+   Expected output (the three addresses are the real ones on the live run):
+
+       == Logs ==
+         key added       LOCK_FLAT
+         key added       LOCK_LP_BPS
+         key added       LOCK_FEE_SHARE_BPS
+         key added       VEST_FLAT
+         key added       PRO_MONTHLY
+         v4 PositionManager allowed
+         VaultFactory   0x...
+         VestingFactory 0x...
+         ProPass        0x...
+         fee recipient code size 0
+
+   **A `DeployR1:` message anywhere in the output means the script refused: stop there, whatever the exit code.**
+   `npx forge` can exit 0 after a failure (its npm wrapper drops forge's exit status), so the exit code proves nothing.
+   The script checks everything before its first transaction, so a refusal leaves the chain as it was. It refuses if:
+   - the sender does not own the FeeController (`the sender does not own the FeeController. Accept its ownership
+     first.`): steps 2 and 3 are not done, or `--sender` is wrong;
+   - one of the five keys already exists (`fee key <NAME> already exists. Set ARCOS_R1_CONTINUE=true to finish an
+     earlier run.`);
+   - an address has no code, or a key cannot be read.
+
+   **If a run stops part-way** (a browser reload, a nonce taken by the wallet), don't use forge's `--resume`. Look at
+   the project wallet's transactions on https://explorer.testnet.arc.io and note which contracts were created (take
+   each address from the explorer, not from `broadcast/…/run-latest.json`). Then run the script again, dry run first,
+   with:
+
+       export ARCOS_R1_CONTINUE=true
+
+   and, for each contract that was created, its line from these three, with its address:
+
+       export ARCOS_VAULT_FACTORY=<VaultFactory address>
+       export ARCOS_VESTING_FACTORY=<VestingFactory address>
+       export ARCOS_PRO_PASS=<ProPass address>
+
+   Leave out the line of a contract that was not created; never set a variable to an empty value. In this mode a key
+   that exists with the same fee and cap and no pending change is kept (`key already set`); a key with another fee or
+   cap, or with a pending change, stops the run (let the change take effect after its 48-hour notice with
+   `applyPending`, or set the fee back with `setFee`, then run again). Each address given must be the contract its variable names (checked
+   through the contract's own key constant, so swapped addresses are refused), wired to this FeeController, and for the
+   VaultFactory owned by the sender. A contract not given is deployed, and `setManager` is sent only if the manager is
+   not allowed yet. With everything in place it sends nothing, so the same dry run is also a check that the deployment
+   is complete. Once the deployment is complete, clear the variables, so a later run starts fresh:
+
+       unset ARCOS_R1_CONTINUE ARCOS_VAULT_FACTORY ARCOS_VESTING_FACTORY ARCOS_PRO_PASS
+
+6. **Verify the source on the explorer.** Take the three addresses from step 5. VaultFactory's constructor is
+   `(owner, feeController)`, where the owner is the sender (`$PROJECT`); the other two take the FeeController only:
+
+       npx forge verify-contract <VaultFactory> src/vault/VaultFactory.sol:VaultFactory \
+         --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
+         --constructor-args $(npx cast abi-encode "constructor(address,address)" $PROJECT $FEES)
+       npx forge verify-contract <VestingFactory> src/vesting/VestingFactory.sol:VestingFactory \
+         --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
+         --constructor-args $(npx cast abi-encode "constructor(address)" $FEES)
+       npx forge verify-contract <ProPass> src/ProPass.sol:ProPass \
+         --chain-id 5042002 --verifier blockscout --verifier-url https://explorer.testnet.arc.io/api/ \
+         --constructor-args $(npx cast abi-encode "constructor(address)" $FEES)
+
+   The VaultFactory creates the two vault implementations in its constructor. Read their addresses with
+   `npx cast call <VaultFactory> "lockVaultImpl()(address)"` (and `positionVaultImpl()`), and verify each with no
+   constructor arguments (`src/vault/LockVault.sol:LockVault`, `src/vault/PositionVault.sol:PositionVault`). Each
+   vesting wallet is its own contract (`src/vesting/ArcVesting.sol:ArcVesting`, constructor
+   `(beneficiary, start, duration, cliff)`), verified one by one if needed.
+
+7. **Checks after the deployment.** All read-only. First the three addresses from step 5:
+
+       export VAULTS=<VaultFactory> VESTINGS=<VestingFactory> PASS=<ProPass>
+
+   Ownership and recipient:
+
+       npx cast call $FEES "owner()(address)"
+       npx cast call $FEES "pendingOwner()(address)"
+       npx cast call $FEES "recipient()(address)"
+       npx cast codesize $PROJECT
+       npx cast call $VAULTS "owner()(address)"
+       npx cast call $VAULTS "pendingOwner()(address)"
+
+   | Line | Expected |
+   |---|---|
+   | FeeController `owner()` | `$PROJECT` |
+   | FeeController `pendingOwner()` | `0x0000000000000000000000000000000000000000` |
+   | FeeController `recipient()` | `$PROJECT` |
+   | `codesize $PROJECT` | `0` (Q20) |
+   | VaultFactory `owner()` | `$PROJECT` |
+   | VaultFactory `pendingOwner()` | `0x0000000000000000000000000000000000000000` |
+
+   Each key's fee, cap and pending change (value and time), one line per key:
+
+       for K in LOCK_FLAT LOCK_LP_BPS LOCK_FEE_SHARE_BPS VEST_FLAT PRO_MONTHLY; do
+         echo $K $(npx cast call $FEES "feeOf(bytes32)(uint256)" $(npx cast keccak $K)) \
+           $(npx cast call $FEES "capOf(bytes32)(uint256)" $(npx cast keccak $K)) \
+           $(npx cast call $FEES "pendingOf(bytes32)(uint256,uint64)" $(npx cast keccak $K))
+       done
+
+   | Key | Fee | Cap | Pending |
+   |---|---|---|---|
+   | `LOCK_FLAT` | `30000000000000000000 [3e19]` | `150000000000000000000 [1.5e20]` | `0 0` |
+   | `LOCK_LP_BPS` | `50` | `100` | `0 0` |
+   | `LOCK_FEE_SHARE_BPS` | `200` | `500` | `0 0` |
+   | `VEST_FLAT` | `20000000000000000000 [2e19]` | `100000000000000000000 [1e20]` | `0 0` |
+   | `PRO_MONTHLY` | `9000000000000000000 [9e18]` | `29000000000000000000 [2.9e19]` | `0 0` |
+
+   Wiring and the manager allow-list:
+
+       npx cast call $VAULTS "feeController()(address)"
+       npx cast call $VESTINGS "feeController()(address)"
+       npx cast call $PASS "feeController()(address)"
+       npx cast call $VAULTS "managers(address)(bool,uint8)" $V4_PM
+
+   The three `feeController()` lines print `$FEES`; `managers` prints `true` and `1` (1 = `Kind.V4`).
+
+   Registries: nothing registered yet, and the factories are not their own entries. Each line prints `false`:
+
+       npx cast call $VAULTS "isVault(address)(bool)" $VAULTS
+       npx cast call $VESTINGS "isVesting(address)(bool)" $VESTINGS
+       npx cast call $PASS "isPro(address)(bool)" $PROJECT
+
+   Then the no-op rerun, a dry run in continue mode with the three addresses:
+
+       export ARCOS_FEE_CONTROLLER=$FEES ARCOS_V4_POSITION_MANAGER=$V4_PM
+       export ARCOS_R1_CONTINUE=true ARCOS_VAULT_FACTORY=$VAULTS ARCOS_VESTING_FACTORY=$VESTINGS ARCOS_PRO_PASS=$PASS
+       npx forge script script/DeployR1.s.sol --rpc-url arc_testnet --sender $PROJECT
+       unset ARCOS_R1_CONTINUE ARCOS_VAULT_FACTORY ARCOS_VESTING_FACTORY ARCOS_PRO_PASS
+
+   Every key prints `key already set`, the manager `already allowed`, and it plans no transaction.
+
+   **T1: does a USDC transfer reach a contract whose `receive` reverts?** `ArcVesting` refuses native value (its
+   `receive` reverts), and on Arc the USDC ERC-20 at `0x3600…0000` is a view of the native balance. If an ERC-20
+   transfer of that USDC to such a contract reverts, USDC schedules can't be created. A read-only `eth_call` on
+   2026-09-30 suggests it succeeds (`transfer(FeeController, 1)` from the project wallet returned `true`, while sending
+   native value to the FeeController, which has no `receive`, reverted), but only a real schedule settles it.
+   Test it once with 1 USDC (`1000000`, 6 decimals) over one hour, to the project wallet itself. First the approval:
+
+       export U=0x3600000000000000000000000000000000000000
+       npx cast send $U "approve(address,uint256)" $VESTINGS 1000000 --account <project-keystore>
+
+   Then simulate the creation (no signature). A revert here means T1 fails: stop and record it.
+
+       export START=$(date +%s)
+       npx cast call $VESTINGS "createVesting(address,address,uint256,uint64,uint64,uint64)(address)" \
+         $U $PROJECT 1000000 $START 3600 0 --value 20ether --from $PROJECT
+
+   If the simulation returns an address, create it for real:
+
+       npx cast send $VESTINGS "createVesting(address,address,uint256,uint64,uint64,uint64)" \
+         $U $PROJECT 1000000 $START 3600 0 --value 20ether --account <project-keystore>
+
+   Take the wallet's address from the `VestingCreated` event in the receipt (or the simulation's output), then check
+   it. `isVesting` prints `true` and the balance `1000000`:
+
+       npx cast call $VESTINGS "isVesting(address)(bool)" <wallet>
+       npx cast call $U "balanceOf(address)(uint256)" <wallet>
+
+   After the hour, release it; the wallet's balance then prints `0`:
+
+       npx cast send <wallet> "release(address)" $U --account <project-keystore>
+       npx cast call $U "balanceOf(address)(uint256)" <wallet>
+
+   If the creation reverts, USDC can't be vested on Arc: the Vesting app must refuse `0x3600…0000` as a token until
+   that is solved. Record the answer under "Open questions" either way.
+
+8. **Wire the addresses.** Once steps 6 and 7 pass, put the three addresses in `ARCOS.testnet` in
+   `packages/chain/src/addresses.ts` (`vaultFactory`, `vestingFactory`, `proPass`; mainnet stays null) and in the
+   Deployments table below. `checkArcosAddresses` then checks their shape. The ABIs the app uses are already in
+   `packages/chain/src/abis/` (`npm run abis` regenerates them; they match this source), and the five keys are in
+   `FEE_KEYS` in `@arcos/chain`.
+
+   Then clear what these steps exported, so a later `forge` or `cast` in the same terminal doesn't pick up the testnet
+   RPC or these addresses:
+
+       unset ETH_RPC_URL FEES PROJECT V4_PM VAULTS VESTINGS PASS U START ARCOS_FEE_CONTROLLER ARCOS_V4_POSITION_MANAGER
+
+### R1 notes
+
+- **Q20, the fee recipient's gas.** A position vault pays the platform's share of collected fees
+  (`LOCK_FEE_SHARE_BPS`) to the fee recipient with a fixed 100,000-gas budget. A recipient that needs more (a Safe
+  with guards or modules, most contracts with logic in `receive`) is skipped on every collect (`PlatformShareSkipped`),
+  and that share goes to the vault's owner instead, for good. The recipient must stay a plain account (code size 0,
+  checked in step 7; the script prints it too) or a plain Safe measured to fit, and `setRecipient` must keep to that.
+- The VaultFactory's owner can only allow or disallow position managers. It has no power over existing vaults.
+  VestingFactory and ProPass have no owner.
+- Mainnet is a separate decision: it would need the v3 NonfungiblePositionManager as a second `setManager` (Kind.V3),
+  and `ARCOS.mainnet` keeps the three fields null until then.
+
 ## Deployments
 
 | Network | Contract | Address |
@@ -185,7 +463,8 @@ are each well-formed, checksummed, non-zero and pairwise distinct — is `checkA
 | Arc (5042) | TokenFactory | [`0xa68edD822048C00dC816d93005B72F8a50234a24`](https://explorer.arc.io/address/0xa68edD822048C00dC816d93005B72F8a50234a24) |
 | Arc (5042) | Multisend | [`0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47`](https://explorer.arc.io/address/0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47) |
 
-These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads.
+These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads. R1's VaultFactory,
+VestingFactory and ProPass are not deployed yet (see "R1" above); they join this table after step 8 there.
 
 The testnet `TokenFactory` predates the current name rule (it checks each byte only for ASCII control characters, so malformed UTF-8 and bidi, line-break and invisible characters still pass there); the
 mainnet deployment uses the current source.
@@ -197,6 +476,10 @@ only that row fail (skip and refund, the same as any other failed transfer) or d
 can't be verified locally — a blocklist is an Arc network policy, not something Anvil or a local fork can reproduce.
 Test it on testnet against a Circle-documented blocklisted test address, if one is published, before relying on the
 per-row failure behavior in the UI. (`docs/QA-R0.md` item 31 is the same check.)
+
+T1, for R1: does an ERC-20 transfer of USDC (`0x3600…0000`) to a contract whose `receive` reverts succeed on Arc?
+A fork can't answer it (a fork can't move `0x3600` USDC). R1 step 7 settles it with a 1 USDC schedule after the
+deployment.
 
 Every step that signs a transaction is the owner's: with a keystore key in a terminal, or with the browser-wallet path
 above, where the owner confirms each transaction in the wallet. After a deployment, the three addresses (they're

@@ -50,6 +50,33 @@ describe("checkArcosAddresses", () => {
     expect(result.status === "invalid" && result.issues.some((i) => /tokenFactory/.test(i) && /checksum/.test(i))).toBe(true);
   });
 
+  it("skips R1's contracts while they're absent or null", () => {
+    expect(checkArcosAddresses(contracts({ vaultFactory: null, vestingFactory: null, proPass: null }))).toEqual({ status: "ok" });
+    expect(checkArcosAddresses(contracts({ vaultFactory: undefined }))).toEqual({ status: "ok" });
+  });
+
+  it("checks R1's contracts once they're set", () => {
+    const D = "0x4444444444444444444444444444444444444444";
+    const E = "0x5555555555555555555555555555555555555555";
+    const F = "0x6666666666666666666666666666666666666666";
+    expect(checkArcosAddresses(contracts({ vaultFactory: D, vestingFactory: E, proPass: F }))).toEqual({ status: "ok" });
+    expect(checkArcosAddresses(contracts({ vaultFactory: D, vestingFactory: null }))).toEqual({ status: "ok" });
+
+    const zero = checkArcosAddresses(contracts({ proPass: ZERO }));
+    expect(zero.status === "invalid" && zero.issues.some((i) => /proPass/.test(i) && /zero/.test(i))).toBe(true);
+
+    const malformed = checkArcosAddresses(contracts({ vestingFactory: "0x123" as ArcosContracts["multisend"] }));
+    expect(malformed.status === "invalid" && malformed.issues.some((i) => /vestingFactory/.test(i))).toBe(true);
+
+    const unchecksummed = checkArcosAddresses(contracts({ vaultFactory: B.toLowerCase() as ArcosContracts["multisend"] }));
+    expect(unchecksummed.status === "invalid" && unchecksummed.issues.some((i) => /vaultFactory/.test(i) && /checksum/.test(i))).toBe(true);
+
+    const shared = checkArcosAddresses(contracts({ vaultFactory: D, proPass: D }));
+    expect(shared.status === "invalid" && shared.issues.some((i) => /distinct/.test(i))).toBe(true);
+    const sharedWithR0 = checkArcosAddresses(contracts({ vestingFactory: A }));
+    expect(sharedWithR0.status === "invalid" && sharedWithR0.issues.some((i) => /distinct/.test(i))).toBe(true);
+  });
+
   it("reports every problem at once rather than stopping at the first", () => {
     const result = checkArcosAddresses({ feeController: ZERO, tokenFactory: ZERO, multisend: C });
     expect(result.status).toBe("invalid");

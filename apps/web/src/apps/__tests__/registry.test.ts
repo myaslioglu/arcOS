@@ -1,6 +1,10 @@
+import { Lock } from "lucide-react";
 import { describe, expect, it } from "vitest";
+import { ARCOS } from "@arcos/chain";
+import type { AppManifest } from "@arcos/shell";
 import { CATEGORY_HUE, appHue, stageLabel } from "@arcos/shell/core";
-import { APPS } from "../registry";
+import { APPS, LIVE, NEEDS_CONTRACT, appsFor, contractAddress } from "../registry";
+import { SOON } from "../soon";
 
 const grey = APPS.filter((m) => m.comingSoon);
 
@@ -74,5 +78,74 @@ describe("the no-dates rule", () => {
     for (const line of ["It may need an audit first.", "Will show what may be revoked."]) {
       expect(line, line).not.toMatch(DATES);
     }
+  });
+});
+
+// D6: an app that acts through one of 4rc.OS's own custodial contracts is live only on a network where @arcos/chain's
+// ARCOS names that contract. Elsewhere its grey stand-in shows, so nothing disappears and nothing unaudited is offered.
+describe("the registry, gated per network (D6)", () => {
+  const ADDRESS = "0x1111111111111111111111111111111111111111";
+  const ids = (apps: AppManifest[]) => apps.map((m) => m.id);
+  const liveVault: AppManifest = {
+    id: "vault",
+    name: "Vault",
+    blurb: "Lock liquidity and team tokens",
+    icon: Lock,
+    category: "trust",
+    window: { w: 640, h: 520 },
+    load: async () => ({ default: () => null }),
+    requiresWallet: true,
+    release: "r2",
+  };
+
+  it("names the contract each gated app needs: Vault the VaultFactory, Vesting the VestingFactory", () => {
+    expect(NEEDS_CONTRACT).toEqual({ vault: "vaultFactory", vesting: "vestingFactory" });
+  });
+
+  it("has a grey stand-in for every gated app, so it stays listed where its contract isn't set", () => {
+    for (const id of Object.keys(NEEDS_CONTRACT)) {
+      expect(SOON.find((m) => m.id === id)?.comingSoon, id).toBe(true);
+    }
+  });
+
+  it("lists the same apps on both networks today, since no network has a gated contract yet", () => {
+    expect(ids(appsFor("mainnet"))).toEqual(ids([...LIVE, ...SOON]));
+    expect(ids(appsFor("testnet"))).toEqual(ids([...LIVE, ...SOON]));
+    expect(ids(APPS)).toEqual(ids([...LIVE, ...SOON]));
+  });
+
+  it("lists a gated app live where its contract has an address, in place of its grey stand-in", () => {
+    const apps = appsFor("testnet", { live: [...LIVE, liveVault], contracts: { vaultFactory: ADDRESS } });
+    const vault = apps.filter((m) => m.id === "vault");
+    expect(vault).toEqual([liveVault]);
+    expect(ids(apps).filter((id) => id === "vesting")).toEqual(["vesting"]); // still grey: its factory isn't set
+    expect(apps.find((m) => m.id === "vesting")?.comingSoon).toBe(true);
+  });
+
+  it("keeps a gated app grey where its contract is null, missing, or not an address", () => {
+    for (const contracts of [null, {}, { vaultFactory: null }, { vaultFactory: "0x1234" }, { vaultFactory: 42 }]) {
+      const apps = appsFor("mainnet", { live: [...LIVE, liveVault], contracts });
+      expect(apps.filter((m) => m.id === "vault").map((m) => m.comingSoon), JSON.stringify(contracts)).toEqual([true]);
+    }
+  });
+
+  it("never lists a gated app live where its contract isn't set, even with no grey stand-in", () => {
+    const apps = appsFor("mainnet", { live: [liveVault], soon: [], contracts: null });
+    expect(apps).toEqual([]);
+  });
+
+  it("reads each network's own contracts from ARCOS by default", () => {
+    const withVault = { ...ARCOS.testnet, vaultFactory: ADDRESS };
+    expect(contractAddress(withVault, "vaultFactory")).toBe(ADDRESS);
+    expect(contractAddress(ARCOS.mainnet, "vaultFactory")).toBeNull();
+    expect(contractAddress(null, "vaultFactory")).toBeNull();
+  });
+
+  // The rule of D6 as data: until the audit gates are passed (task C6), mainnet names none of these contracts. C6
+  // changes this test on purpose, in the same change that sets the address.
+  it("offers no gated app live on mainnet", () => {
+    for (const key of Object.values(NEEDS_CONTRACT)) expect(contractAddress(ARCOS.mainnet, key), key).toBeNull();
+    expect(contractAddress(ARCOS.mainnet, "proPass")).toBeNull();
+    for (const m of appsFor("mainnet")) if (m.id in NEEDS_CONTRACT) expect(m.comingSoon, m.id).toBe(true);
   });
 });

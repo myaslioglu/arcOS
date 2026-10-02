@@ -52,6 +52,21 @@ test.describe("desktop", () => {
   });
 });
 
+// The suite runs against the mainnet build (ci.yml builds with apps/web/apphosting.yaml). The testnet site's label and
+// noindex must not reach it: the title, the menu bar, the robots meta tag and the X-Robots-Tag header are as before.
+test.describe("the mainnet build", () => {
+  test("has no Testnet label and no noindex", async ({ page }) => {
+    const response = await page.goto("/");
+    expect(response?.status()).toBe(200);
+    expect(response?.headers()["x-robots-tag"]).toBeUndefined();
+    await hydrated(page);
+    await expect(page).toHaveTitle("4rc.OS");
+    await expect(page.locator(".os-network-badge")).toHaveCount(0);
+    await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1, name: "4rc.OS", exact: true })).toBeAttached();
+  });
+});
+
 test.describe("server-built routes", () => {
   // Both routes inspect the token on the chain at request time (RPC and explorer reads, under a 15 s deadline). The
   // cases below hold whether that reading succeeds or not: without the network the app answers the proof page's

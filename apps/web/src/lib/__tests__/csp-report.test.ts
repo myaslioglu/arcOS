@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { blockedOf, directiveOf, pathOf, violationsFrom } from "../csp-report";
 
 describe("directiveOf", () => {
@@ -11,6 +11,20 @@ describe("directiveOf", () => {
   it("answers unknown for anything that isn't a directive name", () => {
     for (const v of [undefined, null, 7, {}, [], "", "   ", "x".repeat(41), "../etc", "<script>", "1abc", "'self'"]) {
       expect(directiveOf(v), String(v)).toBe("unknown");
+    }
+  });
+
+  it("reads only the first word of a large value, without splitting the rest into words", () => {
+    // A body may be 256 KB; a value of that many words must not become an array of them all.
+    const value = `script-src ${"a ".repeat(128 * 1024)}`;
+    const split = vi.spyOn(String.prototype, "split");
+    try {
+      expect(directiveOf(value)).toBe("script-src");
+      for (const result of split.mock.results) {
+        expect((result.value as string[]).length).toBeLessThanOrEqual(1);
+      }
+    } finally {
+      split.mockRestore();
     }
   });
 });

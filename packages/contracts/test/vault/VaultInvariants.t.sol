@@ -418,6 +418,11 @@ contract VaultHandler is Test {
     }
 }
 
+/// 1000 runs of 64 calls per invariant (7 invariants: 448,000 handler calls, about 80 s on four cores). Depth stays low
+/// because every run starts from nothing and a lock's whole life fits in a few dozen calls, while more runs means more
+/// different starting sequences.
+/// forge-config: default.invariant.runs = 1000
+/// forge-config: default.invariant.depth = 64
 contract VaultInvariantsTest is VaultTestBase {
     VaultHandler internal handler;
 
@@ -512,7 +517,7 @@ contract VaultInvariantsTest is VaultTestBase {
         }
         assertEq(factory.vaultsForTokenLength(address(token)), handler.createdForToken(0), "vaultsForToken(plain)");
         assertEq(factory.vaultsForTokenLength(address(pair)), handler.createdForToken(1), "vaultsForToken(pair)");
-        assertEq(factory.positionVaultsForTokenLength(address(token)), 0, "nothing can fill the position registry yet");
+        assertEq(factory.positionVaultsForTokenLength(address(token)), 0, "this suite makes no position locks");
     }
 
     /// Every action predicted its own outcome (who may call, when, what state results), and the prediction held.

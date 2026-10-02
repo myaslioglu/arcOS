@@ -10,6 +10,8 @@ import { setDesktopView, useDesktopView } from "./view";
 
 type Props = {
   brand: string;
+  /** A short label beside the brand, such as "Testnet", on every screen size. Empty or missing: none. */
+  badge?: string;
   windows: DesktopWindow[];
   activeId: string | null;
   /** Names the View menu's Desktop group the way the touch switch does ("List", not "Trays"). */
@@ -66,7 +68,7 @@ function useShortcut(): string {
  * or ↓ opens a menu on its first item, ↑ ↓ walk it, ← → step to the neighbouring menu, Esc closes.
  */
 export function MenuBar(props: Props) {
-  const { brand, windows, activeId, touch, repoUrl } = props;
+  const { brand, badge, windows, activeId, touch, repoUrl } = props;
   const { list } = useRegistry();
   const [open, setOpen] = useState<string | null>(null);
   const barRef = useRef<HTMLElement>(null);
@@ -241,6 +243,7 @@ export function MenuBar(props: Props) {
                 </div>
               )}
             </div>
+            {m.brand && badge && <span className="os-network-badge">{badge}</span>}
             {m.brand && <span className="os-app-name">{active?.title ?? "Desktop"}</span>}
           </Fragment>
         ))}

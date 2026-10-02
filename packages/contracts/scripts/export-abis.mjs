@@ -8,6 +8,7 @@ const CONTRACTS = {
   Multisend: "multisend",
   LockVault: "lockVault",
   VaultFactory: "vaultFactory",
+  PositionVault: "positionVault",
   ArcVesting: "arcVesting",
   VestingFactory: "vestingFactory",
   ProPass: "proPass",
