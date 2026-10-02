@@ -59,6 +59,10 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
      quietly dropping the testnet site, so a manual run never deploys less than it was asked to.
    - Once it is `true`, both legs run as described here.
 
+   The same run can also deploy the Firestore indexes and the functions (`arcosIndexer`), after the sites. They are
+   gated the same way, by `ARCOS_FUNCTIONS_READY`, and `targets: indexes` or `targets: functions` deploys either alone
+   ([OPERATIONS.md](OPERATIONS.md#deploying)). A manual run of the sites never deploys them.
+
    The order keeps the testnet site from breaking 4rc.OS:
    - A bundle that fails to build, either one, stops the run before approval, and nothing is deployed. To ship 4rc.OS
      while the testnet build is broken, run the workflow with `targets: mainnet`.

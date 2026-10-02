@@ -85,22 +85,28 @@ the suite's types; `npm run lint` covers it too.
 
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
   proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
-  (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts)
-  and `/api/csp-report` (content security policy violation reports).
+  (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts),
+  `/api/pools/<token>` (a token's indexed pools) and `/api/csp-report` (content security policy
+  violation reports).
 - `packages/shell` — the desktop itself: windows, dock, folders and trays, launcher, drag and
   drop. `src/core` is pure TypeScript (no React beyond type imports), `src/ui` holds the React
   components and `src/styles` the CSS. No wagmi or viem imports.
 - `packages/chain` — chain facts and USDC math: network config, contract addresses, unit
   conversions.
 - `packages/inspector` — the token inspection engine. No React or Next imports, so it can run on
-  the server and in the browser.
+  the server and in the browser. It also holds the server plumbing the site and the functions
+  share: the RPC transport with its cooldowns, the explorer request wrapper and the deadline.
 - `packages/data` — the Firestore layer for the named database `arcos`: collection names, document
   types, id helpers and converters (the pure entry, `@arcos/data`, which never imports
   firebase-admin), and `arcosDb()` (the server-only entry, `@arcos/data/server`).
+- `functions` — the scheduled functions (codebase `arcos`): `arcosIndexer` records new USDC and
+  EURC pools and their tokens, inspects them and keeps Radar's first pages. Bundled with esbuild
+  into `functions/deploy`.
 - `packages/contracts` — the three Solidity contracts and their Foundry tests, scripts and
   deployment guide.
 - `docs/QA-R0.md` — the manual test script for this release.
 - `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the owner's approval, the deploy and its smoke checks.
+- `docs/OPERATIONS.md` — what runs where, the indexer's console controls, deploying the functions, costs and checks.
 
 ## Contracts
 
