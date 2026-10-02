@@ -2,6 +2,8 @@
  * Live, read-only checks against Arc mainnet (https://rpc.mainnet.arc.io): the addresses the pool checks rely on, and v4 and
  * Aerodrome discovery against real pools. Not part of `npm test`; run it with `npm run test:live -w @arcos/inspector`.
  * Only `eth_call` and `eth_getCode` are sent, one at a time, 400 ms apart, with a back-off when the node says -32005.
+ * Behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first (Node 22.21 and later then honours HTTPS_PROXY for fetch):
+ * the config doesn't set it, so a run without a proxy is unchanged.
  *
  * Existence is permanent, market state is not. A v4 pool, once initialised, stays initialised, so the checks that a pool is
  * found hold for good. Two established pools (the USDC/EURC v4 pool and the WETH/USDC Aerodrome pool) also assert that they
