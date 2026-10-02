@@ -86,11 +86,11 @@ describe("every paid write goes through withChain (writeContractAsync / writeCon
     return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
   }
 
-  const FUNCTION_NAMES = ["writeContractAsync", "writeContract", "sendTransaction"];
+  const FUNCTION_NAMES = ["writeContractAsync", "writeContract", "sendTransaction", "mutateAsync", "mutate"];
   // File-selection net: any file mentioning any of these three names at all (call, comment, or
   // otherwise) is worth scanning — a file with a comment-only mention (e.g. mint/session.ts) simply
   // contributes zero call sites below, rather than being silently skipped.
-  const FILE_MENTION_MARKERS = ["writeContractAsync", "writeContract(", "sendTransaction"];
+  const FILE_MENTION_MARKERS = ["writeContractAsync", "writeContract(", "sendTransaction", "useWriteContract(", "useSendTransaction("];
   const matchedFiles = listSourceFiles(root).filter((f) => {
     const source = readFileSync(f, "utf8");
     return FILE_MENTION_MARKERS.some((m) => source.includes(m));

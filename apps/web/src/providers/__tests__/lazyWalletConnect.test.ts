@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { connect, createConfig, createStorage, disconnect, http, reconnect, type CreateConnectorFn } from "@wagmi/core";
+import { createConfig, createStorage, http, type CreateConnectorFn } from "wagmi";
+import { connect, disconnect, reconnect } from "wagmi/actions";
 import { UserRejectedRequestError } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { connectErrorMessage } from "@/lib/network";
@@ -363,6 +364,7 @@ describe("what wagmi does that lazyWalletConnect holds back", () => {
     const stock = actual.walletConnect({ projectId: PROJECT_ID })({
       chains: [mainnet],
       emitter: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), once: vi.fn(), uid: "test" } as never,
+      providers: [],
       transports: {},
     });
     // Asking for nothing back keeps this from loading anything: setup() only needs to be seen asking.
@@ -376,6 +378,6 @@ describe("what wagmi does that lazyWalletConnect holds back", () => {
   // what wagmi's actions do around them. A new @wagmi/connectors can change any of that without a type error.
   it("is the @wagmi/connectors release this wrapper was checked against", async () => {
     const { version } = await vi.importActual<typeof import("wagmi/connectors")>("wagmi/connectors");
-    expect(version, "re-verify lazyWalletConnect after a wagmi upgrade, then update this version").toBe("6.2.0");
+    expect(version, "re-verify lazyWalletConnect after a wagmi upgrade, then update this version").toBe("8.2.0");
   });
 });
