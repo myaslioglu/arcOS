@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getPublicClient } from "@wagmi/core";
+import { getPublicClient } from "wagmi/actions";
 import { encodeErrorResult, encodeFunctionResult, multicall3Abi, parseAbi, type PublicClient } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { CallReverted, viemReader } from "@arcos/inspector";

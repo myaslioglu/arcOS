@@ -1,12 +1,12 @@
 "use client";
 
-import { useAccount } from "wagmi";
+import { useConnection } from "wagmi";
 import { useDesktop } from "@arcos/shell";
 import { useArcNetwork } from "@/lib/network";
 
 /** Apps that sign transactions render inside this. */
 export function ConnectGate({ children }: { children: React.ReactNode }) {
-  const { isConnected } = useAccount();
+  const { isConnected } = useConnection();
   const { chain, wrongNetwork, switching, switchError, switchToArc } = useArcNetwork();
   const { open } = useDesktop();
 

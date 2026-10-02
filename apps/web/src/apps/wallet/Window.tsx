@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useSyncExternalStore } from "react";
-import { useAccount, useBalance, useConnect, useDisconnect } from "wagmi";
+import { useConnection, useBalance, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
 import { useArcNetwork } from "@/lib/network";
 import { connectorLabel, isWalletConnect, visibleConnectors } from "@/providers/wagmi";
@@ -22,10 +22,12 @@ function useHasInjectedProvider(): boolean {
 }
 
 export default function WalletWindow() {
-  const { address, isConnected, connector } = useAccount();
+  const { address, isConnected, connector } = useConnection();
   const { chain, wrongNetwork, switching, switchError, switchToArc } = useArcNetwork();
-  const { connectors: allConnectors, connect, isPending, error, variables } = useConnect();
-  const { disconnect } = useDisconnect();
+  const connect = useConnect();
+  const { isPending, error, variables } = connect;
+  const allConnectors = useConnectors();
+  const disconnect = useDisconnect();
   const { data: balance } = useBalance({ address, chainId: chain.id });
   const hasInjectedProvider = useHasInjectedProvider();
   const connectors = visibleConnectors(allConnectors, hasInjectedProvider);
@@ -46,7 +48,7 @@ export default function WalletWindow() {
                 <button
                   type="button"
                   className="flex min-h-8 w-full items-center gap-2 rounded-lg border border-border-2 px-3 py-2 text-left pointer-coarse:min-h-11"
-                  onClick={() => connect({ connector: c, chainId: chain.id })}
+                  onClick={() => connect.mutate({ connector: c, chainId: chain.id })}
                 >
                   {c.icon && (
                     <span
@@ -87,7 +89,7 @@ export default function WalletWindow() {
             Switch to {chain.name}
           </button>
         )}
-        <button type="button" className="rounded-lg border border-border-2 px-3 py-1.5" onClick={() => disconnect()}>
+        <button type="button" className="rounded-lg border border-border-2 px-3 py-1.5" onClick={() => disconnect.mutate()}>
           Disconnect
         </button>
       </div>

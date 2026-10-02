@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback } from "react";
-import { getAccount } from "@wagmi/core";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { getConnection } from "wagmi/actions";
+import { useConnection, usePublicClient, useWriteContract } from "wagmi";
 import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisendAbi, unitsToNative } from "@arcos/chain";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
@@ -35,9 +35,9 @@ export function useDrop() {
   const contracts = ARCOS[activeNetwork()];
   const multisend = contracts?.multisend;
   const feeController = contracts?.feeController;
-  const { address, chainId: walletChainId } = useAccount();
+  const { address, chainId: walletChainId } = useConnection();
   const client = usePublicClient({ chainId: chain.id });
-  const { writeContractAsync } = useWriteContract();
+  const { mutateAsync } = useWriteContract();
 
   const readFeeBasis = useCallback(
     async (c: PublicClient): Promise<DropFeeBasis> => {
@@ -130,7 +130,7 @@ export function useDrop() {
               // `as const` keeps `functionName`/`args` narrowed to erc20Abi's "approve" overload —
               // without it, passing a fresh object literal through withChain's generic `T` widens
               // `functionName` to plain `string`, which wagmi's overload resolution then rejects.
-              const hash = await writeContractAsync(
+              const hash = await mutateAsync(
                 withChain({ address: token, abi: erc20Abi, functionName: "approve", args: [multisend, total] } as const, chain.id),
               );
               await client.waitForTransactionReceipt({ hash });
@@ -163,12 +163,12 @@ export function useDrop() {
           // wallet's chain to change mid-run, not just before the first batch. `walletChainId`
           // above is a value closed over from the render that started this send — it never
           // changes for the life of this call, so re-checking IT here couldn't actually detect a
-          // mid-run switch (N4). `getAccount(wagmiConfig).chainId` reads the wallet's chain live,
+          // mid-run switch (N4). `getConnection(wagmiConfig).chainId` reads the wallet's chain live,
           // straight from the wagmi config outside React, so a switch that happens between batches
           // is seen here. viem's own `assertCurrentChain` (via `withChain` below) remains the real
           // guard either way — this only decides whether the user gets a plain sentence before the
           // wallet opens, or a cryptic wallet-level mismatch after it does.
-          assertWalletOnChain(getAccount(wagmiConfig).chainId, chain.id);
+          assertWalletOnChain(getConnection(wagmiConfig).chainId, chain.id);
 
           // Re-read DROP_PER_RECIPIENT and DROP_MIN fresh, right before this batch signs — not the
           // basis the form last showed — and recompute the fee: a multi-batch send can straddle a fee
@@ -195,15 +195,15 @@ export function useDrop() {
           }
 
           // Simulate first: a revert here costs nothing and gives a readable reason. Each branch calls
-          // writeContractAsync with its own `request` rather than joining them through a shared variable —
+          // mutateAsync with its own `request` rather than joining them through a shared variable —
           // a ternary here defeats overload resolution between sendToken's and sendNative's request shapes.
           let hash: `0x${string}`;
           if (token) {
             const { request } = await client.simulateContract({ account: address, address: multisend, abi: multisendAbi, functionName: "sendToken", args: [token, to, amounts], value: fee });
-            hash = await writeContractAsync(withChain(request, chain.id));
+            hash = await mutateAsync(withChain(request, chain.id));
           } else {
             const { request } = await client.simulateContract({ account: address, address: multisend, abi: multisendAbi, functionName: "sendNative", args: [to, amounts], value: amounts.reduce((s, a) => s + a, 0n) + fee });
-            hash = await writeContractAsync(withChain(request, chain.id));
+            hash = await mutateAsync(withChain(request, chain.id));
           }
           let receipt: Awaited<ReturnType<PublicClient["waitForTransactionReceipt"]>>;
           try {
@@ -249,7 +249,7 @@ export function useDrop() {
         throw err;
       }
     },
-    [client, multisend, address, walletChainId, chain.id, writeContractAsync, readFeeBasis],
+    [client, multisend, address, walletChainId, chain.id, mutateAsync, readFeeBasis],
   );
 
   return { ready: !!multisend && !!client && !!address, quoteTotal, send };
