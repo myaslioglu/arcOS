@@ -73,7 +73,7 @@ import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { NATIVE, readV4Pools, type V4Quote } from "./v4";
-import { STATUS, poolCanRefuseSell, roundTripFee, simulateTrade, type TradeAttempt, type TradeRun } from "./simulate";
+import { STATUS, buyDidNotTrade, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type TradeAttempt, type TradeRun } from "./simulate";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -357,22 +357,31 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     uniswapAnswered = true;
     return answer;
   };
-  // A v2 pair's depth is its quote reserve, which is what it trades on: a balance can be raised by sending it USDC without a
-  // `sync`, which would make an empty pair look deep. A pair whose reserves can't be read has none.
-  const v2Reserve = async (pair: Address, quote: Address): Promise<bigint> => {
+  // A v2 pair's depth is its quote reserve, which is what it trades on, not its balance. Neither proves it trades: USDC
+  // sent to a pair and `sync`ed gives it a quote reserve with no tokens beside it. So a pair counts as liquid only with
+  // tokens in its reserves too, and a nonzero quote for the amount the trade check would buy with (`testAmountFor`); the
+  // trade check itself moves on from a pool whose buy can't trade. A pair whose reserves can't be read has none.
+  const v2Reserves = async (pair: Address, quote: Address): Promise<{ quote: bigint; token: bigint }> => {
     const [token0, reserves] = await Promise.all([
       catchReverted(reader.read(pair, v2PairAbi, "token0") as Promise<Address | null>, null),
       catchReverted(reader.read(pair, v2PairAbi, "getReserves") as Promise<readonly [bigint, bigint, number] | null>, null),
     ]);
-    if (typeof token0 !== "string" || !Array.isArray(reserves)) return 0n;
-    return BigInt(lower(token0) === lower(quote) ? reserves[0] : reserves[1]);
+    if (typeof token0 !== "string" || !Array.isArray(reserves)) return { quote: 0n, token: 0n };
+    const [r0, r1] = [BigInt(reserves[0]), BigInt(reserves[1])];
+    return lower(token0) === lower(quote) ? { quote: r0, token: r1 } : { quote: r1, token: r0 };
   };
+  /** What a v2 pair pays out, at its 0.3% fee, for `amountIn` of the quote. */
+  const v2Out = (amountIn: bigint, reserveIn: bigint, reserveOut: bigint): bigint =>
+    (amountIn * 997n * reserveOut) / (reserveIn * 1000n + amountIn * 997n);
   const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }, fee?: number): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
-    const depth =
-      version === "v2"
-        ? await v2Reserve(pool as Address, quote.address)
-        : await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
+    if (version === "v2") {
+      const reserves = await v2Reserves(pool as Address, quote.address);
+      const depth = reserves.quote;
+      const liquid = depth >= MIN_DEPTH && reserves.token > 0n && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
+      return { address: pool as Address, version, quote: quote.symbol, depth, liquid };
+    }
+    const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
     return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
   };
   // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
@@ -920,35 +929,22 @@ const poolRefusal = (pool: Pool): string =>
     ? "The pool's hook runs inside every swap and can refuse one the token itself would allow."
     : `${VENUE[pool.version]} pools refuse a token that arrives short (a transfer tax), so a tax alone reverts this sell.`;
 
-/**
- * What a second round trip that neither sold, nor reverted, nor ran out of gas came to: the RPC didn't run it, or the pool
- * would give nothing back for what it bought.
- */
-function attemptNote(attempt: TradeAttempt): string {
-  if (attempt.kind === "no-answer") return "the RPC didn't run it";
-  if (attempt.kind !== "ran") return "the RPC refused it or didn't answer";
-  const r = attempt.result;
-  if (r.status !== STATUS.ok) return "the simulation answered with a status it never gives";
-  // The buy delivered tokens, but the pair gave nothing for them, so no sell was sent.
-  return "the pool would give nothing back for the tokens bought, so no sell was sent";
-}
-
-/** A second round trip whose buy reverted, took nothing, or that the pool paid nothing for: that pool doesn't trade. */
-const couldntBuy = (attempt: TradeAttempt): boolean =>
-  attempt.kind === "ran" &&
-  (attempt.result.status === STATUS.buyReverted ||
-    (attempt.result.status === STATUS.ok && (attempt.result.spent === 0n || (attempt.result.paidOut === 0n && attempt.result.bought === 0n))));
+/** Why a second round trip the RPC didn't complete wasn't measured. */
+const rpcNote = (attempt: TradeAttempt): string => (attempt.kind === "no-answer" ? "the RPC didn't run it" : "the RPC refused it or didn't answer");
 
 /**
  * The finding for a buy that went through and a sell that reverted. In a Uniswap v2 pair or a hookless v4 pool only the
  * token can have refused the sell: `fail`. A Uniswap v3, Aerodrome or hooked v4 pool can refuse it on its own account, so
- * the round trip was tried again on the deepest v2 or hookless v4 USDC pool that can trade (`fallbackPool`):
- * - a sell that reverts there too: `fail`;
- * - no such pool, or one whose buy reverted or that paid nothing out (it doesn't trade, whatever discovery read): `fail`;
- * - a second round trip that ran out of the gas it is given, buying or selling (or reverted as a whole): undecided, so it
- *   can't soften the first pool's revert, and the `fail` stands with a note saying so;
- * - a buy there that the pool paid out for and of which no tokens arrived: `fail`, "Buying delivers no tokens";
- * - a sell there that went through, or a second round trip the RPC didn't complete: a `warn` naming both pools.
+ * the round trip was tried again on the deepest v2 or hookless v4 USDC pool that can trade (`fallbackPool`). Only a sell
+ * there that went through and brought USDC back softens the `fail` to a `warn`, naming both pools, and so does a second
+ * round trip the RPC didn't run or answer (no answer from the token at all). Everything else the token can bring about
+ * keeps the `fail`, with a note on what the second round trip came to:
+ * - no such pool, or one whose buy reverted or that paid nothing out (it doesn't trade, whatever discovery read);
+ * - a sell there that reverted too;
+ * - a second round trip that ran out of the gas it is given, buying or selling, or reverted as a whole: undecided;
+ * - a buy there that the pool paid out for and of which no tokens arrived: "Buying delivers no tokens";
+ * - tokens bought there that the pool would give nothing back for, so no sell was sent: undecided;
+ * - a sell there that went through and brought nothing back.
  */
 function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evidenceUrl: string }): Finding {
   const { pool } = run;
@@ -956,73 +952,81 @@ function sellRevertedFinding(run: Extract<TradeRun, { kind: "ran" }>, at: { evid
   if (!poolCanRefuseSell(pool)) {
     return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${VENUE[pool.version]} went through. ${capitalized(SOLD_BACK_REVERTED)}.`, at);
   }
-  const deepestPool = `its deepest pool (${poolName(pool)})`;
+  const deepestPool = run.skipped?.length ? `the deepest pool it could be bought from (${poolName(pool)})` : `its deepest pool (${poolName(pool)})`;
   const first = `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool)}`;
   const second = run.second;
-  if (!second) {
-    return finding("trade", "fail", "Can't be sold", `${first} It has no ${VENUE.v2} or hookless ${VENUE.v4} USDC pool that trades to try selling into instead.`, at);
-  }
+  const fail = (detail: string, title = "Can't be sold") => finding("trade", "fail", title, detail, at);
+  if (!second) return fail(`${first} It has no ${VENUE.v2} or hookless ${VENUE.v4} USDC pool that trades to try selling into instead.`);
   const other = fallbackName(second.pool);
-  if (couldntBuy(second)) {
+  if (buyDidNotTrade(second)) {
+    const how = second.kind === "ran" && second.result.status === STATUS.buyReverted ? "reverted" : "got nothing";
+    return fail(`${first} Buying from ${other} to try selling there instead ${how}, so it has no other pool that trades to sell into.`);
+  }
+  if (second.kind === "no-answer" || second.kind === "call-failed") {
     return finding(
-      "trade", "fail", "Can't be sold",
-      `${first} Buying from ${other} to try selling there instead ${second.kind === "ran" && second.result.status === STATUS.buyReverted ? "reverted" : "got nothing"}, so it has no other pool that trades to sell into.`,
+      "trade", "warn", "Can't be sold into its deepest pool",
+      `Selling into ${deepestPool} reverted; a round trip on ${other} couldn't be completed (${rpcNote(second)}), so selling it elsewhere wasn't shown either way. ${poolRefusal(pool)} ${SIMULATED}`,
       at,
     );
   }
-  if (second.kind === "call-reverted" || (second.kind === "ran" && (second.result.status === STATUS.buyOutOfGas || second.result.status === STATUS.sellOutOfGas))) {
-    const what =
-      second.kind === "call-reverted"
-        ? `The simulation in ${other}, tried instead, reverted or ran out of its gas as a whole`
-        : `${second.result.status === STATUS.buyOutOfGas ? "Buying" : "Selling"} in ${other}, tried instead, used up all the gas the simulation gives it`;
-    return finding("trade", "fail", "Can't be sold", `${first} ${what}, which shows nothing either way, so it doesn't count as a pool the token sells into.`, at);
+  const undecided = (what: string) => fail(`${first} ${what}, which shows nothing either way, so it doesn't count as a pool the token sells into.`);
+  if (second.kind === "call-reverted") return undecided(`The simulation in ${other}, tried instead, reverted or ran out of its gas as a whole`);
+  const r = second.result;
+  if (r.status === STATUS.buyOutOfGas || r.status === STATUS.sellOutOfGas) {
+    return undecided(`${r.status === STATUS.buyOutOfGas ? "Buying" : "Selling"} in ${other}, tried instead, used up all the gas the simulation gives it`);
   }
-  if (second.kind === "ran" && second.result.status === STATUS.sellReverted) {
-    return finding(
-      "trade", "fail", "Can't be sold",
-      `Selling into ${deepestPool} reverted, and so did selling into ${other}: each time straight back, in the same transaction and from a contract.`,
-      at,
-    );
+  if (r.status === STATUS.sellReverted) {
+    return fail(`Selling into ${deepestPool} reverted, and so did selling into ${other}: each time straight back, in the same transaction and from a contract.`);
   }
-  if (second.kind === "ran" && second.result.status === STATUS.ok && second.result.bought === 0n) {
-    return finding(
-      "trade", "fail", "Buying delivers no tokens",
+  if (r.status !== STATUS.ok) return undecided(`The simulation in ${other}, tried instead, answered with a status it never gives`);
+  if (r.bought === 0n) {
+    return fail(
       `Selling into ${deepestPool} reverted. Buying from ${other} to try selling there instead went through and the pool paid out, but none of the tokens arrived. ${SIMULATED}`,
-      at,
+      "Buying delivers no tokens",
     );
   }
-  const title = "Can't be sold into its deepest pool";
-  if (second.kind === "ran" && second.result.status === STATUS.ok && second.result.sold > 0n) {
-    const toSix = (raw: bigint) => (second.decimals === 18 ? raw / 10n ** 12n : raw);
-    const back = `${usdcAmount(toSix(second.result.spent))} USDC came back as ${usdcAmount(toSix(second.result.received))}`;
-    return finding("trade", "warn", title, `Selling into ${deepestPool} reverted; selling into ${other} went through (${back}). ${poolRefusal(pool)} ${SIMULATED}`, at);
+  if (r.sold === 0n) return undecided(`Buying from ${other}, tried instead, went through, but the pool would give nothing back for the tokens bought, so no sell was sent`);
+  const toSix = (raw: bigint) => (second.decimals === 18 ? raw / 10n ** 12n : raw);
+  if (r.received === 0n) {
+    return fail(`${first} Selling into ${other}, tried instead, went through, but nothing came back for ${usdcAmount(toSix(r.spent))} USDC of tokens. ${SIMULATED}`);
   }
+  const back = `${usdcAmount(toSix(r.spent))} USDC came back as ${usdcAmount(toSix(r.received))}`;
   return finding(
-    "trade", "warn", title,
-    `Selling into ${deepestPool} reverted; a round trip on ${other} couldn't be completed (${attemptNote(second)}), so selling it elsewhere wasn't shown either way. ${poolRefusal(pool)} ${SIMULATED}`,
+    "trade", "warn", "Can't be sold into its deepest pool",
+    `Selling into ${deepestPool} reverted; selling into ${other} went through (${back}). ${poolRefusal(pool)} ${SIMULATED}`,
     at,
   );
 }
 
 /**
  * Check 10: buy the token with USDC from its deepest USDC pool and sell it straight back, in one eth_call (see simulate.ts).
- * Only what that call measured is evidence:
- * - the buy reverted, or either leg ran out of the gas it was given: `unknown`, since neither says anything about selling;
+ * A pool whose buy can't trade (it reverted, took nothing, or paid nothing out; depth alone can be faked) is passed over for
+ * the next deepest, up to `MAX_TRADE_POOLS`, and the finding names the pools passed over. Only what was measured is evidence:
+ * - no pool tried could trade, or either leg ran out of the gas it was given: `unknown`, since neither says anything about
+ *   selling;
  * - the buy went through and the sell reverted: `fail`, "Can't be sold", unless the pool can refuse a sell on its own account
  *   (Uniswap v3, Aerodrome, a hooked v4 pool) and a sell into the deepest Uniswap v2 or hookless v4 USDC pool that trades
- *   went through, or the RPC didn't run or answer the second round trip: then a `warn` naming both (see
- *   `sellRevertedFinding`);
- * - the pool paid out for the buy and no tokens arrived: `fail`, "Buying delivers no tokens"; the pool paid nothing out:
- *   `unknown`;
- * - both went through: the finding states the round trip's measured loss. It is a `warn` above the pool's own fees for the
- *   two swaps plus 3%, or above 5% for a pool whose fee can change (a dynamic-fee or hooked v4 pool, or Aerodrome);
- * - no DEX, no pool scan, no USDC pool, a pool too thin to measure, and an RPC that refused or ignored the state override or
- *   failed: `unknown`.
+ *   went through and brought USDC back, or the RPC didn't run or answer that second round trip: then a `warn` naming both
+ *   (see `sellRevertedFinding`);
+ * - the pool paid out for the buy and no tokens arrived: `fail`, "Buying delivers no tokens";
+ * - both went through: the finding states the round trip's measured loss (100% when nothing came back). It is a `warn`
+ *   above the pool's own fees for the two swaps plus 3%, or above 5% for a pool whose fee can change (a dynamic-fee or
+ *   hooked v4 pool, or Aerodrome);
+ * - no DEX, no pool scan, no USDC pool, and an RPC that refused or ignored the state override or failed: `unknown`.
  */
 export async function checkTrade(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
   if (!input.dex) return finding("trade", "unknown", "Trades aren't simulated on this network", "No DEX registry is configured here.");
   if (scan === null) return finding("trade", "unknown", TRADE_UNKNOWN, "The network didn't answer the pool lookup.");
-  return tradeFinding(input, scan, await simulateTrade(input.reader, input.address, scan));
+  const run = await simulateTrade(input.reader, input.address, scan);
+  const f = tradeFinding(input, scan, run);
+  const skipped = run.kind === "no-pool" ? undefined : run.skipped;
+  if (!skipped?.length) return f;
+  const which = listWith("and", skipped.map(poolName));
+  const note =
+    run.kind === "ran" && buyDidNotTrade(run)
+      ? ` Buying in the deeper ${skipped.length === 1 ? "pool" : "pools"} ${which} couldn't trade either.`
+      : ` Buying in the deeper ${skipped.length === 1 ? "pool" : "pools"} ${which} couldn't trade (it reverted or got nothing), so this was measured on the next one.`;
+  return { ...f, detail: `${f.detail}${note}` };
 }
 
 function tradeFinding(input: InspectInput, scan: PoolScan, run: TradeRun): Finding {
