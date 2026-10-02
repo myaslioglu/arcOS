@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { KitError, RateLimitError, type BridgeResult } from "@circle-fin/app-kit";
+import { BalanceError, KitError, RateLimitError, type BridgeResult } from "@circle-fin/app-kit";
 import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
 import { EMBEDDED_FRAME_MESSAGE } from "@/lib/wallet-frame";
 import {
@@ -316,5 +316,34 @@ describe("classifyBridgeFailure", () => {
     const raw = classifyBridgeFailure(new Error("raw detail: https://internal.example/x"), NOTE);
     expect(raw).toBe(`${GENERIC_TRANSACTION_ERROR} ${NOTE}`);
     expect(raw).not.toMatch(/internal\.example/);
+  });
+
+  // The live site's "Bridge fails at once": with the window's defaults (To Arc, from Ethereum) and no USDC on Ethereum,
+  // App Kit's pre-flight balance check throws this before the wallet is asked for anything (reproduced against Arc
+  // mainnet with a stand-in wallet), and the window showed only the generic sentence.
+  it("names the chain when App Kit finds too little USDC on the source chain, in the app's own words", () => {
+    const short = new KitError({
+      ...BalanceError.INSUFFICIENT_TOKEN,
+      recoverability: "FATAL",
+      message: "Insufficient USDC balance on Ethereum",
+      cause: { trace: { balance: "0", amount: "1002000", chain: "Ethereum", token: "USDC" } },
+    });
+    const text = classifyBridgeFailure(short, NOTE, { label: "Ethereum", gasSymbol: "ETH" });
+    expect(text).toBe("Your wallet doesn't have enough USDC on Ethereum for this amount and the fee. Pick the chain that holds your USDC, or lower the amount.");
+    expect(text).not.toContain("Insufficient");
+  });
+
+  it("names the gas token when the source chain has too little of it", () => {
+    const noGas = new KitError({ ...BalanceError.INSUFFICIENT_GAS, recoverability: "FATAL", message: "Insufficient native token on Polygon to cover gas fees" });
+    expect(classifyBridgeFailure(noGas, NOTE, { label: "Polygon", gasSymbol: "POL" })).toBe(
+      "Your wallet doesn't have enough POL on Polygon to pay for gas. Add some POL there and try again.",
+    );
+  });
+
+  it("keeps the generic sentence for a balance error when no source is given, and for an allowance shortfall", () => {
+    const short = new KitError({ ...BalanceError.INSUFFICIENT_TOKEN, recoverability: "FATAL", message: "Insufficient USDC balance on Base" });
+    expect(classifyBridgeFailure(short, NOTE)).toBe(`${GENERIC_TRANSACTION_ERROR} ${NOTE}`);
+    const allowance = new KitError({ ...BalanceError.INSUFFICIENT_ALLOWANCE, recoverability: "FATAL", message: "Insufficient allowance" });
+    expect(classifyBridgeFailure(allowance, NOTE, { label: "Base", gasSymbol: "ETH" })).toBe(`${GENERIC_TRANSACTION_ERROR} ${NOTE}`);
   });
 });

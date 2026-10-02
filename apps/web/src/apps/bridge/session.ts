@@ -1,4 +1,4 @@
-import { isRateLimitError, type BridgeResult } from "@circle-fin/app-kit";
+import { BalanceError, isBalanceError, isRateLimitError, type BridgeResult } from "@circle-fin/app-kit";
 import { GENERIC_TRANSACTION_ERROR } from "@/lib/contract-error";
 import { isKitCancellation } from "@/lib/kit-errors";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
@@ -87,14 +87,38 @@ export function bridgeSessionReducer(state: BridgeSessionState, action: BridgeSe
  * - A wallet that took the page for an embedded frame comes first: it refuses the first request, so nothing was sent,
  *   and only a reload helps (lib/wallet-frame.ts).
  * - A cancellation and a rate limit keep their own sentences.
+ * - Not enough USDC or gas on the source chain gets a sentence that names the chain (`source`), when the caller passes it.
  * - Anything else gets `GENERIC_TRANSACTION_ERROR`, never the error's own text: like every other wallet, RPC or SDK
  *   error this app shows, it can carry internal detail or a URL.
  */
-export function classifyBridgeFailure(err: unknown, note: string): string {
+export function classifyBridgeFailure(err: unknown, note: string, source?: BridgeFailureSource): string {
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isKitCancellation(err)) return "Cancelled.";
   if (isRateLimitError(err)) return `The bridge service is busy. Try again in a minute. ${note}`;
+  if (source && isBalanceError(err)) {
+    const message = balanceFailureMessage(err.code, source);
+    if (message) return message;
+  }
   return `${GENERIC_TRANSACTION_ERROR} ${note}`;
+}
+
+/** The source chain of a failed bridge, as `classifyBridgeFailure` names it: its display name and its gas token. */
+export type BridgeFailureSource = { label: string; gasSymbol: string };
+
+/**
+ * App Kit checks the wallet's USDC on the source chain before it asks the wallet for anything, and throws
+ * `BALANCE_INSUFFICIENT_TOKEN` (9001) when it is short: that was Bridge's "fails at once", shown as the generic sentence.
+ * Its own message names the chain but is still the SDK's text, so the sentence is the app's own. A gas shortfall (9002)
+ * is the RPC's "insufficient funds for gas" read by the SDK. Any other balance code falls through to the generic sentence.
+ */
+function balanceFailureMessage(code: number, { label, gasSymbol }: BridgeFailureSource): string | null {
+  if (code === BalanceError.INSUFFICIENT_TOKEN.code) {
+    return `Your wallet doesn't have enough USDC on ${label} for this amount and the fee. Pick the chain that holds your USDC, or lower the amount.`;
+  }
+  if (code === BalanceError.INSUFFICIENT_GAS.code) {
+    return `Your wallet doesn't have enough ${gasSymbol} on ${label} to pay for gas. Add some ${gasSymbol} there and try again.`;
+  }
+  return null;
 }
 
 /** The slice of `window` the beforeunload guard needs — narrowed so tests can inject a minimal fake

@@ -1,5 +1,21 @@
 import type { BridgeChain } from "@circle-fin/app-kit";
-import { activeNetwork } from "@arcos/chain";
+import {
+  Arbitrum,
+  ArbitrumSepolia,
+  Arc,
+  ArcTestnet,
+  Avalanche,
+  AvalancheFuji,
+  Base,
+  BaseSepolia,
+  Ethereum,
+  EthereumSepolia,
+  Optimism,
+  OptimismSepolia,
+  Polygon,
+  PolygonAmoy,
+} from "@circle-fin/app-kit/chains";
+import { activeNetwork, type Address } from "@arcos/chain";
 
 /** `BridgeChainIdentifier` (what `BridgeParams` actually wants) isn't exported by the package —
  * this is the same shape restricted to the string-literal form, built from the exported enum. */
@@ -49,4 +65,43 @@ export function chainLabel(chainId: ChainId): string {
   if (chainId === "Arc") return "Arc";
   if (chainId === "Arc_Testnet") return "Arc Testnet";
   return ALL_OPTIONS.find((o) => o.chain === chainId)?.label ?? chainId;
+}
+
+/** What Bridge needs to know about one chain it can bridge with, taken from App Kit's own definition of it. */
+export type BridgeChainInfo = {
+  chainId: number;
+  /** The RPC endpoints App Kit itself reads that chain through (and that the site's connect-src lists). */
+  rpcEndpoints: readonly string[];
+  usdcAddress: Address;
+  /** The token that pays for gas there: ETH, POL, AVAX, or USDC on Arc. */
+  gasSymbol: string;
+};
+
+const DEFINITIONS = [
+  Arc,
+  ArcTestnet,
+  Ethereum,
+  Base,
+  Arbitrum,
+  Optimism,
+  Polygon,
+  Avalanche,
+  EthereumSepolia,
+  BaseSepolia,
+  ArbitrumSepolia,
+  OptimismSepolia,
+  PolygonAmoy,
+  AvalancheFuji,
+] as const;
+
+/** App Kit's definition of a chain Bridge offers (or Arc itself), or null for an id it doesn't know. */
+export function bridgeChainInfo(chainId: ChainId): BridgeChainInfo | null {
+  const def = DEFINITIONS.find((d) => d.chain === chainId);
+  if (!def) return null;
+  return {
+    chainId: def.chainId,
+    rpcEndpoints: def.rpcEndpoints,
+    usdcAddress: def.usdcAddress as Address,
+    gasSymbol: def.nativeCurrency.symbol,
+  };
 }
