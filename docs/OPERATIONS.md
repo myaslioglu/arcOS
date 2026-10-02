@@ -203,7 +203,7 @@ removed it, and every later deploy must work with the roles below alone.
 
    - `roles/iam.serviceAccountUser` on the project's default Compute account
      `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com` only. Cloud Functions 2nd gen builds the function with
-     that account, so every functions update (from the second deploy on) needs `iam.serviceAccounts.actAs` on it. The
+     that account, so every functions deploy needs `iam.serviceAccounts.actAs` on it. The
      production deploy without it stopped with "Caller is missing permission 'iam.serviceaccounts.actAs' on service
      account projects/-/serviceAccounts/<PROJECT_NUMBER>-compute@developer.gserviceaccount.com". It is safe for the same
      reason as the App Engine account: the manifest check pins the function's runtime account to `arcos-jobs@`, so the
