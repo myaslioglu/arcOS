@@ -640,6 +640,11 @@ describe("the lp-lock finding beside a deeper pool", () => {
     expect((await lpLock({ reads: pair(100n, 5_000_000_000n), v4: listed([key, at1251({ quote: undefined })]) })).status).toBe("pass");
   });
 
+  it("reads unknown beside a v4 pool that can't pay when the pair can't pay 1,000 either: neither is known to be the deepest", async () => {
+    const f = await lpLock({ reads: pair(100n, 500_000_000n), v4: listed([key, at1251({ quote: undefined })]) });
+    expect(f).toMatchObject({ status: "unknown", fixAppId: null });
+  });
+
   it("still fails an unlocked pair whatever else exists: the v2 LP is a fact", async () => {
     const f = await lpLock({ reads: { ...pair(10n, 500_000_000n), ...v3With(5_000_000_000n) } });
     expect(f).toMatchObject({ status: "fail", title: "Liquidity isn't locked", fixAppId: "vault" });

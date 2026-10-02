@@ -818,10 +818,11 @@ export async function checkLpLock(input: InspectInput, scan: PoolScan | null): P
   }
   const pair = v2.reduce((a, b) => (b.depth > a.depth ? b : a));
   // A pool whose positions can't be read might hold more than the pair. A v3 or Aerodrome pool is one when it is deeper; a v4
-  // pool's figure is only what sits in its current range, so it can't be ranked and is a rival unless it decisively can't pay.
+  // pool's figure is only what sits in its current range, so it can't be ranked. It is no rival only when it decisively can't
+  // pay 1,000 units and the pair can: a pair that can't pay them either may still be the shallower of the two.
   const others = scan.pools.filter((p) => p.version !== "v2" && p.version !== "v4" && p.depth > pair.depth);
   const rival = others.length > 0 ? others.reduce((a, b) => (b.depth > a.depth ? b : a)) : null;
-  const v4Rival = scan.pools.some((p) => p.version === "v4" && p.liquid !== false);
+  const v4Rival = scan.pools.some((p) => p.version === "v4" && (p.liquid !== false || pair.depth < MIN_DEPTH));
   const read = (fn: string, args: unknown[] = []) => input.reader.read(pair.address, erc20Abi, fn, args) as Promise<bigint>;
   const supply = await read("totalSupply");
   const url = `${input.explorerBase}/token/${pair.address}?tab=holders`;
