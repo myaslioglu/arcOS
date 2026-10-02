@@ -39,6 +39,14 @@ env:
     secret: BLOCKSCOUT_API_KEY@1
     availability:
       - RUNTIME
+  # ARCOS_SESSION_SECRET is a Secret Manager secret: the key of the sign-in cookie (lib/session.ts), 32 random bytes or
+  # more, runtime only and pinned to a version. It has to exist, with access granted to this backend, before a rollout
+  # of this file. Rotating it (a new version, pinned here) signs everyone out. Without it the site still runs and
+  # sign-in answers 503.
+  - variable: ARCOS_SESSION_SECRET
+    secret: ARCOS_SESSION_SECRET@1
+    availability:
+      - RUNTIME
   # ARCOS_TRUSTED_HOPS is deliberately unset. It is a server-only setting for the rate limits (lib/rate-limit.ts): how many
   # entries, counted from the right of X-Forwarded-For, belong to the site's own proxies. Unset it is 0, and each client is
   # keyed by the rightmost entry, the one the nearest proxy added. If a Google load balancer in front of App Hosting adds

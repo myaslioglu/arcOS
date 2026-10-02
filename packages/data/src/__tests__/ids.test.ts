@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   deliveryId,
+  nonceId,
   normalizeAddress,
   normalizePoolId,
   poolId,
@@ -172,5 +173,23 @@ describe("ids, for any valid input", () => {
 
   it("tell the two networks apart", () => {
     fc.assert(fc.property(address, (a) => tokenId("mainnet", a) !== tokenId("testnet", a)));
+  });
+});
+
+describe("nonceId", () => {
+  it("keeps an EIP-4361 nonce as it is: 16 to 128 letters and digits", () => {
+    expect(nonceId("0123456789abcdef")).toBe("0123456789abcdef");
+    expect(nonceId("A".repeat(128))).toBe("A".repeat(128));
+    expect(nonceId("0f".repeat(16))).toBe("0f".repeat(16));
+  });
+
+  it("refuses anything else, and never repeats the input", () => {
+    const bad = ["", "short", "a".repeat(15), "a".repeat(129), "a".repeat(20) + "/x", "a".repeat(20) + " ", "..".repeat(10), "a-b_c".repeat(5), "ä".repeat(20)];
+    for (const value of bad) {
+      const { code, message } = refusal(() => nonceId(value));
+      expect(code).toBe("nonce");
+      expect(message).not.toContain(value || "\u0000");
+    }
+    expect(refusal(() => nonceId(42 as unknown as string)).code).toBe("nonce");
   });
 });
