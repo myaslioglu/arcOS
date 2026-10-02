@@ -29,10 +29,13 @@ function clampRange(n: number, lo: number, hi: number): number {
  * so the title bars step down evenly even when the windows differ in size.
  * When the next step would push the window under the dock, the cascade starts
  * a new column: back at the first window's top, one STEP further right than
- * the column before, so every slot lands somewhere distinct. A stage with no room to spare in a direction (a phone, a window as
- * large as the stage) simply holds that coordinate. No rect ever leaves the
- * stage or runs under the dock; windows may cover the desktop's folders, as
- * they do on any desktop, and can be dragged off them.
+ * the column before, so on a stage with room every slot lands somewhere
+ * distinct.
+ *
+ * A stage with no room to spare in a direction (a phone, a window as large as
+ * the stage) simply holds that coordinate. No rect ever leaves the stage or
+ * runs under the dock; windows may cover the desktop's folders, as they do on
+ * any desktop, and can be dragged off them.
  */
 export function windowRect(slot: number, size: WindowSize, stageW: number, stageH: number): Rect {
   const width = Math.max(260, Math.min(size.w, stageW - EDGE * 2));
