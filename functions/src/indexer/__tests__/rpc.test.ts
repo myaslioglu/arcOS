@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { custom, type EIP1193RequestFn } from "viem";
 import { MAX_WINDOW } from "../windows";
-import { CALL_GAP_MS, RangeRefused, RateLimited, isRateLimit, pacer, rangeRefusal, rpcLogChain, type Clock } from "../rpc";
+import { CALL_GAP_MS, DeadlineExceeded, RangeRefused, RateLimited, isRateLimit, pacer, rangeRefusal, rpcLogChain, type Clock } from "../rpc";
 
 /** A clock that only moves when something sleeps on it, so pacing is measured, not waited for. */
 function fakeClock(): Clock & { slept: number[] } {
@@ -77,6 +77,35 @@ describe("pacer", () => {
     await expect(paced(async () => "next")).resolves.toBe("next");
   });
 
+  it("starts no call whose turn comes at or after the deadline", async () => {
+    const clock = fakeClock();
+    const paced = pacer(clock);
+    let calls = 0;
+    const call = async () => ++calls;
+    await paced(call, clock.now() + 1_000);
+    // The next turn is 400 ms on; a deadline before it refuses the call without making it.
+    await expect(paced(call, clock.now() + CALL_GAP_MS - 1)).rejects.toBeInstanceOf(DeadlineExceeded);
+    expect(calls).toBe(1);
+    await expect(paced(call, clock.now() + 1_000)).resolves.toBe(2);
+  });
+
+  it("gives up on a rate limit whose back-off would reach the deadline", async () => {
+    const clock = fakeClock();
+    const paced = pacer(clock);
+    let tries = 0;
+    const limited = () => (tries++, Promise.reject(rpcFailure(-32005, "rate limit exceeded")));
+    await expect(paced(limited, clock.now() + 2_000)).rejects.toBeInstanceOf(DeadlineExceeded);
+    expect(tries).toBe(2); // backed off 1.5 s once; the next 3 s back-off would cross the deadline
+    expect(clock.slept.filter((ms) => ms >= 1_500)).toEqual([1_500]);
+  });
+
+  it("stops waiting for an answer at the deadline", async () => {
+    const clock = fakeClock();
+    const paced = pacer(clock);
+    await expect(paced(() => new Promise(() => {}), clock.now() + 20)).rejects.toBeInstanceOf(DeadlineExceeded);
+    await expect(paced(async () => "after", clock.now() + 1_000)).resolves.toBe("after");
+  });
+
   it("calls an HTTP 429 a rate limit too", () => {
     expect(isRateLimit(Object.assign(new Error("Too Many Requests"), { status: 429 }))).toBe(true);
   });
@@ -102,6 +131,15 @@ describe("rpcLogChain", () => {
     });
     const chain = rpcLogChain("https://rpc.test", { clock: fakeClock(), transport: node.transport });
     await expect(chain.logs(filter)).rejects.toMatchObject({ name: "RangeRefused", suggested: 2_000 });
+  });
+
+  it("gives the deadline to both calls: a node that doesn't answer in time is DeadlineExceeded, not a range refusal", async () => {
+    const node = fakeNode(() => new Promise(() => {}));
+    const clock = fakeClock();
+    const chain = rpcLogChain("https://rpc.test", { clock, transport: node.transport });
+    await expect(chain.head(clock.now() + 20)).rejects.toBeInstanceOf(DeadlineExceeded);
+    await expect(chain.logs({ ...filter, deadline: clock.now() + CALL_GAP_MS + 20 })).rejects.toBeInstanceOf(DeadlineExceeded);
+    expect(node.calls.map((c) => c.method)).toEqual(["eth_getBlockByNumber", "eth_getLogs"]);
   });
 
   it("fails when the node has no finalized block", async () => {

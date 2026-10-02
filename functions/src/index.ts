@@ -28,5 +28,6 @@ export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscou
     log: logger,
   });
   if (result.status === "halted") logger.error("arcosIndexer halted", result);
+  else if (result.status === "busy") logger.warn("arcosIndexer busy", result);
   else logger.info("arcosIndexer run", result);
 });

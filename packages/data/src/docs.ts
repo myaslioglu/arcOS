@@ -39,8 +39,8 @@ export type ReportSummary = {
 };
 
 /**
- * indexer/{network}: the cursor and the console controls. The owner edits `paused`, `inspect` and `halted` in the
- * Firebase console; the indexer never writes them back.
+ * indexer/{network}: the cursor, the console controls and the run's lease. The owner edits `paused`, `inspect` and
+ * `halted` in the Firebase console; the indexer never writes `paused` or `inspect`.
  */
 export type IndexerDoc = {
   network: NetworkId;
@@ -55,6 +55,12 @@ export type IndexerDoc = {
   halted: string | null;
   /** Blockscout calls spent on `day` (UTC, YYYY-MM-DD), against the daily budget. */
   explorerCalls: { day: string; count: number };
+  /**
+   * The lease of the run in progress: until when it holds the indexer, and which run it is. Set when a run starts and
+   * cleared when it ends; a run that finds another's lease still live skips. Null between runs. The indexer writes both.
+   */
+  runningUntil: TimestampLike | null;
+  runId: string | null;
 };
 
 /**

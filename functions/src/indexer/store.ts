@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Timestamp, type DocumentReference, type Firestore, type WriteBatch } from "firebase-admin/firestore";
 import type { NetworkId } from "@arcos/chain";
 import {
@@ -13,6 +14,7 @@ import {
   type IndexerDoc,
   type RadarFeedDoc,
   type RadarFeedFilter,
+  type RadarRow,
   type ReportDoc,
   type ReportSummary,
   type TokenDoc,
@@ -36,37 +38,77 @@ export const indexerRef = (db: Firestore, network: NetworkId): DocumentReference
 /** The UTC day an explorer call counts against, YYYY-MM-DD. */
 export const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
+/** How long a run holds the indexer: the function's 120 s timeout, and a margin. A lease left by a run that died expires. */
+export const LEASE_MS = 150_000;
+
+/** What a run finds when it starts: its lease and the state, the state alone when paused or halted, or another run busy. */
+export type Start =
+  | { kind: "run"; state: IndexerDoc; runId: string }
+  | { kind: "stop"; state: IndexerDoc }
+  | { kind: "busy"; until: number };
+
+const leaseOf = (doc: IndexerDoc): { runningUntil: number; runId: string | null } => ({
+  runningUntil: doc.runningUntil?.toMillis() ?? 0,
+  runId: doc.runId ?? null,
+});
+
 /**
- * The indexer doc, created on the first run with the cursor `cursor` (the 24-hour backfill) and the console controls at
- * their defaults: running, inspecting, not halted. Two first runs can't both create it: the second reads the first's.
+ * Reads the indexer doc and takes the run's lease (`runningUntil`, `runId`) in one transaction. Another run's lease that
+ * is still live makes this run skip (`busy`); a paused or halted indexer is read and nothing is written. The first run
+ * creates the doc with the cursor `cursor` (the 24-hour backfill) and the console controls at their defaults: running,
+ * inspecting, not halted. Two first runs can't both create it: the transaction makes the second read the first's.
  */
-export async function loadOrCreateState(db: Firestore, network: NetworkId, cursor: () => Promise<number>, now: number): Promise<IndexerDoc> {
+export async function loadOrCreateState(
+  db: Firestore,
+  network: NetworkId,
+  cursor: () => Promise<number>,
+  now: number,
+  runId: string = randomUUID(),
+): Promise<Start> {
   const ref = indexerRef(db, network);
-  const snap = await ref.get();
-  if (snap.exists) return snap.data() as IndexerDoc;
-  const doc: IndexerDoc = {
-    network,
-    block: await cursor(),
-    updatedAt: Timestamp.fromMillis(now),
-    lastRunAt: null,
-    paused: false,
-    inspect: true,
-    halted: null,
-    explorerCalls: { day: utcDay(now), count: 0 },
-  };
-  try {
-    await ref.create(doc);
-    return doc;
-  } catch {
-    return (await ref.get()).data() as IndexerDoc;
-  }
+  // The first cursor needs the chain's head, which is no call to make inside a transaction that may run again.
+  const first = (await ref.get()).exists ? null : await cursor();
+  const lease = { runningUntil: Timestamp.fromMillis(now + LEASE_MS), runId };
+  return db.runTransaction(async (tx): Promise<Start> => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      const doc: IndexerDoc = {
+        network,
+        block: first ?? (await cursor()),
+        updatedAt: Timestamp.fromMillis(now),
+        lastRunAt: null,
+        paused: false,
+        inspect: true,
+        halted: null,
+        explorerCalls: { day: utcDay(now), count: 0 },
+        ...lease,
+      };
+      tx.create(ref, doc);
+      return { kind: "run", state: doc, runId };
+    }
+    const state = snap.data() as IndexerDoc;
+    if (state.paused || state.halted) return { kind: "stop", state };
+    const held = leaseOf(state);
+    if (held.runningUntil > now && held.runId !== runId) return { kind: "busy", until: held.runningUntil };
+    tx.update(ref, lease);
+    return { kind: "run", state: { ...state, ...lease }, runId };
+  });
 }
 
-/** Commits `writes` in batches of at most BATCH. */
-async function commitAll(db: Firestore, writes: ((batch: WriteBatch) => void)[]): Promise<void> {
-  for (let i = 0; i < writes.length; i += BATCH) {
+/** Gives the lease back, if it is still this run's (a run that outlived its lease leaves the next one's alone). */
+export async function releaseLease(db: Firestore, network: NetworkId, runId: string): Promise<void> {
+  const ref = indexerRef(db, network);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.exists && leaseOf(snap.data() as IndexerDoc).runId === runId) tx.update(ref, { runningUntil: null, runId: null });
+  });
+}
+
+/** Commits `writes` in order, in batches of at most `size`. */
+async function commitAll(db: Firestore, writes: ((batch: WriteBatch) => void)[], size = BATCH): Promise<void> {
+  for (let i = 0; i < writes.length; i += size) {
     const batch = db.batch();
-    for (const write of writes.slice(i, i + BATCH)) write(batch);
+    for (const write of writes.slice(i, i + size)) write(batch);
     await batch.commit();
   }
 }
@@ -80,12 +122,17 @@ type Found = { record: TokenRecord; pooled: boolean };
  * Records one window's sightings: every new qualifying pool, every new token, and a token already known queued again when
  * a new pool appeared for it. Reads first which of them exist (one read each), then writes only what is new. The caller
  * writes the cursor after this returns, so a crash repeats the window and never skips it.
+ *
+ * A pool doc is the mark that its sighting is fully handled: a pool that exists is never handled again. So the token
+ * writes (the new tokens and the requeues) are committed first and the pools after them, in that order across batches;
+ * a crash between the two leaves the pools missing, and the window read again requeues their tokens.
+ * `batchSize` is for the tests.
  */
 export async function recordWindow(
   db: Firestore,
   network: NetworkId,
   sightings: readonly Sighting[],
-  options: { inspect: boolean; now: number },
+  options: { inspect: boolean; now: number; batchSize?: number },
 ): Promise<WindowResult> {
   const now = Timestamp.fromMillis(options.now);
   const pools = new Map<string, ReturnType<typeof poolToDoc>>();
@@ -141,10 +188,6 @@ export async function recordWindow(
   const changed: TokenDoc[] = [];
   let created = 0;
   let requeued = 0;
-  for (const id of newPools) {
-    const doc = pools.get(id)!;
-    writes.push((batch) => batch.set(db.collection(COLLECTIONS.pools).doc(id), doc));
-  }
   [...found.values()].forEach(({ record, pooled }, i) => {
     const ref = db.collection(COLLECTIONS.tokens).doc(tokenIds[i]!);
     const snap = tokenSnaps[i]!;
@@ -161,13 +204,27 @@ export async function recordWindow(
     writes.push((batch) => batch.update(ref, { inspect: next }));
     requeued++;
   });
-  await commitAll(db, writes);
+  // Last: the pools, the marks that the tokens above are written.
+  for (const id of newPools) {
+    const doc = pools.get(id)!;
+    writes.push((batch) => batch.set(db.collection(COLLECTIONS.pools).doc(id), doc));
+  }
+  await commitAll(db, writes, options.batchSize);
   return { pools: newPools.size, tokens: created, requeued, changed };
 }
 
-/** Moves the cursor: the window up to `block` is fully handled. */
-export async function writeCursor(db: Firestore, network: NetworkId, block: number, now: number): Promise<void> {
-  await indexerRef(db, network).update({ block, updatedAt: Timestamp.fromMillis(now) });
+/**
+ * Moves the cursor: the window up to `block` is fully handled. Only forward: a run that is behind another (one that
+ * outlived its lease) never moves the cursor back. Returns whether it moved.
+ */
+export async function writeCursor(db: Firestore, network: NetworkId, block: number, now: number): Promise<boolean> {
+  const ref = indexerRef(db, network);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists || (snap.data() as IndexerDoc).block >= block) return false;
+    tx.update(ref, { block, updatedAt: Timestamp.fromMillis(now) });
+    return true;
+  });
 }
 
 /** The indexer stops itself until someone clears `halted` in the console. */
@@ -175,9 +232,20 @@ export async function halt(db: Firestore, network: NetworkId, reason: string): P
   await indexerRef(db, network).update({ halted: reason });
 }
 
-/** The end of a run: when it ran, and the explorer calls spent today. */
-export async function finishRun(db: Firestore, network: NetworkId, now: number, explorerCalls: IndexerDoc["explorerCalls"]): Promise<void> {
-  await indexerRef(db, network).update({ lastRunAt: Timestamp.fromMillis(now), explorerCalls });
+/** The end of a run: when it ran, the explorer calls spent today, and the lease given back if it is still this run's. */
+export async function finishRun(
+  db: Firestore,
+  network: NetworkId,
+  now: number,
+  explorerCalls: IndexerDoc["explorerCalls"],
+  runId: string,
+): Promise<void> {
+  const ref = indexerRef(db, network);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const mine = snap.exists && leaseOf(snap.data() as IndexerDoc).runId === runId;
+    tx.update(ref, { lastRunAt: Timestamp.fromMillis(now), explorerCalls, ...(mine ? { runningUntil: null, runId: null } : {}) });
+  });
 }
 
 /** The head of the inspection queue, in queue order (the composite index on network, inspect.state, inspect.priority, firstSeen). */
@@ -267,22 +335,44 @@ async function feedQuery(db: Firestore, network: NetworkId, filter: RadarFeedFil
   return snap.docs.map((doc) => doc.data() as TokenDoc).filter((token) => inFeed(filter, token));
 }
 
+/** Whether two pages hold the same rows, field by field. */
+function sameRows(a: readonly RadarRow[], b: readonly RadarRow[]): boolean {
+  const key = (r: RadarRow) => [r.address, r.symbol, r.name, r.source, r.firstSeen.toMillis(), r.passed, r.total, r.bestPoolDepth];
+  return a.length === b.length && a.every((row, i) => JSON.stringify(key(row)) === JSON.stringify(key(b[i]!)));
+}
+
+/** The feed a run rebuilds from its query whatever changed: one of the four in turn, a new one each minute. */
+export const rebuiltFeed = (now: number): RadarFeedFilter => RADAR_FEED_FILTERS[Math.floor(now / 60_000) % RADAR_FEED_FILTERS.length]!;
+
 /**
- * Brings the four radarFeed docs up to date with the tokens this run changed. Four reads, plus one query of up to 50
- * reads for a feed that has no doc yet or lost a row from a full page; four writes.
+ * Brings the four radarFeed docs up to date with the tokens this run changed, and rebuilds one of them from its query
+ * (`rebuild`, rebuiltFeed in turn), so a page that missed a change (a run that died between an inspection and this
+ * write) is whole again within four runs. Four reads, plus one query of up to 50 reads for the rebuilt feed, a feed
+ * that has no doc yet, or one that lost a row from a full page; a write for each page that changed. Returns how many
+ * pages it wrote.
  */
-export async function updateFeeds(db: Firestore, network: NetworkId, changed: readonly TokenDoc[], now: number): Promise<number> {
-  if (changed.length === 0) return 0;
+export async function updateFeeds(
+  db: Firestore,
+  network: NetworkId,
+  changed: readonly TokenDoc[],
+  now: number,
+  rebuild: RadarFeedFilter | null = rebuiltFeed(now),
+): Promise<number> {
+  if (changed.length === 0 && rebuild === null) return 0;
   const refs = RADAR_FEED_FILTERS.map((filter) => db.collection(COLLECTIONS.radarFeed).doc(radarFeedId(network, filter)));
   const snaps = await db.getAll(...refs);
   const batch = db.batch();
+  let written = 0;
   for (const [i, filter] of RADAR_FEED_FILTERS.entries()) {
     const current = snaps[i]!.exists ? (snaps[i]!.data() as RadarFeedDoc).rows : null;
-    let rows = current === null ? null : updateFeed(current, changed, filter);
+    if (filter !== rebuild && changed.length === 0 && current !== null) continue;
+    let rows = current === null || filter === rebuild ? null : updateFeed(current, changed, filter);
     if (rows === null || rows.refill) rows = updateFeed([], await feedQuery(db, network, filter), filter);
+    if (current !== null && sameRows(current, rows.rows)) continue;
     const doc: RadarFeedDoc = { network, filter, rows: rows.rows, updatedAt: Timestamp.fromMillis(now) };
     batch.set(refs[i]!, doc);
+    written++;
   }
-  await batch.commit();
-  return RADAR_FEED_FILTERS.length;
+  if (written > 0) await batch.commit();
+  return written;
 }

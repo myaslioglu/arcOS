@@ -4,10 +4,13 @@ import type { RawLog } from "./events";
 
 /** What the indexer asks of the chain: the finalized head, and the logs of a window. */
 export interface LogChain {
-  /** The `finalized` block's number. Arc's `finalized` is `latest` or one behind (F8), so nothing past it can reorg. */
-  head(): Promise<number>;
-  /** One eth_getLogs over [from, to], inclusive, for the addresses and any of the topic0s. */
-  logs(filter: { addresses: readonly Address[]; topic0s: readonly Hex[]; from: number; to: number }): Promise<RawLog[]>;
+  /**
+   * The `finalized` block's number. Arc's `finalized` is `latest` or one behind (F8), so nothing past it can reorg.
+   * `deadline` (a time in ms, on the chain's clock) is when to give up: see DeadlineExceeded.
+   */
+  head(deadline?: number): Promise<number>;
+  /** One eth_getLogs over [from, to], inclusive, for the addresses and any of the topic0s, given up at `deadline`. */
+  logs(filter: { addresses: readonly Address[]; topic0s: readonly Hex[]; from: number; to: number; deadline?: number }): Promise<RawLog[]>;
 }
 
 /** The node refused a window as too wide (-32012) or too full (-32602, over 20,000 results). */
@@ -26,6 +29,18 @@ export class RateLimited extends Error {
   constructor() {
     super("The node kept rate-limiting the indexer.");
     this.name = "RateLimited";
+  }
+}
+
+/**
+ * The window phase ran out of time (run.ts, LIMITS.windowsDeadlineMs): a call or a back-off that couldn't end before the
+ * deadline was not started, or the answer of one in flight was no longer waited for. The run goes on to its inspections,
+ * and the next run repeats the window.
+ */
+export class DeadlineExceeded extends Error {
+  constructor() {
+    super("The window phase ran out of time.");
+    this.name = "DeadlineExceeded";
   }
 }
 
@@ -67,26 +82,43 @@ export const RATE_RETRIES = 4;
 export type Clock = { now: () => number; sleep: (ms: number) => Promise<void> };
 export const realClock: Clock = { now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
 
-/** Runs calls one at a time, at least `gap` ms apart, and retries one the node rate-limited (-32005), backing off. */
-export function pacer(clock: Clock = realClock, gap = CALL_GAP_MS): <T>(call: () => Promise<T>) => Promise<T> {
+/** Waits for `promise` at most `ms` (real time), then rejects with DeadlineExceeded; the timer never outlives the wait. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  if (!Number.isFinite(ms)) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DeadlineExceeded()), Math.max(0, ms));
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Runs calls one at a time, at least `gap` ms apart, and retries one the node rate-limited (-32005), backing off. With a
+ * `deadline` (on the clock's time), a call whose turn comes at or after it, or a back-off that would reach it, fails with
+ * DeadlineExceeded instead, and an answer still missing at the deadline is no longer waited for.
+ */
+export function pacer(clock: Clock = realClock, gap = CALL_GAP_MS): <T>(call: () => Promise<T>, deadline?: number) => Promise<T> {
   let next = 0;
   let queue: Promise<unknown> = Promise.resolve();
-  const slot = async () => {
+  const slot = async (deadline: number) => {
     const now = clock.now();
     const at = Math.max(now, next);
+    if (at >= deadline) throw new DeadlineExceeded();
     next = at + gap;
     if (at > now) await clock.sleep(at - now);
   };
-  return <T>(call: () => Promise<T>): Promise<T> => {
+  return <T>(call: () => Promise<T>, deadline = Infinity): Promise<T> => {
     const run = queue.then(async () => {
       for (let attempt = 0; ; attempt++) {
-        await slot();
+        await slot(deadline);
         try {
-          return await call();
+          return await within(call(), deadline - clock.now());
         } catch (e) {
           if (!isRateLimit(e)) throw e;
           if (attempt >= RATE_RETRIES) throw new RateLimited();
-          await clock.sleep(1_500 * (attempt + 1));
+          const wait = 1_500 * (attempt + 1);
+          if (clock.now() + wait >= deadline) throw new DeadlineExceeded();
+          await clock.sleep(wait);
         }
       }
     });
@@ -110,15 +142,16 @@ export function rpcLogChain(url: string, options: { clock?: Clock; transport?: T
   const paced = pacer(options.clock);
   const request = client.request as unknown as (args: { method: string; params: unknown[] }) => Promise<unknown>;
   return {
-    head: async () => {
-      const block = (await paced(() => request({ method: "eth_getBlockByNumber", params: ["finalized", false] }))) as { number?: Hex } | null;
+    head: async (deadline) => {
+      const block = (await paced(() => request({ method: "eth_getBlockByNumber", params: ["finalized", false] }), deadline)) as { number?: Hex } | null;
       if (!block?.number) throw new Error("The node has no finalized block.");
       return Number(BigInt(block.number));
     },
-    logs: async ({ addresses, topic0s, from, to }) => {
+    logs: async ({ addresses, topic0s, from, to, deadline }) => {
       try {
-        return (await paced(() =>
-          request({ method: "eth_getLogs", params: [{ address: addresses, topics: [topic0s], fromBlock: hex(from), toBlock: hex(to) }] }),
+        return (await paced(
+          () => request({ method: "eth_getLogs", params: [{ address: addresses, topics: [topic0s], fromBlock: hex(from), toBlock: hex(to) }] }),
+          deadline,
         )) as RawLog[];
       } catch (e) {
         throw rangeRefusal(e) ?? e;

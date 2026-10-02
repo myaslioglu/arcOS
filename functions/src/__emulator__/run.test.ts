@@ -1,5 +1,5 @@
 import { deleteApp, getApps } from "firebase-admin/app";
-import { Timestamp } from "firebase-admin/firestore";
+import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { EURC } from "@arcos/chain";
 import {
@@ -19,7 +19,9 @@ import {
 } from "@arcos/data";
 import { arcosDb } from "@arcos/data/server";
 import type { Pool } from "@arcos/inspector";
-import { runIndexer, type InspectToken, type RunResult } from "../indexer/run";
+import { decodeLogs, sourcesFor, type RawLog } from "../indexer/events";
+import { LIMITS, runIndexer, type InspectToken, type RunResult } from "../indexer/run";
+import { LEASE_MS, rebuiltFeed, recordWindow, writeCursor } from "../indexer/store";
 import { BACKFILL_BLOCKS } from "../indexer/windows";
 import { USDC_LOWER, ZERO, addr, created, fakeChain, fakeInspector, fakeNow, fakeReport, timeOf, v3Pool, v4Pool, type FakeChainOptions } from "./fakes";
 
@@ -31,11 +33,14 @@ afterAll(async () => {
   await Promise.all(getApps().map((app) => deleteApp(app)));
 });
 
-// Every test starts from an empty arcos database (the emulator's own reset endpoint; it never runs against a live project).
-beforeEach(async () => {
+/** Empties the arcos database (the emulator's own reset endpoint; it never runs against a live project). */
+async function reset() {
   const res = await fetch(`http://${host}/emulator/v1/projects/${project}/databases/${DATABASE_ID}/documents`, { method: "DELETE" });
   expect(res.ok).toBe(true);
-});
+}
+
+// Every test starts from an empty arcos database.
+beforeEach(reset);
 
 const HEAD = 1_000_000;
 const START = HEAD - BACKFILL_BLOCKS; // 830,000: the first run's cursor
@@ -56,15 +61,68 @@ const count = async (collection: string) => (await db.collection(collection).cou
 async function startAt(block: number, over: Partial<IndexerDoc> = {}) {
   await db.collection(COLLECTIONS.indexer).doc("mainnet").set({
     network: "mainnet", block, updatedAt: Timestamp.now(), lastRunAt: null, paused: false, inspect: true, halted: null,
-    explorerCalls: { day: "2026-10-01", count: 0 }, ...over,
+    explorerCalls: { day: "2026-10-01", count: 0 }, runningUntil: null, runId: null, ...over,
   } satisfies IndexerDoc);
 }
 
 type Ran = Extract<RunResult, { status: "ran" }>;
 const clock = fakeNow();
-function run(chain: FakeChainOptions | ReturnType<typeof fakeChain>, inspector: InspectToken = fakeInspector({}), settings = { inspectPerTick: 3, explorerDailyBudget: 5_000 }) {
+function run(
+  chain: FakeChainOptions | ReturnType<typeof fakeChain>,
+  inspector: InspectToken = fakeInspector({}),
+  settings = { inspectPerTick: 3, explorerDailyBudget: 5_000 },
+  store: Firestore = db,
+) {
   const c = "logs" in chain && typeof chain.logs === "function" ? (chain as ReturnType<typeof fakeChain>) : fakeChain(chain as FakeChainOptions);
-  return runIndexer({ db, network: "mainnet", chain: c, inspectToken: inspector, settings, now: clock.now });
+  return runIndexer({ db: store, network: "mainnet", chain: c, inspectToken: inspector, settings, now: clock.now });
+}
+
+/** The database, with each method bound, and `patch` in front of it. */
+function wrapped(patch: (target: Firestore, prop: string | symbol) => unknown): Firestore {
+  return new Proxy(db, {
+    get(target, prop) {
+      const patched = patch(target, prop);
+      if (patched !== undefined) return patched;
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+}
+
+/** The database as a process that dies at its `n`th batch commit (1-based): that commit and every later one fail. */
+function crashingAt(n: number): Firestore {
+  let commits = 0;
+  return wrapped((target, prop) => {
+    if (prop !== "batch") return undefined;
+    return () => {
+      const batch = target.batch();
+      const commit = batch.commit.bind(batch);
+      batch.commit = async () => {
+        if (++commits >= n) throw new Error("the process died");
+        return commit();
+      };
+      return batch;
+    };
+  });
+}
+
+/** The database, where every update of `address`'s token doc fails. */
+function failingTokenUpdates(address: string): Firestore {
+  const id = tokenId("mainnet", address);
+  return wrapped((target, prop) => {
+    if (prop !== "collection") return undefined;
+    return (name: string) => {
+      const collection = target.collection(name);
+      if (name !== COLLECTIONS.tokens) return collection;
+      const doc = collection.doc.bind(collection);
+      collection.doc = ((docId: string) => {
+        const ref = doc(docId);
+        if (docId === id) ref.update = (() => Promise.reject(Object.assign(new Error("unavailable"), { name: "Unavailable" }))) as typeof ref.update;
+        return ref;
+      }) as typeof collection.doc;
+      return collection;
+    };
+  });
 }
 const ran = (r: RunResult) => r as Ran;
 
@@ -321,6 +379,153 @@ describe("the inspection queue", () => {
     expect(result.expired).toBe(3);
     expect(inspector.calls).toEqual([]);
     expect(await tokenDoc(B)).toMatchObject({ inspect: { state: "skipped", queuedAt: null } });
+  });
+});
+
+describe("a crash inside a window", () => {
+  const sightings = (logs: RawLog[]) => decodeLogs(logs, sourcesFor("mainnet"));
+
+  // The pools are the mark that a window's tokens are written: a crash anywhere among the writes leaves a window that,
+  // read again, still requeues the known token whose new pool it found.
+  it("requeues a known token on the window read again, wherever the writes stopped", async () => {
+    // One commit per write, in recordWindow's order: B created, A requeued, then the two pools.
+    for (let crashAt = 1; crashAt <= 4; crashAt++) {
+      await reset();
+      await recordWindow(db, "mainnet", sightings([v3Pool(START + 1, A, POOL_A)]), { inspect: true, now: clock.now() });
+      await db.collection(COLLECTIONS.tokens).doc(tokenId("mainnet", A)).update({
+        inspect: { state: "done", priority: INSPECT_PRIORITY.pooled, attempts: 0, queuedAt: null },
+        radar: { liquid: true, passing: true },
+      });
+      const window = sightings([v3Pool(START + 2, A, addr(0x2a1)), v3Pool(START + 3, B, addr(0x1b2))]);
+      await expect(recordWindow(crashingAt(crashAt), "mainnet", window, { inspect: true, now: clock.now(), batchSize: 1 }), `crash at ${crashAt}`).rejects.toThrow();
+
+      await recordWindow(db, "mainnet", window, { inspect: true, now: clock.now() });
+      expect(await tokenDoc(A), `crash at ${crashAt}`).toMatchObject({ inspect: { state: "queued", priority: INSPECT_PRIORITY.liquid } });
+      expect(await tokenDoc(B), `crash at ${crashAt}`).toMatchObject({ inspect: { state: "queued" } });
+      expect(await count(COLLECTIONS.pools)).toBe(3);
+    }
+  });
+});
+
+describe("a run that fails part way", () => {
+  const scan = { pools: [], factoriesAnswered: true, silent: [] };
+
+  async function seed() {
+    await startAt(START);
+    const logs = [v3Pool(START + 100, A, POOL_A), created(START + 300, B, "BEE"), v3Pool(START + 400, C, addr(0x1c3))];
+    await run({ head: START + 10_000, logs }, fakeInspector({}), { inspectPerTick: 0, explorerDailyBudget: 0 });
+  }
+
+  it("still updates the feeds and ends the run, with the explorer calls it spent, when the inspections fail", async () => {
+    await seed();
+    // C goes first and is stored; A's inspection fails, and so does writing its failure: the phase stops there.
+    const inspector = fakeInspector({ [C]: { report: fakeReport(C, 5, false), scan }, [A]: new Error("timeout") }, 2);
+    const result = ran(await run({ head: START + 10_000 }, inspector, { inspectPerTick: 3, explorerDailyBudget: 5_000 }, failingTokenUpdates(A)));
+    expect(inspector.calls.map((c) => c.token)).toEqual([C, A]);
+    expect(result).toMatchObject({ status: "ran", inspected: 1, failed: 1, explorerCalls: 4, error: "Unavailable" });
+    expect(await indexerDoc()).toMatchObject({ explorerCalls: { count: 4 }, runningUntil: null, runId: null });
+    expect((await indexerDoc()).lastRunAt!.toMillis()).toBe(clock.now());
+    expect((await feed("passing"))!.rows.map((r) => r.address)).toEqual([C]);
+  });
+
+  it("rebuilds one feed a run, in turn, so a page that missed a change is whole again within four runs", async () => {
+    await seed();
+    await run({ head: START + 10_000 }, fakeInspector({ [C]: { report: fakeReport(C, 5, false), scan } }), { inspectPerTick: 1, explorerDailyBudget: 0 });
+    const whole = (await feed("passing"))!.rows;
+    expect(whole.map((r) => r.address)).toEqual([C]);
+    // As a run that died between the inspection and the feeds would leave it.
+    await db.collection(COLLECTIONS.radarFeed).doc(radarFeedId("mainnet", "passing")).update({ rows: [] });
+
+    const rebuilt: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      clock.advance(60_000);
+      rebuilt.push(rebuiltFeed(clock.now()));
+      const result = ran(await run({ head: START + 10_000 }, fakeInspector({}), { inspectPerTick: 0, explorerDailyBudget: 0 }));
+      expect(result.feeds).toBe(rebuilt.at(-1) === "passing" ? 1 : 0);
+    }
+    expect(new Set(rebuilt).size).toBe(4);
+    expect((await feed("passing"))!.rows.map((r) => r.address)).toEqual([C]);
+  });
+});
+
+describe("one run at a time", () => {
+  it("skips while another run's lease is live, and takes one that has expired", async () => {
+    await startAt(START, { runningUntil: Timestamp.fromMillis(clock.now() + 1), runId: "other" });
+    const chain = fakeChain({ head: START + 10 });
+    expect(await run(chain)).toEqual({ status: "busy", until: clock.now() + 1 });
+    expect(chain.heads).toBe(0);
+    expect(await indexerDoc()).toMatchObject({ block: START, runId: "other" });
+
+    clock.advance(1);
+    expect(ran(await run(chain))).toMatchObject({ status: "ran", to: START + 10 });
+    expect(await indexerDoc()).toMatchObject({ block: START + 10, runningUntil: null, runId: null });
+  });
+
+  it("holds the lease while it runs, for the function's timeout and a margin", async () => {
+    await startAt(START);
+    const chain = fakeChain({ head: START + 10 });
+    const logs = chain.logs;
+    let during: IndexerDoc | undefined;
+    chain.logs = async (filter) => {
+      during = await indexerDoc();
+      return logs(filter);
+    };
+    await run(chain);
+    expect(during!.runningUntil!.toMillis()).toBe(clock.now() + LEASE_MS);
+    expect(LEASE_MS).toBeGreaterThan(120_000);
+    expect(during!.runId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("skips a run that starts while another is still going, and lets the next one go ahead", async () => {
+    await startAt(START);
+    const slow = fakeChain({ head: START + 10 });
+    const logs = slow.logs;
+    let reading!: () => void;
+    let release!: () => void;
+    const inWindow = new Promise<void>((resolve) => (reading = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    slow.logs = async (filter) => {
+      reading();
+      await gate;
+      return logs(filter);
+    };
+    const first = run(slow);
+    await inWindow;
+    const second = fakeChain({ head: START + 10 });
+    expect(await run(second)).toMatchObject({ status: "busy" });
+    expect(second.heads + second.asked.length).toBe(0);
+    release();
+    expect(await first).toMatchObject({ status: "ran", to: START + 10 });
+    expect((await indexerDoc()).runId).toBeNull();
+    expect(await run({ head: START + 20 })).toMatchObject({ status: "ran", from: START + 10, to: START + 20 });
+  });
+
+  it("gives the lease back when it halts", async () => {
+    await startAt(START);
+    expect(await run({ head: START + 10, refuseBlock: START + 1 })).toMatchObject({ status: "halted" });
+    expect(await indexerDoc()).toMatchObject({ runningUntil: null, runId: null });
+  });
+
+  it("only ever moves the cursor forward", async () => {
+    await startAt(START + 50_000);
+    expect(await writeCursor(db, "mainnet", START + 10_000, clock.now())).toBe(false);
+    expect(await writeCursor(db, "mainnet", START + 50_000, clock.now())).toBe(false);
+    expect((await indexerDoc()).block).toBe(START + 50_000);
+    expect(await writeCursor(db, "mainnet", START + 60_000, clock.now())).toBe(true);
+    expect((await indexerDoc()).block).toBe(START + 60_000);
+  });
+
+  it("gives every RPC call of the window phase the phase's deadline", async () => {
+    await startAt(START);
+    const chain = fakeChain({ head: START + 25_000 });
+    const head = chain.head;
+    const logs = chain.logs;
+    const deadlines: (number | undefined)[] = [];
+    chain.head = async (deadline) => (deadlines.push(deadline), head());
+    chain.logs = async (filter) => (deadlines.push(filter.deadline), logs(filter));
+    const started = clock.now();
+    await run(chain);
+    expect(deadlines).toEqual([started + LIMITS.windowsDeadlineMs, started + LIMITS.windowsDeadlineMs, started + LIMITS.windowsDeadlineMs, started + LIMITS.windowsDeadlineMs]);
   });
 });
 

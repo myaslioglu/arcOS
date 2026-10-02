@@ -11,6 +11,7 @@ import {
   finishRun,
   halt,
   loadOrCreateState,
+  releaseLease,
   queueHead,
   recordWindow,
   saveInspection,
@@ -39,8 +40,12 @@ export type RunSettings = {
   explorerDailyBudget: number;
 };
 
-/** The run's bounds (design 1.3): at most 10 windows, none started after 40 s; inspections none started after 80 s. */
-export const LIMITS = { maxWindows: 10, windowsUntilMs: 40_000, inspectUntilMs: 80_000 } as const;
+/**
+ * The run's bounds (design 1.3): at most 10 windows, none started after 40 s, and no RPC call of the window phase waited
+ * for past 55 s (`windowsDeadlineMs`); inspections none started after 80 s, each cut off after 15 s (inspect.ts). So the
+ * last inspection ends by about 95 s, and the feeds and the end of the run fit in the function's 120 s.
+ */
+export const LIMITS = { maxWindows: 10, windowsUntilMs: 40_000, windowsDeadlineMs: 55_000, inspectUntilMs: 80_000 } as const;
 
 /**
  * Refused windows one run may halve through. Halving 10,000 reaches one block in 14 steps, and a node with a lower cap costs one refusal a window; more than this means the
@@ -61,6 +66,8 @@ export type RunDeps = {
 
 export type RunResult =
   | { status: "paused" }
+  /** Another run's lease is live (`runningUntil`): this one did nothing. */
+  | { status: "busy"; until: number }
   | { status: "halted"; reason: string }
   | {
       status: "ran";
@@ -77,6 +84,8 @@ export type RunResult =
       expired: number;
       feeds: number;
       explorerCalls: number;
+      /** The name of the error that cut the inspections or the feeds short, or null. The run still ended normally. */
+      error: string | null;
     };
 
 const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
@@ -86,28 +95,54 @@ const nameOf = (e: unknown): string => (e instanceof Error ? e.name : "unknown")
 
 /**
  * One indexer run (design 1.3, "One arcosIndexer run"):
- * 1. reads indexer/{network}, and stops if it is paused or halted;
+ * 1. reads indexer/{network} and takes the run's lease, and stops if it is paused or halted, or if another run's lease is
+ *    still live;
  * 2. takes the finalized block as head (Arc's finalized is latest or one behind, so there is no reorg to handle);
  * 3. reads new logs in windows of at most 10,000 blocks, one combined eth_getLogs each, halving a refused window;
  *    at most 10 windows read, none started after 40 s; a window that fails ends this phase, and the next run repeats it;
  * 4. records the qualifying pools and their tokens as idempotent upserts, then the cursor, window by window;
  * 5. inspects up to INSPECT_PER_TICK queued tokens, liquid first, then newest, within the explorer budget;
- * 6. rewrites the four Radar feeds when anything changed.
+ * 6. brings the four Radar feeds up to date, rebuilding one of them in turn, and ends the run, giving the lease back.
+ * Steps 5 and 6 can't keep the run from ending: an error there is logged and named in the result.
  */
 export async function runIndexer(deps: RunDeps): Promise<RunResult> {
+  const { db, network } = deps;
+  const now = deps.now ?? (() => Date.now());
+  const started = now();
+
+  // 1. The controls and the lease. A missing doc is the first run: it starts 24 hours back.
+  let head: number | null = null;
+  const deadline = started + (deps.limits?.windowsDeadlineMs ?? LIMITS.windowsDeadlineMs);
+  const readHead = async () => (head ??= await deps.chain.head(deadline));
+  const start = await loadOrCreateState(db, network, async () => firstCursor(await readHead()), started);
+  if (start.kind === "busy") return { status: "busy", until: start.until };
+  if (start.kind === "stop") return start.state.paused ? { status: "paused" } : { status: "halted", reason: start.state.halted ?? "" };
+
+  let result: RunResult | undefined;
+  try {
+    result = await leased(deps, start.state, start.runId, readHead, started, deadline);
+    return result;
+  } finally {
+    // A run that ran to the end gave the lease back in finishRun. One that halted or failed before it gives it back
+    // here; best effort, since a lease also expires.
+    if (result?.status !== "ran") await releaseLease(db, network, start.runId).catch(() => undefined);
+  }
+}
+
+/** Steps 2 to 6, under this run's lease. */
+async function leased(
+  deps: RunDeps,
+  state: IndexerDoc,
+  runId: string,
+  readHead: () => Promise<number>,
+  started: number,
+  deadline: number,
+): Promise<RunResult> {
   const { db, network, chain, inspectToken, settings } = deps;
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? silent;
   const limits = { ...LIMITS, ...deps.limits };
-  const started = now();
   const elapsed = () => now() - started;
-
-  // 1. The controls. A missing doc is the first run: it starts 24 hours back.
-  let head: number | null = null;
-  const readHead = async () => (head ??= await chain.head());
-  const state: IndexerDoc = await loadOrCreateState(db, network, async () => firstCursor(await readHead()), started);
-  if (state.paused) return { status: "paused" };
-  if (state.halted) return { status: "halted", reason: state.halted };
 
   // 2. The head.
   const tip = await readHead();
@@ -129,7 +164,7 @@ export async function runIndexer(deps: RunDeps): Promise<RunResult> {
     if (!window) break;
     let logs;
     try {
-      logs = await chain.logs({ addresses, topic0s, from: window.from, to: window.to });
+      logs = await chain.logs({ addresses, topic0s, from: window.from, to: window.to, deadline });
     } catch (e) {
       if (e instanceof RangeRefused) {
         const width = window.to - window.from + 1;
@@ -158,7 +193,8 @@ export async function runIndexer(deps: RunDeps): Promise<RunResult> {
 
   // 5. The inspection queue.
   const today = utcDay(started);
-  let spent = state.explorerCalls.day === today ? state.explorerCalls.count : 0;
+  const before = state.explorerCalls.day === today ? state.explorerCalls.count : 0;
+  let spent = before;
   const budget: ExplorerBudget = {
     remaining: () => Math.max(0, settings.explorerDailyBudget - spent),
     spend: () => {
@@ -170,45 +206,59 @@ export async function runIndexer(deps: RunDeps): Promise<RunResult> {
   let inspected = 0;
   let failed = 0;
   let expiredCount = 0;
+  let error: string | null = null;
   const perTick = Math.max(0, Math.floor(settings.inspectPerTick));
-  if (state.inspect && perTick > 0 && elapsed() < limits.inspectUntilMs) {
-    const picked = pickQueue(await queueHead(db, network, perTick * 4), Timestamp.fromMillis(now()), perTick);
-    for (const token of picked.expire) {
-      await setInspect(db, token, expired(token.inspect));
-      expiredCount++;
-    }
-    for (const token of picked.inspect) {
-      if (elapsed() >= limits.inspectUntilMs) break;
-      const overBudget = budget.remaining() <= 0;
-      try {
-        const extra: ExtraPool[] = v4PoolKeys(await indexedPools(db, network, token.address)).map((key) => ({ version: "v4", key }));
-        const { report, scan } = await inspectToken(token.address, extra, overBudget ? null : budget);
-        const at = now();
-        const { summary, radar } = summarize(report, Timestamp.fromMillis(at), tip);
-        const next = await saveInspection(db, token, {
-          report,
-          summary,
-          radar,
-          bestPool: bestPoolOf(scan),
-          degraded: report.degraded || overBudget,
-          now: at,
-        });
-        changed.set(next.address, next);
-        inspected++;
-      } catch (e) {
-        failed++;
-        const name = nameOf(e);
-        // No contract at the address: asking again won't change that.
-        const next = name === "NotAContract" ? { ...expired(token.inspect), attempts: token.inspect.attempts + 1 } : afterFailure(token.inspect);
-        await setInspect(db, token, next);
-        log.warn("arcosIndexer inspection failed", { error: name, attempts: next.attempts });
+  // Whatever fails here (a queue read, a write), the feeds still take what changed and the run still ends with the
+  // explorer calls it spent, so the day's budget can't be overrun by runs that failed after spending.
+  try {
+    if (state.inspect && perTick > 0 && elapsed() < limits.inspectUntilMs) {
+      const picked = pickQueue(await queueHead(db, network, perTick * 4), Timestamp.fromMillis(now()), perTick);
+      for (const token of picked.expire) {
+        await setInspect(db, token, expired(token.inspect));
+        expiredCount++;
+      }
+      for (const token of picked.inspect) {
+        if (elapsed() >= limits.inspectUntilMs) break;
+        const overBudget = budget.remaining() <= 0;
+        try {
+          const extra: ExtraPool[] = v4PoolKeys(await indexedPools(db, network, token.address)).map((key) => ({ version: "v4", key }));
+          const { report, scan } = await inspectToken(token.address, extra, overBudget ? null : budget);
+          const at = now();
+          const { summary, radar } = summarize(report, Timestamp.fromMillis(at), tip);
+          const next = await saveInspection(db, token, {
+            report,
+            summary,
+            radar,
+            bestPool: bestPoolOf(scan),
+            degraded: report.degraded || overBudget,
+            now: at,
+          });
+          changed.set(next.address, next);
+          inspected++;
+        } catch (e) {
+          failed++;
+          const name = nameOf(e);
+          // No contract at the address: asking again won't change that.
+          const next = name === "NotAContract" ? { ...expired(token.inspect), attempts: token.inspect.attempts + 1 } : afterFailure(token.inspect);
+          await setInspect(db, token, next);
+          log.warn("arcosIndexer inspection failed", { error: name, attempts: next.attempts });
+        }
       }
     }
+  } catch (e) {
+    error = nameOf(e);
+    log.error("arcosIndexer inspections stopped", { error });
   }
 
-  // 6. The Radar feeds.
-  const feeds = await updateFeeds(db, network, [...changed.values()], now());
-  await finishRun(db, network, now(), { day: today, count: spent });
+  // 6. The Radar feeds, then the end of the run, which gives the lease back.
+  let feeds = 0;
+  try {
+    feeds = await updateFeeds(db, network, [...changed.values()], now());
+  } catch (e) {
+    error ??= nameOf(e);
+    log.error("arcosIndexer feeds failed", { error: nameOf(e) });
+  }
+  await finishRun(db, network, now(), { day: today, count: spent }, runId);
 
   return {
     status: "ran",
@@ -223,6 +273,7 @@ export async function runIndexer(deps: RunDeps): Promise<RunResult> {
     failed,
     expired: expiredCount,
     feeds,
-    explorerCalls: spent - (state.explorerCalls.day === today ? state.explorerCalls.count : 0),
+    explorerCalls: spent - before,
+    error,
   };
 }
