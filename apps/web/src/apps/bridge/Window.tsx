@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { useAccount } from "wagmi";
+import { useConnection } from "wagmi";
 import { AppKit, isRetryableError, type BridgeResult } from "@circle-fin/app-kit";
 import { useDesktop, type Tone } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
@@ -59,7 +59,7 @@ function BridgeResultSteps({ result }: { result: BridgeResult }) {
 }
 
 function Form() {
-  const { connector } = useAccount();
+  const { connector } = useConnection();
   const { notify } = useDesktop();
   const kit = useMemo(() => new AppKit(), []);
 

@@ -23,9 +23,9 @@ const state = vi.hoisted(() => ({
   },
 }));
 vi.mock("wagmi", () => ({
-  useAccount: () => ({ address: state.address, chainId: 5042002 }),
+  useConnection: () => ({ address: state.address, chainId: 5042002 }),
   usePublicClient: () => undefined,
-  useWriteContract: () => ({ writeContractAsync: async () => "0x" }),
+  useWriteContract: () => ({ mutateAsync: async () => "0x" }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: () => state.query }));
 vi.mock("@arcos/shell", () => ({
