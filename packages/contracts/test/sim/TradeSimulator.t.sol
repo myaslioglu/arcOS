@@ -1,0 +1,271 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.30;
+
+import {Test} from "forge-std/Test.sol";
+import {TradeSimulator, ISimPoolManager} from "../../src/sim/TradeSimulator.sol";
+import {SimToken, SimTrapToken, MockV2Pair, MockV3Pool, MockPoolManager} from "./SimMocks.sol";
+
+/// The simulator against mock v2, v3 and v4 pools: an honest token, a transfer tax, a sell block, a blacklist, a sell
+/// that burns its gas, and a dynamic fee. The USDC here is a 6-decimal mock (a fork can't move Arc's 0x3600 USDC; the
+/// live eth_call suite covers that path), and native USDC is the test chain's ether.
+contract TradeSimulatorTest is Test {
+    /// Where Inspector places the code with its state override.
+    address internal constant S = 0x00000000000000000000000000000000000A4c05;
+    uint256 internal constant AMOUNT = 10e6; // 10 USDC
+    uint24 internal constant DYNAMIC_FEE = 0x800000; // v4's dynamic-fee flag
+
+    SimToken internal usdc;
+    SimTrapToken internal token;
+    TradeSimulator internal sim;
+
+    function setUp() public {
+        usdc = new SimToken("USDC", 6);
+        token = new SimTrapToken();
+        // As in the eth_call: the runtime code placed at S, which holds the USDC it trades with.
+        vm.etch(S, type(TradeSimulator).runtimeCode);
+        sim = TradeSimulator(payable(S));
+        usdc.mint(S, AMOUNT);
+    }
+
+    // --- helpers ---
+
+    function _v2() internal returns (MockV2Pair pair) {
+        pair = new MockV2Pair(address(usdc), address(token));
+        usdc.mint(address(pair), 10_000e6);
+        token.seed(address(pair), 1_000_000e18);
+        pair.sync();
+        token.setPool(address(pair));
+    }
+
+    function _v3(uint24 fee) internal returns (MockV3Pool pool) {
+        pool = new MockV3Pool(address(usdc), address(token), fee);
+        usdc.mint(address(pool), 10_000e6);
+        token.seed(address(pool), 1_000_000e18);
+        token.setPool(address(pool));
+    }
+
+    function _key(address quote, uint24 fee) internal view returns (ISimPoolManager.PoolKey memory key) {
+        (address c0, address c1) = quote < address(token) ? (quote, address(token)) : (address(token), quote);
+        key = ISimPoolManager.PoolKey({currency0: c0, currency1: c1, fee: fee, tickSpacing: 60, hooks: address(0)});
+    }
+
+    /// A v4 pool of the token against `quote` (address(0) for native), seeded with 10,000 USDC and 1,000,000 tokens.
+    function _v4(address quote, uint24 fee)
+        internal
+        returns (MockPoolManager manager, ISimPoolManager.PoolKey memory key)
+    {
+        manager = new MockPoolManager();
+        key = _key(quote, fee);
+        uint256 quoteSeed = quote == address(0) ? 10_000e18 : 10_000e6;
+        if (quote == address(0)) vm.deal(address(manager), quoteSeed);
+        else usdc.mint(address(manager), quoteSeed);
+        token.seed(address(manager), 1_000_000e18);
+        (uint256 a0, uint256 a1) =
+            key.currency0 == quote ? (quoteSeed, uint256(1_000_000e18)) : (uint256(1_000_000e18), quoteSeed);
+        manager.seed(key, a0, a1);
+        token.setPool(address(manager));
+    }
+
+    function _trade(uint8 kind, address pool, address quote, uint256 amount, ISimPoolManager.PoolKey memory key)
+        internal
+        view
+        returns (TradeSimulator.Trade memory)
+    {
+        return
+            TradeSimulator.Trade({kind: kind, pool: pool, token: address(token), usdc: quote, amount: amount, key: key});
+    }
+
+    function _noKey() internal pure returns (ISimPoolManager.PoolKey memory key) {}
+
+    /// The call as Inspector makes it: from S to S, so tx.origin is the caller.
+    function _run(TradeSimulator.Trade memory t, uint256 gas) internal returns (TradeSimulator.Result memory) {
+        vm.prank(S, S);
+        return sim.simulate{gas: gas}(t);
+    }
+
+    /// The loss of a round trip in parts per million of what was spent.
+    function _lossPpm(TradeSimulator.Result memory r) internal pure returns (uint256) {
+        return r.received >= r.spent ? 0 : ((r.spent - r.received) * 1e6) / r.spent;
+    }
+
+    // --- v2 ---
+
+    function test_v2_honestTokenLosesOnlyTheFees() public {
+        MockV2Pair pair = _v2();
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, AMOUNT);
+        assertGt(r.bought, 0);
+        assertEq(r.sold, r.bought);
+        // Two 0.3% fees: about 0.6%, and nothing more.
+        assertApproxEqAbs(_lossPpm(r), 6_000, 100);
+    }
+
+    function test_v2_transferTaxShowsInTheLoss() public {
+        MockV2Pair pair = _v2();
+        token.setTaxes(500, 500); // 5% on the buy, 5% on the sell
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.OK());
+        // 1 - 0.95 * 0.95 * 0.997^2, about 10.3%.
+        assertApproxEqAbs(_lossPpm(r), 103_000, 1_000);
+    }
+
+    function test_v2_sellBlockIsASellRevert() public {
+        MockV2Pair pair = _v2();
+        token.setSellBlocked(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+        assertEq(r.spent, AMOUNT);
+        assertGt(r.bought, 0);
+        assertEq(r.received, 0);
+    }
+
+    function test_v2_blacklistedBuyerIsASellRevert() public {
+        MockV2Pair pair = _v2();
+        token.setBlacklistBuyers(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+    }
+
+    function test_v2_aSellThatBurnsAllItsGasIsOutOfGasNotARevert() public {
+        MockV2Pair pair = _v2();
+        token.setBurnGasOnSell(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_OUT_OF_GAS());
+    }
+
+    function test_v2_aHundredPercentBuyTaxBuysNothingAndSellsNothing() public {
+        MockV2Pair pair = _v2();
+        token.setTaxes(10_000, 0);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, AMOUNT);
+        assertEq(r.bought, 0);
+        assertEq(r.received, 0);
+    }
+
+    // --- v3 ---
+
+    function test_v3_honestTokenLosesOnlyTheFees() public {
+        MockV3Pool pool = _v3(3000);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, AMOUNT);
+        assertEq(r.sold, r.bought);
+        assertApproxEqAbs(_lossPpm(r), 6_000, 100);
+        assertEq(pool.calls(), 2);
+    }
+
+    function test_v3_aTokenThatArrivesShortCantBeSoldIntoTheSamePool() public {
+        MockV3Pool pool = _v3(3000);
+        token.setTaxes(0, 500);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+    }
+
+    function test_v3_sellBlockIsASellRevert() public {
+        MockV3Pool pool = _v3(500);
+        token.setSellBlocked(true);
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V3(), address(pool), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+    }
+
+    function test_v3_callbackRefusesAnyoneButThePoolBeingSwapped() public {
+        vm.expectRevert();
+        sim.uniswapV3SwapCallback(1, 0, abi.encode(address(usdc)));
+        assertEq(usdc.balanceOf(S), AMOUNT);
+    }
+
+    // --- v4 ---
+
+    function test_v4_nativeUsdcHonestToken() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(0), 3000);
+        vm.deal(S, 10e18); // 10 native USDC, 18 decimals
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(0), 10e18, key), 5_000_000);
+        assertEq(r.status, sim.OK());
+        assertEq(r.spent, 10e18);
+        assertEq(r.sold, r.bought);
+        assertApproxEqAbs(_lossPpm(r), 6_000, 100);
+    }
+
+    function test_v4_erc20UsdcTransferTaxIsSoldForWhatArrived() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+        token.setTaxes(300, 300);
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.OK());
+        // 1 - 0.97 * 0.97 * 0.997^2, about 6.5%.
+        assertApproxEqAbs(_lossPpm(r), 64_500, 1_000);
+    }
+
+    function test_v4_dynamicFeeShowsInTheLoss() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), DYNAMIC_FEE);
+        manager.setDynamicFee(100_000); // 10%
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.OK());
+        // 1 - 0.9^2: 19%.
+        assertApproxEqAbs(_lossPpm(r), 190_000, 1_000);
+    }
+
+    function test_v4_sellBlockIsASellRevert() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(usdc), 3000);
+        token.setSellBlocked(true);
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, key), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+        assertGt(r.bought, 0);
+    }
+
+    function test_v4_blacklistedBuyerIsASellRevert() public {
+        (MockPoolManager manager, ISimPoolManager.PoolKey memory key) = _v4(address(0), 3000);
+        vm.deal(S, 10e18);
+        token.setBlacklistBuyers(true);
+        TradeSimulator.Result memory r = _run(_trade(sim.V4(), address(manager), address(0), 10e18, key), 5_000_000);
+        assertEq(r.status, sim.SELL_REVERTED());
+    }
+
+    function test_v4_aPoolThatCantPayIsABuyRevert() public {
+        MockPoolManager manager = new MockPoolManager();
+        token.setPool(address(manager));
+        TradeSimulator.Result memory r =
+            _run(_trade(sim.V4(), address(manager), address(usdc), AMOUNT, _key(address(usdc), 3000)), 5_000_000);
+        assertEq(r.status, sim.BUY_REVERTED());
+        assertEq(r.spent, 0);
+        assertEq(usdc.balanceOf(S), AMOUNT);
+    }
+
+    function test_v4_unlockCallbackRefusesAnyoneButTheManagerBeingSwapped() public {
+        vm.expectRevert();
+        sim.unlockCallback(abi.encode(_key(address(usdc), 3000), address(usdc), address(token), AMOUNT));
+    }
+
+    // --- the call itself ---
+
+    function test_anUnknownKindIsABuyRevertNotARevertOfTheCall() public {
+        MockV2Pair pair = _v2();
+        TradeSimulator.Result memory r = _run(_trade(7, address(pair), address(usdc), AMOUNT, _noKey()), 5_000_000);
+        assertEq(r.status, sim.BUY_REVERTED());
+    }
+
+    function test_theLegsAreOnlyCallableByTheSimulatorItself() public {
+        MockV2Pair pair = _v2();
+        TradeSimulator.Trade memory t = _trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey());
+        vm.expectRevert();
+        sim.buy(t);
+        vm.expectRevert();
+        sim.sell(t, 1);
+    }
+
+    function test_tooLittleGasForALegIsOutOfGas() public {
+        MockV2Pair pair = _v2();
+        TradeSimulator.Result memory r = _run(_trade(sim.V2(), address(pair), address(usdc), AMOUNT, _noKey()), 150_000);
+        assertEq(r.status, sim.BUY_OUT_OF_GAS());
+    }
+}
