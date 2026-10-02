@@ -19,9 +19,9 @@ import {IV3PositionManager, IV4PositionManager} from "./interfaces/IPositionMana
 /// alone can collect, extend, hand the vault over, and withdraw after `unlockAt`. One clone per lock; `initialize`
 /// runs once per clone (the factory calls it in the transaction that creates the clone) and never on the
 /// implementation.
-/// The platform's share never blocks the owner (Q9, decided 2026-09-29, reversible): when paying the fee recipient
-/// fails, the share is skipped, the owner receives the whole amount, and `PlatformShareSkipped` records it. There is
-/// no pull balance and no other function that moves tokens.
+/// The platform's share never blocks the owner (Q9, decided 2026-09-29 and final since 2026-10-02): when paying the
+/// fee recipient fails, the share is skipped, the owner receives the whole amount, and `PlatformShareSkipped` records
+/// it. There is no pull balance and no other function that moves tokens.
 contract PositionVault is Initializable, ReentrancyGuardTransient, IERC721Receiver {
     using SafeERC20 for IERC20;
 

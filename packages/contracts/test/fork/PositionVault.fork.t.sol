@@ -11,6 +11,7 @@ import {IV3PositionManager, IV4PositionManager} from "../../src/vault/interfaces
 import {MockToken} from "../vault/mocks/VaultMocks.sol";
 import {
     ArcUniswap,
+    ForkEchoHook,
     ForkSwapper,
     IArcV3Pool,
     IArcV3PositionManager,
@@ -48,6 +49,14 @@ contract PositionVaultForkTest is Test {
     uint128 internal constant V4_LIQUIDITY = 1_000 ether;
     uint256 internal constant SWAP = 100 ether; // per direction, per pool
     uint256 internal constant INTRINSIC = 21_000;
+    // v4-core Hooks: the permission bits a hook's address carries, and the call one of them asks for.
+    uint160 internal constant ALL_HOOK_MASK = (1 << 14) - 1;
+    uint160 internal constant BEFORE_ADD_LIQUIDITY = 1 << 11;
+    bytes4 internal constant BEFORE_ADD_LIQUIDITY_SELECTOR = bytes4(
+        keccak256(
+            "beforeAddLiquidity(address,(address,address,uint24,int24,address),(int24,int24,int256,bytes32),bytes)"
+        )
+    );
     // The v3 manager's ERC-721 (OpenZeppelin 3) refuses a transfer by anyone but the owner or an approved address.
     string internal constant V3_NOT_APPROVED = "ERC721: transfer caller is not owner nor approved";
 
@@ -354,6 +363,28 @@ contract PositionVaultForkTest is Test {
         factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
         vm.stopPrank();
         assertEq(V4.ownerOf(id), alice);
+    }
+
+    /// Q21, on the real v4 manager: a pool whose PoolKey names a hook contract is refused at the lock, since the hook
+    /// would run on every `collect`'s zero-liquidity decrease. The hook here is live: it sits at an address whose
+    /// permission bits ask the PoolManager to call `beforeAddLiquidity`, so minting the position calls it.
+    function test_lockPosition_refusesAV4PositionInAPoolWithHooks() public {
+        address hook = address((uint160(uint256(keccak256("arcos.fork.hook"))) & ~ALL_HOOK_MASK) | BEFORE_ADD_LIQUIDITY);
+        vm.etch(hook, address(new ForkEchoHook()).code);
+        IV4PositionManager.PoolKey memory key =
+            IV4PositionManager.PoolKey(token0, token1, ArcUniswap.FEE, ArcUniswap.TICK_SPACING, hook);
+        IArcV4PoolManager(ArcUniswap.V4_POOL_MANAGER).initialize(key, ArcUniswap.PRICE_ONE);
+        vm.expectCall(hook, abi.encodePacked(BEFORE_ADD_LIQUIDITY_SELECTOR));
+        uint256 id = _mintV4(key);
+        assertEq(V4.getPositionLiquidity(id), V4_LIQUIDITY);
+
+        vm.startPrank(alice);
+        V4.approve(address(factory), id);
+        vm.expectRevert(VaultFactory.HookedPool.selector);
+        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
+        vm.stopPrank();
+        assertEq(V4.ownerOf(id), alice);
+        assertEq(factory.vaultsOfLength(alice), 4); // the four locks made in setUp, nothing more
     }
 
     /// Review I1, on the real v3 manager: a decrease without a collect leaves the principal in `tokensOwed`, where

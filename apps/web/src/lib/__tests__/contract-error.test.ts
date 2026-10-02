@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContractFunctionExecutionError, UserRejectedRequestError } from "viem";
-import { feeControllerAbi, multisendAbi, tokenFactoryAbi } from "@arcos/chain";
+import { arcVestingAbi, feeControllerAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi } from "@arcos/chain";
 import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
 import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
 
@@ -40,6 +40,26 @@ describe("describeContractError — ABI completeness", () => {
       const message = describeContractError(revertError(name, [0n, 0n]));
       expect(message, `${name} must have a specific mapping, not the generic fallback`).not.toBe(GENERIC_TRANSACTION_ERROR);
     }
+  });
+});
+
+describe("describeContractError — the R1 decisions' errors (hooked v4 pools, renounce disabled)", () => {
+  it("both are declared where the Vault and Vesting apps will meet them", () => {
+    expect(errorNamesOf(vaultFactoryAbi)).toContain("HookedPool");
+    expect(errorNamesOf(vaultFactoryAbi)).toContain("RenounceDisabled");
+    expect(errorNamesOf(arcVestingAbi)).toContain("RenounceDisabled");
+  });
+
+  it("explains VaultFactory's HookedPool: a v4 position in a pool with hooks can't be locked", () => {
+    expect(describeContractError(revertError("HookedPool"))).toBe(
+      "This position is in a Uniswap v4 pool with hooks, which can't be locked.",
+    );
+  });
+
+  it("gives RenounceDisabled the same transfer-instead sentence on every contract that declares it", () => {
+    expect(describeContractError(revertError("RenounceDisabled"))).toBe(
+      "Ownership can't be given up on this contract — only transferred.",
+    );
   });
 });
 
