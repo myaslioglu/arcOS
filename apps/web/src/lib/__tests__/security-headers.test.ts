@@ -4,6 +4,7 @@ import { CHAINS } from "@arcos/chain";
 import { bridgeChainOptions } from "@/apps/bridge/chains";
 import nextConfig from "../../../next.config";
 import { CSP_REPORT_PATH, enforcedHeaders, reportOnlyHeaders, reportOnlyPolicy } from "../security-headers";
+import { walletChains } from "../wallet-chains";
 
 type Header = { key: string; value: string };
 const valueOf = (headers: Header[], key: string) => headers.find((h) => h.key === key)?.value;
@@ -184,6 +185,17 @@ describe("reportOnlyPolicy", () => {
         for (const endpoint of rpcEndpoints) expect(connect, `${chain}: ${endpoint}`).toContain(new URL(endpoint).origin);
       }
     });
+  });
+
+  // wagmi reads each configured chain through its default RPC, and WalletConnect's provider is handed the same URL for each
+  // chain in the session (rpcMap). lib/wallet-chains.ts gives the destination chains App Kit's endpoints for that reason.
+  it("has the default RPC origin of every chain in the wallet config", () => {
+    const connect = d["connect-src"]!;
+    for (const network of ["mainnet", "testnet"] as const) {
+      for (const chain of walletChains(network)) {
+        for (const url of chain.rpcUrls.default.http) expect(connect, `${chain.name}: ${url}`).toContain(new URL(url).origin);
+      }
+    }
   });
 
   it("closes objects, the base URL, form targets and framing", () => {

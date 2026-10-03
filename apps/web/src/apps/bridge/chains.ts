@@ -94,9 +94,27 @@ const DEFINITIONS = [
   AvalancheFuji,
 ] as const;
 
+/** One of App Kit's own chain definitions, as the kit's adapter wants it (`prepareAction`'s `fromChain`/`toChain`). */
+export type KitChainDefinition = (typeof DEFINITIONS)[number];
+
+/** App Kit's definition object for a chain Bridge offers (or Arc itself), or null for an id it doesn't know. */
+export function kitChainDefinition(chainId: ChainId): KitChainDefinition | null {
+  return DEFINITIONS.find((d) => d.chain === chainId) ?? null;
+}
+
+/**
+ * The chain of the active network whose CCTP domain is `domain`, or null. Circle's attestation service names a
+ * transfer's destination by its CCTP domain id (`decodedMessage.destinationDomain`), and a domain is shared by a
+ * mainnet chain and its testnet (Base and Base Sepolia are both 6), so the active network decides which one it is.
+ */
+export function chainForDomain(domain: number): ChainId | null {
+  const testnet = activeNetwork() !== "mainnet";
+  return DEFINITIONS.find((d) => d.cctp.domain === domain && d.isTestnet === testnet)?.chain ?? null;
+}
+
 /** App Kit's definition of a chain Bridge offers (or Arc itself), or null for an id it doesn't know. */
 export function bridgeChainInfo(chainId: ChainId): BridgeChainInfo | null {
-  const def = DEFINITIONS.find((d) => d.chain === chainId);
+  const def = kitChainDefinition(chainId);
   if (!def) return null;
   return {
     chainId: def.chainId,

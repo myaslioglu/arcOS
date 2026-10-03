@@ -250,7 +250,8 @@ export function describeStepError(step: Pick<BridgeStep, "error" | "errorMessage
 }
 
 const STEP_REJECTED = "Rejected in your wallet.";
-const STEP_UNKNOWN = "This step didn't finish.";
+/** The generic step sentence; exported so finish.ts can tell it from a specific one and word its own generic case. */
+export const STEP_UNKNOWN = "This step didn't finish.";
 
 /**
  * What a `BridgeResult`'s warning says, by its code: the two the installed App Kit defines get a sentence of their own,
