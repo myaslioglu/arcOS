@@ -12,7 +12,7 @@ import { trackEvent } from "@/lib/analytics";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, adapterFor, bridgeFee, feePercentLabel, feeRecipient } from "@/lib/appkit";
 import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
-import { bridgeChainInfo, bridgeChainOptions, chainLabel, type ChainId } from "./chains";
+import { bridgeChainInfo, bridgeChainOptions, chainLabel, unsupportedBridgeChains, type ChainId } from "./chains";
 import {
   FINISH_ALREADY_DONE,
   FINISH_NOT_FOUND,
@@ -112,6 +112,8 @@ function Form() {
   const busy = sessionActive || finishing;
 
   const options = useMemo(() => bridgeChainOptions(), []);
+  // Shown greyed out after the real choices, so someone looking for one sees why it isn't there.
+  const unsupported = useMemo(() => unsupportedBridgeChains(), []);
   const [direction, setDirection] = useState<Direction>("toArc");
   // `options` is a fixed 6-entry list (see ./chains) — never empty, so index 0 always exists.
   const [otherChain, setOtherChain] = useState<ChainId>(options[0]!.chain);
@@ -300,6 +302,11 @@ function Form() {
             {options.map((o) => (
               <option key={o.chain} value={o.chain}>
                 {o.label}
+              </option>
+            ))}
+            {unsupported.map((u) => (
+              <option key={u.label} value="" disabled>
+                {u.label} ({u.note})
               </option>
             ))}
           </select>

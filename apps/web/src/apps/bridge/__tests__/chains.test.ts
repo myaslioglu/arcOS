@@ -1,5 +1,6 @@
+import { BridgeChain } from "@circle-fin/app-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bridgeChainInfo, bridgeChainOptions, chainLabel } from "../chains";
+import { bridgeChainInfo, bridgeChainOptions, chainLabel, unsupportedBridgeChains } from "../chains";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -26,6 +27,32 @@ describe("bridgeChainOptions", () => {
       expect(chains.some((c) => c.startsWith("Arc"))).toBe(false);
       expect(chains.some((c) => c.startsWith("Solana"))).toBe(false);
     }
+  });
+});
+
+describe("unsupportedBridgeChains", () => {
+  it("shows BNB Smart Chain on mainnet and its testnet on testnet, each saying Circle has no USDC there", () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    expect(unsupportedBridgeChains()).toEqual([{ label: "BNB Smart Chain", note: "Circle has no USDC there" }]);
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
+    expect(unsupportedBridgeChains()).toEqual([{ label: "BNB Smart Chain Testnet", note: "Circle has no USDC there" }]);
+  });
+
+  it("never names a chain Bridge offers", () => {
+    for (const network of ["testnet", "mainnet"]) {
+      vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+      const offered = bridgeChainOptions().map((o) => o.label);
+      for (const u of unsupportedBridgeChains()) expect(offered, network).not.toContain(u.label);
+    }
+  });
+
+  it("matches the installed App Kit: once its BridgeChain enum names BNB Smart Chain, it's time to re-check", () => {
+    // Whole name parts only ("BNB_Smart_Chain", "BSC", "Binance_..."), so "Obscuro" or "opBNB" can't trip it.
+    const bnb = Object.values(BridgeChain).filter((c) => c.split("_").some((part) => /^(bnb|bsc|binance)$/i.test(part)));
+    expect(
+      bnb,
+      "App Kit's BridgeChain now names BNB Smart Chain: if Circle's docs list USDC (not only USYC) there, move it from UNSUPPORTED_* to MAINNET/TESTNET in chains.ts",
+    ).toEqual([]);
   });
 });
 

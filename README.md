@@ -326,9 +326,11 @@ but does have privileged functions, both the ownership and privileges findings r
   the name.
 - Bridge offers EVM chains only (Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, and their
   testnets) — no Solana in R0, since that needs a second, non-EVM wallet adapter this app doesn't
-  have. Bridge shows the source/burn/mint steps App Kit's settled result reports; it doesn't yet
-  show live per-step progress while a transfer is still in flight, since App Kit's `kit.bridge()`
-  call only resolves once the transfer settles rather than streaming per-step events.
+  have. BNB Smart Chain is listed greyed out: Circle doesn't issue USDC there (its CCTP domain is
+  USYC only), so App Kit can't bridge to or from it. Bridge shows the source/burn/mint steps App
+  Kit's settled result reports; it doesn't yet show live per-step progress while a transfer is still
+  in flight, since App Kit's `kit.bridge()` call only resolves once the transfer settles rather than
+  streaming per-step events.
 - Swap and Bridge call Circle's App Kit SDK without an API key (keyless mode — see above), which
   means every user of this deployment shares one public rate limit with the rest of the internet,
   not a limit scoped to this app. A "busy" error from the service (shown as "The swap/bridge
