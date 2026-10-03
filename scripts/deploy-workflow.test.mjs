@@ -825,7 +825,7 @@ describe("the Firestore tests in CI", () => {
   });
 
   it("audits the Firebase CLI's packages too, since CI now installs and loads them", () => {
-    expect(ci).toMatch(/^ {8}run: npm audit --audit-level=high --prefix tools\/firebase$/m);
+    expect(ci).toMatch(/^ {8}run: node scripts\/audit\.mjs --prefix tools\/firebase$/m);
   });
 
   it("runs the functions' unit tests with the other workspaces, and their emulator suite with the same CLI", () => {
@@ -836,19 +836,26 @@ describe("the Firestore tests in CI", () => {
   });
 
   it("audits the functions' own lockfile, which Cloud Build installs from", () => {
-    expect(ci).toMatch(/^ {8}run: npm audit --audit-level=high --prefix functions\/deploy$/m);
+    expect(ci).toMatch(/^ {8}run: node scripts\/audit\.mjs --prefix functions\/deploy$/m);
   });
 
-  it("runs the root audit through scripts/audit.mjs, whose allowlist is explicit and expires; the two --prefix audits stay bare", () => {
-    expect(ci).toMatch(/^ {8}run: node scripts\/audit\.mjs$/m);
-    expect(ci).not.toMatch(/^ {8}run: npm audit --audit-level=high$/m);
+  it("runs all three audits through scripts/audit.mjs, whose allowlist is explicit, scoped per audit root, and expires", () => {
+    expect(ci).not.toMatch(/^ {8}run: npm audit\b/m);
     expect(fs.existsSync(path.join(root, "scripts/audit-allowlist.json"))).toBe(true);
     const audits = ci.split("\n").filter((line) => /^ {8}run: .*\baudit\b/.test(line));
     expect(audits).toEqual([
       "        run: node scripts/audit.mjs",
-      "        run: npm audit --audit-level=high --prefix tools/firebase",
-      "        run: npm audit --audit-level=high --prefix functions/deploy",
+      "        run: node scripts/audit.mjs --prefix tools/firebase",
+      "        run: node scripts/audit.mjs --prefix functions/deploy",
     ]);
+  });
+
+  it("allows nothing in functions/deploy, and nothing as a runtime dependency except in tools/firebase", () => {
+    const allowlist = JSON.parse(read("scripts/audit-allowlist.json"));
+    for (const entry of allowlist) {
+      expect(entry.paths ?? ["."]).not.toContain("functions/deploy");
+      if (entry.runtime) expect(entry.paths).toEqual(["tools/firebase"]);
+    }
   });
 
   it("leaves no GitHub token in the checkout of either job, since both run the CLI's code", () => {

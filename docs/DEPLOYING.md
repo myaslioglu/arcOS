@@ -8,12 +8,14 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
 
 1. **A pull request runs CI** ([ci.yml](../.github/workflows/ci.yml)): typecheck, lint, the tests (those of the deploy
    scripts, and a check of the deploy workflow's rules, included), the web build, the ABI drift check and `npm audit`.
-   Nothing is deployed from a pull request. The root audit runs through `scripts/audit.mjs`: it fails on every high or
-   critical finding except those whose advisories are listed in `scripts/audit-allowlist.json`, each by GHSA id, with
-   the package it is about, a reason and an `until` date after which the entry no longer counts; an allowlisted package
-   must also be a devDependency only (`npm ls --omit=dev <package>` finds no path to it), or the finding fails anyway.
-   The allowlist is for advisories with no published fix, which an `overrides` entry in package.json cannot settle; the
-   step prints each allowance with its reason. The audits of `tools/firebase` and `functions/deploy` have no allowlist.
+   Nothing is deployed from a pull request. The three audits (the root lockfile, `tools/firebase`, `functions/deploy`)
+   run through `scripts/audit.mjs`: it fails on every high or critical finding except those whose advisories are listed
+   in `scripts/audit-allowlist.json`, each by GHSA id, with the package it is about, a reason, an `until` date after
+   which the entry no longer counts, and the audit roots it applies to (`paths`; the root alone when left out). An
+   allowlisted package must also be a devDependency only (`npm ls --omit=dev <package>` finds no path to it), or the
+   finding fails anyway, unless the entry says `runtime: true` with a reason that explains why that exposure is
+   acceptable there; the step prints such an allowance as a WARNING. The allowlist is for advisories with no published
+   fix, which an `overrides` entry in package.json cannot settle; the step prints each allowance with its reason.
 2. **Merging into `main` starts the Deploy workflow** ([deploy.yml](../.github/workflows/deploy.yml)). A small `plan`
    job first chooses the sites (step 5); it checks nothing out and holds no token. Then two jobs run side by side. They
    install the project's dependencies and run its build, which is third-party code, so they hold no Google Cloud
