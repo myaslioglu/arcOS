@@ -130,6 +130,34 @@ test.describe("Bridge", () => {
     await expect(bridge.getByText("With the fee, that's more than your balance on Arc.")).toBeVisible();
     await expect(bridge.getByRole("button", { name: "Bridge", exact: true })).toBeDisabled();
   });
+
+  // Finishing a transfer by its burn hash (apps/bridge/finish.ts). Nothing is looked up or signed here: the field's own
+  // check, the stored list of unfinished transfers, and the button's state are what a real browser must show.
+  test("offers to finish a transfer by its burn hash, checks the hash, and lists an unfinished transfer the page remembered", async ({ page }) => {
+    const burn = "0x7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b";
+    await connect(page);
+    await page.evaluate(
+      ([key, hash]) =>
+        localStorage.setItem(key!, JSON.stringify([{ source: "Arc", dest: "Base", burnTxHash: hash, amount: "9", startedAt: 1_759_480_000_000 }])),
+      ["arcos.bridge.unfinished", burn],
+    );
+    const bridge = await openApp(page, "bridge", "Bridge");
+    await expect(bridge.getByRole("heading", { name: "Finish a transfer" })).toBeVisible();
+
+    const unfinished = bridge.getByRole("list", { name: "Unfinished transfers" });
+    await expect(unfinished.getByText("9 USDC, Arc → Base")).toBeVisible();
+    await expect(unfinished.getByRole("button", { name: /^Finish the transfer 0x7b7b/ })).toBeEnabled();
+
+    const finish = bridge.getByRole("button", { name: "Finish transfer" });
+    await expect(finish).toBeDisabled();
+    const field = bridge.getByLabel("Burn transaction hash");
+    await field.fill("0x1234");
+    await expect(bridge.getByText("That isn't a transaction hash: 0x and 64 hex characters.")).toBeVisible();
+    await expect(finish).toBeDisabled();
+    await field.fill(burn);
+    await expect(bridge.getByText("That isn't a transaction hash: 0x and 64 hex characters.")).toBeHidden();
+    await expect(finish).toBeEnabled();
+  });
 });
 
 test.describe("on a phone", () => {

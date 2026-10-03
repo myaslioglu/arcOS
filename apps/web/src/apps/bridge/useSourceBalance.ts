@@ -14,10 +14,10 @@ const REFETCH_MS = 15_000;
  * The connected wallet's USDC on a bridge's source chain, in 6-decimal units, or undefined while there is no wallet, while
  * it loads, or when the read failed.
  *
- * On Arc it is the top bar's balance (`useArcTokenBalance`, through wagmi). The other chains aren't in the wagmi config
- * (the wallet connects on Arc only), so their balance is an ERC-20 `balanceOf` read through the same public RPC endpoints
- * App Kit's adapter uses for that chain, from App Kit's own chain definition: the bridge itself checks this very balance
- * there before it asks the wallet for anything.
+ * On Arc it is the top bar's balance (`useArcTokenBalance`, through wagmi). The other chains are in the wagmi config only
+ * so a WalletConnect session covers them (lib/wallet-chains.ts); their balance is read without wagmi, as an ERC-20
+ * `balanceOf` through the same public RPC endpoints App Kit's adapter uses for that chain, from App Kit's own chain
+ * definition: the bridge itself checks this very balance there before it asks the wallet for anything.
  */
 export function useSourceBalance(source: ChainId): bigint | undefined {
   const { address } = useConnection();
