@@ -839,6 +839,18 @@ describe("the Firestore tests in CI", () => {
     expect(ci).toMatch(/^ {8}run: npm audit --audit-level=high --prefix functions\/deploy$/m);
   });
 
+  it("runs the root audit through scripts/audit.mjs, whose allowlist is explicit and expires; the two --prefix audits stay bare", () => {
+    expect(ci).toMatch(/^ {8}run: node scripts\/audit\.mjs$/m);
+    expect(ci).not.toMatch(/^ {8}run: npm audit --audit-level=high$/m);
+    expect(fs.existsSync(path.join(root, "scripts/audit-allowlist.json"))).toBe(true);
+    const audits = ci.split("\n").filter((line) => /^ {8}run: .*\baudit\b/.test(line));
+    expect(audits).toEqual([
+      "        run: node scripts/audit.mjs",
+      "        run: npm audit --audit-level=high --prefix tools/firebase",
+      "        run: npm audit --audit-level=high --prefix functions/deploy",
+    ]);
+  });
+
   it("leaves no GitHub token in the checkout of either job, since both run the CLI's code", () => {
     for (const text of [ci, emulator]) {
       expect(text).toMatch(/- uses: actions\/checkout@v7\n {8}with:\n {10}persist-credentials: false\n/);

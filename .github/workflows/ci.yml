@@ -84,8 +84,12 @@ jobs:
           npm run abis -w @arcos/contracts
           git diff --exit-code packages/chain/src/abis
 
-      - name: npm audit (high/critical)
-        run: npm audit --audit-level=high
+      # scripts/audit.mjs runs `npm audit --audit-level=high` and fails on every high or critical finding except
+      # those in scripts/audit-allowlist.json: advisories named by GHSA id, with a reason and an expiry date,
+      # allowed only while the package is a devDependency alone (`npm ls --omit=dev` finds no path to it).
+      # For advisories with no published fix, which an `overrides` entry can't settle; see docs/DEPLOYING.md.
+      - name: npm audit (high/critical, with the allowlist)
+        run: node scripts/audit.mjs
 
       # The pinned Firebase CLI is not a root workspace, so the root audit doesn't see it.
       - name: npm audit of the Firebase CLI (high/critical)
