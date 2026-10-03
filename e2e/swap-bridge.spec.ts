@@ -118,9 +118,10 @@ test.describe("Bridge", () => {
   test("from Arc, shows the USDC on Arc, and Max leaves room for gas and the fee on top", async ({ page }) => {
     await connect(page);
     const bridge = await openApp(page, "bridge", "Bridge");
-    // Shown so nobody wonders where it went, but Circle has no USDC there, so it can't be picked. The DOM property is
-    // checked because Playwright's toBeDisabled reads a disabled <option> as enabled (1.63).
-    const bnb = bridge.getByRole("option", { name: /^BNB Smart Chain.*not supported by Circle/ });
+    // Shown so nobody wonders where it went, but Circle has no USDC there, so it can't be picked. The option's own DOM
+    // property is checked: toBeDisabled can't be used here, because Playwright follows an element inside a <label> to
+    // the label's control, the enabled <select>.
+    const bnb = bridge.getByRole("option", { name: /^BNB Smart Chain.*Circle has no USDC there/ });
     await expect(bnb).toHaveJSProperty("disabled", true);
     await bridge.getByRole("button", { name: "From Arc" }).click();
     await expect(bridge.getByText("Balance: 4.835553 USDC on Arc")).toBeVisible();
