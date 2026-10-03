@@ -53,6 +53,25 @@ export function bridgeChainOptions(): EvmChainOption[] {
   return activeNetwork() === "mainnet" ? MAINNET : TESTNET;
 }
 
+/** A chain people look for in Bridge that it can't offer, shown greyed out in the picker with the reason. */
+export type UnsupportedChainOption = { label: string; note: string };
+
+/**
+ * BNB Smart Chain is a CCTP domain (17), but for USYC only: Circle's docs say "USDC: Supported on all CCTP domains
+ * except BNB Smart Chain" (developers.circle.com/cctp/concepts/supported-chains-and-domains, read 2026-10-03), and the
+ * installed App Kit's BridgeChain enum has no entry for it. The USDC people hold there is Binance-Peg USDC, which
+ * Circle doesn't burn and mint. A test fails once App Kit's BridgeChain gains it: then it moves to MAINNET/TESTNET.
+ */
+const UNSUPPORTED_MAINNET: UnsupportedChainOption[] = [{ label: "BNB Smart Chain", note: "not supported by Circle" }];
+const UNSUPPORTED_TESTNET: UnsupportedChainOption[] = [
+  { label: "BNB Smart Chain Testnet", note: "not supported by Circle" },
+];
+
+/** The chains the picker shows but can't offer, for the active network. Never part of `bridgeChainOptions()`. */
+export function unsupportedBridgeChains(): UnsupportedChainOption[] {
+  return activeNetwork() === "mainnet" ? UNSUPPORTED_MAINNET : UNSUPPORTED_TESTNET;
+}
+
 const ALL_OPTIONS: EvmChainOption[] = [...MAINNET, ...TESTNET];
 
 /**
