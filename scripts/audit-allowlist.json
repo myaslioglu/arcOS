@@ -1,0 +1,17 @@
+[
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "reason": "dev-only lint chain (eslint-config-next); no fixed version published as of 2026-10-03",
+    "until": "2026-11-03",
+    "paths": ["."]
+  },
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "reason": "the CLI globs only paths from this repo (firebase.json, our source); no untrusted pattern reaches braces in the deploy job",
+    "until": "2026-11-03",
+    "paths": ["tools/firebase"],
+    "runtime": true
+  }
+]
