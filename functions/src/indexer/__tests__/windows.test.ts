@@ -29,7 +29,8 @@ describe("nextWindow", () => {
   it("covers every block once, in order, window after window (property)", () => {
     // A run can walk up to 60,000 windows (span 1, 60,000 blocks ahead), so the loop compares plainly and the run
     // asserts once at the end: an expect() per window made the time depend on fast-check's random seed, and some
-    // seeds ran past vitest's 5 s timeout.
+    // seeds ran past vitest's 5 s timeout. Each accepted window starts right after the last and stays within the
+    // head, so a run takes at most `ahead` windows whatever nextWindow does.
     fc.assert(
       fc.property(fc.integer({ min: 0, max: 100_000 }), fc.integer({ min: 0, max: 60_000 }), fc.integer({ min: 1, max: 12_000 }), (cursor, ahead, span) => {
         const head = cursor + ahead;
@@ -40,6 +41,7 @@ describe("nextWindow", () => {
         for (let w = nextWindow(at, head, span); w; w = nextWindow(at, head, span)) {
           if (w.from !== at + 1) broken = `window ${w.from}-${w.to} doesn't start right after ${at}`;
           else if (w.to < w.from) broken = `window ${w.from}-${w.to} is empty`;
+          else if (w.to > head) broken = `window ${w.from}-${w.to} passes the head ${head}`;
           else if (w.to - w.from + 1 > limit) broken = `window ${w.from}-${w.to} is wider than ${limit}`;
           if (broken) break;
           covered += w.to - w.from + 1;
