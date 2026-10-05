@@ -3,7 +3,11 @@ import { isKitCancellation } from "@/lib/kit-errors";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "@/lib/wallet-frame";
 import type { SwapToken } from "./tokenPair";
 
-export type SwapSessionStatus = "idle" | "swapping" | "done";
+/**
+ * "stopped" is the visitor's own "Stop waiting" while the wallet hadn't answered: the outcome is unknown, so it holds
+ * neither a result nor an error, and the form is usable again (only "swapping" locks it).
+ */
+export type SwapSessionStatus = "idle" | "swapping" | "stopped" | "done";
 
 export type SwapSessionState = {
   status: SwapSessionStatus;
@@ -14,6 +18,9 @@ export type SwapSessionState = {
   /** Set instead of `result` when the swap failed — never both at once. */
   error: string | null;
   startedAt: number | null;
+  /** Which `start` this state belongs to; 0 before the first one. `finish`/`fail` name the run they answer, so a
+   * promise that settles after the visitor stopped waiting, or after a newer swap began, can't overwrite it. */
+  runId: number;
 };
 
 export const initialSwapSessionState: SwapSessionState = {
@@ -24,19 +31,33 @@ export const initialSwapSessionState: SwapSessionState = {
   result: null,
   error: null,
   startedAt: null,
+  runId: 0,
 };
 
 export type SwapSessionAction =
-  | { type: "start"; tokenIn: SwapToken; tokenOut: SwapToken; amountIn: string; startedAt: number }
-  | { type: "finish"; result: SwapResult }
-  | { type: "fail"; message: string }
+  | { type: "start"; tokenIn: SwapToken; tokenOut: SwapToken; amountIn: string; startedAt: number; runId: number }
+  | { type: "finish"; result: SwapResult; runId: number }
+  | { type: "fail"; message: string; runId: number }
+  | { type: "stop"; runId: number }
   | { type: "dismiss" };
+
+/** Whether the form is locked: only while a run is swapping. A stopped run frees it, with its outcome unknown. */
+export function locksForm(state: Pick<SwapSessionState, "status">): boolean {
+  return state.status === "swapping";
+}
+
+/** The run `finish`/`fail` may still answer: the one swapping now, or the one the visitor stopped waiting for (its
+ * real outcome, arriving late, replaces "unknown"). Any other run is stale and changes nothing. */
+function answers(state: SwapSessionState, runId: number): boolean {
+  return state.runId === runId && (state.status === "swapping" || state.status === "stopped");
+}
 
 /**
  * Pure state machine for one Swap session — mirrors apps/drop/session.ts's dropSessionReducer.
- * `start` only applies from "idle" or "done" (a no-op from "swapping" is the hard guard against a
- * second concurrent swap, from any number of windows or clicks). `finish`/`fail` only apply from
- * "swapping"; `dismiss` only from "done".
+ * `start` only applies from "idle", "stopped" or "done" (a no-op from "swapping" is the hard guard against a
+ * second concurrent swap, from any number of windows or clicks). `finish`/`fail` only apply to their own run, while
+ * it is swapping or stopped (see `answers`); `stop` only to the run swapping now; `dismiss` only from "stopped" or
+ * "done".
  */
 export function swapSessionReducer(state: SwapSessionState, action: SwapSessionAction): SwapSessionState {
   switch (action.type) {
@@ -50,13 +71,16 @@ export function swapSessionReducer(state: SwapSessionState, action: SwapSessionA
         result: null,
         error: null,
         startedAt: action.startedAt,
+        runId: action.runId,
       };
     case "finish":
-      return state.status === "swapping" ? { ...state, status: "done", result: action.result, error: null } : state;
+      return answers(state, action.runId) ? { ...state, status: "done", result: action.result, error: null } : state;
     case "fail":
-      return state.status === "swapping" ? { ...state, status: "done", result: null, error: action.message } : state;
+      return answers(state, action.runId) ? { ...state, status: "done", result: null, error: action.message } : state;
+    case "stop":
+      return state.status === "swapping" && state.runId === action.runId ? { ...state, status: "stopped", result: null, error: null } : state;
     case "dismiss":
-      return state.status === "done" ? { ...initialSwapSessionState } : state;
+      return state.status === "done" || state.status === "stopped" ? { ...initialSwapSessionState } : state;
   }
 }
 
@@ -120,6 +144,7 @@ export function createSwapSession(target?: BeforeUnloadTarget) {
   const resolveTarget = (): BeforeUnloadTarget | undefined => target ?? (typeof window === "undefined" ? undefined : window);
 
   let state: SwapSessionState = initialSwapSessionState;
+  let lastRunId = 0;
   const listeners = new Set<() => void>();
 
   function emit(): void {
@@ -135,32 +160,47 @@ export function createSwapSession(target?: BeforeUnloadTarget) {
     return () => listeners.delete(listener);
   }
 
-  /** Starts a session; refuses — returns `false`, changes nothing — if one is already swapping. */
-  function start(tokenIn: SwapToken, tokenOut: SwapToken, amountIn: string): boolean {
-    if (state.status === "swapping") return false;
-    state = swapSessionReducer(state, { type: "start", tokenIn, tokenOut, amountIn, startedAt: Date.now() });
+  /** Starts a session and returns its run id, which `finish`/`fail`/`stop` take; refuses — returns `null`, changes
+   * nothing — if one is already swapping. */
+  function start(tokenIn: SwapToken, tokenOut: SwapToken, amountIn: string): number | null {
+    if (state.status === "swapping") return null;
+    const runId = ++lastRunId;
+    state = swapSessionReducer(state, { type: "start", tokenIn, tokenOut, amountIn, startedAt: Date.now(), runId });
     resolveTarget()?.addEventListener("beforeunload", beforeUnloadGuard);
+    emit();
+    return runId;
+  }
+
+  /** Applies `action` if it changes anything; returns whether it did. */
+  function apply(action: SwapSessionAction): boolean {
+    const next = swapSessionReducer(state, action);
+    if (next === state) return false;
+    const wasSwapping = state.status === "swapping";
+    state = next;
+    if (wasSwapping) resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
     emit();
     return true;
   }
 
-  /** Records a successful result; only takes effect while swapping. */
-  function finish(result: SwapResult): void {
-    if (state.status !== "swapping") return;
-    state = swapSessionReducer(state, { type: "finish", result });
-    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
-    emit();
+  /** Records run `runId`'s result; ignored for any run but the one swapping or stopped now. */
+  function finish(result: SwapResult, runId: number): boolean {
+    return apply({ type: "finish", result, runId });
   }
 
-  /** Records a failure; only takes effect while swapping. */
-  function fail(message: string): void {
-    if (state.status !== "swapping") return;
-    state = swapSessionReducer(state, { type: "fail", message });
-    resolveTarget()?.removeEventListener("beforeunload", beforeUnloadGuard);
-    emit();
+  /** Records run `runId`'s failure; ignored for any run but the one swapping or stopped now. */
+  function fail(message: string, runId: number): boolean {
+    return apply({ type: "fail", message, runId });
   }
 
-  /** Dismisses a finished session, returning to a blank form; only takes effect while done. */
+  /**
+   * The visitor's "Stop waiting": run `runId` stops holding the form, its outcome unknown. Nothing is cancelled — the
+   * wallet may still send the swap — and the run's promise may still settle into this state (see `answers`).
+   */
+  function stop(runId: number): boolean {
+    return apply({ type: "stop", runId });
+  }
+
+  /** Dismisses a finished or stopped session, returning to a blank form. */
   function dismiss(): void {
     const next = swapSessionReducer(state, { type: "dismiss" });
     if (next === state) return;
@@ -168,7 +208,18 @@ export function createSwapSession(target?: BeforeUnloadTarget) {
     emit();
   }
 
-  return { getSnapshot, subscribe, start, finish, fail, dismiss };
+  return { getSnapshot, subscribe, start, finish, fail, stop, dismiss };
 }
 
 export const session = createSwapSession();
+
+/**
+ * What the window says once the visitor stops waiting: the outcome is unknown, so it says neither "failed" nor "try
+ * again" — a swap the wallet already sent still completes, and a request still open in the wallet can still be signed.
+ */
+export const STOPPED_WAITING_MESSAGE =
+  "Stopped waiting. The outcome is unknown: if your wallet already sent the swap, it will still complete, and a request still open in your wallet can still be signed, so reject it there if you don't want it. Check your balance or your address in the explorer before you swap again, so you don't swap twice.";
+
+/** Shown while the wallet hasn't answered for a while (lib/wallet-wait.ts). */
+export const WALLET_WAIT_MESSAGE =
+  "Still waiting on your wallet. Check your wallet app for a request to approve or sign; on a phone, open the wallet app.";

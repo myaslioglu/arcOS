@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useConnection } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { AppKit, isRateLimitError } from "@circle-fin/app-kit";
+import { explorerUrl } from "@arcos/chain";
 import { useDesktop } from "@arcos/shell";
 import { BalanceLine } from "@/components/BalanceLine";
 import { ConnectGate } from "@/components/ConnectGate";
@@ -12,9 +13,10 @@ import { ARC_CHAIN_NAME, SWAP_FEE_BPS, SWAP_TOKENS, SWAP_TOKEN_DECIMALS, adapter
 import { amountIssue, normalizedAmount } from "@/lib/amount";
 import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
 import { useArcTokenBalance } from "@/lib/useArcTokenBalance";
+import { useWaitedTooLong } from "@/lib/wallet-wait";
 import { canSwap } from "./canSwap";
 import { presentSwapResult } from "./presentResult";
-import { classifySwapFailure, session } from "./session";
+import { STOPPED_WAITING_MESSAGE, WALLET_WAIT_MESSAGE, classifySwapFailure, locksForm, session } from "./session";
 import { slippageBpsFor, slippagePercentLabel } from "./slippage";
 import { flipTokens, pickToken, type SwapToken, type TokenPair } from "./tokenPair";
 
@@ -51,7 +53,9 @@ function Form() {
   const kit = useMemo(() => new AppKit(), []);
 
   const swapSession = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
-  const sessionActive = swapSession.status === "swapping";
+  const sessionActive = locksForm(swapSession);
+  // `kit.swap()` has no bound on the wallet's side, so after a while the window says so and offers "Stop waiting".
+  const waitedTooLong = useWaitedTooLong(sessionActive ? swapSession.runId : null, swapSession.startedAt);
 
   const [pair, setPair] = useState<TokenPair>({ tokenIn: "USDC", tokenOut: "EURC" });
   const [amountIn, setAmountIn] = useState("");
@@ -80,12 +84,14 @@ function Form() {
 
   const submit = async () => {
     if (!connector || amount === null || !estimateQuery.data) return;
-    const started = session.start(pair.tokenIn, pair.tokenOut, amount);
-    if (!started) return; // a swap is already in flight (another click, another window) — do nothing
+    const runId = session.start(pair.tokenIn, pair.tokenOut, amount);
+    if (runId === null) return; // a swap is already in flight (another click, another window) — do nothing
     try {
       const adapter = await adapterFor(connector);
       const result = await kit.swap(buildParams(adapter, pair.tokenIn, pair.tokenOut, amount, estimateQuery.data.stopLimit.amount));
-      session.finish(result);
+      // `runId` keeps a run the visitor stopped waiting for from overwriting a newer one. A late result still notifies:
+      // a swap that went through is worth knowing about, whichever session the window shows now.
+      session.finish(result, runId);
       const presentation = presentSwapResult(result);
       if (presentation.isSuccess) trackEvent("swap_success", { pair: `${pair.tokenIn}-${pair.tokenOut}` });
       notify(presentation.headline, presentation.tone);
@@ -94,7 +100,7 @@ function Form() {
       // own doc comment for why the unknown case can't just say "Try again" the way
       // GENERIC_TRANSACTION_ERROR does elsewhere: a swap whose promise rejected AFTER it was actually
       // broadcast (a lost wallet response, a timeout) must not read as "nothing happened".
-      session.fail(classifySwapFailure(err));
+      session.fail(classifySwapFailure(err), runId);
     }
   };
 
@@ -215,6 +221,40 @@ function Form() {
 
         {sessionActive && (
           <p className="mt-3 text-muted">{`Swapping ${swapSession.amountIn} ${swapSession.tokenIn} → ${swapSession.tokenOut}…`}</p>
+        )}
+
+        {sessionActive && waitedTooLong && (
+          <div className="mt-3 rounded-md border border-border-2 p-3 text-xs" role="status">
+            <p>{WALLET_WAIT_MESSAGE}</p>
+            <button
+              type="button"
+              className="mt-2 rounded-md border border-border-2 px-2 py-1"
+              onClick={() => session.stop(swapSession.runId)}
+            >
+              Stop waiting
+            </button>
+          </div>
+        )}
+
+        {swapSession.status === "stopped" && (
+          <div className="mt-4 rounded-md border border-border-2 p-3 text-xs" role="status">
+            <p className="text-accent-3-text">{STOPPED_WAITING_MESSAGE}</p>
+            {address && (
+              <a className="mt-1 block text-accent-text" href={explorerUrl("address", address)} target="_blank" rel="noreferrer">
+                Your address in the explorer
+              </a>
+            )}
+            <button
+              type="button"
+              className="mt-2 rounded-md border border-border-2 px-2 py-1"
+              onClick={() => {
+                session.dismiss();
+                setAmountIn("");
+              }}
+            >
+              Done
+            </button>
+          </div>
         )}
 
         {swapSession.status === "done" && (
