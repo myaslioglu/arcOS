@@ -31,11 +31,44 @@ fixed. Coordinated disclosure — please give us time to address a report before
 ## Where the site runs
 
 https://4rcos.com runs on Firebase App Hosting (Cloud Run, behind Google's load balancers), configured in
-`apps/web/apphosting.yaml`. Its one server secret, `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which the
-server's explorer reads use because explorer.arc.io refuses server requests), is a Secret Manager secret, pinned to a
-version and available at runtime only. It is never a `NEXT_PUBLIC_` value and never in the repository. Every other
+`apps/web/apphosting.yaml`. It has two server secrets: `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which
+the server's explorer reads use because explorer.arc.io refuses server requests) and `ARCOS_SESSION_SECRET` (the key of
+the sign-in cookie, below). Both are Secret Manager secrets, pinned to a version and available at runtime only. Neither
+is ever a `NEXT_PUBLIC_` value or in the repository. Every other
 setting in that file is public: `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, for one, is a client identifier that ships in
 the browser bundle.
+
+## Sign-in with Ethereum
+
+Signing in is free and sends no transaction: the wallet signs an EIP-4361 message (`apps/web/src/lib/siwe.ts`,
+`apps/web/src/lib/auth-server.ts`).
+
+- **Nonce.** `GET /api/auth/nonce` makes 16 random bytes with the server's CSPRNG and stores them in the Firestore
+  database `arcos` for 10 minutes. A nonce is accepted once: it is read and deleted in the same transaction that signs
+  the wallet in, and its expiry is checked in code as well as by the TTL policy. It is bound to the browser that
+  fetched it: the same answer sets `__Host-arcos_nonce` (`HttpOnly; Secure; SameSite=Lax; Path=/`, 10 minutes) to the
+  nonce's SHA-256, and verify refuses a message whose nonce doesn't match that cookie (compared in constant time),
+  then clears it.
+- **Message.** It must be exactly the canonical EIP-4361 text of its own fields, name the host of
+  `NEXT_PUBLIC_SITE_URL` as its domain and that site's origin as its URI (never the request's Host header), name the
+  active chain, carry the site's own statement and no resources, request id or Not Before, and be inside a lifetime of
+  at most 10 minutes.
+- **Signature.** viem's `verifySiweMessage` over sign-in's own RPC client (CCIP-Read off). It covers ordinary wallets
+  and smart-contract wallets (ERC-1271, and ERC-6492 before deployment). That client keeps its own endpoint-health
+  record and reads an out-of-gas answer as the node's, so a signature built to burn gas costs one call at one endpoint
+  and never puts the endpoints the Inspector, `/api/pulse`, `/badge` and `/t` share on cooldown. Before the check,
+  verify reads, without consuming it, that the nonce is stored and live, so a nonce that can't sign in never reaches
+  the RPC.
+- **Session.** The cookie `__Host-arcos_session` is an HS256 JWT `{ sub: address, aud: site host, iat, exp: +7 days }`,
+  signed with `ARCOS_SESSION_SECRET` (a Secret Manager secret of 32 bytes or more) and sent
+  `HttpOnly; Secure; SameSite=Lax; Path=/` with no `Domain`, as the `__Host-` prefix requires, so a sibling subdomain can
+  neither plant nor overwrite it. A request that carries it twice is treated as signed out. Each sign-in issues a new
+  token. It also carries the wallet's session version: signing out moves the version on, so every earlier cookie of
+  that wallet, anywhere, stops counting. Rotating the secret signs everyone out. Without the secret, sign-in answers
+  503; there is no fallback key.
+- **CSRF.** `POST /api/auth/verify` and `POST /api/auth/logout` require an `Origin` equal to the site's own; the verify
+  body must be `application/json`. Every auth route is rate-limited per client and answers `no-store`.
+- **Logs.** No address, message, signature, cookie or secret reaches a log line; a failure logs the name of the step.
 
 ## Rate limiting and the trusted-proxy assumption
 
@@ -113,11 +146,12 @@ sends its own usage and error reports to Circle.
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
-does: the server's two clients (`serverRpcClient` and `approvalsRpcClient` in `apps/web/src/lib/server-rpc.ts`, both
-built by `inspectionClient` in `packages/inspector/src/inspection-client.ts`, each with its own endpoint-health record) —
-`serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and `/api/pulse`; `approvalsRpcClient` behind
-`/api/approvals` alone, which reads the allowance, symbol, name and decimals of whatever token contracts an address
-has approved — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
+does: the server's three clients (`serverRpcClient`, `approvalsRpcClient` and `authRpcClient` in
+`apps/web/src/lib/server-rpc.ts`, all built by `inspectionClient` in `packages/inspector/src/inspection-client.ts`, each
+with its own endpoint-health record) — `serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and
+`/api/pulse`; `approvalsRpcClient` behind `/api/approvals` alone, which reads the allowance, symbol, name and decimals
+of whatever token contracts an address has approved; `authRpcClient` behind `/api/auth/verify` alone, which checks
+smart-wallet signatures — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
 With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is
 a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
 Swap and Bridge only read Circle's own contracts.

@@ -153,6 +153,11 @@ export type UserDoc = {
   telegram: { chatId: number; linkedAt: TimestampLike } | null;
   createdAt: TimestampLike;
   lastSignInAt: TimestampLike;
+  /**
+   * A session cookie carries the version it was signed with, and counts only while it equals this one. Signing out adds
+   * one, so every cookie issued before stops counting. A doc without it reads as 0.
+   */
+  sessionVersion: number;
 };
 
 /** watches/{user}:{network}:{token} */

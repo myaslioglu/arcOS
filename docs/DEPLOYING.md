@@ -156,7 +156,10 @@ name reads `apphosting.yaml` alone. So `apps/web/apphosting.testnet.yaml` names 
   stands for "no fee recipient", and Swap and Bridge charge no platform fee;
 - `BLOCKSCOUT_API_KEY` `none`, a plain runtime value in place of the mainnet secret, so the backend's account needs
   access to no secret. The server then reads the testnet explorer's public API, which answers servers (the mainnet one
-  refuses them).
+  refuses them);
+- `ARCOS_SESSION_SECRET` `none`, also a plain runtime value in place of a mainnet secret: shorter than the 32 bytes a
+  session key needs, so the testnet site has no key and sign-in answers 503 there. Signing in on testnet would take a
+  secret of its own, with access granted to `arcos-testnet`, named here.
 
 The WalletConnect project ID and `runConfig` are the base file's. `scripts/apphosting-env.mjs --environment testnet`
 merges the files the same way for the workflow's testnet bundle, and fails if `apphosting.testnet.yaml` is missing.

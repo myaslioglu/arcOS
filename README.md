@@ -66,6 +66,11 @@ by 4rc.OS's own TokenFactory still passes source verification through the factor
 Revoke's list (`/api/approvals`) reads approval events through the same key; without one it asks the
 public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
+Sign-in with Ethereum (`/api/auth/*`) needs two server settings: `NEXT_PUBLIC_SITE_URL`, whose host is the only domain a
+sign-in message may name, and `ARCOS_SESSION_SECRET`, 32 random bytes or more that sign the session cookie (on App
+Hosting a Secret Manager secret). It also reads and writes the Firestore database `arcos`. Without either setting the
+rest of the site runs as before and sign-in answers "Sign-in isn't available right now." There is no default secret.
+
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
 and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the

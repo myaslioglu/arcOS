@@ -125,6 +125,7 @@ describe("every paid write goes through withChain (every source file, every writ
     { file: "apps/web/src/apps/wallet/Window.tsx", receiver: "connect", member: "mutate", kind: "call", count: 1, reason: "useConnect: connects a wallet, sends nothing" },
     { file: "apps/web/src/apps/wallet/Window.tsx", receiver: "disconnect", member: "mutate", kind: "call", count: 1, reason: "useDisconnect: ends the connection, sends nothing" },
     { file: "apps/web/src/lib/network.ts", receiver: "switchChain", member: "mutate", kind: "call", count: 1, reason: "useSwitchChain: asks the wallet to change network, sends nothing" },
+    { file: "apps/web/src/components/SignInGate.tsx", receiver: "signMessage", member: "mutateAsync", kind: "call", count: 1, reason: "useSignMessage: the wallet signs the sign-in message, free, sends nothing" },
     {
       file: "apps/web/src/apps/revoke/Window.tsx",
       receiver: "writeContract",

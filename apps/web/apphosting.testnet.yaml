@@ -7,13 +7,16 @@
 # (MergeEnvVars in GoogleCloudPlatform/buildpacks, pkg/firebase/apphostingschema). scripts/apphosting-env.mjs
 # --environment testnet merges the two files the same way for the deploy workflow's testnet bundle.
 #
-# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the two mainnet-only items
+# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the three mainnet-only items
 # are replaced by the value `none`:
 # - NEXT_PUBLIC_FEE_RECIPIENT: `none` is not an address, so Swap and Bridge add no platform fee (feeRecipient() in
 #   src/lib/appkit.ts).
 # - BLOCKSCOUT_API_KEY: a secret in apphosting.yaml. Named there, the backend's account would need access to it; replaced
 #   by a plain `none`, it needs none, and the server reads the testnet explorer's public API, which answers servers
 #   (proExplorerApi() in src/lib/inspect-input.ts). RUNTIME only, as in apphosting.yaml.
+# - ARCOS_SESSION_SECRET: a secret in apphosting.yaml, the key of the sign-in cookie. Replaced by `none`, shorter than
+#   the 32 bytes a key needs, the testnet site has no key, so sign-in answers 503 there (sessionKey() in
+#   src/lib/session.ts). RUNTIME only, as in apphosting.yaml.
 # Public values only: nothing here is a secret.
 
 env:
@@ -33,6 +36,10 @@ env:
       - BUILD
       - RUNTIME
   - variable: BLOCKSCOUT_API_KEY
+    value: none
+    availability:
+      - RUNTIME
+  - variable: ARCOS_SESSION_SECRET
     value: none
     availability:
       - RUNTIME

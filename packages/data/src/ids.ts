@@ -6,6 +6,8 @@ import { RADAR_FEED_FILTERS, isNetwork, type RadarFeedFilter } from "./names";
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const V4_POOL_ID = /^0x[0-9a-fA-F]{64}$/;
 const ALERT_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// EIP-4361 asks for at least 8 letters and digits; ours are 32. 16 is the floor this store accepts.
+const NONCE = /^[A-Za-z0-9]{16,128}$/;
 
 export function assertNetwork(value: string): NetworkId {
   if (!isNetwork(value)) throw new DataError("network", 'Not a network: expected "mainnet" or "testnet"');
@@ -30,6 +32,14 @@ export function normalizePoolId(value: string): string {
 export const tokenId = (network: NetworkId, address: string): string => `${assertNetwork(network)}:${normalizeAddress(address)}`;
 
 export const poolId = (network: NetworkId, id: string): string => `${assertNetwork(network)}:${normalizePoolId(id)}`;
+
+/** nonces/{nonce}: a sign-in nonce is its own doc id, so it must be letters and digits only (no slash, no dots). */
+export function nonceId(value: string): string {
+  if (typeof value !== "string" || !NONCE.test(value)) {
+    throw new DataError("nonce", "Not a sign-in nonce: expected 16 to 128 letters or digits");
+  }
+  return value;
+}
 
 export const userId = (address: string): Address => normalizeAddress(address);
 
