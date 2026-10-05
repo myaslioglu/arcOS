@@ -1,9 +1,8 @@
 import "server-only";
 import { activeChain, type Address } from "@arcos/chain";
-import { inspect, type Report } from "@arcos/inspector";
-import { withDeadline } from "./deadline";
-import { explorerFetch } from "./explorer-fetch";
-import { inspectInput, proExplorerApi } from "./inspect-input";
+import { DEADLINE_MS, explorerFetch, inspect, proExplorerApi, withDeadline, type Report } from "@arcos/inspector";
+import { extraPoolsFor } from "./indexed-pools-server";
+import { inspectInput } from "./inspect-input";
 import { processGlobal } from "./process-global";
 import { inFlightGate } from "./rate-limit";
 import { reportTtlMs } from "./report-cache";
@@ -20,7 +19,7 @@ import { ttlCache } from "./ttl-cache";
 // on testnet, 7 on mainnet (with a v2 pool to check), 8 through getOwner(), 10 for an EIP-1967 or ZeppelinOS proxy
 // such as EURC, 12 for a beacon proxy, and 13 at most (a clone of a beacon proxy). Each call tries the chain's URLs in
 // order, one 3 s attempt each, and every call in this server process skips a URL that failed for the next 60 s (see
-// rpc-transport.ts). So a hung primary costs one 3 s timeout per process per minute, and an inspection meets it at
+// rpc-transport.ts in @arcos/inspector). So a hung primary costs one 3 s timeout per process per minute, and an inspection meets it at
 // most once: after timing out, the primary is skipped for longer than any inspection runs. With a healthy secondary
 // the deepest path takes 3 s plus one round trip per step, under 7 s for 13 steps at 0.3 s each. Every endpoint
 // hanging is an outage: one call alone takes 12 s on mainnet (4 × 3 s), the deadline cuts the inspection off, and it
@@ -46,7 +45,7 @@ const gate = processGlobal("inspect.gate", () => inFlightGate(8, () => new Inspe
 // therefore waits its turn here instead of being refused and cached as "unknown". The worst case per
 // server process, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the 15 s deadline;
 // each request then gets at most 8 s, and none is still sent once its inspection's deadline has
-// passed (see explorer-fetch.ts).
+// passed (see explorer-fetch.ts in @arcos/inspector).
 const explorerTurn = explorerPacer();
 
 export function cachedInspection(address: Address): Promise<Report> {
@@ -60,10 +59,15 @@ export function cachedInspection(address: Address): Promise<Report> {
   // Each inspection has its own controller: when its deadline passes, its explorer requests stop,
   // and no other inspection's do.
   return cache.get(address.toLowerCase(), () =>
-    gate.run(() => {
+    gate.run(async () => {
+      // The index's pools for this token, hooked v4 pools among them (at most 1.5 s, none when the index can't be read;
+      // see indexed-pools.ts). The 15 s deadline starts after it.
+      const extraPools = await extraPoolsFor(address);
       const controller = new AbortController();
       const fetchFn = explorerFetch(explorerTurn, controller.signal);
-      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi)), controller);
+      // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
+      const deadlineAt = Date.now() + DEADLINE_MS;
+      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt)), controller, DEADLINE_MS);
     }),
   );
 }

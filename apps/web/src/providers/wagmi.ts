@@ -1,9 +1,18 @@
-import { createConfig, http } from "wagmi";
+import { createConfig, http, type Transport } from "wagmi";
 import { injected } from "wagmi/connectors";
-import { CHAINS, activeNetwork } from "@arcos/chain";
+import { walletChains } from "@/lib/wallet-chains";
 import { lazyWalletConnect } from "./lazyWalletConnect";
 
-const { mainnet, testnet } = CHAINS;
+/**
+ * Arc first (the chain wallets are asked to connect on), the other network's Arc, then every chain Bridge offers on the
+ * other side of Arc. The destination chains are in so a WalletConnect session covers them: the kit's adapter switches the
+ * phone's wallet to the destination chain for the mint, and a WalletConnect session only lets the page switch to a chain
+ * it was opened with. See lib/wallet-chains.ts for the whole account, including what it means for an existing session.
+ *
+ * Nothing else reads the destination chains from this config: every app still signs on Arc only (lib/paid-write.ts pins
+ * each write to Arc's id), and `useArcNetwork` still reads any chain but Arc as the wrong network.
+ */
+const chains = walletChains();
 
 /** The site a build without a usable NEXT_PUBLIC_SITE_URL names: the mainnet one, as before the testnet site existed. */
 const DEFAULT_SITE = "https://4rcos.com";
@@ -42,21 +51,27 @@ const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?
 // dropped over `npm audit`: its packages (@walletconnect/*, @reown/*) were expected to bring high or critical findings.
 // `npm audit --omit=dev` on 2026-09-29 reported 0 high and 0 critical (8 low, 37 moderate overall). Those packages are
 // flagged moderate only, through decode-uri-component (denial of service on malformed percent-encoded input) and uuid (a
-// missing buffer bounds check), and they are installed anyway, as wagmi's own dependency.
+// missing buffer bounds check).
+//
+// Since wagmi 3 the provider is an optional peer of wagmi's connector, so apps/web/package.json pins it itself, exactly at
+// @walletconnect/ethereum-provider 2.21.8: the last release under Apache-2.0. From 2.21.9 on, WalletConnect's packages
+// (and @reown/appkit from 1.8.3) ship under Reown's own community licence instead (a proprietary licence with usage
+// thresholds), which this MIT repo doesn't take on. scripts/walletconnect-licence.mjs (run by the web tests) fails if the
+// lockfile ever resolves past that line.
 //
 // The provider is a dynamic import, so it sits in a chunk of its own, and lazyWalletConnect keeps wagmi from loading it
 // until a visitor picks WalletConnect (or a reload restores a WalletConnect session). injected() alone still discovers
 // every EIP-6963 browser wallet.
 export const wagmiConfig = createConfig({
-  // The first chain is the one wallets are asked to connect on.
-  chains: activeNetwork() === "mainnet" ? [mainnet, testnet] : [testnet, mainnet],
+  chains,
   connectors: [
     injected(),
     ...(walletConnectProjectId
       ? [lazyWalletConnect({ projectId: walletConnectProjectId, showQrModal: true, metadata: WALLETCONNECT_METADATA })]
       : []),
   ],
-  transports: { [mainnet.id]: http(), [testnet.id]: http() },
+  // Each chain's own default RPC (for the destination chains, App Kit's endpoints, which the connect-src lists).
+  transports: Object.fromEntries(chains.map((chain) => [chain.id, http()])) as Record<(typeof chains)[number]["id"], Transport>,
   ssr: true,
   // CCIP-Read off for every client this config builds. The Inspector (and Drop, for a token pasted in) reads contracts
   // anyone can deploy, and with it on, a read that reverts with EIP-3668's OffchainLookup makes the visitor's browser

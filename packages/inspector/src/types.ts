@@ -3,16 +3,19 @@ import type { Address, DexConfig, NetworkId } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import type { ExplorerSource } from "./explorer";
 
-/** The call reached the chain and reverted (or returned no data): the function isn't there, or it said no. */
+/**
+ * The call reached the chain and reverted (or returned no data): the function isn't there, or it said no. `data` is what it
+ * reverted with, when the node sent any: an error selector and its arguments, `null` for a bare revert or an empty answer.
+ */
 export class CallReverted extends Error {
-  constructor(message = "execution reverted") {
+  constructor(message = "execution reverted", readonly data: Hex | null = null) {
     super(message);
     this.name = "CallReverted";
   }
 }
 
 export type Status = "pass" | "warn" | "fail" | "unknown";
-export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao";
+export type CheckId = "verified" | "ownership" | "privileges" | "proxy" | "holders" | "liquidity" | "lp-lock" | "prevrandao" | "trade";
 
 export type Finding = {
   id: CheckId;
@@ -39,8 +42,9 @@ export type Report = {
    * - a `ChainReader` call failed: an HTTP error, a timeout, or a JSON-RPC error that isn't the node's answer (anything
    *   but a revert or -32602 invalid params; see rpc-errors.ts), on every endpoint the transport tried; or
    * - an explorer request ended in `ExplorerUnavailable`.
-   * Never degraded: a revert or an empty answer (`CallReverted`), -32602, a 404 from the explorer, and viem failing to
-   * decode what the node answered, since asking again returns the same. The findings mean what they always do; this
+   * Never degraded: a revert or an empty answer (`CallReverted`), a call that set its own gas limit running out of it (a v4
+   * quote, the trade simulation), -32602, a 404 from the explorer, and viem failing to decode what the node answered, since
+   * asking again returns the same. The findings mean what they always do; this
    * only says that some of the unknowns may be a network hiccup, so the report shouldn't be kept for long.
    */
   degraded: boolean;
@@ -54,11 +58,91 @@ export interface ChainReader {
   getStorageAt(address: Address, slot: Hex): Promise<Hex | null>;
   /**
    * Rejects with `CallReverted` when the call reverts or returns no data. Any other rejection is
-   * a transport failure and means nothing about the contract.
+   * a transport failure and means nothing about the contract. `options.gas` caps the call's gas: a read that could walk an
+   * attacker-chosen amount of state (a v4 quote) gets a limit of its own.
    */
-  read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[]): Promise<unknown>;
+  read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[], options?: { gas?: bigint }): Promise<unknown>;
   blockNumber(): Promise<bigint>;
+  /** The network's current gas price (eth_gasPrice), in wei. */
+  gasPrice(): Promise<bigint>;
+  /**
+   * One eth_call with some accounts' state replaced for that call only (the RPC's third parameter): the trade simulation's
+   * code and USDC balance at a throwaway address. Resolves with what the call returned, `0x` included (code that never ran,
+   * when a node ignores the override, answers that). The gas limit is always set, so it rejects with `CallReverted` when
+   * the call reverts or runs out of that gas (Arc's -32003), both the node's answer; anything else, a node refusing the
+   * override included, is passed on as it came.
+   */
+  callWithOverride(call: OverrideCall, overrides: readonly StateOverride[]): Promise<Hex>;
 }
+
+/** The call `ChainReader.callWithOverride` makes, at `gasPrice` (wei per gas), which `from` must hold enough to prepay. */
+export type OverrideCall = { from: Address; to: Address; data: Hex; gas: bigint; gasPrice: bigint };
+/** One account's state for one call: its code, its native balance (in wei), or both. */
+export type StateOverride = { address: Address; code?: Hex; balance?: bigint };
+
+/** A Uniswap v4 pool's identity. Its id is keccak256(abi.encode(key)). `currency0 < currency1`, and address(0) is native USDC. */
+export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
+
+/**
+ * A pool the caller already knows about, read live next to the ones discovery finds. The index supplies them (pools/ in Firestore): that is
+ * how a v4 pool with hooks, or a fee outside the standard five, gets seen.
+ */
+export type ExtraPool = { version: "v4"; key: PoolKey };
+
+export type PoolVersion = "v2" | "v3" | "v4" | "aero";
+
+export type Pool = {
+  /** Where the pool's tokens sit: the pair or pool contract, or for v4 the PoolManager, which holds the tokens of every v4 pool. */
+  address: Address;
+  version: PoolVersion;
+  /** The quote currency's symbol. Native USDC on v4 is "USDC" too. */
+  quote: string;
+  /**
+   * In units of the quote currency, 6 decimals. v2, v3 and Aerodrome: the pool's balance of the quote token. v4: what the
+   * active liquidity holds in range at the current price (see `quoteInRange` in v4.ts), not the pool's total.
+   */
+  depth: bigint;
+  /**
+   * The pool alone can pay out 1,000 units of the quote currency. v2, v3 and Aerodrome: `depth` is at least that. v4: a
+   * pool without a hook, and a V4Quoter exact-output quote for that amount succeeded. `null` is undecided (see `undecided`);
+   * `false` is only ever a hookless pool's own "not enough liquidity".
+   */
+  liquid: boolean | null;
+  /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. "hook": the
+   * pool has a hook, which runs inside any swap and so could fake a quote either way; it isn't quoted. */
+  undecided?: "quote-unavailable" | "hook";
+  /**
+   * v2 only: whether its reserves hold any tokens at all. `false` for a pair holding USDC `sync`ed in and nothing to sell
+   * for it, whatever its depth; such a pair is never liquid and the trade check never trades against it. A pair with tokens
+   * is `true` even when it quotes nothing for the test amount or is thin; it is liquid only with 1,000 USDC and a nonzero
+   * quote.
+   */
+  tradable?: boolean;
+  /** v2 only: the token's reserve, in its raw units, next to `depth`, the USDC (or EURC) reserve. */
+  tokenReserve?: bigint;
+  /** v3 only: the fee tier the factory was asked for, in hundredths of a bip (3000 is 0.3%). */
+  fee?: number;
+  /** v4 only. */
+  poolId?: Hex;
+  key?: PoolKey;
+};
+
+/**
+ * What the pool lookup found, and whether the pool contracts answered at all. An address with no contract code reverts
+ * every call it's given (and inside a multicall answers `0x`), which reaches this code as "no pool", identical to a working
+ * contract saying there is none. "No pool found" read off a contract that never answered is a claim about pools that
+ * nothing actually checked.
+ */
+export type PoolScan = {
+  pools: Pool[];
+  /** Some pool contract answered: a factory call, or v4's StateView, came back with an answer. */
+  factoriesAnswered: boolean;
+  /**
+   * The configured families, by name, none of whose contracts answered. What they said about pools isn't evidence, so
+   * "no pool" and "thin" can't be claimed while one is silent; a liquid pool found elsewhere still stands.
+   */
+  silent: string[];
+};
 
 export type InspectInput = {
   address: Address;
@@ -72,5 +156,17 @@ export type InspectInput = {
   /** The 4rc.OS TokenFactory on this network. A token it created (`isArcosToken`) runs one of the factory's fixed
    * templates, whose source is published with the factory's verified source. */
   arcosTokenFactory?: Address | null;
+  /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */
+  extraPools?: ExtraPool[];
+  /**
+   * Called once with what the pool lookup found, or null when it failed, before the findings are made from it. The indexer
+   * stores the best pool from it (`bestPool`), so it needs no second lookup. A hook that throws changes nothing.
+   */
+  onPools?: (scan: PoolScan | null) => void;
   now?: () => Date;
+  /**
+   * When the caller stops waiting for the report (ms since the epoch, on `Date.now()`'s clock): the inspection's own
+   * deadline. The trade check fits its eth_calls inside it (see simulate.ts). Absent: it gives itself a fixed time.
+   */
+  deadlineAt?: number;
 };

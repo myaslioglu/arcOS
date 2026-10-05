@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { useConnection, usePublicClient, useWriteContract } from "wagmi";
 import { getAddress, isAddress, type Address } from "viem";
 import { activeChain, activeNetwork, explorerUrl } from "@arcos/chain";
 import { dragSourceProps, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
@@ -51,7 +51,7 @@ const expiryText = (seconds: number) => `Expires ${new Date(seconds * 1000).toIS
  * `approvals` command and the form below set it.
  */
 export default function RevokeWindow({ params }: AppProps) {
-  const { address } = useAccount();
+  const { address } = useConnection();
   const { open } = useDesktop();
   const view = revokeView(params.owner, address);
   return (
@@ -145,9 +145,9 @@ function LookupForm({ mine, onLook }: { mine?: string; onLook: (owner: Address) 
 function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean }) {
   const chain = activeChain();
   const network = activeNetwork();
-  const { address, chainId: walletChainId } = useAccount();
+  const { address, chainId: walletChainId } = useConnection();
   const client = usePublicClient({ chainId: chain.id });
-  const { writeContractAsync } = useWriteContract();
+  const writeContract = useWriteContract();
   const { open } = useDesktop();
   const query = useQuery({
     queryKey: ["approvals", owner.toLowerCase()],
@@ -229,7 +229,10 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
       account: address,
       chainId: chain.id,
       walletChainId,
-      writeContractAsync: writeContractAsync as (request: never) => Promise<`0x${string}`>,
+      // Passed by reference, not called here: flow.ts makes the one call, `deps.writeContractAsync(withChain(...))`,
+      // and the paid-write scan (lib/__tests__/paid-write.test.ts) checks that call there, by this name. This reference
+      // is the one entry in that scan's ALLOWLIST for this file; a second one fails it.
+      writeContractAsync: writeContract.mutateAsync as (request: never) => Promise<`0x${string}`>,
     };
     void revokeSession.run(
       owner,

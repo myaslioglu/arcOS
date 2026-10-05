@@ -13,4 +13,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - `packages/data` is the Firestore layer. Its pure entry, `@arcos/data`, never imports firebase-admin. Its server entry,
   `@arcos/data/server`, is imported only from server code (route handlers, server-only modules, functions). Its tests run
   against the Firestore emulator under a `demo-` project id, never against the live project.
+- `functions/` is the functions codebase `arcos`. Every function it exports has a name that starts with `arcos`, and
+  `functions/deploy/index.js` and `functions/deploy/functions.yaml` are build output, never committed. Its emulator
+  tests run under a `demo-` project id only.
 - Never commit secrets. `.env*` is ignored; only `.env.example` is tracked.

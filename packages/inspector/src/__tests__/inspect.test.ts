@@ -7,6 +7,7 @@ import { ExplorerUnavailable, blockscoutSource, type ExplorerSource, type Holder
 import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
 import { MINTABLE_TOKEN_DEPLOYED, STANDARD_TOKEN_DEPLOYED } from "./fixtures/tokens";
+import { v2PairReads } from "./fixtures/chain-fake";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const IMPL = "0x2222222222222222222222222222222222222222";
@@ -71,6 +72,9 @@ function reader(f: Fake): ChainReader {
       if (f.blockNumberError) throw f.blockNumberError;
       return 123n;
     },
+    gasPrice: async () => 1n,
+    // A node that ignores the override: the simulator never runs (trade.test.ts covers what it says).
+    callWithOverride: async () => "0x",
   };
 }
 
@@ -107,7 +111,7 @@ describe("inspect", () => {
     expect(find(r, "proxy").status).toBe("pass");
     expect(find(r, "prevrandao").status).toBe("pass");
     expect(find(r, "verified").status).toBe("pass");
-    expect(r.total).toBe(8);
+    expect(r.total).toBe(9);
     expect(r.passed).toBe(r.findings.filter((x) => x.status === "pass").length);
     expect(r.generatedAt).toBe("2026-09-20T00:00:00.000Z");
     expect(JSON.stringify(r)).toContain(TOKEN); // JSON-safe: no bigint anywhere
@@ -171,7 +175,7 @@ describe("inspect", () => {
       [`${TOKEN}.totalSupply()`]: 1000n,
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
       [`${V3}.getPool(${TOKEN},${USDC},3000)`]: ZERO,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 100n,
       [`${PAIR}.balanceOf(${ZERO})`]: 0n,
       [`${PAIR}.balanceOf(${DEAD})`]: 100n,
@@ -188,7 +192,7 @@ describe("inspect", () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
       [`${V3}.getPool(${TOKEN},${USDC},3000)`]: ZERO,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 100n,
       [`${PAIR}.balanceOf(${ZERO})`]: 0n,
       [`${PAIR}.balanceOf(${DEAD})`]: 10n,
@@ -226,7 +230,7 @@ describe("inspect", () => {
   it("survives a failing blockNumber call", async () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, blockNumberError: new Error("boom") });
     expect(r.blockNumber).toBe("unknown");
-    expect(r.total).toBe(8);
+    expect(r.total).toBe(9);
   });
 
   it("says unknown when pool discovery fails at the network level", async () => {
@@ -240,7 +244,7 @@ describe("inspect", () => {
   it("says unknown when an LP balance read fails at the network level", async () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 100n,
       [`${PAIR}.balanceOf(${ZERO})`]: new Error("ETIMEDOUT"),
       [`${PAIR}.balanceOf(${DEAD})`]: 100n,
@@ -415,7 +419,7 @@ describe("inspect", () => {
   it("marks lp-lock unknown, not fail, when the v2 pair's LP totalSupply is zero", async () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
-      [`${USDC}.balanceOf(${PAIR})`]: 5_000_000_000n,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
       [`${PAIR}.totalSupply()`]: 0n,
     };
     const r = await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex);
@@ -1317,7 +1321,7 @@ describe("degraded", () => {
   ])("is true when a %s call fails at the transport level, and the report is still produced", async (_, fake) => {
     const r = await run(fake);
     expect(r.degraded).toBe(true);
-    expect(r.total).toBe(8);
+    expect(r.total).toBe(9);
   });
 
   it("is false when calls revert or a read comes back empty — both are answers", async () => {

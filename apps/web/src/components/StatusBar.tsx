@@ -1,6 +1,6 @@
 "use client";
 
-import { useAccount, useBalance } from "wagmi";
+import { useConnection, useBalance } from "wagmi";
 import { Wallet } from "lucide-react";
 import { formatUsdc } from "@arcos/chain";
 import { useDesktop } from "@arcos/shell";
@@ -10,7 +10,7 @@ import { shortAddress } from "@/lib/format";
 // No explicit font-size here: `.os-topbar` sets 11px mono for the bar, and
 // this slot inherits it so it matches the clock next to it.
 export function StatusBar() {
-  const { address } = useAccount();
+  const { address } = useConnection();
   const { chain, wrongNetwork, switching, switchError, switchToArc } = useArcNetwork();
   const { open } = useDesktop();
   const { data: balance } = useBalance({ address, chainId: chain.id, query: { refetchInterval: 15_000 } });

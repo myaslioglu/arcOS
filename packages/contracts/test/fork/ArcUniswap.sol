@@ -174,3 +174,15 @@ contract ForkSwapper {
         }
     }
 }
+
+/// A v4 hook that approves every call: it answers with the selector it was called with, which is all the PoolManager
+/// checks for the hooks that return no delta (`beforeInitialize`, `beforeAddLiquidity`, ...). Deployed with `vm.etch`
+/// at an address whose low bits carry the permissions a test wants.
+contract ForkEchoHook {
+    fallback() external {
+        assembly ("memory-safe") {
+            mstore(0, shl(224, shr(224, calldataload(0))))
+            return(0, 32)
+        }
+    }
+}

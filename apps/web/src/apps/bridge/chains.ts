@@ -1,5 +1,21 @@
 import type { BridgeChain } from "@circle-fin/app-kit";
-import { activeNetwork } from "@arcos/chain";
+import {
+  Arbitrum,
+  ArbitrumSepolia,
+  Arc,
+  ArcTestnet,
+  Avalanche,
+  AvalancheFuji,
+  Base,
+  BaseSepolia,
+  Ethereum,
+  EthereumSepolia,
+  Optimism,
+  OptimismSepolia,
+  Polygon,
+  PolygonAmoy,
+} from "@circle-fin/app-kit/chains";
+import { activeNetwork, type Address } from "@arcos/chain";
 
 /** `BridgeChainIdentifier` (what `BridgeParams` actually wants) isn't exported by the package —
  * this is the same shape restricted to the string-literal form, built from the exported enum. */
@@ -37,6 +53,26 @@ export function bridgeChainOptions(): EvmChainOption[] {
   return activeNetwork() === "mainnet" ? MAINNET : TESTNET;
 }
 
+/** A chain people look for in Bridge that it can't offer, shown greyed out in the picker with the reason. */
+export type UnsupportedChainOption = { label: string; note: string };
+
+/**
+ * BNB Smart Chain is a CCTP domain (17), but for USYC only: Circle's docs say "USDC: Supported on all CCTP domains
+ * except BNB Smart Chain" (developers.circle.com/cctp/concepts/supported-chains-and-domains, read 2026-10-03), and the
+ * installed App Kit's BridgeChain enum has no entry for it. The USDC people hold there is Binance-Peg USDC, which
+ * Circle doesn't burn and mint. A test fails once App Kit's BridgeChain gains it: then, if Circle's docs list USDC
+ * (not only USYC) there, it moves to MAINNET/TESTNET.
+ */
+const UNSUPPORTED_MAINNET: UnsupportedChainOption[] = [{ label: "BNB Smart Chain", note: "Circle has no USDC there" }];
+const UNSUPPORTED_TESTNET: UnsupportedChainOption[] = [
+  { label: "BNB Smart Chain Testnet", note: "Circle has no USDC there" },
+];
+
+/** The chains the picker shows but can't offer, for the active network. Never part of `bridgeChainOptions()`. */
+export function unsupportedBridgeChains(): UnsupportedChainOption[] {
+  return activeNetwork() === "mainnet" ? UNSUPPORTED_MAINNET : UNSUPPORTED_TESTNET;
+}
+
 const ALL_OPTIONS: EvmChainOption[] = [...MAINNET, ...TESTNET];
 
 /**
@@ -49,4 +85,61 @@ export function chainLabel(chainId: ChainId): string {
   if (chainId === "Arc") return "Arc";
   if (chainId === "Arc_Testnet") return "Arc Testnet";
   return ALL_OPTIONS.find((o) => o.chain === chainId)?.label ?? chainId;
+}
+
+/** What Bridge needs to know about one chain it can bridge with, taken from App Kit's own definition of it. */
+export type BridgeChainInfo = {
+  chainId: number;
+  /** The RPC endpoints App Kit itself reads that chain through (and that the site's connect-src lists). */
+  rpcEndpoints: readonly string[];
+  usdcAddress: Address;
+  /** The token that pays for gas there: ETH, POL, AVAX, or USDC on Arc. */
+  gasSymbol: string;
+};
+
+const DEFINITIONS = [
+  Arc,
+  ArcTestnet,
+  Ethereum,
+  Base,
+  Arbitrum,
+  Optimism,
+  Polygon,
+  Avalanche,
+  EthereumSepolia,
+  BaseSepolia,
+  ArbitrumSepolia,
+  OptimismSepolia,
+  PolygonAmoy,
+  AvalancheFuji,
+] as const;
+
+/** One of App Kit's own chain definitions, as the kit's adapter wants it (`prepareAction`'s `fromChain`/`toChain`). */
+export type KitChainDefinition = (typeof DEFINITIONS)[number];
+
+/** App Kit's definition object for a chain Bridge offers (or Arc itself), or null for an id it doesn't know. */
+export function kitChainDefinition(chainId: ChainId): KitChainDefinition | null {
+  return DEFINITIONS.find((d) => d.chain === chainId) ?? null;
+}
+
+/**
+ * The chain of the active network whose CCTP domain is `domain`, or null. Circle's attestation service names a
+ * transfer's destination by its CCTP domain id (`decodedMessage.destinationDomain`), and a domain is shared by a
+ * mainnet chain and its testnet (Base and Base Sepolia are both 6), so the active network decides which one it is.
+ */
+export function chainForDomain(domain: number): ChainId | null {
+  const testnet = activeNetwork() !== "mainnet";
+  return DEFINITIONS.find((d) => d.cctp.domain === domain && d.isTestnet === testnet)?.chain ?? null;
+}
+
+/** App Kit's definition of a chain Bridge offers (or Arc itself), or null for an id it doesn't know. */
+export function bridgeChainInfo(chainId: ChainId): BridgeChainInfo | null {
+  const def = kitChainDefinition(chainId);
+  if (!def) return null;
+  return {
+    chainId: def.chainId,
+    rpcEndpoints: def.rpcEndpoints,
+    usdcAddress: def.usdcAddress as Address,
+    gasSymbol: def.nativeCurrency.symbol,
+  };
 }

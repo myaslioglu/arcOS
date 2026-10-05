@@ -226,6 +226,50 @@ contract PositionFactoryTest is PositionTestBase {
         assertEq(factory.vaultsOfLength(alice), 0);
     }
 
+    // ---------------------------------------------------------------------
+    // A v4 pool with hooks is refused (THREAT-MODEL Q21)
+    // ---------------------------------------------------------------------
+
+    /// A hook runs on the zero-liquidity decrease every `collect` makes: it could block collecting or take the fees
+    /// through return deltas. So a v4 position whose PoolKey names any hook contract is refused at the lock, and
+    /// nothing is left behind: the NFT is back with its owner, no vault is registered, no fee is kept.
+    function test_lockPosition_v4_refusesAPoolWithHooks_andLeavesNothing() public {
+        for (uint256 native; native < 2; ++native) {
+            address currency0 = native == 1 ? NATIVE : address(tokenA);
+            uint256 id = _mintV4(alice, currency0, address(tokenB));
+            v4.setHooks(id, makeAddr("hook"));
+            uint256 recipientBefore = feeRecipient.balance;
+            uint256 aliceBefore = alice.balance;
+            Snap memory snap = _snap(alice, currency0);
+            vm.prank(alice);
+            vm.expectRevert(VaultFactory.HookedPool.selector);
+            factory.lockPosition{value: FLAT}(address(v4), id, uint64(block.timestamp + 30 days), alice);
+            assertEq(v4.ownerOf(id), alice);
+            assertEq(factory.vaultsOfLength(alice), 0);
+            assertEq(factory.positionVaultsForTokenLength(currency0), 0);
+            assertEq(factory.positionVaultsForTokenLength(address(tokenB)), 0);
+            assertEq(feeRecipient.balance, recipientBefore);
+            assertEq(alice.balance, aliceBefore);
+            _assertNothingLeftBehind(snap, alice, currency0);
+        }
+    }
+
+    /// Any non-zero hooks address is refused, whatever its permission bits; the same position without hooks locks.
+    function testFuzz_lockPosition_v4_refusesEveryHookAddress(address hooks) public {
+        vm.assume(hooks != address(0));
+        uint256 id = _mintV4(alice, address(tokenA), address(tokenB));
+        uint64 at = uint64(block.timestamp + 30 days);
+        v4.setHooks(id, hooks);
+        vm.prank(alice);
+        vm.expectRevert(VaultFactory.HookedPool.selector);
+        factory.lockPosition{value: FLAT}(address(v4), id, at, alice);
+
+        v4.setHooks(id, address(0));
+        vm.prank(alice);
+        PositionVault vault = PositionVault(payable(factory.lockPosition{value: FLAT}(address(v4), id, at, alice)));
+        assertEq(v4.ownerOf(id), address(vault));
+    }
+
     /// The kind comes from the allow-list at lock time and is copied into the vault; changing it later touches only
     /// new locks.
     function test_lockPosition_copiesTheManagersKind() public {

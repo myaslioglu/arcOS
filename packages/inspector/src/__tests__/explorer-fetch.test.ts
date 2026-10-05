@@ -1,10 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CallReverted, ExplorerUnavailable, blockscoutSource, inspect, type ChainReader } from "@arcos/inspector";
+import { ExplorerUnavailable, blockscoutSource } from "../explorer";
+import { inspect } from "../inspect";
+import { CallReverted, type ChainReader } from "../types";
 import { explorerFetch } from "../explorer-fetch";
-import { perSecond } from "../rate-limit";
 
 const API = "https://explorer.test/api/v2";
 const TOKEN = "0x1111111111111111111111111111111111111111";
+
+/** One turn a second, the first at once: the web app's per-process pacer at its slowest, kept here without it. */
+function oneASecond(): () => Promise<void> {
+  let next = 0;
+  return async () => {
+    const now = Date.now();
+    const slot = Math.max(now, next);
+    next = slot + 1_000;
+    if (slot > now) await new Promise((resolve) => setTimeout(resolve, slot - now));
+  };
+}
 
 /** A fetch that records what it was asked for and answers every request with an empty JSON object. */
 function recordingFetch() {
@@ -75,7 +87,7 @@ describe("explorerFetch", () => {
   it("sends nothing once its inspection has given up, not even a request already waiting for its turn", async () => {
     const { sent, fetchFn } = recordingFetch();
     const inspection = new AbortController();
-    const fetchFor = explorerFetch(perSecond(1), inspection.signal, fetchFn);
+    const fetchFor = explorerFetch(oneASecond(), inspection.signal, fetchFn);
     const first = outcome(fetchFor(`${API}/tokens/${TOKEN}`));
     const second = outcome(fetchFor(`${API}/tokens/${TOKEN}/holders`)); // one a second: this one waits its turn
     await vi.advanceTimersByTimeAsync(0);
@@ -106,6 +118,10 @@ describe("an inspection whose explorer requests were cut off", () => {
       throw new CallReverted();
     },
     blockNumber: async () => 1n,
+    gasPrice: async () => 1n,
+    callWithOverride: async () => {
+      throw new CallReverted();
+    },
   };
 
   it("reads its explorer checks as unknown and itself as degraded, and still produces a report", async () => {

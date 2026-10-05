@@ -24,9 +24,10 @@ jobs:
           persist-credentials: false
 
       # Node version comes from .nvmrc ("22": the newest 22.x), which satisfies the root package.json's
-      # "engines": { "node": "^22.16.0" } and is what contributors run locally. 22.16 fixed an
-      # AbortSignal.timeout inside AbortSignal.any that could be garbage-collected and never fire
-      # (nodejs/node#57736), which the server's explorer requests rely on.
+      # "engines": { "node": "^22.22.2" } and is what contributors run locally. 22.22.2 is the oldest 22.x
+      # that jsdom 30 and the packages it depends on support. 22.16 fixed an AbortSignal.timeout inside
+      # AbortSignal.any that could be garbage-collected and never fire (nodejs/node#57736), which the
+      # server's explorer requests rely on.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -61,9 +62,11 @@ jobs:
 
       # The JS/TS workspaces' own vitest suites. @arcos/contracts' "test" script is `forge test`,
       # run as its own step below instead, so a Solidity failure and a TS failure are never
-      # conflated in the same step's output. @arcos/data's emulator suite runs in emulator.yml.
+      # conflated in the same step's output. The emulator suites of @arcos/data and @arcos/functions
+      # run in emulator.yml. @arcos/functions' unit tests include a real build of its bundle and the
+      # manifest the deploy reads.
       - name: Test (JS workspaces)
-        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector --workspace=@arcos/data
+        run: npm run test --workspace=@arcos/web --workspace=@arcos/chain --workspace=@arcos/shell --workspace=@arcos/inspector --workspace=@arcos/data --workspace=@arcos/functions
 
       # The contracts scripts run forge through packages/contracts/scripts/forge.mjs: the npm `forge`
       # command (@foundry-rs/forge 1.7.1) exits 0 even when a test fails, which kept this step green.
@@ -81,12 +84,21 @@ jobs:
           npm run abis -w @arcos/contracts
           git diff --exit-code packages/chain/src/abis
 
-      - name: npm audit (high/critical)
-        run: npm audit --audit-level=high
+      # scripts/audit.mjs runs `npm audit --audit-level=high` and fails on every high or critical finding except
+      # those in scripts/audit-allowlist.json: advisories named by GHSA id, with a reason, an expiry date and the
+      # audit roots they apply to, allowed only while the package is a devDependency alone (`npm ls --omit=dev`
+      # finds no path to it) unless the entry says `runtime: true`, which the step prints as a WARNING.
+      # For advisories with no published fix, which an `overrides` entry can't settle; see docs/DEPLOYING.md.
+      - name: npm audit (high/critical, with the allowlist)
+        run: node scripts/audit.mjs
 
       # The pinned Firebase CLI is not a root workspace, so the root audit doesn't see it.
-      - name: npm audit of the Firebase CLI (high/critical)
-        run: npm audit --audit-level=high --prefix tools/firebase
+      - name: npm audit of the Firebase CLI (high/critical, with the allowlist)
+        run: node scripts/audit.mjs --prefix tools/firebase
+
+      # The two packages Cloud Build installs for the functions, from functions/deploy's own lockfile.
+      - name: npm audit of the functions' deployed packages (high/critical, with the allowlist)
+        run: node scripts/audit.mjs --prefix functions/deploy
 
   # The end-to-end smoke suite (e2e/smoke.spec.ts) in a real browser against a production build, beside the checks
   # above rather than after them. Built with the settings in apps/web/apphosting.yaml, like https://4rcos.com. The /t and /badge cases read the chain

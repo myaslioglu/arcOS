@@ -21,14 +21,14 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
 | **Pending owner** | `acceptOwnership` | anything else |
 | **Lock creator** (the caller of `lockToken` / `lockPosition`) | pay the flat fee; lock their own tokens or their own position NFT for any `owner_`, any `unlockAt` in the window | lock a token or NFT they don't hold or haven't approved; the NFT is always taken from `msg.sender` |
 | **Vesting creator** (the caller of `createVesting`) | fund a schedule for any beneficiary, token, start (up to 3650 days out, or in the past), duration and cliff | take anything back: a schedule can't be cancelled |
-| **Beneficiary** (`ArcVesting.owner()`) | receive releases; transfer the wallet in one step (so sell it, unvested tokens included); `renounceOwnership` | change the schedule; release more than has vested |
+| **Beneficiary** (`ArcVesting.owner()`) | receive releases; transfer the wallet in one step (so sell it, unvested tokens included) | change the schedule; release more than has vested; renounce ownership (disabled, V2) |
 | **Anyone** | call `release(token)` on any wallet (the tokens go to its owner); create locks and schedules for anyone, and so pad the registries; send tokens to a vault or wallet; clone the public implementations; pay `ProPass` for any account; apply a fee increase whose delay has passed (`FeeController.applyPending`); add liquidity to a locked v3 position (Q22) | move value out of a vault or a wallet to anyone but its owner |
 | **Fee recipient** (`FeeController.recipient()`) | receive the flat fees, the LP fee and the position share | reach a vault. A recipient that reverts blocks new locks, schedules and subscriptions (Q9, V11); in a position vault it is skipped instead (Q9) |
 | **FeeController owner** | add a key; lower a fee at once; raise a fee up to its cap after 48 hours; change the recipient | exceed a cap; renounce ownership (disabled); change a fee already charged, or the share and recipient already copied into a position vault |
-| **VaultFactory owner** | allow or disallow a position manager and set its kind, for new position locks only (`setManager`); transfer ownership; renounce it (Q7) | touch an existing vault, lock or fee |
+| **VaultFactory owner** | allow or disallow a position manager and set its kind, for new position locks only (`setManager`); transfer ownership in two steps | touch an existing vault, lock or fee; renounce ownership (disabled, Q7) |
 | **Allow-listed position manager** (Uniswap v3 `NonfungiblePositionManager`, v4 `PositionManager`) | report a position's currencies, liquidity and owed amounts; transfer the NFT; pay out fees on `collect` | nothing more is granted, but a hostile manager could lie about all of that (Q8, Q24) |
-| **Token issuers** (a locked token, a vested token, a pool currency) | freeze, blocklist, confiscate, pause, tax transfers, rebase, lie about balances; make a token look like a v2 pair (Q18); refuse the fee recipient (Q19); raise its own transfer gas (Q28) | reach other tokens' locks |
-| **v4 hooks** | run on the zero-liquidity decrease that `collect` makes: revert it, or take fees through return deltas (Q21) | block `withdraw`, which is a plain NFT transfer |
+| **Token issuers** (a locked token, a vested token, a pool currency) | freeze, blocklist, confiscate, pause, tax transfers, rebase, lie about balances; make a token look like a v2 pair (Q18); refuse the fee recipient (Q19); raise its own transfer gas (Q28); re-enter on transfer | reach other tokens' locks |
+| **v4 hooks** | nothing on a locked position: `lockPosition` refuses a v4 position whose pool has a hook contract (Q21), and a pool's hooks never change | run on a locked position's `collect`; block `withdraw`, which is a plain NFT transfer |
 | **Arc and Circle** | blocklist an address for USDC (both views); define how the two USDC views behave | nothing on the contracts themselves |
 | **Deployer** (the `DeployR1` sender) | add R1's fee keys and deploy; becomes the VaultFactory's owner. The script refuses to start unless the sender owns the FeeController, and runs all its checks before its first transaction | nothing beyond the FeeController owner's and the VaultFactory owner's powers |
 
@@ -52,7 +52,8 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
 - **Allow-listed managers are the real Uniswap deployments.** The vault believes its manager about ownership,
   liquidity, owed amounts and currencies. The VaultFactory owner is trusted to allow-list only those (Q8, Q24).
 - **Uniswap behaves as documented.** A v3 `collect` and a v4 zero-liquidity `DECREASE_LIQUIDITY` followed by
-  `TAKE_PAIR` pay fees without touching principal. An NFT's owner alone can decrease, burn, transfer or approve it. The
+  `TAKE_PAIR` pay fees without touching principal. A v4 pool's hooks are fixed in its PoolKey, so a position that
+  was hookless when locked stays hookless. An NFT's owner alone can decrease, burn, transfer or approve it. The
   fork suite checks these on the live deployments.
 - **The FeeController owner is honest within its caps.** It can raise fees only to the caps and only after 48
   hours, can set a fee to zero (T5), and chooses the recipient. It is meant to be a Safe before mainnet.
@@ -66,28 +67,65 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
 
 ## Past locker exploits, and what one contract per lock changes
 
-Lockers on other chains have been drained before. Those incidents are not documented in this repository, so this
-section doesn't describe them. It names the attack classes a locker that keeps every user's assets in one shared
-contract is exposed to, and what this design does to each.
+Lockers on other chains have been drained before. Three incidents are summarised below from public post-mortems,
+with what this design does about each, followed by the attack classes they belong to. Dates and amounts are as the
+cited sources report them; where the sources differ, both figures are given.
 
-1. **A flaw that releases more than the caller's own deposit.** In a shared pool, the contract's books decide whose
-   tokens a call may move: a wrong index, a missing ownership check or an accounting error reaches every user's
-   deposit, often in one transaction. Here each vault holds one lock's asset and keeps no books: `withdraw` sends
-   the vault's own balance (or its one NFT) to the vault's own owner. A flaw of this kind can reach only the vault it
-   is called on. *What it does not change:* all clones run one implementation, so a flaw in its own checks (the
-   owner check or the time check) would hold in every vault. It would still have to be exploited vault by vault, and
-   those checks are exactly what the invariant suites attack.
-2. **A privileged path.** An emergency withdrawal, a migration function, an upgradeable proxy or an admin key that
-   can move pooled assets. Once its key is stolen or its logic is abused, it empties the pool. Here there is none:
-   no admin function over a vault, no upgrade (clones of a fixed implementation whose initializer is disabled), no
-   migrate or rescue function. `packages/chain/src/__tests__/abis.test.ts` pins the exact function lists of the vault,
-   vesting and ProPass contracts. The VaultFactory owner can only change the
-   allow-list for new position locks. The FeeController owner can only change future fees within their caps.
-3. **Trusting what the caller supplies.** A shared contract that calls a token, pair, router or position manager the
-   caller names can be re-entered or lied to, and a lie told to the pool's books costs everyone. Here a
-   caller-supplied token can only affect the vault made for it, since that token is the vault's asset. Position
-   managers are allow-listed. Every factory and vault entry point that calls out is non-reentrant. Fees are
-   forwarded, not kept.
+**GemPad, 17 December 2024, about $1.8M** (Decurity; Halborn puts it at about $1.9M), on Ethereum, BNB Chain and
+Base. One contract, `GemPadLock`, held every user's locked LP tokens and kept the books for them. The attacker
+locked a Uniswap v3 position paired with a token of their own whose `transfer` re-enters the locker, then called
+`collectFees`; inside the manager's `collect`, the token re-entered `multipleLock`, which credited new locks with a
+balance difference the locker measured around the re-entry, that is, with other users' tokens. The attacker
+unlocked them in the next block. *Here:* every factory and vault entry point that calls out is `nonReentrant`, and
+the vault that a hostile token reaches holds only that lock's own asset. `lockToken` records the balance delta of
+the new vault, not of a shared pool, and `collect` splits only the collecting vault's own balance, so a re-entering
+token can't count anyone else's tokens as its own.
+Sources: https://www.decurity.io/research/gempad-incident-deep-dive,
+https://www.halborn.com/blog/post/explained-the-gempad-hack-december-2024
+
+**DxSale, late May 2026, about $7.3M**, on BNB Chain. A 2021 (v1) locker contract held the LP tokens of more than 1,400
+pools. BlockSec traces the drain to its `unlockToken`: the lock period was checked with an `if` rather than a `require`,
+the locked amount was not zeroed after a withdrawal, and the balance check read the contract's whole balance rather than
+the caller's lock, so one lock could be withdrawn again and again until the shared balance was gone. rekt.news
+reports that the locker's owner key had passed to the attacker; BlockSec reports the attacker used it to set the lock
+fee and says the key compromise was not a prerequisite. *Here:* `withdraw` sends only what the vault itself holds (its live balance,
+or its one NFT), only at or after `unlockAt`, and only when the vault's owner calls it; the time check reverts
+(`StillLocked`). There are no books to leave unzeroed: a repeated withdrawal finds nothing left to send. The
+VaultFactory owner has no power over any vault, and a fee change reaches new locks only.
+Sources: https://blocksec.com/blog/web3-security-dxsale-squidrouter-more, https://rekt.news/dxsale-rekt
+
+**Team Finance, 27 October 2022, $15.8M** per rekt.news, citing PeckShield (Halborn puts it at about $14.5M), on
+Ethereum. Team Finance's liquidity-lock contract had a `migrate` function, added so projects could move locked Uniswap
+v2 liquidity to v3. By locking a token in the contract, the attacker got past `migrate`'s validation, then migrated
+other projects' locked v2 liquidity, held by the same contract, into v3 pools they had set up at a skewed price, and
+kept the difference that the migration refunded. The function had been in an audit's scope. *Here:* there is no migrate,
+rescue or admin function; nothing moves a lock's asset into a new pool or to anyone but the vault's owner, and
+`packages/chain/src/__tests__/abis.test.ts` pins every vault's exact function list. Sources:
+https://rekt.news/teamfinance-rekt, https://halborn.com/explained-the-team-finance-hack-october-2022/
+
+The attack classes, and what this design does to each:
+
+1. **A flaw that releases more than the caller's own deposit** (DxSale's `unlockToken`, GemPad's re-entered
+   books). In a shared pool, the contract's books decide whose tokens a call may move: a wrong index, a missing
+   ownership check or an accounting error reaches every user's deposit, often in one transaction. Here each vault
+   holds one lock's asset and keeps no books: `withdraw` sends the vault's own balance (or its one NFT) to the
+   vault's own owner. A flaw of this kind can reach only the vault it is called on. *What it does not change:* all
+   clones run one implementation, so a flaw in its own checks (the owner check or the time check) would hold in
+   every vault. It would still have to be exploited vault by vault, and those checks are exactly what the invariant
+   suites attack.
+2. **A privileged path** (Team Finance's `migrate`, DxSale's owner key). An emergency withdrawal, a migration
+   function, an upgradeable proxy or an admin key that can move pooled assets. Once its key is stolen or its logic
+   is abused, it empties the pool. Here there is none: no admin function over a vault, no upgrade (clones of a fixed
+   implementation whose initializer is disabled), no migrate or rescue function.
+   `packages/chain/src/__tests__/abis.test.ts` pins the exact function lists of the vault, vesting and ProPass
+   contracts. The VaultFactory owner can only change the allow-list for new position locks, and can't renounce. The
+   FeeController owner can only change future fees within their caps.
+3. **Trusting what the caller supplies** (GemPad's re-entering token, the lock Team Finance's `migrate` trusted).
+   A shared contract that calls a token, pair, router or position manager the caller names can be re-entered or
+   lied to, and a lie told to the pool's books costs everyone. Here a caller-supplied token can only affect the vault
+   made for it, since that token is the vault's asset. Position managers are allow-listed, and a v4 pool with hooks
+   is refused (Q21). Every factory and vault entry point that calls out is non-reentrant. Fees are forwarded, not
+   kept.
 
 ## Questions for the auditor
 
@@ -126,7 +164,7 @@ schedule ends.
 `getReserves()` returns 96. Any ERC-20 author can answer the same way, and then everyone who locks that token pays the
 LP fee (at most 1%). A real v2-fork pair whose `getReserves()` returns another length escapes the fee. The three
 static calls copy whole return data, so a hostile token can make only its own lock expensive.
-- Status: by design; NatSpec at `VaultFactory.sol` lines 265-269.
+- Status: by design; NatSpec at `VaultFactory.sol` lines 284-288.
 - Why: it harms that token's lockers only, not the factory or other tokens.
 
 ### B. Registries and proofs
@@ -159,7 +197,7 @@ in `VestingCreated.amount`. The same holds for a pre-funded vault address.
 ### C. The fee recipient and the platform's share
 
 **Q9. What a position vault does when the recipient can't be paid.**
-- Status: **owner decision, open** on whether to keep it (it was decided on 2026-09-29 as reversible).
+- Status: decided (2026-09-29, made final on 2026-10-02): the share is skipped and the owner gets everything.
 - Current behaviour: `_split` (`PositionVault.sol` lines 200-216) makes one attempt with at most 100,000 gas and at
   most 32 bytes of return data copied. If it fails, `PlatformShareSkipped` is emitted and the owner gets the whole
   amount. There is no pull balance and no other function that moves tokens.
@@ -182,8 +220,8 @@ in `receive`) is skipped on every collect.
 
 **Q28. The owner can force the skip** on a token whose transfer cost they can push above the budget (a tax token that
 swaps back on transfer).
-- Status: **owner decision, open**: accept it, or raise the ERC-20 budget.
-- Why it's open: it bounds platform revenue only, and a larger budget costs every owner more gas.
+- Status: decided (2026-10-02): accepted; the ERC-20 budget stays at 100,000 gas.
+- Why: it bounds platform revenue only, and a larger budget would cost every owner more gas.
 
 **Q9 (part 1), V11. A recipient that reverts, or is blocklisted, blocks new locks, schedules and subscriptions**
 until the FeeController owner calls `setRecipient`. Existing vaults and wallets are unaffected.
@@ -215,10 +253,18 @@ the vault asks it. `setManager` can flip an allowed manager's `kind`, for new lo
 - Why: only the Uniswap managers are ever allow-listed (testnet: v4 only), and the VaultFactory owner is meant to be a
   Safe before mainnet.
 
-**Q21. v4 hooks run on the zero-liquidity decrease.** A hook can revert (blocking `collect`; `withdraw` still works)
-or take fees through return deltas.
-- Status: **owner decision, open**: reject hooked pools at `lockPosition`, or accept them and flag them in the app.
-- Current behaviour: any pool of an allow-listed manager is accepted, hooks included.
+**Q21. v4 hooks would run on the zero-liquidity decrease.** A hook could revert (blocking `collect`; `withdraw` still
+works) or take fees through return deltas.
+- Status: fixed (decided 2026-10-02: reject hooked pools at the lock).
+- Now: `lockPosition` reverts `HookedPool` when a v4 position's PoolKey has a non-zero `hooks` address, checked after
+  the NFT arrives, with the principal checks (`VaultFactory.sol` lines 163 and 266-270). A pool's hooks are part of
+  its PoolKey and never change. v3 positions are unaffected.
+- Tests: `vault/PositionFactory.t.sol` `test_lockPosition_v4_refusesAPoolWithHooks_andLeavesNothing` (ERC-20 and
+  native pools) and `testFuzz_lockPosition_v4_refusesEveryHookAddress`; on the deployed PoolManager,
+  `fork/PositionVault.fork.t.sol` `test_lockPosition_refusesAV4PositionInAPoolWithHooks`, with a hook that the
+  PoolManager calls on `beforeAddLiquidity`.
+- Question: an allow-listed manager is trusted to report the PoolKey truthfully (Q8, Q24). Is there a v4 pool whose
+  hook could matter that the zero check misses?
 
 **Q22. Anyone can add liquidity to a locked v3 position** (the manager's `increaseLiquidity` is open). The added
 liquidity then stays locked.
@@ -235,7 +281,7 @@ v3 position whose principal had been decreased into `tokensOwed` (released at th
 - Status: fixed.
 - Now: `lockPosition` reverts `NoLiquidity` for zero liquidity, `OwedNotCollected` when a v3 position has anything
   owed, and `PositionNotReceived` when the manager's `ownerOf` isn't the vault after the transfer.
-  The checks are `VaultFactory.sol` lines 240-251. `PositionVault.liquidity()` exposes the live liquidity
+  The checks are `VaultFactory.sol` lines 252-264. `PositionVault.liquidity()` exposes the live liquidity
   (`PositionVault.sol` lines 116-119). Unit and fork tests
   cover each case.
 
@@ -253,12 +299,17 @@ it is locked. That pokes the position, so accrued fees land in `tokensOwed`, and
 
 ### E. Ownership and admin
 
-**Q7, V2. `renounceOwnership` is enabled on `VaultFactory` and on each `ArcVesting` wallet.**
-- Status: **owner decision, open**: keep it (OpenZeppelin's default), or disable it as `FeeController` does.
-- On the factory it permanently freezes the allow-list: a manager can never be added or disallowed again
-  (`test_renounceOwnership_isOneWay_andFreezesTheAllowList`).
-- On a wallet it leaves no one to pay: later releases revert, or burn the tokens for a token that accepts the zero
-  address.
+**Q7, V2. `renounceOwnership` is disabled on `VaultFactory` and on each `ArcVesting` wallet.**
+- Status: fixed (decided 2026-10-02). Both override it to revert `RenounceDisabled` for the owner, as `FeeController`
+  does; a stranger still gets `OwnableUnauthorizedAccount`. Ownership still moves (two steps on the factory, one on a
+  wallet).
+- Why: on the factory, renouncing would freeze the allow-list for good, so a manager could never be added or
+  disallowed again. On a wallet it would leave no one to pay: later releases would revert, or burn the tokens for a
+  token that accepts the zero address.
+- Tests: `vault/VaultFactory.t.sol` `test_renounceOwnership_alwaysReverts_ownerUnchanged_setManagerStillWorks`,
+  `test_renounceOwnership_byAStranger_isUnauthorized`, `test_renounceOwnership_staysDisabled_afterOwnershipMoves`;
+  `vesting/ArcVesting.t.sol` `test_renounceOwnership_alwaysReverts_releasesStillPayTheOwner`,
+  `test_onlyTheOwnerCanTransferTheWallet`.
 
 **Q14, V1. Ownership moves**, so a lock or a vesting wallet can be sold. A vault's transfer takes two steps. A
 wallet's takes one step (OpenZeppelin's `Ownable`), unvested tokens included.
@@ -270,7 +321,7 @@ wallet's takes one step (OpenZeppelin's `Ownable`), unvested tokens included.
 
 **D0. One full contract per schedule.** The original design said "one clone per schedule". `VestingFactory` deploys a full
 `ArcVesting` instead (about 700,000 gas).
-- Status: **owner decision, open** (confirming this reading of the design).
+- Status: decided (2026-10-02): one full contract per schedule stays.
 - Why: OpenZeppelin's `VestingWallet` keeps start, duration and cliff in immutables, which an EIP-1167 clone can't
   carry. A clone would need the upgradeable variant.
 - A reviewer found the full contract isolates more strongly: no shared implementation, no delegatecall, no
@@ -319,7 +370,7 @@ USDC vested through its ERC-20 view is also the wallet's native balance, so a be
 asset twice.
 - Status: fixed (deviation D1, then review I1).
 - `receive` reverts, `release()` reverts, and `releasable()` and the native `vestedAmount(uint64)` return zero
-  (`ArcVesting.sol` lines 41-60). Native value that arrives anyway is released through `release(token)` in its ERC-20
+  (`ArcVesting.sol` lines 43-68). Native value that arrives anyway is released through `release(token)` in its ERC-20
   view (`test_usdcsTwoViews_cannotBeReleasedTwice`).
 
 **Q26, T2. Blocklisting.**
@@ -342,7 +393,7 @@ implementer's choices; are they reasonable?
 
 `MAX_AMOUNT` bounds only the funded amount. Later deposits, or a positive rebase, can push the total past it, and
 releases between the cliff and the end then revert on overflow until `end()`. This is in NatSpec
-(`ArcVesting.sol` lines 25-30).
+(`ArcVesting.sol` lines 26-31).
 
 ### I. ProPass
 
@@ -375,5 +426,5 @@ then deploys. It runs every check before its first transaction:
    the recipient turn it against the other?
 3. The v4 encoding in `_collectV4`, against Arc's deployed PositionManager.
 4. `ArcVesting` on Arc's two-view USDC.
-5. The open owner decisions above (Q9, Q20, Q21, Q28, D0, and `renounceOwnership` under Q7 and V2): what you would
-   choose, and why.
+5. The decisions above: the two still open (Q20, V9), and those made on 2026-10-02 (Q9, Q28, D0, the Q21 fix and
+   the `renounceOwnership` fix under Q7 and V2). What you would choose, and why.

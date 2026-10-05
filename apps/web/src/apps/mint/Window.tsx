@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
+import { useConnection, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { parseEventLogs } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, explorerUrl, feeControllerAbi, formatUsdc, tokenFactoryAbi } from "@arcos/chain";
 import { useDesktop } from "@arcos/shell";
@@ -17,9 +17,9 @@ const EMPTY: MintForm = { name: "", symbol: "", decimals: "18", supply: "", mint
 function Form() {
   const chain = activeChain();
   const contracts = ARCOS[activeNetwork()];
-  const { address, chainId: walletChainId } = useAccount();
+  const { address, chainId: walletChainId } = useConnection();
   const client = usePublicClient({ chainId: chain.id });
-  const { writeContractAsync } = useWriteContract();
+  const writeContract = useWriteContract();
   const { open, notify } = useDesktop();
   const [form, setForm] = useState<MintForm>(EMPTY);
   const [errors, setErrors] = useState<Partial<Record<keyof MintForm, string>>>({});
@@ -99,7 +99,7 @@ function Form() {
         args: [result.args],
         value: fresh.data,
       });
-      hash = await writeContractAsync(withChain(request, chain.id));
+      hash = await writeContract.mutateAsync(withChain(request, chain.id));
       const receipt = await client.waitForTransactionReceipt({ hash });
       // A revert refunds `value` atomically — the fee was NOT taken. Distinct from the "no token
       // reported" case below: this has a real receipt confirming exactly what happened (a definite

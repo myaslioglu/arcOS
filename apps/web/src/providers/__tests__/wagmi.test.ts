@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getPublicClient } from "@wagmi/core";
+import { getPublicClient } from "wagmi/actions";
 import { encodeErrorResult, encodeFunctionResult, multicall3Abi, parseAbi, type PublicClient } from "viem";
 import { CHAINS } from "@arcos/chain";
 import { CallReverted, viemReader } from "@arcos/inspector";
@@ -165,6 +165,43 @@ describe("wagmiConfig's WalletConnect connector", () => {
   it("keeps CCIP-Read off with WalletConnect in the config", async () => {
     const config = await configWith(PROJECT_ID);
     expect(config.getClient({ chainId: CHAINS.mainnet.id }).ccipRead).toBe(false);
+  });
+});
+
+// A WalletConnect session only lets the page switch to a chain it was opened with, and wagmi's connector opens it with the
+// config's chains (every one of them, as optional chains). Bridge's mint runs on the destination chain, so those chains
+// have to be here: without them, the kit's switch to Base went to the phone's wallet as a request outside the session, and
+// Trust Wallet closed on it (2026-10-03). See lib/wallet-chains.ts.
+describe("wagmiConfig's chains", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function chainsOn(network: "mainnet" | "testnet") {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+    const { wagmiConfig: config } = await import("../wagmi");
+    return config;
+  }
+
+  it("asks a wallet to connect on Arc, and carries every chain Bridge offers on mainnet", async () => {
+    const config = await chainsOn("mainnet");
+    expect(config.chains.map((c) => c.id)).toEqual([CHAINS.mainnet.id, CHAINS.testnet.id, 1, 8453, 42161, 10, 137, 43114]);
+  });
+
+  it("carries the testnet destinations on testnet", async () => {
+    const config = await chainsOn("testnet");
+    expect(config.chains.map((c) => c.id)).toEqual([CHAINS.testnet.id, CHAINS.mainnet.id, 11155111, 84532, 421614, 11155420, 80002, 43113]);
+  });
+
+  it("has a transport for every chain, so a client for any of them can be built", async () => {
+    const config = await chainsOn("mainnet");
+    for (const chain of config.chains) {
+      const client = config.getClient({ chainId: chain.id });
+      expect(client.chain?.id, chain.name).toBe(chain.id);
+      expect(client.ccipRead, chain.name).toBe(false);
+    }
   });
 });
 

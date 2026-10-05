@@ -23,7 +23,11 @@ Kinds of test:
 The implementers also mutation-tested these suites (their counts, not re-run for this package):
 - vault ERC-20 locks: all 13 invariant-only mutants killed;
 - position locks: 62 mutants, all killed but 2 judged equivalent;
-- vesting: 52 of 54 killed by the fast suites, the other 2 equivalent; the invariants alone killed 11 of 12.
+- vesting: 52 of 54 killed by the fast suites, the other 2 equivalent; the invariants alone killed 11 of 12;
+- the 2026-10-02 changes (hooked v4 pools refused, `renounceOwnership` disabled), run for that update: 10 hand-made
+  mutants, all killed by the unit suites. The hook check removed, applied to v3 instead of v4 or to both, inverted,
+  testing another PoolKey field, or testing only the permission bits; each `renounceOwnership` override restored to
+  OpenZeppelin's or stripped of `onlyOwner`.
 
 ## The listed invariants
 
@@ -43,7 +47,8 @@ straight through the manager.
 | `vault/PositionFuzz.t.sol` `testFuzz_nonOwnerNeverReceivesValue_ownerNeverGetsThePositionEarly` | fuzz |
 | `vault/PositionVault.t.sol` `test_withdraw_oneSecondBefore_reverts_atUnlock_sendsThePosition`, `test_theManagerRefusesEveryoneButTheVault`, `test_anApprovalGivenBeforeTheLock_doesNotSurvive`, `test_collect_v4_erc20_splitsByTheShare_andDecreasesByZero` | unit |
 | `vault/PositionFactory.t.sol` `test_lockPosition_refusesAPositionWithNoLiquidity`, `test_lockPosition_v3_refusesPrincipalWaitingInTokensOwed_untilCollected`, `test_lockPosition_refusesWhenTheManagerDidNotDeliverTheNft` (a lock always starts with principal in it) | unit |
-| `fork/PositionVault.fork.t.sol` `test_v3_everyEarlyExitFails_thenTheOwnerWithdrawsAWorkingPosition`, and the `v4` and `v4Native` versions | fork |
+| `vault/PositionFactory.t.sol` `test_lockPosition_v4_refusesAPoolWithHooks_andLeavesNothing`, `testFuzz_lockPosition_v4_refusesEveryHookAddress` (no v4 lock has a hook that could run on its `collect`; THREAT-MODEL Q21) | unit, fuzz |
+| `fork/PositionVault.fork.t.sol` `test_v3_everyEarlyExitFails_thenTheOwnerWithdrawsAWorkingPosition`, and the `v4` and `v4Native` versions; `test_lockPosition_refusesAV4PositionInAPoolWithHooks` (a live hook on the deployed PoolManager) | fork |
 
 The invariant and fuzz tests run against mock managers that model Uniswap's access rules. **Gap:** on the real
 managers, the property is checked by the fork scenarios only, not by an invariant or fuzz campaign.
@@ -173,6 +178,7 @@ The handler drives:
 | `vault/PositionFuzz.t.sol` `testFuzz_collect_splitsExactly` | The split is exact for any share and amounts |
 | `vault/PositionFuzz.t.sol` `testFuzz_nonOwnerNeverReceivesValue_ownerNeverGetsThePositionEarly` | As named |
 | `vault/PositionFuzz.t.sol` `testFuzz_extend_onlyLengthens` | As named |
+| `vault/PositionFactory.t.sol` `testFuzz_lockPosition_v4_refusesEveryHookAddress` | Any non-zero hooks address is refused; the same position without hooks locks |
 | `vesting/VestingFuzz.t.sol` `testFuzz_curveMatchesTheReference` | The vesting curve equals a `mulDiv` reference, rounding down |
 | `vesting/VestingFuzz.t.sol` `testFuzz_vestedIsMonotonicInTime` | Vested never decreases over time |
 | `vesting/VestingFuzz.t.sol` `testFuzz_releasesFollowTheSchedule` | At random moments, releases equal the reference curve, the beneficiary holds exactly what was released, and nothing appears or vanishes |
@@ -198,6 +204,17 @@ The handler drives:
 - **The vesting native path is closed** (USDC's two views): `vesting/ArcVesting.t.sol`
   `test_usdcsTwoViews_cannotBeReleasedTwice`, `test_nativeRelease_isClosed_andNothingNativeIsReleasable`,
   `test_nativeValueIsRefused`.
+- **No v4 lock has hooks** (THREAT-MODEL Q21): `lockPosition` refuses a v4 position whose PoolKey names a hook
+  contract, and nothing is left behind. `vault/PositionFactory.t.sol`
+  `test_lockPosition_v4_refusesAPoolWithHooks_andLeavesNothing`, `testFuzz_lockPosition_v4_refusesEveryHookAddress`;
+  `fork/PositionVault.fork.t.sol` `test_lockPosition_refusesAV4PositionInAPoolWithHooks`.
+- **Ownership can't be renounced** on `VaultFactory`, `ArcVesting` or `FeeController` (THREAT-MODEL Q7, V2): the
+  owner gets `RenounceDisabled`, a stranger `OwnableUnauthorizedAccount`, and nothing changes.
+  `vault/VaultFactory.t.sol` `test_renounceOwnership_alwaysReverts_ownerUnchanged_setManagerStillWorks`,
+  `test_renounceOwnership_byAStranger_isUnauthorized`, `test_renounceOwnership_staysDisabled_afterOwnershipMoves`;
+  `vesting/ArcVesting.t.sol` `test_renounceOwnership_alwaysReverts_releasesStillPayTheOwner`,
+  `test_onlyTheOwnerCanTransferTheWallet`; `FeeController.t.sol`
+  `test_renounceOwnership_alwaysReverts_ownerUnchanged_setRecipientStillWorks`.
 - **The platform share never blocks the owner** (THREAT-MODEL Q9): the 19 `test_q9_*` tests in
   `vault/PositionVault.t.sol`, including `test_q9_theOwnerCannotStarveARecipientThatNeedsAllOfTheBudget`.
 

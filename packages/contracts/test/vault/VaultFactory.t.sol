@@ -364,25 +364,48 @@ contract VaultFactoryTest is VaultTestBase {
         factory.setManager(manager, true, PositionVault.Kind.V3);
     }
 
-    /// Pins today's behaviour, which is OpenZeppelin's default: the owner can renounce, in one step and for good.
-    /// That freezes the allow-list as it stands (it can no longer add or remove a manager) and touches nothing else.
-    /// It is listed as an open question for the audit's threat model.
-    function test_renounceOwnership_isOneWay_andFreezesTheAllowList() public {
+    /// Renouncing is disabled (THREAT-MODEL Q7, decided 2026-10-02), as on FeeController: it would freeze the
+    /// allow-list for good, so a manager could never be disallowed again. It reverts for the owner, changes nothing,
+    /// and the owner keeps every power; ownership still moves in two steps.
+    function test_renounceOwnership_alwaysReverts_ownerUnchanged_setManagerStillWorks() public {
         address manager = makeAddr("manager");
         vm.startPrank(factoryOwner);
         factory.setManager(manager, true, PositionVault.Kind.V3);
+        vm.expectRevert(VaultFactory.RenounceDisabled.selector);
         factory.renounceOwnership();
         vm.stopPrank();
-        assertEq(factory.owner(), address(0));
+        assertEq(factory.owner(), factoryOwner);
+        assertEq(factory.pendingOwner(), address(0));
 
         vm.prank(factoryOwner);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, factoryOwner));
         factory.setManager(manager, false, PositionVault.Kind.V3);
         (bool allowed,) = factory.managers(manager);
-        assertTrue(allowed); // frozen as it was
+        assertFalse(allowed);
+    }
 
-        LockVault v = _lock(alice, token, 1 ether, 30 days, alice); // locking never depended on the owner
-        assertTrue(factory.isVault(address(v)));
+    /// A stranger is refused as by any owner-only function, before the disabled body is reached.
+    function test_renounceOwnership_byAStranger_isUnauthorized() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        factory.renounceOwnership();
+        assertEq(factory.owner(), factoryOwner);
+    }
+
+    /// A pending transfer survives a refused renounce, and the new owner can't renounce either.
+    function test_renounceOwnership_staysDisabled_afterOwnershipMoves() public {
+        address next = makeAddr("next");
+        vm.prank(factoryOwner);
+        factory.transferOwnership(next);
+        vm.prank(factoryOwner);
+        vm.expectRevert(VaultFactory.RenounceDisabled.selector);
+        factory.renounceOwnership();
+        assertEq(factory.pendingOwner(), next);
+        vm.prank(next);
+        factory.acceptOwnership();
+        vm.prank(next);
+        vm.expectRevert(VaultFactory.RenounceDisabled.selector);
+        factory.renounceOwnership();
+        assertEq(factory.owner(), next);
     }
 
     function test_isVault_isTrueOnlyForFactoryVaults() public {

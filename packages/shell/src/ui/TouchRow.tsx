@@ -1,10 +1,11 @@
 "use client";
 
-import { appHue, type AppManifest } from "../core";
+import { appHue, appTag, type AppManifest } from "../core";
 
 /**
  * One row of a touch list: the app's glyph, its name and one line of what it does. Touch has no hover to read a
- * tooltip by, so the line is always on. A grey app is tagged "Soon", and a tap opens its "work in progress" window.
+ * tooltip by, so the line is always on. A grey app is tagged "Soon", and a tap opens its "work in progress" window;
+ * a live app with a `tag` carries it the same way, and a blurb that only repeats the tag is left off.
  * The row hands itself to `onOpen`, so the window can open out of it.
  */
 export function TouchRow({
@@ -14,6 +15,7 @@ export function TouchRow({
   m: AppManifest;
   onOpen: (appId: string, from: HTMLElement) => void;
 }) {
+  const tag = appTag(m);
   return (
     <li>
       <button
@@ -29,9 +31,9 @@ export function TouchRow({
         <span className="os-touch-text">
           <span className="os-touch-title-row">
             <span className="os-touch-title">{m.name}</span>
-            {m.comingSoon && <span className="os-soon">Soon</span>}
+            {tag && <span className="os-soon">{tag}</span>}
           </span>
-          <span className="os-touch-blurb">{m.blurb}</span>
+          {m.blurb !== tag && <span className="os-touch-blurb">{m.blurb}</span>}
         </span>
       </button>
     </li>

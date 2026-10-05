@@ -6,4 +6,5 @@ export * from "./docs";
 export * from "./errors";
 export * from "./ids";
 export * from "./names";
+export * from "./pools";
 export * from "./timestamps";

@@ -12,8 +12,8 @@ vi.mock("react", async (importOriginal) => {
   return { ...react, useState: () => [gate.state, gate.set] };
 });
 vi.mock("wagmi", () => ({
-  useAccount: () => ({ address: "0x1111111111111111111111111111111111111111" }),
-  useSignMessage: () => ({ signMessageAsync: async () => "0x" }),
+  useConnection: () => ({ address: "0x1111111111111111111111111111111111111111" }),
+  useSignMessage: () => ({ mutateAsync: async () => "0x" }),
 }));
 const client = vi.hoisted(() => ({
   signOut: vi.fn(),

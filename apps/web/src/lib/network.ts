@@ -1,6 +1,6 @@
 "use client";
 
-import { useAccount, useSwitchChain } from "wagmi";
+import { useConnection, useSwitchChain } from "wagmi";
 import { SwitchChainError, UserRejectedRequestError } from "viem";
 import { activeChain } from "@arcos/chain";
 import { EMBEDDED_FRAME_MESSAGE, isEmbeddedFrameRefusal } from "./wallet-frame";
@@ -139,8 +139,9 @@ export type ArcNetworkState = {
  * discarding whatever it throws. */
 export function useArcNetwork(): ArcNetworkState {
   const chain = activeChain();
-  const { isConnected, chainId } = useAccount();
-  const { switchChain, isPending, error } = useSwitchChain();
+  const { isConnected, chainId } = useConnection();
+  const switchChain = useSwitchChain();
+  const { isPending, error } = switchChain;
 
   return {
     chain,
@@ -148,6 +149,6 @@ export function useArcNetwork(): ArcNetworkState {
     wrongNetwork: isConnected && chainId !== chain.id,
     switching: isPending,
     switchError: error ? switchNetworkErrorMessage(error, chain.name) : null,
-    switchToArc: () => switchChain({ chainId: chain.id }),
+    switchToArc: () => switchChain.mutate({ chainId: chain.id }),
   };
 }

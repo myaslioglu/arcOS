@@ -29,8 +29,8 @@ type Props = {
 /**
  * Stacks open windows. A window the visitor has moved, resized, snapped or
  * tiled keeps that rect (kept on screen if the stage shrinks); one they have
- * not touched opens where `windowRect` places it: the first against the right
- * edge, the second tiled beside it, later ones cascading. The stage is
+ * not touched opens where `windowRect` places it: the first centred, a little
+ * above the middle, later ones cascading down and right from it. The stage is
  * measured with a ResizeObserver so those rects follow the viewport. Touch
  * devices get exactly one full-screen window: the active one.
  *

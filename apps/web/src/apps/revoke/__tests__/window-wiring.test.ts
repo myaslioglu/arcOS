@@ -11,20 +11,20 @@ import type { Approval, ApprovalsAnswer } from "@/lib/approvals";
  */
 
 const state = vi.hoisted(() => ({
-  /** What useAccount answers to the window itself and to its approval list; each falls back to `address`. */
+  /** What useConnection answers to the window itself and to its approval list; each falls back to `address`. */
   accounts: {} as { window?: string; list?: string },
   address: undefined as string | undefined,
   data: undefined as ApprovalsAnswer | undefined,
   drop: undefined as ((item: unknown) => void) | undefined,
 }));
 vi.mock("wagmi", () => ({
-  useAccount: () => {
+  useConnection: () => {
     // The caller, read off the stack: the approval list is the only component in Window.tsx named ApprovalList.
     const caller = /\bApprovalList\b/.test(new Error().stack ?? "") ? "list" : "window";
     return { address: caller in state.accounts ? state.accounts[caller] : state.address, chainId: 1 };
   },
   usePublicClient: () => ({ fake: "client" }),
-  useWriteContract: () => ({ writeContractAsync: async () => "0x" }),
+  useWriteContract: () => ({ mutateAsync: async () => "0x" }),
 }));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ isPending: false, isLoadingError: false, isRefetchError: false, data: state.data, refetch: async () => undefined }),

@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { useAccount } from "wagmi";
+import { useConnection } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { AppKit, isRateLimitError } from "@circle-fin/app-kit";
 import { useDesktop } from "@arcos/shell";
+import { BalanceLine } from "@/components/BalanceLine";
 import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, SWAP_TOKENS, SWAP_TOKEN_DECIMALS, adapterFor, feePercentLabel, feeRecipient } from "@/lib/appkit";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
+import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
+import { useArcTokenBalance } from "@/lib/useArcTokenBalance";
 import { canSwap } from "./canSwap";
 import { presentSwapResult } from "./presentResult";
 import { classifySwapFailure, session } from "./session";
@@ -43,7 +46,7 @@ function buildParams(
 }
 
 function Form() {
-  const { address, connector } = useAccount();
+  const { address, connector } = useConnection();
   const { notify } = useDesktop();
   const kit = useMemo(() => new AppKit(), []);
 
@@ -53,6 +56,7 @@ function Form() {
   const [pair, setPair] = useState<TokenPair>({ tokenIn: "USDC", tokenOut: "EURC" });
   const [amountIn, setAmountIn] = useState("");
   const decimalsIn = SWAP_TOKEN_DECIMALS[pair.tokenIn];
+  const balanceIn = useArcTokenBalance(pair.tokenIn).units;
 
   // Debounced 400ms after the last keystroke: estimateSwap is a network call against a rate-limited
   // (keyless) endpoint, so re-firing it on every keystroke would burn through that budget for nothing.
@@ -94,7 +98,7 @@ function Form() {
     }
   };
 
-  const issue = amountIssue(amountIn, decimalsIn);
+  const issue = amountIssue(amountIn, decimalsIn) ?? overBalanceIssue(amountIn, decimalsIn, balanceIn);
   const decision = canSwap({
     sessionActive,
     hasConnector: !!connector,
@@ -151,6 +155,16 @@ function Form() {
             </div>
             {issue && <span className="mt-1 block text-xs text-accent-3-text">{issue}</span>}
           </label>
+          <BalanceLine
+            units={balanceIn}
+            decimals={decimalsIn}
+            symbol={pair.tokenIn}
+            // USDC is also Arc's gas token, so "Max" leaves a little of it for the approval and the swap. The platform fee
+            // is taken from what the swap pays out, not added to what it spends, so it doesn't count here.
+            max={{ reserveUnits: pair.tokenIn === "USDC" ? ARC_GAS_RESERVE_UNITS : 0n }}
+            disabled={sessionActive}
+            onMax={setAmountIn}
+          />
 
           <button
             type="button"

@@ -25,6 +25,21 @@ test.describe("desktop", () => {
     await expect(page.getByRole("dialog", { name: "Trust" })).toBeVisible();
   });
 
+  test("the Trade folder's Meme tile is tagged Soon, and opens a window that says so", async ({ page }) => {
+    await page.goto("/");
+    await hydrated(page);
+
+    await page.getByRole("group", { name: "Desktop" }).getByRole("button", { name: /^Trade: / }).click();
+    const trade = page.getByRole("dialog", { name: "Trade" });
+    const tile = trade.getByRole("button", { name: "Meme, soon" });
+    await expect(tile).toBeEnabled();
+    await expect(tile.locator(".os-soon")).toHaveText("Soon");
+    await tile.click();
+    const meme = page.getByRole("dialog", { name: "Meme" });
+    await expect(meme).toBeVisible();
+    await expect(meme.getByText("Soon.", { exact: true })).toBeVisible();
+  });
+
   test("Cmd/Ctrl+K opens the launcher, and picking an app opens its window", async ({ page }) => {
     await page.goto("/");
     await hydrated(page);

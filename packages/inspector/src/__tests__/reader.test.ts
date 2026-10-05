@@ -6,6 +6,7 @@ import {
 import { viemReader } from "../reader";
 import { isDecodeFailure, isNodeAnswer } from "../rpc-errors";
 import { CallReverted } from "../types";
+import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
 
 const abi = parseAbi(["function foo() view returns (uint256)"]);
 const ADDRESS = "0x1111111111111111111111111111111111111111" as const;
@@ -114,5 +115,132 @@ describe("viemReader().read: which node answers are reverts", () => {
     const e: unknown = await read(rpcError(-32602, "invalid argument 0: hex string has length 38")).catch((x: unknown) => x);
     expect(e).not.toBeInstanceOf(CallReverted);
     expect(isNodeAnswer(e)).toBe(true);
+  });
+});
+
+// A quote is one eth_call with a gas limit of its own, and what it reverted with is kept: only the revert payload tells the
+// pool's own "not enough liquidity" from an inner call that ran out of gas.
+describe("viemReader().read: a gas limit and the revert payload", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the gas limit with the eth_call", async () => {
+    const bodies: { method: string; params: [{ gas?: string }] }[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return Response.json({ jsonrpc: "2.0", id: 1, result: `0x${"0".repeat(63)}1` });
+    });
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    await viemReader(client).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n });
+    await viemReader(client).read(ADDRESS, abi, "foo");
+    expect(bodies[0]!.params[0].gas).toBe("0x1e8480");
+    expect(bodies[1]!.params[0].gas).toBeUndefined();
+  });
+
+  it.each([
+    ["not enough liquidity", NOT_ENOUGH_LIQUIDITY],
+    ["an empty inner reason", EMPTY_INNER_REASON],
+    ["an uninitialised pool", POOL_NOT_INITIALIZED],
+  ])("keeps the payload of a revert: %s", async (_, data) => {
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted", data } }));
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    const e: unknown = await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(CallReverted);
+    expect((e as CallReverted).data).toBe(data);
+  });
+
+  it("has no payload for an empty answer or a revert that carries none", async () => {
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, result: "0x" }));
+    expect(((await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)) as CallReverted).data).toBeNull();
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted" } }));
+    expect(((await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)) as CallReverted).data).toBeNull();
+  });
+});
+
+// Arc answers an eth_call that runs out of gas mid-execution with -32003 "out of gas: gas required exceeds: N". For a read that
+// set its own gas limit, that is the node's answer about this call (asking again returns the same), never the endpoint failing.
+describe("viemReader().read: a gas-capped read that runs out of gas", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const outOfGas = async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32003, message: "out of gas: gas required exceeds: 2000000" } });
+
+  it("is the node's answer, a CallReverted with no payload, when the read gave a gas limit", async () => {
+    vi.stubGlobal("fetch", outOfGas);
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    const e: unknown = await viemReader(client).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(CallReverted);
+    expect((e as CallReverted).data).toBeNull();
+  });
+
+  it("stays an RPC failure for a read without a gas limit, and for any other -32003", async () => {
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    vi.stubGlobal("fetch", outOfGas);
+    expect(await viemReader(client).read(ADDRESS, abi, "foo").catch((x: unknown) => x)).not.toBeInstanceOf(CallReverted);
+    vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32003, message: "transaction rejected" } }));
+    expect(await viemReader(client).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x)).not.toBeInstanceOf(CallReverted);
+  });
+});
+
+// The trade simulation is one eth_call from S to S, with S's code and balance replaced for that call only. The reader sends it
+// as it is, with its gas limit and gas price, and maps the answer the way it maps a gas-capped read.
+describe("viemReader().callWithOverride", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const S = "0x00000000000000000000000000000000000a4c05" as const;
+  const call = { from: S, to: S, data: "0x12345678" as const, gas: 5_000_000n, gasPrice: 160_000_000_000n };
+  const overrides = [{ address: S, code: "0x6001600055" as const, balance: 10n ** 19n }];
+  const client = () => createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+  const answer = (body: object) => vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, ...body }));
+
+  it("sends from, to, data, the gas limit, the gas price and the state override, and resolves with what the call returned", async () => {
+    const bodies: { method: string; params: unknown[] }[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return Response.json({ jsonrpc: "2.0", id: 1, result: "0xabcd" });
+    });
+    expect(await viemReader(client()).callWithOverride(call, overrides)).toBe("0xabcd");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.method).toBe("eth_call");
+    const [tx, block, state] = bodies[0]!.params as [Record<string, string>, string, Record<string, Record<string, string>>];
+    expect(tx).toMatchObject({ from: S, to: S, data: "0x12345678", gas: "0x4c4b40", gasPrice: "0x2540be4000" });
+    expect(block).toBe("latest");
+    expect(state).toEqual({ [S]: { code: "0x6001600055", balance: "0x8ac7230489e80000" } });
+  });
+
+  it("reads the gas price with eth_gasPrice", async () => {
+    const methods: string[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      methods.push(JSON.parse(init.body).method);
+      return Response.json({ jsonrpc: "2.0", id: 1, result: "0x2540be4000" });
+    });
+    expect(await viemReader(client()).gasPrice()).toBe(160_000_000_000n);
+    expect(methods).toEqual(["eth_gasPrice"]);
+  });
+
+  it("resolves with an empty answer as it is: the caller decides what code that didn't run means", async () => {
+    answer({ result: "0x" });
+    expect(await viemReader(client()).callWithOverride(call, overrides)).toBe("0x");
+  });
+
+  it("is a CallReverted with the payload when the call reverts", async () => {
+    answer({ error: { code: 3, message: "execution reverted", data: REVERT_DATA } });
+    const e: unknown = await viemReader(client()).callWithOverride(call, overrides).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(CallReverted);
+    expect((e as CallReverted).data).toBe(REVERT_DATA);
+  });
+
+  it("is a CallReverted when it runs out of the gas it was given (Arc's -32003): the node's answer", async () => {
+    answer({ error: { code: -32003, message: "out of gas: gas required exceeds: 5000000" } });
+    expect(await viemReader(client()).callWithOverride(call, overrides).catch((x: unknown) => x)).toBeInstanceOf(CallReverted);
+  });
+
+  it("rejects without a CallReverted when the node refuses the override (-32602) or the endpoint fails", async () => {
+    answer({ error: { code: -32602, message: "invalid argument 2: unknown field" } });
+    const refused: unknown = await viemReader(client()).callWithOverride(call, overrides).catch((x: unknown) => x);
+    expect(refused).not.toBeInstanceOf(CallReverted);
+    expect(isNodeAnswer(refused)).toBe(true);
+    vi.stubGlobal("fetch", async () => new Response("bad gateway", { status: 502 }));
+    const failed: unknown = await viemReader(client()).callWithOverride(call, overrides).catch((x: unknown) => x);
+    expect(failed).toBeInstanceOf(Error);
+    expect(failed).not.toBeInstanceOf(CallReverted);
+    expect(isNodeAnswer(failed)).toBe(false);
   });
 });

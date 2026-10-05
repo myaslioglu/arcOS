@@ -169,6 +169,12 @@ contract MockV4PositionManager is ERC721 {
         _mint(to, id);
     }
 
+    /// Puts the position in a pool with `hooks` as its hook contract. On the real PoolManager a pool's hooks are part of
+    /// its PoolKey and never change; the mock lets a test pick them after minting.
+    function setHooks(uint256 id, address hooks) external {
+        _positions[id].key.hooks = hooks;
+    }
+
     /// Trading fees arrive. ERC-20 fee tokens are minted to the manager; native value must be sent with the call.
     function accrue(uint256 id, uint128 amount0, uint128 amount1) external payable {
         Position storage p = _positions[id];

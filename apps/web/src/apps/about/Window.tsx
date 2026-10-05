@@ -74,7 +74,9 @@ export default function AboutWindow() {
 
       <ul className="mt-4 grid gap-1 text-xs text-faint">
         <li>{'Explorer data can be unavailable; when it is, checks read "unknown" instead of pass or fail.'}</li>
-        <li>{"Liquidity and lock checks cover Uniswap v2/v3 against USDC and EURC only; v4 and Aerodrome aren't scanned yet."}</li>
+        <li>{"Liquidity checks read Uniswap v2, v3 and v4 and Aerodrome pools against USDC and EURC (testnet has v4 only). A v4 pool with a hook or an unusual fee can be missed until an index lists it."}</li>
+        <li>{"Lock checks read Uniswap v2 LP tokens only; positions in v3, v4 and Aerodrome pools can't be read without an index yet."}</li>
+        <li>{"The trade check buys with up to 10 USDC and sells straight back, in a simulated call for each liquid USDC pool and each thinner hookless one it could trade in (up to six), and tries a Uniswap v2 or hookless v4 pool too when a v3, Aerodrome or hooked pool refuses the sell; nothing is signed or sent. It passes only when every round trip does, one in a liquid pool, and no other liquid or undecided pool is left out. A token can tell a simulation from a real trade, and a cooldown or anti-bot rule can refuse a sell made straight after a buy, so a finding covers those round trips."}</li>
         <li>{"Swap and Bridge run on Circle's App Kit in keyless mode and charge a 0.20% platform fee, split 90/10 with Circle, only when a fee recipient is configured."}</li>
         <li>{"Bridge covers EVM chains only — no Solana yet, and it shows each step once a transfer settles rather than live progress while it's in flight."}</li>
         <li>{"Revoke finds approvals in the explorer's logs: token allowances, NFT approvals and operators, and Permit2 allowances. Revoking all of them asks the wallet once per transaction; Permit2's go in one."}</li>

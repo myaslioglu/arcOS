@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { useAccount, useSignMessage } from "wagmi";
+import { useConnection, useSignMessage } from "wagmi";
 import { activeChain } from "@arcos/chain";
 import { fetchSession, signInWithWallet, signOut, type SessionInfo, type SignOutOutcome } from "@/lib/sign-in-client";
 
@@ -45,8 +45,8 @@ const box = "grid h-full place-items-center p-6 text-center text-sm";
 const button = "mt-3 rounded-lg border border-border-2 px-3 py-1.5";
 
 export function SignInGate({ children }: { children: React.ReactNode }) {
-  const { address } = useAccount();
-  const { signMessageAsync } = useSignMessage();
+  const { address } = useConnection();
+  const signMessage = useSignMessage();
   const [state, setState] = useState<State>({ kind: "loading" });
 
   const load = useCallback(async () => setState(stateFor(await fetchSession(), address)), [address]);
@@ -67,7 +67,7 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     const outcome = await signInWithWallet({
       address,
       chainId: activeChain().id,
-      signMessage: ({ message }) => signMessageAsync({ message }),
+      signMessage: ({ message }) => signMessage.mutateAsync({ message }),
       siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     });
     if (outcome.ok) await load();

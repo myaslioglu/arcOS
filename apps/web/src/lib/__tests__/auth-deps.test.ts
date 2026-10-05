@@ -7,7 +7,7 @@ vi.mock("server-only", () => ({}));
 
 import { authDeps } from "../auth-deps";
 import { processGlobal } from "../process-global";
-import { endpointHealth } from "../rpc-transport";
+import { endpointHealth } from "@arcos/inspector";
 import { authRpcClient, serverRpcClient } from "../server-rpc";
 import { buildSignInMessage, siteIdentity } from "../siwe";
 

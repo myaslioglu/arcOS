@@ -10,6 +10,8 @@ import {
   positionVaultAbi,
   proPassAbi,
   tokenFactoryAbi,
+  tradeSimulatorAbi,
+  tradeSimulatorRuntime,
   vaultFactoryAbi,
   vestingFactoryAbi,
 } from "../abis";
@@ -27,7 +29,23 @@ const findItem = (abi: readonly AbiItem[], type: string, name: string) =>
 
 const inputNames = (item: AbiItem | undefined) => (item?.inputs ?? []).map((input) => input.name);
 
+// A function the contract overrides to always revert is declared `view`, so its mutability shows the override.
+const stateMutability = (abi: readonly AbiItem[], name: string) =>
+  (findItem(abi, "function", name) as { stateMutability?: string } | undefined)?.stateMutability;
+
 describe("abis", () => {
+  it("tradeSimulatorAbi exposes the call Inspector makes, the router's pull, and its callbacks", () => {
+    const fns = names(tradeSimulatorAbi, "function");
+    expect(fns).toEqual(expect.arrayContaining(["simulate", "pull", "uniswapV3SwapCallback", "unlockCallback"]));
+  });
+
+  it("tradeSimulatorRuntime is runtime code without solc's metadata trailer", () => {
+    expect(tradeSimulatorRuntime).toMatch(/^0x([0-9a-f]{2})+$/);
+    // The trailer is CBOR that starts a2 64 "ipfs" (a2646970667358) and ends with its two-byte length.
+    expect(tradeSimulatorRuntime).not.toContain("a2646970667358");
+    expect(tradeSimulatorRuntime.length).toBeLessThan(2 + 2 * 24_576);
+  });
+
   it("feeControllerAbi exposes the functions the app calls", () => {
     const fns = names(feeControllerAbi, "function");
     expect(fns).toContain("feeOf");
@@ -189,7 +207,7 @@ describe("abis", () => {
         "positionVaultsForToken",
         "positionVaultsForTokenLength",
         "positionVaultsForTokenSlice",
-        "renounceOwnership",
+        "renounceOwnership", // always reverts RenounceDisabled
         "setManager",
         "transferOwnership",
         "vaultsForToken",
@@ -239,9 +257,16 @@ describe("abis", () => {
       "NoLiquidity",
       "OwedNotCollected",
       "PositionNotReceived",
+      "HookedPool",
     ]) {
       expect(errors).toContain(name);
     }
+  });
+
+  it("vaultFactoryAbi's renounceOwnership is permanently disabled, as on the fee controller", () => {
+    expect(names(vaultFactoryAbi, "error")).toContain("RenounceDisabled");
+    expect(stateMutability(vaultFactoryAbi, "renounceOwnership")).toBe("view");
+    expect(stateMutability(feeControllerAbi, "renounceOwnership")).toBe("view");
   });
 
   it("FEE_KEYS.MINT_FLAT matches keccak256(toHex(\"MINT_FLAT\"))", () => {
@@ -329,7 +354,7 @@ describe("vesting and ProPass abis", () => {
         "release", // release(token)
         "released",
         "released",
-        "renounceOwnership",
+        "renounceOwnership", // always reverts RenounceDisabled
         "start",
         "transferOwnership",
         "vestedAmount",
@@ -343,6 +368,11 @@ describe("vesting and ProPass abis", () => {
     for (const name of ["NativeValueNotSupported", "InvalidCliffDuration", "OwnableUnauthorizedAccount"]) {
       expect(errors).toContain(name);
     }
+  });
+
+  it("arcVestingAbi's renounceOwnership is permanently disabled", () => {
+    expect(names(arcVestingAbi, "error")).toContain("RenounceDisabled");
+    expect(stateMutability(arcVestingAbi, "renounceOwnership")).toBe("view");
   });
 
   it("vestingFactoryAbi has exactly these functions: creation and the registries with bounded reads, no owner", () => {

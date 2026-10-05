@@ -1,21 +1,24 @@
 import "server-only";
 import type { PublicClient } from "viem";
 import { activeChain } from "@arcos/chain";
-import { inspectionClient } from "./inspection-client";
+import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer } from "@arcos/inspector";
 import { processGlobal } from "./process-global";
 import { perSecond } from "./rate-limit";
-import { endpointHealth, outOfGasIsNodeAnswer } from "./rpc-transport";
 
 /**
  * The server's RPC client, one per process: the inspection engine, `/api/pulse`, `/api/inspect`, `/badge` and `/t`
- * all read Arc through it, over the chain's URLs in order with one shared cooldown record (see rpc-transport.ts).
- * CCIP-Read is off on it (see inspection-client.ts), which matters for every route that reads contracts anyone can
+ * all read Arc through it, over the chain's URLs in order with one shared cooldown record (see rpc-transport.ts in @arcos/inspector).
+ * CCIP-Read is off on it (see inspection-client.ts in @arcos/inspector), which matters for every route that reads contracts anyone can
  * deploy. `/api/approvals` and sign-in read Arc through their own clients instead — `approvalsRpcClient()` and
  * `authRpcClient()`, below — each with its own cooldown record, so neither can put this one's endpoints on cooldown.
+ *
+ * It opts in to `outOfGasIsNodeAnswer`: Inspector's v4 quotes each run with a gas limit of their own, and a pool anyone can
+ * create can make one run out of it. That is the node's answer about one call, the same on every endpoint, so it must not
+ * fail over to, and cool, every endpoint these routes share.
  */
 export function serverRpcClient(): PublicClient {
   return processGlobal("server.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("inspect.rpcHealth", endpointHealth)),
+    inspectionClient(activeChain(), processGlobal("inspect.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
   );
 }
 
@@ -35,8 +38,8 @@ export function explorerPacer(): () => Promise<void> {
  * resilient aggregate3 splitting): that must not put the URLs the Inspector, /badge, /t and /api/pulse share on
  * cooldown, so Revoke's failures cool only Revoke's own client.
  *
- * It alone also opts in to `outOfGasIsNodeAnswer`: a poisoned multicall target can make an eth_call run out of gas
- * mid-execution, which the shared classifier doesn't read as the node's answer (see rpc-transport.ts), so without
+ * It also opts in to `outOfGasIsNodeAnswer`: a poisoned multicall target can make an eth_call run out of gas
+ * mid-execution, which the shared classifier doesn't read as the node's answer (see rpc-transport.ts in @arcos/inspector), so without
  * this every such failure would fail over to, and cool, every endpoint on one attempt instead of costing one.
  */
 export function approvalsRpcClient(): PublicClient {
