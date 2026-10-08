@@ -56,14 +56,13 @@ describe("the no-score rule", () => {
     expect(withoutTheDenial("Evidence, never a score.")).not.toMatch(SCORE);
   });
 
-  it("gives Radar the words that say each new token comes with Inspector's checks", () => {
-    const radar = APPS.find((m) => m.id === "radar");
-    expect(radar?.blurb).toBe("New tokens, each with Inspector's checks");
-    expect(radar?.details).toEqual([
-      "Will list new tokens and locks on Arc as they appear.",
-      "Will run Inspector's checks on each new token: evidence, never a score.",
-      "Needs an index of new tokens first.",
-    ]);
+  it("lists Radar as a live app with its blurb", () => {
+    const radar = LIVE.find((m) => m.id === "radar");
+    expect(radar).toMatchObject({ blurb: "New tokens, each with Inspector's checks", category: "trade", release: "r1" });
+    expect(radar?.comingSoon).toBeFalsy();
+    expect(SOON.some((m) => m.id === "radar")).toBe(false);
+    expect(appsFor("mainnet").filter((m) => m.id === "radar")).toHaveLength(1);
+    expect(appsFor("testnet").filter((m) => m.id === "radar")).toHaveLength(1);
   });
 });
 

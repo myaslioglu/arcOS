@@ -18,9 +18,10 @@ describe("Meme", () => {
     expect(appLabel(meme)).toBe("Meme, soon");
   });
 
-  it("stands with the other Trade apps, after Bridge", () => {
+  it("stands with the other Trade apps, after Bridge and Radar", () => {
     const trade = APPS.filter((m) => m.category === "trade").map((m) => m.id);
-    expect(trade.indexOf("meme")).toBe(trade.indexOf("bridge") + 1);
+    expect(trade.indexOf("radar")).toBe(trade.indexOf("bridge") + 1);
+    expect(trade.indexOf("meme")).toBe(trade.indexOf("radar") + 1);
   });
 
   it("opens a window whose body says only Soon.", async () => {

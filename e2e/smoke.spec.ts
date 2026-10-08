@@ -40,6 +40,25 @@ test.describe("desktop", () => {
     await expect(meme.getByText("Soon.", { exact: true })).toBeVisible();
   });
 
+  // The e2e build is mainnet without K_SERVICE, so /api/radar answers 503 and the window shows its first-load error;
+  // the filters and the note are there in every state, and that is what this checks.
+  test("the Trade folder's Radar tile opens Radar with its filters and its note", async ({ page }) => {
+    await page.goto("/");
+    await hydrated(page);
+
+    await page.getByRole("group", { name: "Desktop" }).getByRole("button", { name: /^Trade: / }).click();
+    const trade = page.getByRole("dialog", { name: "Trade" });
+    const tile = trade.getByRole("button", { name: "Radar", exact: true });
+    await expect(tile).toBeEnabled();
+    await expect(tile.locator(".os-soon")).toHaveCount(0);
+    await tile.click();
+    const radar = page.getByRole("dialog", { name: "Radar" });
+    await expect(radar).toBeVisible();
+    await expect(radar.getByRole("checkbox", { name: "Has liquidity" })).toBeVisible();
+    await expect(radar.getByRole("checkbox", { name: "At least 5 checks pass" })).toBeVisible();
+    await expect(radar.getByText("evidence, never a score", { exact: false })).toBeVisible();
+  });
+
   test("Cmd/Ctrl+K opens the launcher, and picking an app opens its window", async ({ page }) => {
     await page.goto("/");
     await hydrated(page);

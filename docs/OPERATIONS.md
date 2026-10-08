@@ -9,7 +9,7 @@ All of it is in the Firebase project `arcos-c80cf`, region `europe-west4`.
 
 | Piece | Runs as | Reads | Writes |
 |---|---|---|---|
-| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools) | nothing in Firestore yet |
+| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, radarFeed, indexer) | nothing in Firestore yet |
 | App Hosting `arcos-testnet`: https://testnet.4rcos.com | `arcos-testnet-web@` | Arc testnet RPC and explorer | nothing; it has no Firestore access |
 | Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed` |
 | Cloud Scheduler job of `arcosIndexer`, every minute (UTC) | calls the function with an OIDC token of `arcos-jobs@` | | |
@@ -17,6 +17,11 @@ All of it is in the Firebase project `arcos-c80cf`, region `europe-west4`.
 
 The Firestore data is mainnet data only. The testnet site has no index: `GET /api/pools/[token]` answers 404 there, and
 the Inspector reads that as "no indexed pools".
+
+`GET /api/radar` reads one radarFeed doc and `indexer/mainnet` in one `getAll` (2 reads), keeps the answer 15 s per filter
+in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s cooldown. It answers 404 on testnet. Logs:
+`radar failed <name> [<gRPC code>]`, and `radar rows skipped <n>` if a stored row is malformed. The site's
+`roles/datastore.user` on the `arcos` database covers both reads, so there is no IAM change.
 
 ## The indexer
 
@@ -102,6 +107,8 @@ The indexer never writes `paused` or `inspect`. Change them only between runs (a
 ## The site's reads
 
 - `GET /api/pools/[token]` answers the token's indexed pools, v4 pool keys included, kept 60 seconds at the CDN.
+- `GET /api/radar` answers the first Radar page of a filter (the newest 50 tokens, each with Inspector's counts), kept 20
+  seconds at the CDN; the Radar window polls it every 20 seconds.
 - `/api/inspect`, `/t` and `/badge` pass the index's v4 pools to the Inspector, and the Inspector window reads them from
   `/api/pools`. This is how a v4 pool with a hook, or with a fee outside the five standard tiers, gets inspected.
 - The site reads the index only on mainnet, and only on App Hosting (or against the emulator), so a dev server never

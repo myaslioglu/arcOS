@@ -21,10 +21,10 @@ Automated analysis, not investment advice.
 | About | What 4rc.OS is, read from inside the app | Live |
 | Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
 | Revoke | Lists a wallet's live token approvals and revokes one with a transaction the wallet confirms | Live |
+| Radar | Lists new tokens as the index records them, each with Inspector's checks | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
 | Watchdog | Alerts when a token you hold changes | Coming soon |
-| Radar | New tokens, each with Inspector's checks | Coming soon |
 | Meme | Soon | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
@@ -294,6 +294,9 @@ but does have privileged functions, both the ownership and privileges findings r
   not see its oldest approvals. Hiding a pair just revoked lasts for that browser tab (kept in sessionStorage) until a
   newer approval of the same pair appears; a new tab, or that tab's storage cleared, reads the chain
   again from scratch.
+- Radar lists the newest 50 tokens the indexer has recorded on Arc mainnet for each filter, with no
+  older pages yet, and can trail the chain by a few minutes. A token shows its checks once the
+  indexer has inspected it. The testnet site has no token index, so its Radar says so.
 - The trade check sees each pool as it is at that block. A pool whose price is parked at its limit
   while the inspection runs reads "pool can't trade" and is left out (when it is the deepest, it caps
   as a deeper pool not measured); a token whose real market is a pool moved there for the moment of
