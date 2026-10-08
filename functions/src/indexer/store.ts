@@ -56,7 +56,8 @@ const leaseOf = (doc: IndexerDoc): { runningUntil: number; runId: string | null 
  * Reads the indexer doc and takes the run's lease (`runningUntil`, `runId`) in one transaction. Another run's lease that
  * is still live makes this run skip (`busy`); a paused or halted indexer is read and nothing is written. The first run
  * creates the doc with the cursor `cursor` (the 24-hour backfill) and the console controls at their defaults: running,
- * inspecting, not halted. Two first runs can't both create it: the transaction makes the second read the first's.
+ * inspecting, not halted, Watchdog and its Telegram sends on, with no Watchdog cursor yet. Two first runs can't both
+ * create it: the transaction makes the second read the first's.
  */
 export async function loadOrCreateState(
   db: Firestore,
@@ -81,6 +82,9 @@ export async function loadOrCreateState(
         inspect: true,
         halted: null,
         explorerCalls: { day: utcDay(now), count: 0 },
+        watch: true,
+        telegram: true,
+        watchCursor: null,
         ...lease,
       };
       tx.create(ref, doc);
@@ -254,9 +258,10 @@ export async function halt(db: Firestore, network: NetworkId, reason: string): P
 
 /**
  * The end of a run, in one transaction: `lastRunAt` (never moved back), the explorer calls this run spent added to what
- * the doc holds for that UTC day, and the lease given back if it is still this run's. Adding, rather than writing the
- * count the run started from plus its own, keeps the calls of a run that overlapped this one (one that outlived its
- * lease) in the day's count.
+ * the doc holds for that UTC day, the Watchdog step's page cursor when the step ran (`watchCursor`; undefined leaves
+ * the stored one), and the lease given back if it is still this run's. Adding, rather than writing the count the run
+ * started from plus its own, keeps the calls of a run that overlapped this one (one that outlived its lease) in the
+ * day's count.
  */
 export async function finishRun(
   db: Firestore,
@@ -264,6 +269,7 @@ export async function finishRun(
   now: number,
   spent: { day: string; calls: number },
   runId: string,
+  watchCursor?: string | null,
 ): Promise<void> {
   const ref = indexerRef(db, network);
   await db.runTransaction(async (tx) => {
@@ -276,7 +282,12 @@ export async function finishRun(
     const explorerCalls =
       stored.day === spent.day ? { day: spent.day, count: stored.count + spent.calls } : stored.day > spent.day ? stored : { day: spent.day, count: spent.calls };
     const lastRunAt = Math.max(doc.lastRunAt?.toMillis() ?? 0, now);
-    tx.update(ref, { lastRunAt: Timestamp.fromMillis(lastRunAt), explorerCalls, ...(mine ? { runningUntil: null, runId: null } : {}) });
+    tx.update(ref, {
+      lastRunAt: Timestamp.fromMillis(lastRunAt),
+      explorerCalls,
+      ...(watchCursor === undefined ? {} : { watchCursor }),
+      ...(mine ? { runningUntil: null, runId: null } : {}),
+    });
   });
 }
 
