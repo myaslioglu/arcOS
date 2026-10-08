@@ -27,11 +27,20 @@ export function viemReader(client: PublicClient): ChainReader {
       const code = await client.getCode({ address });
       return code && code !== "0x" ? code : null;
     },
-    getStorageAt: async (address, slot) => (await client.getStorageAt({ address, slot })) ?? null,
+    getStorageAt: async (address, slot, blockNumber) =>
+      (await client.getStorageAt({ address, slot, ...(blockNumber === undefined ? {} : { blockNumber }) })) ?? null,
     // The function name is dynamic here, so viem's per-ABI inference can't apply; the checks cast the result.
-    // viem's readContract hands everything it isn't typed for on to eth_call, `gas` included.
+    // viem's readContract hands everything it isn't typed for on to eth_call, `gas` included; `blockNumber` becomes the
+    // call's block parameter.
     read: (address, abi: Abi, functionName, args = [], options) =>
-      client.readContract({ address, abi, functionName, args, ...(options?.gas === undefined ? {} : { gas: options.gas }) } as Parameters<PublicClient["readContract"]>[0])
+      client.readContract({
+        address,
+        abi,
+        functionName,
+        args,
+        ...(options?.gas === undefined ? {} : { gas: options.gas }),
+        ...(options?.blockNumber === undefined ? {} : { blockNumber: options.blockNumber }),
+      } as Parameters<PublicClient["readContract"]>[0])
         .catch(options?.gas === undefined ? mapReadError : mapCappedReadError),
     blockNumber: () => client.getBlockNumber(),
     gasPrice: () => client.getGasPrice(),

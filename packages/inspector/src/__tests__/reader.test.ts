@@ -157,6 +157,43 @@ describe("viemReader().read: a gas limit and the revert payload", () => {
   });
 });
 
+// Watchdog reads every token at the run's finalized block, so the block reaches the node: eth_call's second parameter and
+// eth_getStorageAt's third. Without one, both ask for the latest block, as the checks always have.
+describe("viemReader(): a read pinned to a block", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const capture = (result: string) => {
+    const bodies: { method: string; params: unknown[] }[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return Response.json({ jsonrpc: "2.0", id: 1, result });
+    });
+    return bodies;
+  };
+  const client = () => createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+
+  it("sends the block number with the eth_call, and latest without one", async () => {
+    const bodies = capture(`0x${"0".repeat(63)}1`);
+    await viemReader(client()).read(ADDRESS, abi, "foo", [], { blockNumber: 1_234_567n });
+    await viemReader(client()).read(ADDRESS, abi, "foo", [], { blockNumber: 1_234_567n, gas: 2_000_000n });
+    await viemReader(client()).read(ADDRESS, abi, "foo");
+    expect(bodies.map((b) => b.method)).toEqual(["eth_call", "eth_call", "eth_call"]);
+    expect(bodies[0]!.params[1]).toBe("0x12d687");
+    expect(bodies[1]!.params[1]).toBe("0x12d687");
+    expect((bodies[1]!.params[0] as { gas?: string }).gas).toBe("0x1e8480");
+    expect(bodies[2]!.params[1]).toBe("latest");
+  });
+
+  it("sends the block number with eth_getStorageAt, and latest without one", async () => {
+    const bodies = capture(`0x${"0".repeat(64)}`);
+    const slot = `0x${"ab".repeat(32)}` as const;
+    expect(await viemReader(client()).getStorageAt(ADDRESS, slot, 1_234_567n)).toBe(`0x${"0".repeat(64)}`);
+    await viemReader(client()).getStorageAt(ADDRESS, slot);
+    expect(bodies.map((b) => b.method)).toEqual(["eth_getStorageAt", "eth_getStorageAt"]);
+    expect(bodies[0]!.params).toEqual([ADDRESS, slot, "0x12d687"]);
+    expect(bodies[1]!.params).toEqual([ADDRESS, slot, "latest"]);
+  });
+});
+
 // Arc answers an eth_call that runs out of gas mid-execution with -32003 "out of gas: gas required exceeds: N". For a read that
 // set its own gas limit, that is the node's answer about this call (asking again returns the same), never the endpoint failing.
 describe("viemReader().read: a gas-capped read that runs out of gas", () => {

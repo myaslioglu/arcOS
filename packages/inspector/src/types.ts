@@ -52,16 +52,21 @@ export type Report = {
   generatedAt: string;
 };
 
+/** What a `ChainReader.read` may carry besides the call: a gas cap and the block to read at. Both optional. */
+export type ReadOptions = { gas?: bigint; blockNumber?: bigint };
+
 /** The few chain reads the checks need. Small on purpose: trivial to fake in tests. */
 export interface ChainReader {
   getCode(address: Address): Promise<Hex | null>;
-  getStorageAt(address: Address, slot: Hex): Promise<Hex | null>;
+  /** The slot's word at `blockNumber`, or at the latest block when none is given. */
+  getStorageAt(address: Address, slot: Hex, blockNumber?: bigint): Promise<Hex | null>;
   /**
    * Rejects with `CallReverted` when the call reverts or returns no data. Any other rejection is
    * a transport failure and means nothing about the contract. `options.gas` caps the call's gas: a read that could walk an
-   * attacker-chosen amount of state (a v4 quote) gets a limit of its own.
+   * attacker-chosen amount of state (a v4 quote) gets a limit of its own. `options.blockNumber` pins the call to a block
+   * (Watchdog reads every token at one finalized block); without it the call is at the latest block.
    */
-  read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[], options?: { gas?: bigint }): Promise<unknown>;
+  read(address: Address, abi: Abi, functionName: string, args?: readonly unknown[], options?: ReadOptions): Promise<unknown>;
   blockNumber(): Promise<bigint>;
   /** The network's current gas price (eth_gasPrice), in wei. */
   gasPrice(): Promise<bigint>;

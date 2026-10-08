@@ -38,7 +38,7 @@ export async function paced<T>(call: () => Promise<T>): Promise<T> {
 const inner = viemReader(client);
 export const reader: ChainReader = {
   getCode: (a) => paced(() => inner.getCode(a)),
-  getStorageAt: (a, slot) => paced(() => inner.getStorageAt(a, slot)),
+  getStorageAt: (a, slot, blockNumber) => paced(() => inner.getStorageAt(a, slot, blockNumber)),
   read: (a, abi, fn, args, options) => paced(() => inner.read(a, abi, fn, args, options)),
   blockNumber: () => paced(() => inner.blockNumber()),
   gasPrice: () => paced(() => inner.gasPrice()),
