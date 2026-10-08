@@ -210,6 +210,10 @@ export type RadarRow = {
   passed: number | null;
   total: number | null;
   bestPoolDepth: Amount | null;
+  /** null when the token didn't say; absent on rows written before R1 Task 4, read as null */
+  decimals?: number | null;
+  /** the factory caller the indexer recorded; null for tokens first seen through a pool; absent on older rows */
+  creator?: Address | null;
 };
 
 /** radarFeed/{network}:{filter}: the first page of 50 rows, so one read serves a Radar page. */

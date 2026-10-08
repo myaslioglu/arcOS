@@ -1,7 +1,7 @@
 import { isAddress } from "viem";
-import type { NetworkId } from "@arcos/chain";
 import type { PoolDoc, PoolQuote, PoolVersion, V4PoolKey } from "@arcos/data";
 import type { ExtraPool } from "@arcos/inspector";
+import { indexSource, type IndexSourceOptions } from "./index-source";
 
 // The pools the indexer recorded for a token (Firestore pools/, mainnet only): what GET /api/pools/[token] answers, and
 // what the Inspector reads besides the pools its own discovery finds (`extraPools`), on the server and in the browser.
@@ -60,88 +60,19 @@ export function extraPoolsFrom(answer: unknown): ExtraPool[] {
   return out;
 }
 
-/**
- * The index can't be read right now: it failed or timed out a moment ago, or this server has no Firestore. `cause` is
- * the read's own error when one failed (a Firestore error carries a gRPC `code`: 7 is PERMISSION_DENIED, 16
- * UNAUTHENTICATED, 5 NOT_FOUND for the database, 4 DEADLINE_EXCEEDED, 14 UNAVAILABLE); the route logs that code only.
- */
-export class IndexUnavailable extends Error {
-  constructor(message = "The pool index can't be read right now.", options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "IndexUnavailable";
-  }
-}
-
-/** The `code` of an error's cause when it is a number or a short word (a gRPC status, a JSON-RPC code, `ECONNRESET`). */
-export function causeCode(e: unknown): number | string | undefined {
-  const cause = e instanceof Error ? (e.cause as { code?: unknown } | undefined) : undefined;
-  const code = typeof cause === "object" && cause !== null ? cause.code : undefined;
-  if (typeof code === "number" && Number.isFinite(code)) return code;
-  if (typeof code === "string" && /^[\w.-]{1,64}$/.test(code)) return code;
-  return undefined;
-}
+export { IndexUnavailable, causeCode, indexEnabled } from "./index-source";
 
 /**
- * Whether this server reads the index. Firestore holds mainnet data only (D6), so never on testnet. And only where the
- * runtime gives the site its own account: App Hosting (Cloud Run sets K_SERVICE), or the Firestore emulator. A dev
- * server or a CI build reads nothing, so nobody's own credentials ever reach the live database from a laptop.
+ * A token's indexed pools through `load`, with the guards of `indexSource` (index-source.ts): a 1.5 s deadline, a
+ * 60 s cooldown after a failure, and an answer kept 60 s per token, whatever the case of its address.
  */
-export function indexEnabled(network: NetworkId, env: Readonly<Record<string, string | undefined>>): boolean {
-  return network === "mainnet" && Boolean(env.K_SERVICE || env.FIRESTORE_EMULATOR_HOST);
-}
-
-/**
- * A token's indexed pools through `load`, with three guards: a read that takes longer than `deadlineMs` counts as a
- * failure; after a failure no read is tried for `cooldownMs`, so an outage costs one wait a minute, not one per page; and
- * an answer is kept `ttlMs` per token.
- */
-export function indexedPoolsSource({
-  load,
-  now = Date.now,
-  deadlineMs = 1_500,
-  cooldownMs = 60_000,
-  ttlMs = 60_000,
-  maxKeys = 1_000,
-}: {
-  load: (token: string) => Promise<PoolDoc[]>;
-  now?: () => number;
-  deadlineMs?: number;
-  cooldownMs?: number;
-  ttlMs?: number;
-  maxKeys?: number;
-}) {
-  let downUntil = 0;
-  const cache = new Map<string, { at: number; value: Promise<PoolDoc[]> }>();
-  return {
-    pools(token: string): Promise<PoolDoc[]> {
-      const key = token.toLowerCase();
-      const hit = cache.get(key);
-      if (hit && now() - hit.at <= ttlMs) return hit.value;
-      if (now() < downUntil) return Promise.reject(new IndexUnavailable());
-      const value = new Promise<PoolDoc[]>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new IndexUnavailable("The pool index took too long.")), deadlineMs);
-        load(key).then(
-          (docs) => {
-            clearTimeout(timer);
-            resolve(docs);
-          },
-          (e: unknown) => {
-            clearTimeout(timer);
-            reject(new IndexUnavailable(undefined, { cause: e }));
-          },
-        );
-      });
-      const entry = { at: now(), value };
-      cache.delete(key);
-      cache.set(key, entry);
-      if (cache.size > maxKeys) cache.delete(cache.keys().next().value as string);
-      value.catch(() => {
-        downUntil = now() + cooldownMs;
-        if (cache.get(key) === entry) cache.delete(key);
-      });
-      return value;
-    },
-  };
+export function indexedPoolsSource(opts: Omit<IndexSourceOptions<PoolDoc[]>, "timeoutMessage" | "unavailableMessage">) {
+  const s = indexSource<PoolDoc[]>({
+    ...opts,
+    timeoutMessage: "The pool index took too long.",
+    unavailableMessage: "The pool index can't be read right now.",
+  });
+  return { pools: (token: string) => s.get(token.toLowerCase()) };
 }
 
 /**

@@ -369,7 +369,9 @@ async function feedQuery(db: Firestore, network: NetworkId, filter: RadarFeedFil
 
 /** Whether two pages hold the same rows, field by field. */
 function sameRows(a: readonly RadarRow[], b: readonly RadarRow[]): boolean {
-  const key = (r: RadarRow) => [r.address, r.symbol, r.name, r.source, r.firstSeen.toMillis(), r.passed, r.total, r.bestPoolDepth];
+  const key = (r: RadarRow) => [
+    r.address, r.symbol, r.name, r.source, r.firstSeen.toMillis(), r.passed, r.total, r.bestPoolDepth, r.decimals ?? null, r.creator ?? null,
+  ];
   return a.length === b.length && a.every((row, i) => JSON.stringify(key(row)) === JSON.stringify(key(b[i]!)));
 }
 

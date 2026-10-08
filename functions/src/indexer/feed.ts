@@ -16,6 +16,8 @@ export function feedRow(token: TokenDoc): RadarRow {
     passed: token.report?.passed ?? null,
     total: token.report?.total ?? null,
     bestPoolDepth: token.bestPool?.depthUsdc ?? null,
+    decimals: token.decimals,
+    creator: token.creator,
   };
 }
 
