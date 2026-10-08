@@ -263,6 +263,15 @@ describe("pools and tokens", () => {
     expect((await feed("liquid-passing"))!.rows).toEqual([]);
   });
 
+  it("gives every feed row its decimals, and a factory token's row its creator", async () => {
+    await startAt(START);
+    await run({ head: START + 10_000, logs: logs() }, fakeInspector({}), { inspectPerTick: 0, explorerDailyBudget: 0 });
+    const rows = (await feed("all"))!.rows;
+    for (const r of rows) expect(r, r.address).toHaveProperty("decimals");
+    expect(rows.find((r) => r.address === B)).toMatchObject({ decimals: 18, creator: addr(0xc0ffee) });
+    expect(rows.find((r) => r.address === A)).toMatchObject({ decimals: null, creator: null });
+  });
+
   it("writes nothing new when a window is read again", async () => {
     await startAt(START);
     await run({ head: START + 10_000, logs: logs() }, fakeInspector({}), { inspectPerTick: 0, explorerDailyBudget: 0 });

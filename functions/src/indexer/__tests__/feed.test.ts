@@ -18,8 +18,21 @@ describe("feedRow", () => {
     });
     expect(feedRow(inspected)).toEqual({
       address: addr(1), symbol: "TEST", name: "Test", source: "v4", firstSeen: inspected.firstSeen, passed: 6, total: 8, bestPoolDepth: "2500000000",
+      decimals: null, creator: null,
     });
     expect(feedRow(t(2))).toMatchObject({ passed: null, total: null, bestPoolDepth: null });
+  });
+
+  it("carries the token's decimals and its creator, so a row can be dragged and attributed to a launchpad", () => {
+    const minted = t(3, { source: "factory", decimals: 18, creator: addr(0xc0ffee) });
+    expect(feedRow(minted)).toMatchObject({ decimals: 18, creator: addr(0xc0ffee) });
+  });
+
+  it("keeps a missing decimals or creator as null, never undefined, since Firestore refuses undefined", () => {
+    const row = feedRow(t(4, { decimals: null, creator: null }));
+    expect(row.decimals).toBeNull();
+    expect(row.creator).toBeNull();
+    expect(Object.values(row)).not.toContain(undefined);
   });
 });
 
