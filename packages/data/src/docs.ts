@@ -23,7 +23,20 @@ export type AlertKind =
   | "implementation_changed"
   | "liquidity_dropped"
   | "lock_expiring";
+/** pending = waiting, or a retryable failure; sent = delivered; failed = terminal. */
 export type DeliveryStatus = "pending" | "sent" | "failed";
+/** Why a delivery failed, or why its last attempt did: a code, never a message. */
+export type DeliveryError =
+  | "blocked"
+  | "chat_not_found"
+  | "bad_request"
+  | "telegram_5xx"
+  | "timeout"
+  | "network"
+  | "expired"
+  | "unlinked"
+  | "no_alert"
+  | "rate_limited";
 export type DeliveryChannel = "telegram";
 
 /** A Uniswap v4 pool key. Addresses are lowercase; the native currency is the zero address. */
@@ -61,6 +74,12 @@ export type IndexerDoc = {
    */
   runningUntil: TimestampLike | null;
   runId: string | null;
+  /** The whole Watchdog step (checks, fan-out and sends). The owner edits it; missing reads as true. */
+  watch?: boolean;
+  /** Telegram sends only. The owner edits it; missing reads as true. */
+  telegram?: boolean;
+  /** The watchState doc id the Watchdog step last attempted, so a run carries on where the last one stopped. Missing reads as null. */
+  watchCursor?: string | null;
 };
 
 /**
@@ -124,9 +143,11 @@ export type WatchStateFields<A> = {
   /** The pool id of the deepest pool. */
   bestPool: string | null;
   bestPoolDepth: A | null;
+  /** The block the stored values were read at. 0 means never observed: the doc was created by a watch, not by a check. */
   checkedBlock: number;
   /** How many wallets watch the token. The doc is deleted when it reaches 0. */
   watchers: number;
+  /** When the stored values were last written. The doc is only written on change, so this is "last stored", not "last checked". */
   lastCheckedAt: TimestampLike;
 };
 export type WatchStateDoc = WatchStateFields<Amount>;
@@ -158,6 +179,8 @@ export type UserDoc = {
    * one, so every cookie issued before stops counting. A doc without it reads as 0.
    */
   sessionVersion: number;
+  /** How many tokens the wallet watches (see FREE_WATCH_LIMIT in names.ts). Missing reads as 0. */
+  watchCount?: number;
 };
 
 /** watches/{user}:{network}:{token} */
@@ -168,16 +191,41 @@ export type WatchDoc = {
   createdAt: TimestampLike;
 };
 
-/** alerts/{auto id}. Expires after 90 days. */
+/**
+ * What an alert says, kept apart from the copy so the copy can change: addresses lowercase, amounts as decimal strings
+ * (raw token units for supply, 6-decimal quote units for liquidity), and no user data.
+ * - owner_changed: `from` and `to` are the owners; `renounced` says `to` is a burn address.
+ * - supply_increased: `from` and `to` are total supplies.
+ * - paused and unpaused: nothing beyond the label.
+ * - implementation_changed: `from` and `to` are implementations, null for none.
+ * - liquidity_dropped: `from` and `to` are the pool's depth, `quote` its quote, `pool` its id, `pct` the whole-percent drop.
+ */
+export type AlertDetail = {
+  symbol: string | null;
+  decimals: number | null;
+  from: string | null;
+  to: string | null;
+  quote: "USDC" | "EURC" | null;
+  pool: string | null;
+  renounced: boolean;
+  pct: number | null;
+};
+
+/**
+ * alerts/{auto id}: written in the same batch as the watchState change it reports, so a crash keeps both or neither.
+ * Expires after 90 days.
+ */
 export type AlertDoc = {
   network: NetworkId;
   token: Address;
   kind: AlertKind;
   /** Not indexed (see firestore/arcos.indexes.json). */
-  detail: Record<string, unknown>;
+  detail: AlertDetail;
   block: number;
   createdAt: TimestampLike;
   expiresAt: TimestampLike;
+  /** false when written; true once every linked watcher has a delivery doc (the fan-out is resumable). */
+  fannedOut: boolean;
 };
 
 /** deliveries/{alert id}:{address}:telegram. Expires after 30 days. */
@@ -185,10 +233,11 @@ export type DeliveryDoc = {
   alertId: string;
   user: Address;
   channel: DeliveryChannel;
+  /** pending = waiting or retryable; sent = delivered; failed = terminal (see DELIVERY_MAX_ATTEMPTS in names.ts). */
   status: DeliveryStatus;
   attempts: number;
   /** A short code, never a message. */
-  error: string | null;
+  error: DeliveryError | null;
   createdAt: TimestampLike;
   deliveredAt: TimestampLike | null;
   expiresAt: TimestampLike;
@@ -197,7 +246,7 @@ export type DeliveryDoc = {
 /** nonces/{nonce}. Expires after 10 minutes. */
 export type NonceDoc = { expiresAt: TimestampLike };
 
-/** linkCodes/{code}. Expires after 10 minutes. */
+/** linkCodes/{sha256(code) as base64url}: the code itself is never stored. Expires after 10 minutes. */
 export type LinkCodeDoc = { address: Address; expiresAt: TimestampLike };
 
 /** One row of a Radar page (R1 Task 4's row fields). */

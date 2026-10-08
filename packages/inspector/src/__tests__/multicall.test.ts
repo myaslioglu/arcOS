@@ -8,7 +8,13 @@ const abi = parseAbi(["function balanceOf(address) view returns (uint256)", "fun
 const A = "0x1111111111111111111111111111111111111111";
 const B = "0x2222222222222222222222222222222222222222";
 type Answer = { success: boolean; returnData: `0x${string}` };
-type Sent = { address: string; abi: unknown; fn: string; calls: readonly { target: string; allowFailure: boolean; callData: `0x${string}` }[] };
+type Sent = {
+  address: string;
+  abi: unknown;
+  fn: string;
+  calls: readonly { target: string; allowFailure: boolean; callData: `0x${string}` }[];
+  options: { gas?: bigint; blockNumber?: bigint } | undefined;
+};
 
 /** A reader that answers `aggregate3` the way Multicall3 does, from `answer`: one entry per call, in order. */
 function aggregator(answer: Answer[] | Error) {
@@ -21,8 +27,8 @@ function aggregator(answer: Answer[] | Error) {
     callWithOverride: async () => {
       throw new Error("multicall never simulates");
     },
-    read: async (address, readAbi, fn, args = []) => {
-      sent.push({ address, abi: readAbi, fn, calls: args[0] as Sent["calls"] });
+    read: async (address, readAbi, fn, args = [], options) => {
+      sent.push({ address, abi: readAbi, fn, calls: args[0] as Sent["calls"], options });
       if (answer instanceof Error) throw answer;
       return answer;
     },
@@ -74,6 +80,16 @@ describe("multicall", () => {
     const call: BatchCall = { target: A, abi, functionName: "symbol" };
     await expect(multicall(aggregator(new CallReverted()).reader, [call])).rejects.toBeInstanceOf(CallReverted);
     await expect(multicall(aggregator(new Error("ETIMEDOUT")).reader, [call])).rejects.toThrow("ETIMEDOUT");
+  });
+
+  it("hands the block it is asked for to the reader, and nothing when it isn't asked", async () => {
+    const { reader, sent } = aggregator([ok("symbol", "USDC")]);
+    const call: BatchCall = { target: A, abi, functionName: "symbol" };
+    await multicall(reader, [call], { blockNumber: 1_234_567n });
+    await multicall(reader, [call], {});
+    await multicall(reader, [call]);
+    expect(sent.map((s) => s.options)).toEqual([{ blockNumber: 1_234_567n }, undefined, undefined]);
+    expect(sent.map((s) => s.fn)).toEqual(["aggregate3", "aggregate3", "aggregate3"]);
   });
 
   it("refuses an answer with the wrong number of results", async () => {

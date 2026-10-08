@@ -124,13 +124,13 @@ describe("acceptSignIn", () => {
     expect(results.filter((result) => result.ok)).toHaveLength(1);
   });
 
-  it("keeps the user's createdAt, Telegram link and session version on a later sign-in", async () => {
+  it("keeps the user's createdAt, Telegram link, watch count and session version on a later sign-in", async () => {
     const user = address();
     const first = nonce();
     await storeNonce(first, NOW);
     await acceptSignIn({ nonce: first, address: user, now: NOW });
     const telegram = { chatId: 12345, linkedAt: Timestamp.fromDate(NOW) };
-    await arcosDb().collection(COLLECTIONS.users).doc(user).update({ telegram, sessionVersion: 3 });
+    await arcosDb().collection(COLLECTIONS.users).doc(user).update({ telegram, sessionVersion: 3, watchCount: 2 });
 
     const second = nonce();
     await storeNonce(second, later(5_000));
@@ -142,6 +142,8 @@ describe("acceptSignIn", () => {
     expect(doc.createdAt.toMillis()).toBe(NOW.getTime());
     expect(doc.lastSignInAt.toMillis()).toBe(later(6_000).getTime());
     expect(doc.telegram?.chatId).toBe(12345);
+    expect(doc.telegram?.linkedAt.toMillis()).toBe(NOW.getTime());
+    expect(doc.watchCount).toBe(2);
     expect(doc.sessionVersion).toBe(3);
   });
 

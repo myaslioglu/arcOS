@@ -91,7 +91,7 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
   const watch = watching((e) => !(e instanceof CallReverted) && !isNodeAnswer(e) && !isDecodeFailure(e), onFailure);
   return {
     getCode: (address) => watch(() => reader.getCode(address)),
-    getStorageAt: (address, slot) => watch(() => reader.getStorageAt(address, slot)),
+    getStorageAt: (address, slot, blockNumber) => watch(() => reader.getStorageAt(address, slot, blockNumber)),
     read: (address, abi, functionName, args, options) => watch(() => reader.read(address, abi, functionName, args, options)),
     blockNumber: () => watch(() => reader.blockNumber()),
     gasPrice: () => watch(() => reader.gasPrice()),
