@@ -163,6 +163,17 @@ describe("unlinkWallet and unlinkChat", () => {
     await expect(unlinkChat(chatId)).resolves.toBe(0);
   });
 
+  it("unlinkChat clears more wallets than one query holds: 21 on one chat, all unlinked in one call", async () => {
+    const chatId = chat();
+    const wallets = await Promise.all(Array.from({ length: 21 }, () => signedIn()));
+    for (const wallet of wallets) await consumeLinkCode(await createLinkCode(wallet, NOW), chatId, NOW);
+
+    await expect(unlinkChat(chatId)).resolves.toBe(21);
+    const docs = await Promise.all(wallets.map(userDoc));
+    expect(docs.every((doc) => doc.telegram === null)).toBe(true);
+    await expect(unlinkChat(chatId)).resolves.toBe(0);
+  });
+
   it("unlinkChat refuses a chat id that isn't a safe integer", async () => {
     await expect(unlinkChat(0.5)).rejects.toMatchObject({ code: "chat-id" });
   });

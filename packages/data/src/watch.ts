@@ -58,11 +58,11 @@ const detail = (label: WatchObservation["label"], over: Partial<AlertDetail> = {
 
 /**
  * The alerts an observation raises against the stored state, in a fixed order: owner, supply, pause, implementation,
- * liquidity. None on first sight (`prev` null), and none for a block at or before the stored one. A field that was not
- * read (`ok: false`) raises nothing, whatever it was before.
+ * liquidity. None on first sight (`prev` null, or a record never seen), and none for a block at or before the stored
+ * one. A field that was not read (`ok: false`) raises nothing, whatever it was before.
  */
 export function diffWatchState(prev: WatchStateRecord | null, obs: WatchObservation): AlertDraft[] {
-  if (prev === null || obs.block <= prev.checkedBlock) return [];
+  if (prev === null || !seen(prev) || obs.block <= prev.checkedBlock) return [];
   const drafts: AlertDraft[] = [];
   const draft = (kind: AlertKind, over: Partial<AlertDetail>) => drafts.push({ kind, block: obs.block, detail: detail(obs.label, over) });
 
@@ -109,13 +109,14 @@ const sameAddress = (a: Address | null, b: Address | null): boolean => (a === nu
 const lowerOrNull = (a: Address | null): Address | null => (a === null ? null : (lower(a) as Address));
 
 /**
- * What to write to watchState after a check, or null for nothing. On first sight the four core reads (owner, total
- * supply, paused, implementation) must all be ok, or the doc stays unseen and the next run tries again; an unread pool
- * is stored as none. Later, an unread field is left as it is, and the patch carries only the fields that changed, with
- * the block they were read at and `now`: no change, no write. A block at or before the stored one writes nothing.
+ * What to write to watchState after a check, or null for nothing. On first sight (`prev` null, or a record never seen)
+ * the four core reads (owner, total supply, paused, implementation) must all be ok, or the doc stays unseen and the
+ * next run tries again; an unread pool is stored as none. Later, an unread field is left as it is, and the patch
+ * carries only the fields that changed, with the block they were read at and `now`: no change, no write. A block at or
+ * before the stored one writes nothing.
  */
 export function nextWatchState(prev: WatchStateRecord | null, obs: WatchObservation, now: TimestampLike): WatchStatePatch | null {
-  if (prev === null) {
+  if (prev === null || !seen(prev)) {
     if (!obs.owner.ok || !obs.totalSupply.ok || !obs.paused.ok || !obs.implementation.ok) return null;
     const pool = obs.pool.ok ? obs.pool.value : null;
     return {
@@ -165,13 +166,14 @@ export const SYMBOL_MAX_LENGTH = 16;
 /**
  * A symbol as an alert may show it. Symbols are whatever the deployer chose, so: NFKC; every control, format (bidi
  * overrides, zero-width joiners), surrogate, private-use and unassigned code point and every line or paragraph
- * separator removed; whitespace collapsed; trimmed; at most 16 code points. Nothing left is null.
+ * separator removed, and with them the letters that draw nothing (the Hangul fillers, the Braille blank); whitespace
+ * collapsed; trimmed; at most 16 code points. Nothing left is null.
  */
 export function sanitizeSymbol(symbol: string | null | undefined): string | null {
   if (typeof symbol !== "string") return null;
   const cleaned = symbol
     .normalize("NFKC")
-    .replace(/[\p{C}\p{Zl}\p{Zp}]/gu, "")
+    .replace(/[\p{C}\p{Zl}\p{Zp}\u115f\u1160\u3164\u2800\uffa0]/gu, "")
     .replace(/\s+/gu, " ")
     .trim();
   const cut = [...cleaned].slice(0, SYMBOL_MAX_LENGTH).join("").trim();
@@ -183,8 +185,11 @@ export const short = (address: string): string => `${address.slice(0, 6)}…${ad
 
 const grouped = (digits: string): string => digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
-/** A raw amount in whole and fraction units, comma-grouped, at most `fractionDigits` fraction digits, truncated. */
-export function formatUnits(raw: bigint, decimals: number, fractionDigits = 4): string {
+/**
+ * A raw amount in whole and fraction units, comma-grouped, at most `fractionDigits` fraction digits, truncated. Not
+ * viem's `formatUnits`, which neither groups nor truncates.
+ */
+export function formatTokenUnits(raw: bigint, decimals: number, fractionDigits = 4): string {
   const scale = 10n ** BigInt(decimals);
   const whole = grouped((raw / scale).toString());
   const fraction = (raw % scale).toString().padStart(decimals, "0").slice(0, fractionDigits).replace(/0+$/, "");
@@ -193,7 +198,7 @@ export function formatUnits(raw: bigint, decimals: number, fractionDigits = 4): 
 
 const amountOf = (text: string | null): bigint => (text === null ? 0n : BigInt(text));
 const supplyText = (text: string | null, decimals: number | null): string =>
-  decimals === null ? `${grouped(amountOf(text).toString())} raw units` : formatUnits(amountOf(text), decimals);
+  decimals === null ? `${grouped(amountOf(text).toString())} raw units` : formatTokenUnits(amountOf(text), decimals);
 const quoteUnits = (text: string | null): string => grouped((amountOf(text) / 1_000_000n).toString());
 const addressOrNone = (a: string | null): string => (a === null ? "none" : short(a));
 

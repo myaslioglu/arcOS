@@ -5,7 +5,7 @@ import type { AlertDetail, AlertKind, WatchStateRecord } from "../docs";
 import {
   alertText,
   diffWatchState,
-  formatUnits,
+  formatTokenUnits,
   isBurnAddress,
   nextWatchState,
   sanitizeSymbol,
@@ -72,6 +72,12 @@ describe("seen", () => {
 describe("diffWatchState: when nothing is said", () => {
   it("alerts nothing on first sight, whatever was read", () => {
     expect(diffWatchState(null, observation({ owner: ok(OWNER_B), paused: ok(true), totalSupply: ok(5n) }))).toEqual([]);
+  });
+
+  it("treats a record never seen as first sight: a proxy's implementation appearing at block 0 → an address is no change", () => {
+    const unseen = state({ checkedBlock: 0, owner: null, totalSupply: null, paused: null, implementation: null, bestPool: null, bestPoolDepth: null });
+    expect(diffWatchState(unseen, observation({ implementation: ok(IMPL_A) }))).toEqual([]);
+    expect(diffWatchState(state({ checkedBlock: 0, implementation: null }), observation({ implementation: ok(IMPL_A), owner: ok(OWNER_B) }))).toEqual([]);
   });
 
   it("alerts nothing for an identical state", () => {
@@ -199,8 +205,9 @@ describe("diffWatchState: implementation_changed", () => {
 describe("diffWatchState: liquidity_dropped", () => {
   const pool = (depth: bigint, id = POOL_A) => observation({ pool: ok({ id, depth }) });
 
-  it("alerts at exactly 30% when that is exactly 500 units", () => {
-    // 500 units of 1,666.666666 is 30% to the unit: 1,666.666666 × 0.3 = 500.0000 (rounded down), and 500 ≥ 500.
+  it("alerts for 500 units that are just over 30%: both thresholds met at once, each at its floor", () => {
+    // 500 units of 1,666.666666 is 30.00000001%: there is no integer depth of which exactly 500 units is exactly 30%.
+    // The two exact boundaries (30% of 10,000; 500 of 1,000) are the next cases.
     const prevDepth = 1_666_666_666n;
     const drop = 500_000_000n;
     expect(drop * 10_000n >= prevDepth * 3000n).toBe(true);
@@ -308,6 +315,22 @@ describe("nextWatchState: first sight", () => {
 
   it.each(["owner", "totalSupply", "paused", "implementation"] as const)("writes nothing when %s is unread", (field) => {
     expect(nextWatchState(null, observation({ [field]: unread }), NOW)).toBeNull();
+  });
+
+  it("treats a record never seen as first sight: the full patch when the core reads are ok, nothing otherwise", () => {
+    const unseen = state({ checkedBlock: 0, owner: null, totalSupply: null, paused: null, implementation: null, bestPool: null, bestPoolDepth: null });
+    expect(nextWatchState(unseen, observation({ implementation: ok(IMPL_A), block: 50 }), NOW)).toEqual({
+      owner: OWNER_A,
+      totalSupply: 1_000_000n * 10n ** 18n,
+      paused: false,
+      implementation: IMPL_A,
+      bestPool: POOL_A,
+      bestPoolDepth: 10_000_000_000n,
+      checkedBlock: 50,
+      lastCheckedAt: NOW,
+    });
+    expect(nextWatchState(unseen, observation({ owner: unread }), NOW)).toBeNull();
+    expect(nextWatchState(state({ checkedBlock: 0 }), observation({ paused: unread }), NOW)).toBeNull();
   });
 });
 
@@ -555,6 +578,12 @@ describe("sanitizeSymbol", () => {
     expect(sanitizeSymbol("US­DC")).toBe("USDC");
   });
 
+  it("strips the letters that draw nothing: Hangul fillers, the Braille blank, the halfwidth filler", () => {
+    expect(sanitizeSymbol("\u3164\u3164")).toBeNull();
+    expect(sanitizeSymbol("\u115f\u1160\u2800\uffa0")).toBeNull();
+    expect(sanitizeSymbol("US\u3164DC\u2800")).toBe("USDC");
+  });
+
   it("strips control characters and newlines, and collapses whitespace", () => {
     expect(sanitizeSymbol("US\nDC")).toBe("USDC");
     expect(sanitizeSymbol("US \n\t DC\r\n")).toBe("US DC");
@@ -573,20 +602,25 @@ describe("sanitizeSymbol", () => {
     expect(sanitizeSymbol("😀".repeat(20))).toBe("😀".repeat(16));
     expect(sanitizeSymbol("abcdefghijklmno pqr")).toBe("abcdefghijklmno");
   });
+
+  it("strips before it cuts: sixteen invisible characters do not use up the sixteen", () => {
+    expect(sanitizeSymbol("\u200b".repeat(16) + "DUKE")).toBe("DUKE");
+    expect(sanitizeSymbol("\u202e".repeat(20) + "https://evil.example/claim")).toBe("https://evil.exa");
+  });
 });
 
-describe("short and formatUnits", () => {
+describe("short and formatTokenUnits", () => {
   it("shows six characters, an ellipsis and four", () => {
     expect(short("0x1234567890abcdef1234567890abcdef1234abcd")).toBe("0x1234…abcd");
   });
 
   it("groups whole units and truncates to four fraction digits", () => {
-    expect(formatUnits(1_234_567n * 10n ** 18n, 18)).toBe("1,234,567");
-    expect(formatUnits(1_234_567n * 10n ** 18n + 123_456_789n * 10n ** 9n, 18)).toBe("1,234,567.1234");
-    expect(formatUnits(5n * 10n ** 17n, 18)).toBe("0.5");
-    expect(formatUnits(1n, 18)).toBe("0");
-    expect(formatUnits(1_000_000n, 6)).toBe("1");
-    expect(formatUnits(42n, 0)).toBe("42");
+    expect(formatTokenUnits(1_234_567n * 10n ** 18n, 18)).toBe("1,234,567");
+    expect(formatTokenUnits(1_234_567n * 10n ** 18n + 123_456_789n * 10n ** 9n, 18)).toBe("1,234,567.1234");
+    expect(formatTokenUnits(5n * 10n ** 17n, 18)).toBe("0.5");
+    expect(formatTokenUnits(1n, 18)).toBe("0");
+    expect(formatTokenUnits(1_000_000n, 6)).toBe("1");
+    expect(formatTokenUnits(42n, 0)).toBe("42");
   });
 });
 
@@ -655,6 +689,19 @@ describe("alertText", () => {
     expect(text("liquidity_dropped", { from: "1666666666", to: "1166666666", quote: "EURC", pool: POOL_A, pct: 30 }).text).toBe(
       `${T}: deepest pool's EURC fell from 1,666 to 1,166 (30% lower) at block 1,234,567`,
     );
+  });
+
+  it("liquidity dropped with no quote or percentage: the fallbacks, pinned", () => {
+    expect(text("liquidity_dropped", { from: "10000000000", to: "6999999999", quote: null, pool: POOL_A, pct: 30 }).text).toBe(
+      `${T}: deepest pool's liquidity fell from 10,000 to 6,999 (30% lower) at block 1,234,567`,
+    );
+    expect(text("liquidity_dropped", { from: "10000000000", to: "6999999999", quote: "USDC", pool: POOL_A, pct: null }).text).toBe(
+      `${T}: deepest pool's USDC fell from 10,000 to 6,999 (0% lower) at block 1,234,567`,
+    );
+  });
+
+  it("lock expiring: the kind's name as words, until its rule exists", () => {
+    expect(text("lock_expiring").text).toBe(`${T}: lock expiring at block 1,234,567`);
   });
 
   it("shows the short address alone when there is no symbol, or none survives sanitising", () => {

@@ -77,18 +77,26 @@ export async function unlinkWallet(address: string, db: Firestore = arcosDb()): 
   });
 }
 
-/** How many wallets one chat can be taken off at once: a chat serves a few wallets, never a crowd. */
+/** How many wallets one query takes off a chat, and how many queries one /stop may run: a chat serves a few wallets, never a crowd. */
 const UNLINK_CHAT_LIMIT = 20;
+const UNLINK_CHAT_ROUNDS = 5;
 
 /**
- * Takes every wallet off a chat (the bot's /stop): one query on users.telegram.chatId (a single-field index), then one
- * batch. Returns how many wallets were unlinked.
+ * Takes every wallet off a chat (the bot's /stop): a query on users.telegram.chatId (a single-field index), then one
+ * batch, again while a query comes back full, at most UNLINK_CHAT_ROUNDS times. Each batch clears what the query
+ * found, so the same query pages by itself. Returns how many wallets were unlinked.
  */
 export async function unlinkChat(chatId: number, db: Firestore = arcosDb()): Promise<number> {
-  const snap = await db.collection(COLLECTIONS.users).where("telegram.chatId", "==", assertChatId(chatId)).limit(UNLINK_CHAT_LIMIT).get();
-  if (snap.empty) return 0;
-  const batch = db.batch();
-  for (const doc of snap.docs) batch.update(doc.ref, { telegram: null });
-  await batch.commit();
-  return snap.size;
+  const query = db.collection(COLLECTIONS.users).where("telegram.chatId", "==", assertChatId(chatId)).limit(UNLINK_CHAT_LIMIT);
+  let count = 0;
+  for (let round = 0; round < UNLINK_CHAT_ROUNDS; round++) {
+    const snap = await query.get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    for (const doc of snap.docs) batch.update(doc.ref, { telegram: null });
+    await batch.commit();
+    count += snap.size;
+    if (snap.size < UNLINK_CHAT_LIMIT) break;
+  }
+  return count;
 }
