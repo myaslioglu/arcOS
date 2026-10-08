@@ -574,13 +574,16 @@ describe("deploy.yml, the check of the functions manifest", () => {
         vpc: null,
         platform: "gcfv2",
         region: ["europe-west4"],
-        secretEnvironmentVariables: [{ key: "BLOCKSCOUT_API_KEY" }],
+        secretEnvironmentVariables: [{ key: "BLOCKSCOUT_API_KEY" }, { key: "TELEGRAM_BOT_TOKEN" }],
         labels: {},
         scheduleTrigger: { schedule: "every 1 minutes", retryConfig: { retryCount: 0 }, timeZone: "Etc/UTC" },
         entryPoint: "arcosIndexer",
       },
     },
-    params: [{ type: "secret", name: "BLOCKSCOUT_API_KEY" }],
+    params: [
+      { type: "secret", name: "BLOCKSCOUT_API_KEY" },
+      { type: "secret", name: "TELEGRAM_BOT_TOKEN" },
+    ],
     requiredAPIs: [{ api: "cloudscheduler.googleapis.com", reason: "Needed for scheduled functions." }],
     extensions: {},
   });
@@ -622,8 +625,8 @@ describe("deploy.yml, the check of the functions manifest", () => {
     expect(index).toBeLessThan(at(/Put the functions bundle in place/));
     expect(index).toBeLessThan(at(/uses: google-github-actions\/auth@/));
     expect(step()).toMatch(/^ {8}if: env\.DEPLOY_FUNCTIONS == 'true'$/m);
-    expect(stepEnv()).toMatchObject({ FUNCTIONS_ENDPOINT: "arcosIndexer", JOBS_ACCOUNT: JOBS, FUNCTIONS_REGION: "europe-west4", FUNCTIONS_SECRET: "BLOCKSCOUT_API_KEY" });
-    expect(Object.keys(stepEnv()).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
+    expect(stepEnv()).toMatchObject({ FUNCTIONS_ENDPOINT: "arcosIndexer", JOBS_ACCOUNT: JOBS, FUNCTIONS_REGION: "europe-west4", FUNCTIONS_SECRETS: "BLOCKSCOUT_API_KEY,TELEGRAM_BOT_TOKEN" });
+    expect(Object.keys(stepEnv()).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRETS", "JOBS_ACCOUNT"]);
   });
 
   // The CLI enables a required API on the standard list without asking (deploy/functions/prepare.js,
@@ -727,12 +730,26 @@ describe("deploy.yml, the check of the functions manifest", () => {
     refused(changed((m) => (m.lifecycleHooks = {})), /declares lifecycle hooks/);
   });
 
-  it("refuses a param or a secret other than the secret BLOCKSCOUT_API_KEY", () => {
-    refused(changed((m) => m.params.push({ type: "string", name: "BLOCKSCOUT_API_KEY" })), /a param other than the secret BLOCKSCOUT_API_KEY/);
-    refused(changed((m) => (m.params = [{ type: "secret", name: "OTHER_KEY" }])), /a param other than the secret BLOCKSCOUT_API_KEY/);
-    refused(changed((m) => (m.params = [{ type: "int", name: "INSPECT_PER_TICK" }])), /a param other than the secret BLOCKSCOUT_API_KEY/);
-    refused(changed((m, e) => e.secretEnvironmentVariables.push({ key: "OTHER_KEY" })), /a secret other than BLOCKSCOUT_API_KEY/);
-    refused(changed((m, e) => (e.secretEnvironmentVariables = [{ key: "BLOCKSCOUT_API_KEY", secret: "OTHER_KEY" }])), /a secret other than BLOCKSCOUT_API_KEY/);
+  it("refuses a param or a secret other than the secrets BLOCKSCOUT_API_KEY and TELEGRAM_BOT_TOKEN", () => {
+    const params = /a param other than the secrets BLOCKSCOUT_API_KEY,TELEGRAM_BOT_TOKEN/;
+    const secret = /a secret other than BLOCKSCOUT_API_KEY,TELEGRAM_BOT_TOKEN/;
+    // A non-secret param named like an allowed secret.
+    refused(changed((m) => m.params.push({ type: "string", name: "BLOCKSCOUT_API_KEY" })), params);
+    refused(changed((m) => (m.params = [{ type: "string", name: "TELEGRAM_BOT_TOKEN" }])), params);
+    refused(changed((m) => (m.params = [{ type: "secret", name: "OTHER_KEY" }])), params);
+    refused(changed((m) => (m.params = [{ type: "int", name: "INSPECT_PER_TICK" }])), params);
+    // A third secret, beside the two or in place of one.
+    refused(changed((m) => m.params.push({ type: "secret", name: "OTHER_KEY" })), params);
+    refused(changed((m, e) => e.secretEnvironmentVariables.push({ key: "OTHER_KEY" })), secret);
+    refused(changed((m, e) => (e.secretEnvironmentVariables = [{ key: "BLOCKSCOUT_API_KEY", secret: "OTHER_KEY" }])), secret);
+    refused(changed((m, e) => (e.secretEnvironmentVariables = [{ key: "TELEGRAM_BOT_TOKEN", secret: "BLOCKSCOUT_API_KEY" }])), secret);
+    // A name that only contains an allowed one, or an allowed one with the list's comma, is not on the list.
+    refused(changed((m) => (m.params = [{ type: "secret", name: "BLOCKSCOUT_API_KEY2" }])), params);
+    refused(changed((m) => (m.params = [{ type: "secret", name: "BLOCKSCOUT_API_KEY,TELEGRAM_BOT_TOKEN" }])), params);
+    refused(changed((m, e) => (e.secretEnvironmentVariables = [{ key: "KEY" }])), secret);
+    // Either secret alone, or none, still passes: the check pins what may be declared, not what must be.
+    expect(check(changed((m, e) => ((m.params = [{ type: "secret", name: "TELEGRAM_BOT_TOKEN" }]), (e.secretEnvironmentVariables = [{ key: "TELEGRAM_BOT_TOKEN", secret: "TELEGRAM_BOT_TOKEN" }])))).status).toBe(0);
+    expect(check(changed((m, e) => ((m.params = []), (e.secretEnvironmentVariables = [])))).status).toBe(0);
   });
 });
 
