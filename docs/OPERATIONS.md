@@ -11,7 +11,7 @@ All of it is in the Firebase project `arcos-c80cf`, region `europe-west4`.
 |---|---|---|---|
 | App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, radarFeed, indexer) | nothing in Firestore yet |
 | App Hosting `arcos-testnet`: https://testnet.4rcos.com | `arcos-testnet-web@` | Arc testnet RPC and explorer | nothing; it has no Firestore access |
-| Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed` |
+| Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API, the Telegram Bot API (sends only), Firestore `arcos` (`watches`, `users`) | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed`, `watchState`, `alerts`, `deliveries`, `users.telegram` (cleared when a chat blocked the bot) |
 | Cloud Scheduler job of `arcosIndexer`, every minute (UTC) | calls the function with an OIDC token of `arcos-jobs@` | | |
 | Firestore database `arcos` (Native, `europe-west4`) | | | |
 
@@ -49,6 +49,8 @@ in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s coold
    a window, and never skips one, and a run behind another never moves the cursor back. New pools and tokens are
    created, never overwritten: if another run created one in the meantime, the window is read and written once more,
    and that doc is left as it is.
+4b. Watchdog (below): checks a page of watched tokens at the run's head, writes each change with its alerts, fans the
+   alerts out to deliveries and sends the oldest pending ones to Telegram, each phase within its own time limit.
 5. Inspects up to `INSPECT_PER_TICK` queued tokens (default 3): a token last found liquid that gained a new pool
    first, then tokens with a pool, then tokens without; newest first within each. A token still queued after 24 hours
    is skipped (it is inspected when someone opens it), and one whose inspection fails three times is skipped too. The
@@ -60,13 +62,13 @@ in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s coold
    tokens the run changed, and rebuilds one of the four from its query, a different one each minute, writing a page
    only when it changed. A page that missed a change (a run that died between an inspection and this step) is whole
    again within four runs.
-7. Ends the run: `lastRunAt` (never moved back), the run's explorer calls added to the day's count, and the lease given
-   back if it is still this run's.
+7. Ends the run: `lastRunAt` (never moved back), the run's explorer calls added to the day's count, Watchdog's page
+   cursor (`watchCursor`) when the step ran, and the lease given back if it is still this run's.
 
-Once the window phase (steps 2 to 4) is over, steps 6 and 7 run whatever fails in step 5, and a failure in step 6
-doesn't stop step 7; the error's name is in the run's log line (`error`), with its `code` when it has one, and, for a
-Firestore error, its `details` with URLs and addresses masked, cut to 200 characters (never the message, which could
-carry a node's URL). Before that, they don't: a run that can't read the head, halts, or fails to write a window's pools,
+Once the window phase (steps 2 to 4) is over, steps 5, 6 and 7 run whatever fails in step 4b, steps 6 and 7 run
+whatever fails in step 5, and a failure in step 6 doesn't stop step 7; the error's name is in the run's log line
+(`error`), with its `code` when it has one, and, for a Firestore error, its `details` with URLs and addresses masked,
+cut to 200 characters (never the message, which could carry a node's URL). Before that, they don't: a run that can't read the head, halts, or fails to write a window's pools,
 tokens or cursor ends there, with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's
 count loses nothing, and the next run reads the window again. Such a run gives the lease back on its way out (best
 effort), and a run that died holding it leaves a lease that expires on its own.
@@ -101,8 +103,80 @@ In the Firebase console, Firestore, database `arcos`, collection `indexer`, docu
 | `halted` | (set by the indexer) | The indexer stopped itself, and says why: the node refused even a one-block window, or refused 24 windows in one run. Read the reason, fix the cause, then set the field to `null`. |
 | `block` | a block number | The cursor: the last block fully read. Lowering it makes the next runs read those blocks again (nothing is duplicated). Never raise it past blocks not yet read: they would be skipped. The indexer itself only ever moves it forward. |
 | `runningUntil`, `runId` | (set by the indexer) | The lease of the run in progress, `null` between runs. While `runningUntil` is in the future, a new run skips. Leave them alone: a lease left by a run that died expires 150 seconds after it was taken. |
+| `watch` | `false` | Stops the whole Watchdog step (no check, no fan-out, no send). A missing field reads as `true`. |
+| `telegram` | `false` | Stops Watchdog's Telegram sends only: the checks still run, alerts and deliveries are still written, and the deliveries wait as `pending` (they expire after a day). A missing field reads as `true`. |
+| `watchCursor` | (set by the indexer) | The `watchState` doc id Watchdog's checks ended at; the next run's page starts after it. Set it to `null` to start the round from the first token. |
 
-The indexer never writes `paused` or `inspect`. Change them only between runs (any time is fine: the next run reads them).
+The indexer never writes `paused`, `inspect`, `watch` or `telegram`. Change them only between runs (any time is fine: the
+next run reads them).
+
+## Watchdog
+
+The Watchdog step (step 4b of a run; design 3.4) runs on mainnet only, inside `arcosIndexer`: no second function, no
+second schedule. A wallet's watches are `watches/{user}:{network}:{token}` docs, and each watched token has one
+`watchState/{network}:{token}` doc with the last state observed and its watcher count (the site's routes write both, in
+one transaction per change). One run:
+
+- **A. The checks.** Reads the next page of up to 40 `watchState` docs after `watchCursor`, in doc id order, wrapping to
+  the start (so each of N watched tokens is checked every ceil(N / 40) minutes), then the `tokens` and `pools` docs of
+  the page in two `getAll`s. Each token takes 3 RPC requests, pinned to the run's finalized head and each cut off after
+  5 s: one `aggregate3` through Multicall3 for `owner()`/`getOwner()`, `totalSupply()`, `paused()`, `symbol()`,
+  `decimals()` and the deepest pool's depth (a v2 pair's quote reserve, a v3 or Aerodrome pool's quote balance, or a v4
+  pool's `getSlot0` and `getLiquidity` priced in range), and two `eth_getStorageAt` for the EIP-1967 and ZeppelinOS
+  implementation slots. Four tokens are in flight at a time. Watch reads go through their own RPC client with their own
+  endpoint health, never through the Inspector or the explorer, so `explorerCalls` never move. A read that fails
+  (transport, timeout, a rejected aggregate, a malformed slot word) leaves its fields *unread*: the stored values are
+  kept and nothing alerts. A token's first check stores its state and alerts nothing; a later check compares the
+  observation with the stored state ([packages/data/src/watch.ts](../packages/data/src/watch.ts): owner changed, supply
+  increased, paused, unpaused, implementation changed, the deepest pool's depth down at least 30% and 500 units) and
+  writes the state change **and its alert docs in one batch**, so a crash keeps both or neither; the doc is only written
+  on change. After 3 consecutive transport or timeout failures the run's remaining reads stop (the endpoints are down,
+  not the token). A `watchState` doc deleted mid-run (its last watcher left) is skipped.
+- **B. The fan-out.** For up to 10 alerts with `fannedOut: false`, creates one `deliveries/{alert}:{user}:telegram`
+  doc per watcher whose `users` doc has a Telegram chat, `pending`, paging the token's watches 400 at a time; at most
+  1,000 creates a run. The ids are deterministic and only missing docs are created, so a fan-out that stopped (the
+  budget, the time limit, a crash) resumes next run without a second delivery, and `fannedOut` becomes `true` only
+  after the last page.
+- **C. The sends.** Reads the 100 oldest `pending` deliveries with their `users` and `alerts`. One older than a day is
+  failed as `expired`, one whose wallet has no chat any more as `unlinked`, one whose alert is gone as `no_alert`. The
+  rest go to the Bot API's `sendMessage`, plain text (no parse mode, no link preview), `<words> — <explorer link>`,
+  4 s per send, 4 chats at a time, each chat's sends in order, at most 3 per chat and 60 in all per run. Send first,
+  then mark (at least once, never lost). A delivery is `sent` on 200; on a 5xx, a timeout or a network failure it stays
+  `pending` with the attempt counted and is tried again on later runs, `failed` after 4 attempts in all; a 403 (the
+  chat blocked the bot) or "chat not found" fails it at once and clears the wallet's chat (if it is still that chat);
+  any other 400 fails it. A 429 stops this instance's sends for the seconds Telegram asks (1 s to 1 h); a 401 or 404
+  (the token is wrong or revoked) stops them for 10 minutes; neither counts an attempt.
+
+Time limits, on the run's clock: the step starts only before 55 s; no read starts after 62 s (so the reads end by 67 s);
+no fan-out page starts after 68 s; no send starts after 72 s (so the sends end by 76 s). Inspections still start before
+80 s as before, so Watchdog never moves the run's end; at worst it narrows the window in which inspections may start.
+Typically it takes a few seconds. Work the limits cut short resumes next minute: the cursor covers only the tokens
+attempted, `fannedOut` stays `false`, deliveries stay `pending`.
+
+The bot token is the function's secret `TELEGRAM_BOT_TOKEN`, read inside the function and nowhere else (the site never
+calls the Bot API). A value that isn't a token (empty, `none`) leaves the sends off: the instance logs
+`arcosIndexer telegram not configured` once, the checks and the fan-out still run, and the deliveries wait. The secret
+is pinned to the version the deploy resolves: to rotate it, add a new version, deploy the functions again, then register
+the webhook again as in the site's setup.
+
+Logs, all under `arcosIndexer`, with names, codes and counts only (never an address, a chat id, a token, a message or a
+URL):
+
+| Line | Fields | Meaning |
+|---|---|---|
+| `arcosIndexer run` | `watch: {checked, unread, failed, alerts, writes, deliveriesCreated, fannedOut, sent, sendFailed, skipped, cursor}` | The step's counters; `watch: null` when the step didn't run. `skipped` is `off` (the switch) or `late` (the run reached 55 s before the step). |
+| `arcosIndexer watch read failed` | `code`: `timeout`, `transport` or `reverted` | One token's read failed; its fields stay as stored. At most 5 a run, then `{suppressed: true}`. |
+| `arcosIndexer watch reads stopped` | `code: breaker` | 3 consecutive transport or timeout failures: the run's remaining reads were skipped. |
+| `arcosIndexer watch check failed` | `error`, `code`, `details` (masked) | A token's Firestore read or write failed; it is read again on its next turn. At most 5 a run. |
+| `arcosIndexer telegram send failed` | `code` (the delivery's error code), `status` (a 5xx), `attempts` | One send failed. At most 5 a run. |
+| `arcosIndexer telegram paused` | `code`: `rate_limited` or `unauthorized`; `seconds` | This instance makes no send for `seconds`. |
+| `arcosIndexer telegram not configured` | | The secret holds no token; sends are off on this instance. |
+| `arcosIndexer watch stopped` | `error`, `code` | The step itself failed (Firestore); the run went on to its inspections, with the error named in the run line. |
+
+Signs to look for: `unread` close to `checked` for many runs (the RPC endpoints are refusing the reads; the breaker
+line says so), `sendFailed` with `code: telegram_5xx` (Telegram's side), `arcosIndexer telegram paused` with
+`unauthorized` (the token was revoked or the secret holds the wrong value: add a new version and deploy), and
+`deliveries` docs expiring (`error: expired`) while `telegram` is `true` (sends were paused or failing for a day).
 
 ## The site's reads
 
@@ -145,8 +219,9 @@ The functions are built in a job without a credential: `npm run build -w @arcos/
 files with the sites' bundles, checks the manifest with `jq` (one document; the one endpoint `arcosIndexer`, `gcfv2`,
 run as `arcos-jobs@`, triggered by a schedule and nothing else, in `europe-west4`, with no VPC, no environment variables
 and the default ingress; no extensions, no lifecycle hooks, no required roles; required APIs only from the pinned CLI's
-standard list; no param or secret but `BLOCKSCOUT_API_KEY`), and only then signs in and hands both to the Firebase CLI, which reads the manifest
-instead of loading the code. A manifest that fails the check stops the deploy with a message that says which rule it
+standard list; no param or secret but the two `FUNCTIONS_SECRETS` names, `BLOCKSCOUT_API_KEY` and
+`TELEGRAM_BOT_TOKEN`), and only then signs in and hands both to the Firebase CLI, which reads the manifest instead of
+loading the code. A manifest that fails the check stops the deploy with a message that says which rule it
 broke. On a push, a functions build that fails stops the sites' deploy too (the deploy job waits for every build); to
 ship the sites meanwhile, run the workflow by hand with `targets: both`.
 Cloud Build installs `firebase-admin` and `firebase-functions` from `functions/deploy/package-lock.json`, with install
@@ -164,8 +239,9 @@ npm ci --ignore-scripts --prefix tools/firebase
 tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --project arcos-c80cf
 ```
 
-The function's secret, `BLOCKSCOUT_API_KEY`, is pinned to the version the deploy resolves: rotating it means deploying
-again.
+The function's secrets, `BLOCKSCOUT_API_KEY` and `TELEGRAM_BOT_TOKEN`, are pinned to the versions the deploy resolves:
+rotating either means deploying again. Both must exist, with the bindings of steps 3 and 5 below, before a deploy of a
+function that declares them: a deploy whose pinned secret is missing fails.
 
 ## Setting it up
 
@@ -183,12 +259,23 @@ removed it, and every later deploy must work with the roles below alone.
    - `roles/datastore.user` on the project, with the IAM condition
      `resource.name=="projects/arcos-c80cf/databases/arcos"`, so it reaches no other database;
    - `roles/logging.logWriter` on the project;
-   - `roles/secretmanager.secretAccessor` on the secret `BLOCKSCOUT_API_KEY` (a binding on the secret, not the project).
+   - `roles/secretmanager.secretAccessor` on the secret `BLOCKSCOUT_API_KEY`, and on the secret `TELEGRAM_BOT_TOKEN`
+     (Watchdog's bot token; a binding on each secret, not the project).
 
-   To see the last one (it should list `arcos-jobs@` under `roles/secretmanager.secretAccessor`):
+   To see them (each should list `arcos-jobs@` under `roles/secretmanager.secretAccessor`):
 
    ```bash
    gcloud secrets get-iam-policy BLOCKSCOUT_API_KEY --project arcos-c80cf
+   gcloud secrets get-iam-policy TELEGRAM_BOT_TOKEN --project arcos-c80cf
+   ```
+
+   The bot token's secret is created by the owner before the first deploy that declares it (the owner pastes the token
+   at a silent prompt; it is printed nowhere), with the same replication policy as `BLOCKSCOUT_API_KEY`, and the
+   binding added with:
+
+   ```bash
+   gcloud secrets add-iam-policy-binding TELEGRAM_BOT_TOKEN --project arcos-c80cf \
+     --member "serviceAccount:arcos-jobs@arcos-c80cf.iam.gserviceaccount.com" --role roles/secretmanager.secretAccessor
    ```
 
 4. The APIs, enabled by the owner. Before every functions deploy the CLI checks each API it needs and enables one that
@@ -244,7 +331,8 @@ removed it, and every later deploy must work with the roles below alone.
      ```
 
    - a custom role holding `secretmanager.secrets.get`, `secretmanager.versions.get` and
-     `secretmanager.secrets.getIamPolicy`, bound on the secret `BLOCKSCOUT_API_KEY` only. Before every deploy the CLI
+     `secretmanager.secrets.getIamPolicy`, bound on the secrets `BLOCKSCOUT_API_KEY` and `TELEGRAM_BOT_TOKEN` only,
+     never on the project. Before every deploy the CLI
      reads the secret and its latest version (`deploy/functions/params.js` `ensureSecret`, through
      `gcp/secretManager.js` `getSecretMetadata`: `secrets.get`, then `versions.get`; the first deploy was refused there
      with a 403 on `GET secrets/BLOCKSCOUT_API_KEY`), and resolves the latest version again
@@ -260,6 +348,9 @@ removed it, and every later deploy must work with the roles below alone.
        --title "arcos: resolve a function secret" \
        --permissions secretmanager.secrets.get,secretmanager.versions.get,secretmanager.secrets.getIamPolicy --stage GA
      gcloud secrets add-iam-policy-binding BLOCKSCOUT_API_KEY --project arcos-c80cf \
+       --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
+       --role projects/arcos-c80cf/roles/arcosSecretDeployReader
+     gcloud secrets add-iam-policy-binding TELEGRAM_BOT_TOKEN --project arcos-c80cf \
        --member "serviceAccount:arcos-deployer@arcos-c80cf.iam.gserviceaccount.com" \
        --role projects/arcos-c80cf/roles/arcosSecretDeployReader
      ```
@@ -394,8 +485,9 @@ resource.type="cloud_run_revision" resource.labels.service_name="arcosindexer" j
 ```
 
 Each run logs one line: `arcosIndexer run` with `from`, `to`, `windows`, `pools`, `tokens`, `inspected`, `failed`,
-`expired`, `feeds` and `explorerCalls`; a halted indexer logs `arcosIndexer halted` with its reason. No line carries an
-address. In Firestore, `indexer/mainnet` shows the cursor (`block`), `lastRunAt` and the day's explorer calls.
+`expired`, `feeds`, `explorerCalls` and Watchdog's `watch` counters (above); a halted indexer logs `arcosIndexer halted`
+with its reason. No line carries an address. In Firestore, `indexer/mainnet` shows the cursor (`block`), `lastRunAt`,
+the day's explorer calls and Watchdog's `watchCursor`.
 
 ## What it costs
 
@@ -410,6 +502,10 @@ minute), a steady-state run makes:
 | Firestore reads | about 30: the controls and the lease 2, the window's pools and tokens about 4, the cursor 1, the queue up to 12, each inspection's pools 1 or 2, the feeds 4, the end of the run 1; plus up to 50 for the feed rebuilt that run | about 3.5 million |
 | Firestore writes | about 17: the lease 1, pools and tokens about 4, the cursor 1, each inspection 2, the feeds up to 4, the end of the run 1 | about 0.7 million |
 | Function time | a few seconds, plus up to 15 seconds per inspection | inside or near the free tier at the default CPU of a 512 MiB function (the function sets no `cpu` option) |
+| Arc RPC (Watchdog) | 3 per watched token on the page, at most 120 (40 tokens); 0 explorer calls | about 5 million at the cap, far fewer with a few watched tokens |
+| Firestore reads (Watchdog) | about 2 + 3 per token on the page (the `watchState`, `tokens` and `pools` docs), at most about 122; plus the fan-out's and the sends' reads only when there is work | about 5.3 million at the cap, about $1.60 |
+| Firestore writes (Watchdog) | 0 when nothing changed; 1 per first sight; 1 + k per change with k alerts; 1 per delivery created; 1 per send; the cursor rides on the end of the run | a few a minute at most; the hard ceiling during a fan-out is 1,000 delivery creates + 60 send updates + 40 state writes |
+| Telegram | at most 60 messages a run, 3 per chat | at most 60 a minute |
 
 The first run's 24-hour backfill reads and writes about 6,000 documents once. Firestore single-region prices are about
 half of the multi-region $0.06 per 100,000 reads and $0.18 per 100,000 writes, so the indexer's Firestore use is about
@@ -419,9 +515,12 @@ are made on RPC only and marked `degraded` unless the budget grows.
 ## Tests
 
 - `npm test -w @arcos/functions`: the pure parts (windows, the log decoder on real mainnet logs, pool selection, the
-  queue, the feeds, the RPC deadline), and a real build of the bundle and its manifest, read back by the pinned
-  Firebase CLI and passed through the deploy job's manifest check.
+  queue, the feeds, the RPC deadline, Watchdog's reader on a fake chain, the Telegram sender on a stubbed Bot API with
+  every outcome and the token in no result, the delivery state machine), and a real build of the bundle and its
+  manifest, read back by the pinned Firebase CLI and passed through the deploy job's manifest check.
 - `npm run test:emulator -w @arcos/functions`: whole runs against fake chains in the Firestore emulator, under the
   `demo-arcos` project id only: the windows, the queue, a crash inside a window, a run whose inspections fail, the feed
-  rebuilt in turn, the lease and the cursor that only moves forward.
+  rebuilt in turn, the lease and the cursor that only moves forward; and Watchdog's step: first sight, a change with
+  its alerts and deliveries, the fan-out resumed after a crash, retries and the 4-attempt limit, a blocked chat
+  unlinked, the 429 pause, the switches, the 40-token page and its cursor, the time limits, the breaker and the logs.
 - `npm run test:live -w @arcos/functions`: three read-only calls to Arc mainnet. Not part of CI.
