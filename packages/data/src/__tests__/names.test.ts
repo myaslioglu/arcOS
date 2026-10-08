@@ -3,6 +3,10 @@ import {
   COLLECTIONS,
   DATABASE_ENV,
   DATABASE_ID,
+  DELIVERY_MAX_AGE_MS,
+  DELIVERY_MAX_ATTEMPTS,
+  FREE_WATCH_LIMIT,
+  LIQUIDITY_DROP,
   NETWORKS,
   RADAR_FEED_FILTERS,
   TTL_COLLECTIONS,
@@ -78,5 +82,20 @@ describe("TTL", () => {
 describe("radar feeds", () => {
   it("come in four filters", () => {
     expect(RADAR_FEED_FILTERS).toEqual(["all", "liquid", "passing", "liquid-passing"]);
+  });
+});
+
+describe("Watchdog's numbers", () => {
+  it("lets a wallet watch three tokens", () => {
+    expect(FREE_WATCH_LIMIT).toBe(3);
+  });
+
+  it("tries a delivery four times in all, and gives up on one a day old", () => {
+    expect(DELIVERY_MAX_ATTEMPTS).toBe(4);
+    expect(DELIVERY_MAX_AGE_MS).toBe(DAY);
+  });
+
+  it("calls a liquidity drop an alert at 30% and 500 quote units, both as bigints", () => {
+    expect(LIQUIDITY_DROP).toEqual({ bps: 3000n, minUnits: 500_000_000n });
   });
 });

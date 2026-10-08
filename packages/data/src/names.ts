@@ -72,3 +72,18 @@ export const RADAR_PASSING_MIN = 5;
 
 /** The most pools /api/pools and the indexer hand an inspection: the Inspector reads at most 50 index pools. */
 export const INDEXED_POOLS_LIMIT = 50;
+
+/** How many tokens a wallet may watch (Watchdog's free tier). Enforced in addWatch's transaction. */
+export const FREE_WATCH_LIMIT = 3;
+
+/** A delivery is tried this many times in all: the first try plus at most 3 retries on later runs. */
+export const DELIVERY_MAX_ATTEMPTS = 4;
+
+/** A delivery still pending this long after it was created is failed as "expired" instead of being sent. */
+export const DELIVERY_MAX_AGE_MS = DAY;
+
+/**
+ * When a drop in the deepest pool's depth is an alert: both at least 30% of the previous depth (bps of 10,000) and at
+ * least 500 units of the quote currency (6 decimals), so neither a thin pool's noise nor a deep pool's dust alerts.
+ */
+export const LIQUIDITY_DROP = { bps: 3000n, minUnits: 500_000_000n } as const;
