@@ -54,8 +54,8 @@ const item = (over: Partial<RadarItem> = {}): RadarItem => ({
 });
 /** React escapes an apostrophe in static markup; read it back as typed. */
 const render = () => renderToStaticMarkup(createElement(RadarWindow, { winId: "w-1", params: {} })).replaceAll("&#x27;", "'");
-const listing = (rows: RadarItem[], indexedAt: number | null = NOW - 60_000) => {
-  state.query = { ...state.query, data: { rows, indexedAt } };
+const listing = (rows: RadarItem[], indexedAt: number | null = NOW - 60_000, servedAt = NOW) => {
+  state.query = { ...state.query, data: { rows, indexedAt, servedAt } };
 };
 
 beforeEach(() => {
@@ -75,11 +75,11 @@ describe("radarView", () => {
     expect(radarView(true, { ...base, isLoadingError: true, error: new RadarFetchError(500) }, OFF)).toBe("failed");
     expect(radarView(true, { ...base, isLoadingError: true, error: new RadarFetchError(null) }, OFF)).toBe("failed");
     expect(radarView(true, { ...base, isLoadingError: true, error: new TypeError("x") }, OFF)).toBe("failed");
-    expect(radarView(true, { ...base, data: { rows: [], indexedAt: null } }, OFF)).toBe("first-run");
-    expect(radarView(true, { ...base, data: { rows: [], indexedAt: NOW } }, OFF)).toBe("empty");
-    expect(radarView(true, { ...base, data: { rows: [], indexedAt: NOW } }, ON)).toBe("no-match");
-    expect(radarView(true, { ...base, data: { rows: [item()], indexedAt: NOW } }, OFF)).toBe("list");
-    expect(radarView(true, { ...base, data: { rows: [item()], indexedAt: null } }, OFF)).toBe("list");
+    expect(radarView(true, { ...base, data: { rows: [], indexedAt: null, servedAt: NOW } }, OFF)).toBe("first-run");
+    expect(radarView(true, { ...base, data: { rows: [], indexedAt: NOW, servedAt: NOW } }, OFF)).toBe("empty");
+    expect(radarView(true, { ...base, data: { rows: [], indexedAt: NOW, servedAt: NOW } }, ON)).toBe("no-match");
+    expect(radarView(true, { ...base, data: { rows: [item()], indexedAt: NOW, servedAt: NOW } }, OFF)).toBe("list");
+    expect(radarView(true, { ...base, data: { rows: [item()], indexedAt: null, servedAt: NOW } }, OFF)).toBe("list");
   });
 });
 
@@ -102,18 +102,24 @@ describe("Radar", () => {
     expect(render()).toContain("This site has no token index.");
   });
 
-  it("shows the filters and says it is loading", () => {
+  it("shows the filters and says it is loading, in a status region that is there before the text", () => {
     state.query = { ...state.query, isPending: true };
-    const html = render();
+    let html = render();
     expect(html).toContain('aria-label="Filters"');
     expect(html).toContain("Has liquidity");
     expect(html).toContain("1,000 USDC or more");
     expect(html).toContain("At least 5 checks pass");
-    expect(html).toContain('aria-live="polite"');
-    expect(html).toContain("Loading new tokens…");
+    expect(html).toContain('role="status" aria-live="polite">Loading new tokens…</p>');
     expect(state.opts?.enabled).toBe(true);
     expect(state.opts?.queryKey).toEqual(["radar", "all"]);
     expect(html).toContain(NOTE);
+
+    // The region stays mounted, empty, once the list is there: a live region mounted with its text is never announced.
+    state.query = { ...state.query, isPending: false };
+    listing([item()]);
+    html = render();
+    expect(html).toContain('role="status" aria-live="polite"></p>');
+    expect(html).not.toContain("Loading new tokens");
   });
 
   it("tells the index being down from any other failure, with a Try again button, and never the error's words", () => {
@@ -193,6 +199,22 @@ describe("Radar", () => {
     listing([], NOW - 11 * 60_000);
     html = render();
     expect(html).toContain("The index last ran 11 min ago. New tokens may be missing.");
+  });
+
+  it("measures the index's age and the rows' on the server's clock, not the device's", () => {
+    // The device is 11 minutes ahead of the server: the index ran a minute ago and the row is 5 minutes old, still.
+    state.query = { ...state.query, dataUpdatedAt: NOW + 11 * 60_000 };
+    listing([item()], NOW - 60_000, NOW);
+    let html = render();
+    expect(html).not.toContain("New tokens may be missing");
+    expect(html).toContain("5 min ago");
+
+    // The device is 10 minutes behind: the index last ran 11 minutes ago, and the note says so.
+    state.query = { ...state.query, dataUpdatedAt: NOW - 10 * 60_000 };
+    listing([item()], NOW - 11 * 60_000, NOW);
+    html = render();
+    expect(html).toContain("The index last ran 11 min ago. New tokens may be missing.");
+    expect(html).toContain("5 min ago");
   });
 
   it("keeps the last list on a failed refresh, with a note", () => {

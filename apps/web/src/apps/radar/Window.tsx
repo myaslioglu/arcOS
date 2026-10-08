@@ -54,9 +54,11 @@ export default function RadarWindow() {
   const [filters, setFilters] = useState<RadarFilters>({ liquid: false, passing: false });
   const query = useQuery(radarQueryOptions(filters, mainnet));
   const view = radarView(mainnet, query, filters);
-  // Ages are measured from the moment the list was last read, so they move with every refetch and never drift alone.
-  const now = query.dataUpdatedAt;
   const list = query.data;
+  // Every age, the index's too, is measured on the server's clock as the route answered it, never this device's: a
+  // device minutes ahead would otherwise call a fresh index stale, and one minutes behind would call a stale one fresh.
+  // The ages move with every poll, since each answer carries its own time.
+  const now = list?.servedAt ?? 0;
 
   return (
     <div className="flex h-full flex-col text-sm">
@@ -73,6 +75,10 @@ export default function RadarWindow() {
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-auto p-3">
+        {/* Always mounted, so a screen reader hears the text when it arrives: a live region mounted with its text is never announced. */}
+        <p className="text-muted" role="status" aria-live="polite">
+          {view === "loading" ? "Loading new tokens…" : ""}
+        </p>
         {view === "elsewhere" && (
           <div className="grid justify-items-start gap-2">
             <p className="text-muted">Radar lists tokens on Arc mainnet only. This site has no token index.</p>
@@ -80,11 +86,6 @@ export default function RadarWindow() {
               Open Radar on 4rcos.com
             </a>
           </div>
-        )}
-        {view === "loading" && (
-          <p className="text-muted" aria-live="polite">
-            Loading new tokens…
-          </p>
         )}
         {(view === "down" || view === "failed") && (
           <div className="grid justify-items-start gap-2">

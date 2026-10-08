@@ -39,7 +39,11 @@ describe("parseRadarAnswer", () => {
   });
 
   it("keeps a good row, lowercases its address, parses its time and cleans its labels", () => {
-    const list = parseRadarAnswer({ rows: [row({ symbol: "RD‮R", name: " Radar \u0000token ", launchpad: "Pad​launch" })], indexedAt: "2026-10-08T12:00:00.000Z" });
+    const list = parseRadarAnswer({
+      rows: [row({ symbol: "RD‮R", name: " Radar \u0000token ", launchpad: "Pad​launch" })],
+      indexedAt: "2026-10-08T12:00:00.000Z",
+      servedAt: "2026-10-08T12:00:05.000Z",
+    });
     expect(list.rows).toEqual([
       {
         address: TOKEN.toLowerCase(), symbol: "RDR", name: "Radar token", source: "v3", firstSeen: "2026-10-08T11:58:00.000Z",
@@ -47,6 +51,19 @@ describe("parseRadarAnswer", () => {
       },
     ]);
     expect(list.indexedAt).toBe(Date.parse("2026-10-08T12:00:00.000Z"));
+    expect(list.servedAt).toBe(Date.parse("2026-10-08T12:00:05.000Z"));
+  });
+
+  it("keeps the first row of an address and drops a repeat, whatever its case", () => {
+    const list = parseRadarAnswer({ rows: [row({ symbol: "ONE" }), row({ address: TOKEN.toLowerCase(), symbol: "TWO" })], indexedAt: null });
+    expect(list.rows.map((r) => r.symbol)).toEqual(["ONE"]);
+  });
+
+  it("reads a servedAt that is missing or not a time as this device's clock", () => {
+    const now = () => 1_790_000_000_000;
+    expect(parseRadarAnswer({ rows: [], indexedAt: null }, now).servedAt).toBe(1_790_000_000_000);
+    expect(parseRadarAnswer({ rows: [], indexedAt: null, servedAt: "soon" }, now).servedAt).toBe(1_790_000_000_000);
+    expect(parseRadarAnswer({ rows: [], indexedAt: null, servedAt: 5 }, now).servedAt).toBe(1_790_000_000_000);
   });
 
   it("drops a row with a bad address, source or time, and nulls a bad field", () => {

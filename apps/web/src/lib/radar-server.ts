@@ -23,6 +23,7 @@ const source = () =>
       },
       ttlMs: RADAR_TTL_MS,
       maxKeys: RADAR_FEED_FILTERS.length,
+      unavailableMessage: "The token index can't be read right now.",
     }),
   );
 

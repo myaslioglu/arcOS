@@ -68,7 +68,7 @@ describe("radarPage", () => {
       skipped: 0,
     });
     expect(Object.keys(page.rows[0]!)).toEqual(["address", "symbol", "name", "source", "firstSeen", "passed", "total", "bestPoolDepth", "decimals", "launchpad"]);
-    expect(radarAnswer(page)).toEqual({ rows: page.rows, indexedAt: page.indexedAt });
+    expect(radarAnswer(page, () => T0 + 90_000)).toEqual({ rows: page.rows, indexedAt: page.indexedAt, servedAt: new Date(T0 + 90_000).toISOString() });
     expect(JSON.stringify(page)).not.toContain(CREATOR);
   });
 
@@ -113,6 +113,13 @@ describe("radarPage", () => {
     const page = radarPage(read(rows));
     expect(page.rows.map((r) => r.address)).toEqual([addr(2)]);
     expect(page.skipped).toBe(8);
+  });
+
+  it("keeps the first row of an address, and skips and counts a repeat", () => {
+    const page = radarPage(read([row({ symbol: "ONE" }), row({ address: addr(2) }), row({ symbol: "TWO" })]));
+    expect(page.rows.map((r) => r.address)).toEqual([addr(1), addr(2)]);
+    expect(page.rows[0]?.symbol).toBe("ONE");
+    expect(page.skipped).toBe(1);
   });
 
   it("nulls both counts when they don't make sense together, and a depth that isn't a uint", () => {

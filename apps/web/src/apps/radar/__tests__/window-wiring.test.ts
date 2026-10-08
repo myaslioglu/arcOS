@@ -68,7 +68,7 @@ const dblclick = (el: Element) => act(async () => el.dispatchEvent(new MouseEven
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
   state.opts = undefined;
-  state.data = { rows: [row], indexedAt: Date.parse("2026-10-08T12:00:00.000Z") };
+  state.data = { rows: [row], indexedAt: Date.parse("2026-10-08T12:00:00.000Z"), servedAt: Date.parse("2026-10-08T12:00:00.000Z") };
   state.loadingError = false;
   state.open.mockClear();
   state.refetch.mockClear();

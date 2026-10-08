@@ -35,11 +35,15 @@ export type RadarAnswerRow = {
   launchpad: string | null;
 };
 
-/** The route's body: at most RADAR_FEED_SIZE rows, newest first, and when the indexer last finished a run. */
-export type RadarAnswer = { rows: RadarAnswerRow[]; indexedAt: string | null };
+/**
+ * The route's body: at most RADAR_FEED_SIZE rows, newest first, when the indexer last finished a run, and the server's
+ * own time as it answered (`servedAt`), which the window measures every age against: a device's clock may be minutes
+ * off the indexer's.
+ */
+export type RadarAnswer = { rows: RadarAnswerRow[]; indexedAt: string | null; servedAt: string };
 
-/** A page as the server keeps it: the answer, and how many stored rows were malformed and left out (logged as a count). */
-export type RadarPage = RadarAnswer & { skipped: number };
+/** A page as the server keeps it: the rows and the last run, and how many stored rows were malformed and left out (logged as a count). */
+export type RadarPage = Omit<RadarAnswer, "servedAt"> & { skipped: number };
 
 export const BEFORE_ERROR = "Radar lists the newest 50 tokens only.";
 export const LIQUIDITY_ERROR = "hasLiquidity can be 0 or 1.";
@@ -92,14 +96,16 @@ function counts(passed: unknown, total: unknown): { passed: number | null; total
 
 /**
  * A page from what the server read, run once per cache fill. It keeps the stored order (newest first, ties by
- * address) and the first RADAR_FEED_SIZE rows, checking each: a row whose address, source or firstSeen is malformed is
- * skipped and counted, never thrown on; a malformed count, depth or decimals reads as null; labels are cleaned again.
- * The creator is resolved to a launchpad name through `lookup` and never answered itself.
+ * address) and the first RADAR_FEED_SIZE rows, checking each: a row whose address, source or firstSeen is malformed, or
+ * whose address a row before it already has, is skipped and counted, never thrown on; a malformed count, depth or
+ * decimals reads as null; labels are cleaned again. The creator is resolved to a launchpad name through `lookup` and
+ * never answered itself.
  */
 export function radarPage(read: RadarFeedRead, lookup: (creator: string | null) => string | null = launchpadOf): RadarPage {
   const stored: readonly unknown[] = Array.isArray(read.feed?.rows) ? read.feed.rows : [];
   const rows: RadarAnswerRow[] = [];
   let skipped = 0;
+  const seen = new Set<string>();
   for (const raw of stored.slice(0, RADAR_FEED_SIZE)) {
     const row = (isRecord(raw) ? raw : {}) as Partial<Record<keyof RadarRow, unknown>>;
     const ms = millisOf(row.firstSeen);
@@ -107,6 +113,12 @@ export function radarPage(read: RadarFeedRead, lookup: (creator: string | null) 
       skipped++;
       continue;
     }
+    // Two stored rows of one address would be two list items with one key; the first is the row.
+    if (seen.has(row.address)) {
+      skipped++;
+      continue;
+    }
+    seen.add(row.address);
     const decimals = typeof row.decimals === "number" && Number.isInteger(row.decimals) && row.decimals >= 0 && row.decimals <= 36 ? row.decimals : null;
     rows.push({
       address: row.address,
@@ -124,5 +136,9 @@ export function radarPage(read: RadarFeedRead, lookup: (creator: string | null) 
   return { rows, indexedAt: ranMs === null ? null : new Date(ranMs).toISOString(), skipped };
 }
 
-/** The body the route answers: the page without its count of skipped rows. */
-export const radarAnswer = (p: RadarPage): RadarAnswer => ({ rows: p.rows, indexedAt: p.indexedAt });
+/** The body the route answers: the page without its count of skipped rows, and the server's time as it answers. */
+export const radarAnswer = (p: RadarPage, now: () => number = Date.now): RadarAnswer => ({
+  rows: p.rows,
+  indexedAt: p.indexedAt,
+  servedAt: new Date(now()).toISOString(),
+});

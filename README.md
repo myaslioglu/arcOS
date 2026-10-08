@@ -92,8 +92,8 @@ the suite's types; `npm run lint` covers it too.
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
   proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
   (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts),
-  `/api/pools/<token>` (a token's indexed pools) and `/api/csp-report` (content security policy
-  violation reports).
+  `/api/pools/<token>` (a token's indexed pools), `/api/radar` (Radar's first page of a filter) and
+  `/api/csp-report` (content security policy violation reports).
 - `packages/shell` — the desktop itself: windows, dock, folders and trays, launcher, drag and
   drop. `src/core` is pure TypeScript (no React beyond type imports), `src/ui` holds the React
   components and `src/styles` the CSS. No wagmi or viem imports.

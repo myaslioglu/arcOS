@@ -101,7 +101,9 @@ describe("indexedPoolsSource", () => {
     let t = 0;
     const load = vi.fn().mockRejectedValueOnce(new Error("PERMISSION_DENIED")).mockResolvedValue([doc({})]);
     const source = indexedPoolsSource({ load, now: () => t, cooldownMs: 10 });
-    await expect(source.pools(TOKEN)).rejects.toBeInstanceOf(IndexUnavailable);
+    await expect(source.pools(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
+    t = 9;
+    await expect(source.pools(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
     t = 11;
     await expect(source.pools(TOKEN)).resolves.toHaveLength(1);
   });

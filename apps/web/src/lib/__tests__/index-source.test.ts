@@ -48,8 +48,18 @@ describe("indexSource", () => {
     const source = indexSource({ load: vi.fn().mockRejectedValue(denied), now: () => 0 });
     const failure = await source.get("all").catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(IndexUnavailable);
-    expect((failure as Error).message).toBe("The pool index can't be read right now.");
+    expect((failure as Error).message).toBe("The index can't be read right now.");
     expect(causeCode(failure)).toBe(7);
+  });
+
+  it("says what the caller named the index, both on a failed read and during the cooldown", async () => {
+    let t = 0;
+    const load = vi.fn().mockRejectedValueOnce(new Error("UNAVAILABLE")).mockResolvedValue("ok");
+    const source = indexSource({ load, now: () => t, cooldownMs: 10, unavailableMessage: "The token index can't be read right now." });
+    await expect(source.get("all")).rejects.toMatchObject({ name: "IndexUnavailable", message: "The token index can't be read right now." });
+    t = 9;
+    await expect(source.get("all")).rejects.toMatchObject({ name: "IndexUnavailable", message: "The token index can't be read right now." });
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("never keeps a failure as an answer", async () => {

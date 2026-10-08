@@ -69,19 +69,24 @@ describe("GET /api/radar", () => {
     }
   });
 
-  it("answers the page's rows and the index's last run, kept 20 s at the CDN, and never the skipped count", async () => {
+  it("answers the page's rows, the index's last run and its own time, kept 20 s at the CDN, and never the skipped count", async () => {
     radarFeedPage.mockResolvedValue(page);
+    const before = Date.now();
     const res = await get("?hasLiquidity=1");
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, s-maxage=20");
-    expect(await res.json()).toEqual({ rows: page.rows, indexedAt: page.indexedAt });
+    const body = (await res.json()) as { servedAt: string };
+    expect(body).toEqual({ rows: page.rows, indexedAt: page.indexedAt, servedAt: body.servedAt });
+    expect(body.servedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(Date.parse(body.servedAt)).toBeGreaterThanOrEqual(before - 1000);
+    expect(Date.parse(body.servedAt)).toBeLessThanOrEqual(Date.now() + 1000);
   });
 
   it("answers an empty page with a 200", async () => {
     radarFeedPage.mockResolvedValue({ rows: [], indexedAt: null, skipped: 0 });
     const res = await get();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ rows: [], indexedAt: null });
+    expect(await res.json()).toEqual({ rows: [], indexedAt: null, servedAt: expect.stringMatching(/Z$/) as string });
   });
 
   it("limits each client to 60 requests a minute", async () => {

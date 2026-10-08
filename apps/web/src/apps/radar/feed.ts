@@ -11,7 +11,8 @@ export type RadarFilters = { liquid: boolean; passing: boolean };
 /** A row as the window shows it: the answer's row, with `firstSeen` parsed once. */
 export type RadarItem = Omit<RadarAnswerRow, "firstSeen"> & { firstSeen: string; firstSeenMs: number };
 
-export type RadarList = { rows: RadarItem[]; indexedAt: number | null };
+/** The list, with the index's last run and the server's time as it answered (`servedAt`), both in milliseconds. */
+export type RadarList = { rows: RadarItem[]; indexedAt: number | null; servedAt: number };
 
 /** The feed the filters name: the same mapping as the data package's radarFeedFilter. */
 export function radarKey(f: RadarFilters): "all" | "liquid" | "passing" | "liquid-passing" {
@@ -48,14 +49,16 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 
 /**
- * The route's answer, checked field by field: a row whose address, source or time isn't right is dropped, a field
- * that isn't right reads as null, and labels are cleaned again. At most one page. Anything but an answer throws.
+ * The route's answer, checked field by field: a row whose address, source or time isn't right, or whose address a row
+ * before it has, is dropped; a field that isn't right reads as null, and labels are cleaned again. At most one page.
+ * Anything but an answer throws. A `servedAt` that isn't a time reads as this device's clock (`now`).
  */
-export function parseRadarAnswer(json: unknown): RadarList {
+export function parseRadarAnswer(json: unknown, now: () => number = Date.now): RadarList {
   if (!isRecord(json) || !Array.isArray(json.rows) || !(typeof json.indexedAt === "string" || json.indexedAt === null)) {
     throw new RadarFetchError(null);
   }
   const rows: RadarItem[] = [];
+  const seen = new Set<string>();
   for (const raw of json.rows) {
     if (rows.length >= PAGE) break;
     if (!isRecord(raw)) continue;
@@ -63,9 +66,13 @@ export function parseRadarAnswer(json: unknown): RadarList {
     if (typeof raw.source !== "string" || !SOURCES.includes(raw.source)) continue;
     const firstSeenMs = typeof raw.firstSeen === "string" ? Date.parse(raw.firstSeen) : Number.NaN;
     if (!Number.isFinite(firstSeenMs)) continue;
+    const address = raw.address.toLowerCase();
+    // Each address is one list item, keyed by it: a repeat is dropped.
+    if (seen.has(address)) continue;
+    seen.add(address);
     const counted = isCount(raw.passed) && isCount(raw.total);
     rows.push({
-      address: raw.address.toLowerCase(),
+      address,
       symbol: typeof raw.symbol === "string" ? cleanLabel(raw.symbol, 32) : null,
       name: typeof raw.name === "string" ? cleanLabel(raw.name, 64) : null,
       source: raw.source as RadarItem["source"],
@@ -79,7 +86,8 @@ export function parseRadarAnswer(json: unknown): RadarList {
     });
   }
   const indexedAt = json.indexedAt === null ? Number.NaN : Date.parse(json.indexedAt);
-  return { rows, indexedAt: Number.isFinite(indexedAt) ? indexedAt : null };
+  const servedAt = typeof json.servedAt === "string" ? Date.parse(json.servedAt) : Number.NaN;
+  return { rows, indexedAt: Number.isFinite(indexedAt) ? indexedAt : null, servedAt: Number.isFinite(servedAt) ? servedAt : now() };
 }
 
 /** Asks the route for the feed, at most 10 s; an error status, no answer, or a body that isn't one throws RadarFetchError. */

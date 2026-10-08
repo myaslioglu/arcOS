@@ -66,8 +66,12 @@ export { IndexUnavailable, causeCode, indexEnabled } from "./index-source";
  * A token's indexed pools through `load`, with the guards of `indexSource` (index-source.ts): a 1.5 s deadline, a
  * 60 s cooldown after a failure, and an answer kept 60 s per token, whatever the case of its address.
  */
-export function indexedPoolsSource(opts: Omit<IndexSourceOptions<PoolDoc[]>, "timeoutMessage">) {
-  const s = indexSource<PoolDoc[]>({ ...opts, timeoutMessage: "The pool index took too long." });
+export function indexedPoolsSource(opts: Omit<IndexSourceOptions<PoolDoc[]>, "timeoutMessage" | "unavailableMessage">) {
+  const s = indexSource<PoolDoc[]>({
+    ...opts,
+    timeoutMessage: "The pool index took too long.",
+    unavailableMessage: "The pool index can't be read right now.",
+  });
   return { pools: (token: string) => s.get(token.toLowerCase()) };
 }
 

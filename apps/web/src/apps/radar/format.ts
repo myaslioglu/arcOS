@@ -1,7 +1,7 @@
 import type { TokenSource } from "@arcos/data";
 
 // The words a Radar row shows, from the numbers the route answers. Pure: every time comes in as milliseconds, so the
-// window hands in one "now" (the query's dataUpdatedAt) and the tests are deterministic.
+// window hands in one "now" (the answer's servedAt: the server's clock, not the device's) and the tests are deterministic.
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;

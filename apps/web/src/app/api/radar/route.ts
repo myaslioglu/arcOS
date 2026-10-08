@@ -16,9 +16,9 @@ const NO_STORE = { "cache-control": "no-store" };
 /**
  * GET /api/radar?hasLiquidity=0|1&minPassed=0|5: the newest 50 tokens the indexer recorded on Arc mainnet for that
  * filter, newest first, each with Inspector's counts, its best pool's depth, where the index first saw it and its
- * launchpad badge, plus when the indexer last finished a run (`indexedAt`). Page one only: `before` answers 400. Kept
- * 20 s at the CDN. The index holds mainnet data only, so on testnet this route is not there (404), and the Radar window
- * says so.
+ * launchpad badge, plus when the indexer last finished a run (`indexedAt`) and this server's own time as it answers
+ * (`servedAt`, which the window measures the ages against). Page one only: `before` answers 400. Kept 20 s at the CDN.
+ * The index holds mainnet data only, so on testnet this route is not there (404), and the Radar window says so.
  */
 export async function GET(req: Request) {
   if (activeNetwork() !== "mainnet") return NextResponse.json({ error: "Not available on this network." }, { status: 404, headers: NO_STORE });

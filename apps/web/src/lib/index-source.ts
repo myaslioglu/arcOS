@@ -10,7 +10,7 @@ import type { NetworkId } from "@arcos/chain";
  * UNAUTHENTICATED, 5 NOT_FOUND for the database, 4 DEADLINE_EXCEEDED, 14 UNAVAILABLE); the route logs that code only.
  */
 export class IndexUnavailable extends Error {
-  constructor(message = "The pool index can't be read right now.", options?: { cause?: unknown }) {
+  constructor(message = "The index can't be read right now.", options?: { cause?: unknown }) {
     super(message, options);
     this.name = "IndexUnavailable";
   }
@@ -43,6 +43,8 @@ export type IndexSourceOptions<T> = {
   maxKeys?: number;
   /** What the rejection says when a read outlives the deadline. */
   timeoutMessage?: string;
+  /** What the rejection says when a read failed, or none is tried during the cooldown. */
+  unavailableMessage?: string;
 };
 
 /**
@@ -60,6 +62,7 @@ export function indexSource<T>({
   ttlMs = 60_000,
   maxKeys = 1_000,
   timeoutMessage = "The index took too long.",
+  unavailableMessage = "The index can't be read right now.",
 }: IndexSourceOptions<T>) {
   let downUntil = 0;
   const cache = new Map<string, { at: number; value: Promise<T> }>();
@@ -67,7 +70,7 @@ export function indexSource<T>({
     get(key: string): Promise<T> {
       const hit = cache.get(key);
       if (hit && now() - hit.at <= ttlMs) return hit.value;
-      if (now() < downUntil) return Promise.reject(new IndexUnavailable());
+      if (now() < downUntil) return Promise.reject(new IndexUnavailable(unavailableMessage));
       const value = new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => reject(new IndexUnavailable(timeoutMessage)), deadlineMs);
         load(key).then(
@@ -77,7 +80,7 @@ export function indexSource<T>({
           },
           (e: unknown) => {
             clearTimeout(timer);
-            reject(new IndexUnavailable(undefined, { cause: e }));
+            reject(new IndexUnavailable(unavailableMessage, { cause: e }));
           },
         );
       });
