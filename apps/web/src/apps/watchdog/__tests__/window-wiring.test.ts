@@ -14,6 +14,7 @@ import { WatchFetchError, type WatchItem, type WatchList } from "../api";
 type DropItem = { kind: string; address: string };
 const state = vi.hoisted(() => ({
   data: undefined as WatchList | undefined,
+  refetch: vi.fn(async () => undefined),
   query: { isPending: false, isLoadingError: false, isRefetchError: false, error: null as unknown, refetch: async () => undefined },
   setQueryData: vi.fn<(key: unknown, next: unknown) => void>(),
   cancelQueries: vi.fn<(filters: unknown) => Promise<void>>(async () => undefined),
@@ -106,7 +107,8 @@ beforeEach(() => {
   answers = [];
   me = () => session("unlinked");
   state.data = list(row(TOKEN));
-  state.query = { isPending: false, isLoadingError: false, isRefetchError: false, error: null, refetch: async () => undefined };
+  state.refetch.mockClear();
+  state.query = { isPending: false, isLoadingError: false, isRefetchError: false, error: null, refetch: state.refetch };
   state.telegram = "unlinked";
   state.accepts = undefined;
   state.drop = undefined;
@@ -284,6 +286,9 @@ describe("Watchdog's window wiring", () => {
     expect(state.setQueryData).not.toHaveBeenCalled();
     expect(state.trackEvent).not.toHaveBeenCalled();
     expect(state.refresh).not.toHaveBeenCalled();
+    // The limit moved under the window (another tab or device added a token): the list on screen, its footer and
+    // the Watch button's state are stale, so the list is read again at once rather than on the minute's poll.
+    expect(state.refetch).toHaveBeenCalledTimes(1);
   });
 
   it("marks the input invalid when the route's 400 faults the address", async () => {
@@ -294,6 +299,62 @@ describe("Watchdog's window wiring", () => {
     expect(alertText()).toBe("That isn't a token on Arc mainnet.");
     expect(input().getAttribute("aria-invalid")).toBe("true");
     expect(input().getAttribute("aria-describedby")).toBe(host.querySelector('[role="alert"]')!.id);
+    // Nothing says the list is stale.
+    expect(state.refetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a token the form was given while an add was under way, whether the add succeeded or was refused", async () => {
+    // A is dropped on an empty form: its POST starts. Before it answers, Inspector hands B (the form shows B, focused).
+    let release!: (res: Response) => void;
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await mount();
+    await drop(OTHER);
+    expect(input().value).toBe("");
+    expect(button("Watch").disabled).toBe(true);
+    await mount({ token: THIRD });
+    expect(input().value).toBe(THIRD);
+    expect(document.activeElement).toBe(input());
+    // A's 201 arrives: the list shows A, and B stays in the form for Watch to send.
+    await act(async () => release(json(201, { limit: 3, watches: [row(TOKEN), row(OTHER, "TWO")] })));
+    expect(host.textContent).toContain("2 of 3 tokens watched.");
+    expect(input().value).toBe(THIRD);
+    expect(alertText()).toBeNull();
+    expect(document.activeElement).toBe(input());
+
+    // B is sent from the form and refused; A is dropped meanwhile, while a change is under way, so it waits in the
+    // form. The refusal leaves A there: the token refused goes into the form only when the form is empty.
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await submit();
+    expect(button("Watch").disabled).toBe(true);
+    await drop(OTHER);
+    expect(input().value).toBe(OTHER);
+    await act(async () => release(json(503, { error: "Watchdog isn't available right now." })));
+    expect(alertText()).toBe("Watchdog isn't available right now.");
+    expect(input().value).toBe(OTHER);
+    expect(calls).toHaveLength(2);
+
+    // Typed while the route answered, too: what was typed stays, on success and after a refusal alike.
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await type("");
+    await drop(THIRD);
+    expect(calls).toHaveLength(3);
+    await type("0x12");
+    await act(async () => release(json(409, { error: "You can watch up to 3 tokens. Remove one to add another." })));
+    expect(input().value).toBe("0x12");
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await type(THIRD);
+    await submit();
+    await type("0x34");
+    await act(async () => release(json(201, { limit: 3, watches: [row(TOKEN), row(OTHER, "TWO"), row(THIRD, "THREE")] })));
+    expect(input().value).toBe("0x34");
+
+    // A dropped token refused on an empty form goes into it, with the sentence, so the visitor sees what was refused.
+    state.data = list(row(TOKEN));
+    await type("");
+    answers = [json(409, { error: "You can watch up to 3 tokens. Remove one to add another." })];
+    await drop(OTHER);
+    expect(input().value).toBe(OTHER);
+    expect(alertText()).toBe("You can watch up to 3 tokens. Remove one to add another.");
   });
 
   it("counts nothing when the wallet already watched the token (the route's 200)", async () => {
@@ -502,6 +563,9 @@ describe("Watchdog's window wiring", () => {
 
     await tick(5_000);
     expect(meCalls()).toBe(1);
+    // Each read gives up on its own (a hung one would otherwise hold every later read back until it failed).
+    expect(calls.find((c) => c.input === ME)!.init).toMatchObject({ credentials: "same-origin" });
+    expect(calls.find((c) => c.input === ME)!.init!.signal).toBeInstanceOf(AbortSignal);
     await tick(10_000);
     expect(meCalls()).toBe(3);
     // A session still unlinked moves nothing: the gate isn't asked, the window keeps waiting.
@@ -547,10 +611,25 @@ describe("Watchdog's window wiring", () => {
     expect(state.refresh).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Press Start");
 
+    // A read that hangs holds the next ticks back only until it gives up (its signal's timeout, which the stub stands
+    // in for by rejecting as the timeout would): the one after reads again.
+    let giveUp!: (reason: unknown) => void;
+    me = () => new Promise<Response>((_, reject) => (giveUp = reject)) as unknown as Response;
+    await tick(5_000);
+    expect(meCalls()).toBe(3);
+    me = () => new Response("", { status: 503 });
+    await tick(10_000);
+    expect(meCalls()).toBe(3);
+    await act(async () => giveUp(new DOMException("The operation timed out.", "TimeoutError")));
+    await tick(5_000);
+    expect(meCalls()).toBe(4);
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Press Start");
+
     // The chat pressed Start: the gate reads the session, and the linked view takes over.
     me = () => session("linked");
     await tick(5_000);
-    expect(meCalls()).toBe(3);
+    expect(meCalls()).toBe(5);
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -564,18 +643,33 @@ describe("Watchdog's window wiring", () => {
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("says Telegram linked, once, when the session says so while waiting", async () => {
+  it("says Telegram linked, once, when the session says so while waiting, and hands the focus to Unlink", async () => {
     answers = [json(200, { url: T_ME })];
     await mount();
     await click(button("Link Telegram"));
+    // The anchor took the focus the button had; the visitor came back from the Telegram tab with it still there.
+    expect(document.activeElement?.textContent).toBe("Open the link again");
     state.telegram = "linked";
     await mount();
     expect(state.notify).toHaveBeenCalledTimes(1);
     expect(state.notify).toHaveBeenCalledWith("Telegram linked.", "ok");
     expect(host.textContent).toContain("Telegram linked.");
     expect(button("Unlink")).toBeDefined();
+    // The anchor left the page: Unlink takes the focus, so a keyboard user keeps their place.
+    expect(document.activeElement).toBe(button("Unlink"));
     await mount();
     expect(state.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves focus where a visitor moved it while the chat got linked", async () => {
+    answers = [json(200, { url: T_ME })];
+    await mount();
+    await click(button("Link Telegram"));
+    input().focus();
+    state.telegram = "linked";
+    await mount();
+    expect(host.textContent).toContain("Telegram linked.");
+    expect(document.activeElement).toBe(input());
   });
 
   it("says nothing when the session was linked from the start", async () => {

@@ -122,13 +122,16 @@ function Watches({ params }: { params: Record<string, string> }) {
   // The list is this wallet's. It leaves the cache with the window (closed, or taken down by the gates when the wallet
   // signed out or changed), so the next wallet to sign in on this page loads its own list rather than seeing the last
   // wallet's, or the 401 the last poll answered. The key stays ["watches"] (design 6); the list is only cached while
-  // a window shows it.
-  useEffect(
-    () => () => {
+  // a window shows it. A change still answering when the window leaves writes nothing (see show): its list would
+  // put the entry back, for the next wallet to start from.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       queryClient.removeQueries({ queryKey: WATCHES_KEY });
-    },
-    [queryClient],
-  );
+    };
+  }, [queryClient]);
 
   // Inspector's button, or a deep link, names a token: it goes into the form, which gets focus. Nothing is sent. The
   // shell stores a fresh params object on every open that carries params, and keeps it between renders, so the form
@@ -182,10 +185,14 @@ function Watches({ params }: { params: Record<string, string> }) {
   /**
    * The route's list after a change is the list: it replaces the query's data without another fetch. A refresh still
    * in flight (the minute's poll, or the focus that came back from the Telegram tab) is cancelled first: it would
-   * otherwise answer the list from before the change and put it back over this one.
+   * otherwise answer the list from before the change and put it back over this one. Once the window has left the
+   * page, nothing is written or cancelled: the cache entry is gone with it, and the next wallet's own load may be
+   * under way.
    */
   const show = async (next: WatchList) => {
+    if (!mounted.current) return;
     await queryClient.cancelQueries({ queryKey: WATCHES_KEY });
+    if (!mounted.current) return;
     queryClient.setQueryData(WATCHES_KEY, next);
   };
 
@@ -205,15 +212,20 @@ function Watches({ params }: { params: Record<string, string> }) {
     const result = await addWatch(token);
     // Watch was disabled meanwhile and couldn't keep the focus it had: the input takes it, unless the visitor moved on.
     if (from === "form") pendingFocus.current = { kind: "input" };
+    // The form may hold another token by now (dropped, handed by Inspector or typed while the route answered): it
+    // stays. The one sent leaves the form on success, and goes into it after a refusal only when the form was empty
+    // (a drop).
     if (!result.ok) {
       setBusy(false);
       refused(result);
-      setDraft(token);
+      // The limit moved under the window (another tab or device added a token): the list on screen is stale.
+      if (result.status === 409) void query.refetch();
+      setDraft((current) => (current === "" ? token : current));
       // Only the route's 400 faults the address itself; a limit or an outage says nothing against it.
       setFormError({ text: result.error, invalid: result.status === 400 });
       return;
     }
-    setDraft("");
+    setDraft((current) => (current.trim() === token ? "" : current));
     await show(result.list);
     setBusy(false);
     if (result.added) trackEvent("watch_add", { watches: result.list.watches.length });
@@ -391,11 +403,16 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
       }
       if (document.visibilityState !== "visible" || asking) return;
       asking = true;
-      void fetchSession().then((session) => {
-        asking = false;
-        if (!live) return;
-        if (session === null || (session !== "unavailable" && session.telegram === "linked")) void refresh();
-      });
+      // A read gives up after the poll's own interval, so one that hangs (the phone changed networks) can't hold the
+      // next ones back; a read that gave up answers "unavailable", which moves nothing.
+      void fetchSession((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(LINK_POLL_MS) }))
+        .then((session) => {
+          if (!live) return;
+          if (session === null || (session !== "unavailable" && session.telegram === "linked")) void refresh();
+        })
+        .finally(() => {
+          asking = false;
+        });
     }, LINK_POLL_MS);
     return () => {
       live = false;
@@ -419,10 +436,12 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
 
   // The section's views replace one another's controls, and the one that had focus drops it to the body as it leaves
   // the page. The view that comes next takes it, so a keyboard user keeps their place: the "Open the link again"
-  // anchor as the wait begins (the way in, too, for a browser that let no tab open), and the Link Telegram button
-  // when the wait has run out or Unlink has ended the chat. A visitor who moved on meanwhile keeps their focus.
+  // anchor as the wait begins (the way in, too, for a browser that let no tab open), the Unlink button when the chat
+  // got linked while the anchor had the focus, and the Link Telegram button when the wait has run out or Unlink has
+  // ended the chat. A visitor who moved on meanwhile keeps their focus.
   const againRef = useRef<HTMLAnchorElement>(null);
   const linkRef = useRef<HTMLButtonElement>(null);
+  const unlinkRef = useRef<HTMLButtonElement>(null);
   const view = linked ? "linked" : waiting ? "waiting" : "unlinked";
   const lastView = useRef(view);
   useEffect(() => {
@@ -431,6 +450,7 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
     if (from === view || !focusWasLost()) return;
     if (view === "waiting") againRef.current?.focus();
     else if (view === "unlinked") linkRef.current?.focus();
+    else unlinkRef.current?.focus();
   }, [view]);
 
   const link = async () => {
@@ -466,7 +486,7 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
       {linked ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p>{TELEGRAM_LINKED}</p>
-          <button type="button" className={BUTTON} disabled={busy} onClick={() => void unlink()}>
+          <button ref={unlinkRef} type="button" className={BUTTON} disabled={busy} onClick={() => void unlink()}>
             Unlink
           </button>
         </div>
