@@ -115,6 +115,16 @@ export type RunResult =
       error: string | null;
     };
 
+/**
+ * The result as the run line logs it: every field but Watchdog's `cursor`, a watchState doc id that names a watched
+ * token (`network:0x…`). No log line carries an address; the cursor is read in Firestore, `indexer/{network}.watchCursor`.
+ */
+export function runLogFields(result: RunResult): Record<string, unknown> {
+  if (result.status !== "ran" || result.watch === null) return result;
+  const watch = Object.fromEntries(Object.entries(result.watch).filter(([key]) => key !== "cursor"));
+  return { ...result, watch };
+}
+
 const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
 /**

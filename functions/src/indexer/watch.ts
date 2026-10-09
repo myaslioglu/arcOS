@@ -80,7 +80,7 @@ export type WatchDeps = {
   limits: WatchLimits;
   log: Logger;
   pause?: TelegramPause;
-  caps?: Partial<typeof WATCH>;
+  caps?: Partial<Record<keyof typeof WATCH, number>>;
 };
 
 export type WatchResult = {

@@ -21,15 +21,16 @@ import {
   type WatchStateDoc,
 } from "@arcos/data";
 import { addWatch, arcosDb, removeWatch } from "@arcos/data/server";
-import { LIMITS, runIndexer, type Logger, type RunDeps, type RunResult } from "../indexer/run";
+import { LIMITS, runIndexer, runLogFields, type Logger, type RunDeps, type RunResult } from "../indexer/run";
 import type { SendOutcome, TelegramSender } from "../indexer/telegram";
-import { WATCH, instancePause } from "../indexer/watch";
+import { WATCH, instancePause, runWatch } from "../indexer/watch";
 import { REVERT, fakeWatchReader, type Call } from "../indexer/__tests__/watch-fakes";
 import { addr, fakeChain, fakeInspector, fakeNow } from "./fakes";
 
 // Watchdog's step (design 3.4) inside whole runs, against the emulator: first sight, a change and its alert in one
 // batch, the fan-out to linked watchers only and its resumption after a crash, the sends and their retries, the kill
-// switches, the page cursor, the time limits, the breaker, and what the logs may carry.
+// switches, the page cursor, the fan-out budget, the time limits, the breaker, the dead deliveries, and what the logs
+// may carry.
 
 const db = arcosDb();
 const host = process.env.FIRESTORE_EMULATOR_HOST as string;
@@ -267,8 +268,11 @@ describe("a change", () => {
     expect(texts[1]).toBe(`DUKE (0x0000…8f3a): owner changed from 0x0000…0abc to 0x0000…0def at block 1,000,010 — https://explorer.arc.io/token/${A}`);
     expect(texts[0]).toBe(`DUKE (0x0000…8f3a): deepest pool's USDC fell from 5,000 to 1,000 (80% lower) at block 1,000,010 — https://explorer.arc.io/token/${A}`);
 
-    // The run line carries the counters, and no line carries an address, a chat id or a message.
-    const logged = JSON.stringify(log.lines);
+    // The run line (index.ts logs runLogFields(result)) carries the counters, and no line carries an address, a chat
+    // id or a message: the cursor, a watchState doc id naming the token, stays in the result and Firestore alone.
+    expect(result.watch!.cursor).toBe(tokenId("mainnet", A));
+    expect(runLogFields(result).watch).not.toHaveProperty("cursor");
+    const logged = JSON.stringify([...log.lines, { message: "arcosIndexer run", data: runLogFields(result) }]);
     expect(logged).not.toMatch(/0x/i);
     expect(logged).not.toContain(String(CHAT_1));
     expect(logged).not.toMatch(/DUKE|owner changed/);
@@ -413,6 +417,84 @@ describe("the sends", () => {
     const chat3 = telegram.sends.filter((s) => s.chatId === CHAT_3);
     expect([chat1.length, chat3.length]).toEqual([3, 2]);
     expect(WATCH.perChatPerRun).toBe(3);
+  });
+});
+
+describe("the fan-out and the limits", () => {
+  it("stops at the run's budget of creates with fannedOut false, and finishes next run without a duplicate", async () => {
+    await startAt(HEAD);
+    await user(U1, CHAT_1);
+    await user(U3, CHAT_3);
+    for (const token of [A, B]) {
+      await watch(U1, token);
+      await watch(U3, token);
+    }
+    const chain = chainOf({ [A]: plain(), [B]: plain() });
+    await run({ head: HEAD, reader: chain.reader });
+    chain.states[A] = plain({ paused: true });
+    chain.states[B] = plain({ paused: true });
+    const telegram = sender();
+    // Two alerts of two watchers each, and a budget of three creates: the first alert's page fits and ends its fan-out;
+    // the second's doesn't fit the one create left, so it is left whole for the next run, with fannedOut false.
+    const capped = await runWatch({
+      db, network: "mainnet", tip: HEAD + 10, reader: chain.reader, telegram, state: await indexerDoc(), now: clock.now, elapsed: () => 0, limits: LIMITS, log: recorder(), caps: { fanoutPerRun: 3 },
+    });
+    expect(capped).toMatchObject({ checked: 2, alerts: 2, writes: 2, deliveriesCreated: 2, fannedOut: 1, sent: 2, sendFailed: 0 });
+    expect([...(await alertsOf(A)), ...(await alertsOf(B))].map((a) => a.fannedOut).sort()).toEqual([false, true]);
+    expect(await count(COLLECTIONS.deliveries)).toBe(2);
+
+    const resumed = await run({ head: HEAD + 10, reader: chain.reader, telegram });
+    expect(resumed.watch).toMatchObject({ alerts: 0, deliveriesCreated: 2, fannedOut: 1, sent: 2, sendFailed: 0 });
+    expect([...(await alertsOf(A)), ...(await alertsOf(B))].map((a) => a.fannedOut)).toEqual([true, true]);
+    expect(await count(COLLECTIONS.deliveries)).toBe(4);
+    expect(telegram.sends).toHaveLength(4);
+    expect(WATCH.fanoutPerRun).toBe(1_000);
+  });
+
+  it("starts no fan-out page past the fan-out limit and no send past the send limit, and resumes both next run", async () => {
+    const { chain } = await seeded();
+    chain.states[A] = plain({ paused: true, pool: PAIR, depth: 5_000_000_000n });
+    const telegram = sender();
+    const noFanout = await run({ head: HEAD + 10, reader: chain.reader, telegram, limits: { watchFanoutUntilMs: 0 } });
+    expect(noFanout.watch).toMatchObject({ alerts: 1, writes: 1, deliveriesCreated: 0, fannedOut: 0, sent: 0, sendFailed: 0 });
+    expect(await alertsOf(A)).toMatchObject([{ kind: "paused", fannedOut: false }]);
+    expect(await count(COLLECTIONS.deliveries)).toBe(0);
+
+    const noSend = await run({ head: HEAD + 10, reader: chain.reader, telegram, limits: { watchSendUntilMs: 0 } });
+    expect(noSend.watch).toMatchObject({ alerts: 0, deliveriesCreated: 1, fannedOut: 1, sent: 0, sendFailed: 0 });
+    expect(await deliveriesAll()).toMatchObject([{ status: "pending", attempts: 0 }]);
+    expect(telegram.sends).toEqual([]);
+
+    const resumed = await run({ head: HEAD + 10, reader: chain.reader, telegram });
+    expect(resumed.watch).toMatchObject({ alerts: 0, deliveriesCreated: 0, fannedOut: 0, sent: 1, sendFailed: 0 });
+    expect(await deliveriesAll()).toMatchObject([{ status: "sent", attempts: 1 }]);
+    expect(telegram.sends).toHaveLength(1);
+  });
+
+  it("fails a delivery without a send when its wallet is no longer linked, or its alert is gone", async () => {
+    const telegram = sender();
+    const { chain } = await seeded();
+    chain.states[A] = plain({ paused: true, pool: PAIR, depth: 5_000_000_000n });
+    await run({ head: HEAD + 10, reader: chain.reader, telegram, limits: { watchSendUntilMs: 0 } });
+    expect(await deliveriesAll()).toMatchObject([{ user: U1, status: "pending" }]);
+    await db.collection(COLLECTIONS.users).doc(U1).update({ telegram: null });
+    const unlinked = await run({ head: HEAD + 10, reader: chain.reader, telegram });
+    expect(unlinked.watch).toMatchObject({ sent: 0, sendFailed: 1 });
+    expect(await deliveriesAll()).toMatchObject([{ status: "failed", error: "unlinked", attempts: 0 }]);
+    expect(telegram.sends).toEqual([]);
+
+    // Linked again, a second alert, and its alert doc gone before the send.
+    await db.collection(COLLECTIONS.users).doc(U1).update({ telegram: { chatId: CHAT_1, linkedAt: Timestamp.fromMillis(clock.now()) } });
+    chain.states[A] = plain({ paused: false, pool: PAIR, depth: 5_000_000_000n });
+    const second = await run({ head: HEAD + 20, reader: chain.reader, telegram, limits: { watchSendUntilMs: 0 } });
+    expect(second.watch).toMatchObject({ alerts: 1, deliveriesCreated: 1, sent: 0 });
+    const pending = (await deliveriesAll()).filter((d) => d.status === "pending");
+    expect(pending).toHaveLength(1);
+    await db.collection(COLLECTIONS.alerts).doc(pending[0]!.alertId).delete();
+    const gone = await run({ head: HEAD + 20, reader: chain.reader, telegram });
+    expect(gone.watch).toMatchObject({ sent: 0, sendFailed: 1 });
+    expect((await deliveriesAll()).find((d) => d.id === pending[0]!.id)).toMatchObject({ status: "failed", error: "no_alert", attempts: 0 });
+    expect(telegram.sends).toEqual([]);
   });
 });
 

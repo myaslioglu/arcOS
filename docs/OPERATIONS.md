@@ -140,8 +140,10 @@ one transaction per change). One run:
 - **C. The sends.** Reads the 100 oldest `pending` deliveries with their `users` and `alerts`. One older than a day is
   failed as `expired`, one whose wallet has no chat any more as `unlinked`, one whose alert is gone as `no_alert`. The
   rest go to the Bot API's `sendMessage`, plain text (no parse mode, no link preview), `<words> — <explorer link>`,
-  4 s per send, 4 chats at a time, each chat's sends in order, at most 3 per chat and 60 in all per run. Send first,
-  then mark (at least once, never lost). A delivery is `sent` on 200; on a 5xx, a timeout or a network failure it stays
+  the words naming the token as `SYMBOL (0x1234…abcd)`, or as the short address alone when the symbol holds anything
+  but letters, digits, spaces, `_` and `-` (Telegram makes a URL, a domain, an `@mention` or a `/command` tappable
+  even in plain text), 4 s per send, 4 chats at a time, each chat's sends in order, at most 3 per chat and 60 in all
+  per run. Send first, then mark (at least once, never lost). A delivery is `sent` on 200; on a 5xx, a timeout or a network failure it stays
   `pending` with the attempt counted and is tried again on later runs, `failed` after 4 attempts in all; a 403 (the
   chat blocked the bot) or "chat not found" fails it at once and clears the wallet's chat (if it is still that chat);
   any other 400 fails it. A 429 stops this instance's sends for the seconds Telegram asks (1 s to 1 h); a 401 or 404
@@ -156,15 +158,16 @@ attempted, `fannedOut` stays `false`, deliveries stay `pending`.
 The bot token is the function's secret `TELEGRAM_BOT_TOKEN`, read inside the function and nowhere else (the site never
 calls the Bot API). A value that isn't a token (empty, `none`) leaves the sends off: the instance logs
 `arcosIndexer telegram not configured` once, the checks and the fan-out still run, and the deliveries wait. The secret
-is pinned to the version the deploy resolves: to rotate it, add a new version, deploy the functions again, then register
-the webhook again as in the site's setup.
+is pinned to the version the deploy resolves: to rotate it or replace a wrong value, add a new version (the commands
+are under Setting it up, step 3), deploy the functions again and, once the site's webhook exists (part 3,
+[DEPLOYING.md](DEPLOYING.md)), register it again.
 
 Logs, all under `arcosIndexer`, with names, codes and counts only (never an address, a chat id, a token, a message or a
 URL):
 
 | Line | Fields | Meaning |
 |---|---|---|
-| `arcosIndexer run` | `watch: {checked, unread, failed, alerts, writes, deliveriesCreated, fannedOut, sent, sendFailed, skipped, cursor}` | The step's counters; `watch: null` when the step didn't run. `skipped` is `off` (the switch) or `late` (the run reached 55 s before the step). |
+| `arcosIndexer run` | `watch: {checked, unread, failed, alerts, writes, deliveriesCreated, fannedOut, sent, sendFailed, skipped}` | The step's counters; `watch: null` when the step didn't run. `skipped` is `off` (the switch) or `late` (the run reached 55 s before the step). The page cursor is left out of the line (it is a `watchState` doc id, which names a token); read it in Firestore, `indexer/mainnet.watchCursor`. |
 | `arcosIndexer watch read failed` | `code`: `timeout`, `transport` or `reverted` | One token's read failed; its fields stay as stored. At most 5 a run, then `{suppressed: true}`. |
 | `arcosIndexer watch reads stopped` | `code: breaker` | 3 consecutive transport or timeout failures: the run's remaining reads were skipped. |
 | `arcosIndexer watch check failed` | `error`, `code`, `details` (masked) | A token's Firestore read or write failed; it is read again on its next turn. At most 5 a run. |
@@ -175,7 +178,8 @@ URL):
 
 Signs to look for: `unread` close to `checked` for many runs (the RPC endpoints are refusing the reads; the breaker
 line says so), `sendFailed` with `code: telegram_5xx` (Telegram's side), `arcosIndexer telegram paused` with
-`unauthorized` (the token was revoked or the secret holds the wrong value: add a new version and deploy), and
+`unauthorized` (the token was revoked or the secret holds the wrong value: add a new version, as under Setting it up,
+step 3, and deploy), and
 `deliveries` docs expiring (`error: expired`) while `telegram` is `true` (sends were paused or failing for a day).
 
 ## The site's reads
@@ -241,7 +245,9 @@ tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --projec
 
 The function's secrets, `BLOCKSCOUT_API_KEY` and `TELEGRAM_BOT_TOKEN`, are pinned to the versions the deploy resolves:
 rotating either means deploying again. Both must exist, with the bindings of steps 3 and 5 below, before a deploy of a
-function that declares them: a deploy whose pinned secret is missing fails.
+function that declares them: a deploy whose pinned secret is missing fails. In a run of the deploy workflow the sites'
+App Hosting rollouts come before the functions deploy, so such a failure lands after the sites have shipped; the secret
+and its bindings come before the merge that deploys the function.
 
 ## Setting it up
 
@@ -274,9 +280,33 @@ removed it, and every later deploy must work with the roles below alone.
    binding added with:
 
    ```bash
+   read -rsp 'Bot token: ' T; echo; printf %s "$T" | gcloud secrets create TELEGRAM_BOT_TOKEN --project arcos-c80cf \
+     --data-file=- --replication-policy=automatic; unset T
    gcloud secrets add-iam-policy-binding TELEGRAM_BOT_TOKEN --project arcos-c80cf \
      --member "serviceAccount:arcos-jobs@arcos-c80cf.iam.gserviceaccount.com" --role roles/secretmanager.secretAccessor
    ```
+
+   A wrong value (a token pasted wrong, a token rotated at BotFather) is replaced with a new version, which keeps the
+   secret and its bindings; `gcloud secrets create` would only answer `ALREADY_EXISTS`. Then the old version is
+   destroyed, so no deploy can resolve it, and the functions are deployed again (the deploy pins the latest version):
+
+   ```bash
+   read -rsp 'Bot token: ' T; echo; printf %s "$T" | gcloud secrets versions add TELEGRAM_BOT_TOKEN --project arcos-c80cf \
+     --data-file=-; unset T
+   gcloud secrets versions list TELEGRAM_BOT_TOKEN --project arcos-c80cf
+   gcloud secrets versions destroy 1 --secret TELEGRAM_BOT_TOKEN --project arcos-c80cf
+   ```
+
+   (`1` being the wrong version's number in the list.) Deleting the secret and creating it again also works before
+   any deploy has pinned it, but it drops the secret's bindings, so this binding and step 5's (the deployer's) are then
+   added again, and `gcloud secrets get-iam-policy TELEGRAM_BOT_TOKEN --project arcos-c80cf` should list both members
+   before the next deploy:
+
+   ```bash
+   gcloud secrets delete TELEGRAM_BOT_TOKEN --project arcos-c80cf --quiet
+   ```
+
+   Both ways run in [Cloud Shell](https://shell.cloud.google.com/?project=arcos-c80cf).
 
 4. The APIs, enabled by the owner. Before every functions deploy the CLI checks each API it needs and enables one that
    is off (`deploy/functions/prepare.js`); the deployer holds only `roles/serviceusage.serviceUsageConsumer`, which can
@@ -486,8 +516,9 @@ resource.type="cloud_run_revision" resource.labels.service_name="arcosindexer" j
 
 Each run logs one line: `arcosIndexer run` with `from`, `to`, `windows`, `pools`, `tokens`, `inspected`, `failed`,
 `expired`, `feeds`, `explorerCalls` and Watchdog's `watch` counters (above); a halted indexer logs `arcosIndexer halted`
-with its reason. No line carries an address. In Firestore, `indexer/mainnet` shows the cursor (`block`), `lastRunAt`,
-the day's explorer calls and Watchdog's `watchCursor`.
+with its reason. No line carries an address: the run line leaves out Watchdog's page cursor, a `watchState` doc id
+that names a token. In Firestore, `indexer/mainnet` shows the cursor (`block`), `lastRunAt`, the day's explorer calls
+and Watchdog's `watchCursor`.
 
 ## What it costs
 

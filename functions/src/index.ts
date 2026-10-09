@@ -10,7 +10,7 @@ import { arcosDb } from "@arcos/data/server";
 import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer, viemReader, type ChainReader } from "@arcos/inspector";
 import { liveInspector } from "./indexer/inspect";
 import { rpcLogChain } from "./indexer/rpc";
-import { runIndexer } from "./indexer/run";
+import { runIndexer, runLogFields } from "./indexer/run";
 import { INDEXER_NETWORK, INDEXER_OPTIONS, INDEXER_RPC_URL, indexerSettings } from "./indexer/schedule";
 import { BOT_TOKEN_FORMAT, telegramSender, type TelegramSender } from "./indexer/telegram";
 
@@ -46,7 +46,9 @@ export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscou
     log: logger,
     watch: { reader: watchReader, telegram },
   });
-  if (result.status === "halted") logger.error("arcosIndexer halted", result);
-  else if (result.status === "busy") logger.warn("arcosIndexer busy", result);
-  else logger.info("arcosIndexer run", result);
+  // Logged without Watchdog's cursor, a watchState doc id that would name a watched token.
+  const fields = runLogFields(result);
+  if (result.status === "halted") logger.error("arcosIndexer halted", fields);
+  else if (result.status === "busy") logger.warn("arcosIndexer busy", fields);
+  else logger.info("arcosIndexer run", fields);
 });
