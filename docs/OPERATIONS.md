@@ -159,7 +159,8 @@ The bot token is the function's secret `TELEGRAM_BOT_TOKEN`, read inside the fun
 calls the Bot API). A value that isn't a token (empty, `none`) leaves the sends off: the instance logs
 `arcosIndexer telegram not configured` once, the checks and the fan-out still run, and the deliveries wait. The secret
 is pinned to the version the deploy resolves: to rotate it or replace a wrong value, add a new version (the commands
-are under Setting it up, step 3), deploy the functions again and, once the site's webhook exists (part 3,
+are under Setting it up, step 3), deploy the functions again, destroy the old version only after that deploy (the
+running revision is pinned to it until then) and, once the site's webhook exists (part 3,
 [DEPLOYING.md](DEPLOYING.md)), register it again.
 
 Logs, all under `arcosIndexer`, with names, codes and counts only (never an address, a chat id, a token, a message or a
@@ -287,20 +288,35 @@ removed it, and every later deploy must work with the roles below alone.
    ```
 
    A wrong value (a token pasted wrong, a token rotated at BotFather) is replaced with a new version, which keeps the
-   secret and its bindings; `gcloud secrets create` would only answer `ALREADY_EXISTS`. Then the old version is
-   destroyed, so no deploy can resolve it, and the functions are deployed again (the deploy pins the latest version):
+   secret and its bindings; `gcloud secrets create` would only answer `ALREADY_EXISTS`. The order matters once a
+   deploy has pinned the secret: the deployed `arcosIndexer` revision is pinned to the old version, and a Cloud Run
+   instance resolves its secret when it starts, so destroying a version a deployed function is pinned to stops every
+   new instance of that function (the whole schedule, pools, tokens and feeds included, not only the sends) until the
+   next deploy lands, which needs a merge and the owner's OK. So: add the new version, deploy the functions again (the
+   deploy pins the latest version), and destroy the old version only then.
+
+   First the new version:
 
    ```bash
    read -rsp 'Bot token: ' T; echo; printf %s "$T" | gcloud secrets versions add TELEGRAM_BOT_TOKEN --project arcos-c80cf \
      --data-file=-; unset T
    gcloud secrets versions list TELEGRAM_BOT_TOKEN --project arcos-c80cf
+   ```
+
+   Then the functions deploy (Deploying, above). Once the new revision is serving, the old version is destroyed, so
+   no deploy can resolve it again:
+
+   ```bash
    gcloud secrets versions destroy 1 --secret TELEGRAM_BOT_TOKEN --project arcos-c80cf
    ```
 
-   (`1` being the wrong version's number in the list.) Deleting the secret and creating it again also works before
-   any deploy has pinned it, but it drops the secret's bindings, so this binding and step 5's (the deployer's) are then
-   added again, and `gcloud secrets get-iam-policy TELEGRAM_BOT_TOKEN --project arcos-c80cf` should list both members
-   before the next deploy:
+   (`1` being the wrong version's number in the list. `npx -y firebase-tools@15.32.0 functions:secrets:prune
+   --project arcos-c80cf` does the same with its own check: it destroys only the versions no deployed function uses.)
+   Before any deploy has pinned the secret, the destroy can follow the add at once, since no function reads the old
+   version. Deleting the secret and creating it again also works before any deploy has pinned it, but it drops the
+   secret's bindings, so this binding and step 5's (the deployer's) are then added again, and
+   `gcloud secrets get-iam-policy TELEGRAM_BOT_TOKEN --project arcos-c80cf` should list both members before the next
+   deploy:
 
    ```bash
    gcloud secrets delete TELEGRAM_BOT_TOKEN --project arcos-c80cf --quiet

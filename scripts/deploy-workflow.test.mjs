@@ -954,3 +954,33 @@ describe("docs/OPERATIONS.md, the CLI version run by npx", () => {
     for (const version of used) expect(version).toBe(pinned);
   });
 });
+
+// The deployed function is pinned to a secret version, and a Cloud Run instance resolves its secret env var when it
+// starts: a version destroyed before the redeploy stops every new instance of arcosIndexer until that deploy lands
+// (hours, since it needs a merge and the owner's OK). The runbook's replace-a-wrong-value recipe therefore orders:
+// versions add, deploy, versions destroy.
+describe("docs/OPERATIONS.md, replacing a secret version", () => {
+  const doc = read("docs/OPERATIONS.md");
+  const start = doc.indexOf("A wrong value (a token pasted wrong");
+  const end = doc.indexOf("Both ways run in", start);
+  const recipe = doc.slice(start, end);
+
+  it("adds the new version, deploys, and only then destroys the old one", () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const add = recipe.indexOf("gcloud secrets versions add TELEGRAM_BOT_TOKEN");
+    const destroy = recipe.indexOf("gcloud secrets versions destroy");
+    expect(add).toBeGreaterThan(0);
+    expect(destroy).toBeGreaterThan(add);
+    const between = recipe.slice(add, destroy);
+    expect(between).toMatch(/functions deploy/);
+    // No single code block holds both commands: a reader copying one block never destroys before deploying.
+    for (const block of recipe.match(/```bash[\s\S]*?```/g)) {
+      expect(block.includes("versions add") && block.includes("versions destroy")).toBe(false);
+    }
+  });
+
+  it("says what destroying a pinned version does to the running function", () => {
+    expect(recipe).toMatch(/destroying a version a deployed function is pinned to stops/);
+  });
+});
