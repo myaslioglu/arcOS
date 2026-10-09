@@ -131,6 +131,71 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
 The workflow never writes a credential into the repository. The sign-in step leaves a credentials file in the workspace,
 which the deploy would upload with the source, so `.gitignore` lists `gha-creds-*.json` and the job fails if it doesn't.
 
+## Watchdog's Telegram settings
+
+Watchdog's routes (`/api/watches`, `/api/telegram/link` and `/api/telegram/webhook`, in `apps/web/src/lib/watch-server.ts`)
+read two more runtime settings from [apps/web/apphosting.yaml](../apps/web/apphosting.yaml). Neither reaches the build
+(`scripts/apphosting-env.test.mjs` checks that), and the rest of the site runs as before without them:
+
+- `TELEGRAM_WEBHOOK_SECRET`, a Secret Manager secret pinned to a version (`TELEGRAM_WEBHOOK_SECRET@1`): what Telegram
+  sends in the `X-Telegram-Bot-Api-Secret-Token` header of every call to the webhook, 32 to 256 characters of
+  `A-Za-z0-9_-`. The route compares it in constant time before it reads anything else, and answers 503 while the
+  setting is missing or shorter than 32 characters.
+- `TELEGRAM_BOT_USERNAME`, a plain value: the bot's public username, which the link `/api/telegram/link` answers opens
+  (`https://t.me/<username>?start=<code>`). It is public, not a secret. While it is `none`, that route answers 503.
+
+The bot's own token is the indexer's (`TELEGRAM_BOT_TOKEN`, a functions secret: [OPERATIONS.md](OPERATIONS.md)); the
+site never holds it and never calls the Bot API. A webhook reply rides in the response body.
+
+### Owner steps
+
+Once, before the pull request that adds the two entries merges: a merge rolls out, and a rollout whose pinned secret is
+missing fails. From a machine signed in as the owner (`gcloud auth login`, `firebase login`), with
+`export PROJECT_ID=arcos-c80cf`:
+
+1. **The secret.** 43 random base64url characters, piped straight into Secret Manager and never printed. Use the
+   replication the session secret has (`gcloud secrets describe ARCOS_SESSION_SECRET --project "$PROJECT_ID"
+   --format='yaml(replication)'`): `--replication-policy=automatic` below, or `--replication-policy=user-managed
+   --locations=europe-west4`.
+
+   ```sh
+   openssl rand 32 | basenc --base64url | tr -d '=\n' | gcloud secrets create TELEGRAM_WEBHOOK_SECRET \
+     --project "$PROJECT_ID" --data-file=- --replication-policy=automatic
+   ```
+
+2. **Access for the mainnet backend.** `arcos` reads it at runtime, as it reads `ARCOS_SESSION_SECRET`:
+
+   ```sh
+   firebase apphosting:secrets:grantaccess TELEGRAM_WEBHOOK_SECRET --backend arcos --project "$PROJECT_ID"
+   ```
+
+   Then compare the two policies, and if the session secret has a member the new one lacks, add the same binding:
+
+   ```sh
+   gcloud secrets get-iam-policy TELEGRAM_WEBHOOK_SECRET --project "$PROJECT_ID"
+   gcloud secrets get-iam-policy ARCOS_SESSION_SECRET --project "$PROJECT_ID"
+   ```
+
+   The testnet backend needs nothing: it reads the value `none` (see [The testnet site](#the-testnet-site)).
+
+3. **The bot's username**, from BotFather, goes into `apps/web/apphosting.yaml` as `TELEGRAM_BOT_USERNAME` in place of
+   `none`, in the same pull request. It is public and needs no secret.
+
+4. **After the rollout**, once https://4rcos.com serves `/api/telegram/webhook`, register the webhook with Telegram. Both
+   values are read from Secret Manager into the shell and only the HTTP status is printed; expect `200`:
+
+   ```sh
+   TOKEN=$(gcloud secrets versions access 1 --secret TELEGRAM_BOT_TOKEN --project "$PROJECT_ID")
+   HOOK=$(gcloud secrets versions access 1 --secret TELEGRAM_WEBHOOK_SECRET --project "$PROJECT_ID")
+   curl -sS -o /dev/null -w '%{http_code}\n' "https://api.telegram.org/bot${TOKEN}/setWebhook" \
+     --data-urlencode 'url=https://4rcos.com/api/telegram/webhook' --data-urlencode "secret_token=${HOOK}" \
+     --data-urlencode 'allowed_updates=["message"]' -d drop_pending_updates=true -d max_connections=5
+   unset TOKEN HOOK
+   ```
+
+   Use the custom domain, never the `hosted.app` address. To rotate the webhook secret: add a new version, bump the
+   `@N` pin in `apphosting.yaml`, roll out, then run this step again with that version.
+
 ## The testnet site
 
 https://testnet.4rcos.com is the same code built for Arc Testnet, on a backend of its own, `arcos-testnet`. It is where
@@ -159,7 +224,13 @@ name reads `apphosting.yaml` alone. So `apps/web/apphosting.testnet.yaml` names 
   refuses them);
 - `ARCOS_SESSION_SECRET` `none`, also a plain runtime value in place of a mainnet secret: shorter than the 32 bytes a
   session key needs, so the testnet site has no key and sign-in answers 503 there. Signing in on testnet would take a
-  secret of its own, with access granted to `arcos-testnet`, named here.
+  secret of its own, with access granted to `arcos-testnet`, named here;
+- `TELEGRAM_WEBHOOK_SECRET` `none`, a plain runtime value in place of the mainnet secret (see
+  [Watchdog's Telegram settings](#watchdogs-telegram-settings)): shorter than the 32 characters a webhook secret needs,
+  so `/api/telegram/webhook` answers 503 on the testnet site, and the backend's account needs access to no secret;
+- `TELEGRAM_BOT_USERNAME` `none`: not a bot's username, so `/api/telegram/link` answers 503 there and no testnet
+  wallet is ever linked to the bot. Watches are mainnet-only anyway: `/api/watches` answers 404 on testnet, like the
+  other routes over the token index.
 
 The WalletConnect project ID and `runConfig` are the base file's. `scripts/apphosting-env.mjs --environment testnet`
 merges the files the same way for the workflow's testnet bundle, and fails if `apphosting.testnet.yaml` is missing.

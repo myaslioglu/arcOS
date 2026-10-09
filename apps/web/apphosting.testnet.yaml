@@ -7,7 +7,7 @@
 # (MergeEnvVars in GoogleCloudPlatform/buildpacks, pkg/firebase/apphostingschema). scripts/apphosting-env.mjs
 # --environment testnet merges the two files the same way for the deploy workflow's testnet bundle.
 #
-# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the three mainnet-only items
+# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the five mainnet-only items
 # are replaced by the value `none`:
 # - NEXT_PUBLIC_FEE_RECIPIENT: `none` is not an address, so Swap and Bridge add no platform fee (feeRecipient() in
 #   src/lib/appkit.ts).
@@ -17,6 +17,12 @@
 # - ARCOS_SESSION_SECRET: a secret in apphosting.yaml, the key of the sign-in cookie. Replaced by `none`, shorter than
 #   the 32 bytes a key needs, the testnet site has no key, so sign-in answers 503 there (sessionKey() in
 #   src/lib/session.ts). RUNTIME only, as in apphosting.yaml.
+# - TELEGRAM_WEBHOOK_SECRET: a secret in apphosting.yaml, what Telegram sends with each call to the bot's webhook.
+#   Replaced by `none`, shorter than the 32 characters a secret needs, the testnet site has no webhook and
+#   /api/telegram/webhook answers 503 there (src/lib/watch-server.ts). RUNTIME only, as in apphosting.yaml.
+# - TELEGRAM_BOT_USERNAME: the bot's username in apphosting.yaml. `none` is not one, so /api/telegram/link answers 503
+#   and no testnet wallet is ever linked to the mainnet bot. Watches are mainnet-only anyway: /api/watches answers 404
+#   on testnet, with the other routes over the token index.
 # Public values only: nothing here is a secret.
 
 env:
@@ -40,6 +46,14 @@ env:
     availability:
       - RUNTIME
   - variable: ARCOS_SESSION_SECRET
+    value: none
+    availability:
+      - RUNTIME
+  - variable: TELEGRAM_WEBHOOK_SECRET
+    value: none
+    availability:
+      - RUNTIME
+  - variable: TELEGRAM_BOT_USERNAME
     value: none
     availability:
       - RUNTIME
