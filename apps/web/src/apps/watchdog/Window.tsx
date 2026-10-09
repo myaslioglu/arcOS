@@ -47,6 +47,13 @@ const limitSentence = (limit: number) => `You can watch up to ${limit} tokens. R
 const LINK_TTL_MS = 10 * 60_000;
 /** While waiting for the chat: /api/auth/me every 5 s is 12 a minute, under its 60 a minute. */
 const LINK_POLL_MS = 5_000;
+/**
+ * The window's own read of the session, for the link poll and for Unlink. It gives up after the poll's interval, so
+ * one that hangs (the phone changed networks) can't hold the next reads, or the form, back; a read that gave up
+ * answers "unavailable", which moves nothing. The gate's own re-read has no timeout, and a failed one puts the gate
+ * in its "unavailable" view, in the body's place: the window reads first, and tells the gate only what it saw change.
+ */
+const readSession = () => fetchSession((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(LINK_POLL_MS) }));
 
 /**
  * Whether focus was lost: nothing holds it, or the page body does, which is where it lands when the element that had
@@ -60,8 +67,11 @@ const focusWasLost = () => document.activeElement === null || document.activeEle
  */
 const prefilled = new WeakSet<object>();
 
-/** What the form says under the input: the route's sentence or the client check's, and whether it faults the address itself. */
-type FormError = { text: string; invalid: boolean };
+/**
+ * What the form says under the input: the route's sentence or the client check's, whether it faults the address
+ * itself, and whether it is the route's 409 (the list is full: a Remove answers it).
+ */
+type FormError = { text: string; invalid: boolean; limit: boolean };
 
 /**
  * Watchdog: the tokens the signed-in wallet watches on Arc mainnet, each with its newest alert, polled every minute;
@@ -122,8 +132,9 @@ function Watches({ params }: { params: Record<string, string> }) {
   // The list is this wallet's. It leaves the cache with the window (closed, or taken down by the gates when the wallet
   // signed out or changed), so the next wallet to sign in on this page loads its own list rather than seeing the last
   // wallet's, or the 401 the last poll answered. The key stays ["watches"] (design 6); the list is only cached while
-  // a window shows it. A change still answering when the window leaves writes nothing (see show): its list would
-  // put the entry back, for the next wallet to start from.
+  // a window shows it. A change still answering when the window leaves acts on nothing (see add and remove): its list,
+  // or the read a 409 asks for, would put the entry back, for the next wallet to start from, and the gate it would
+  // tell of a 401 is the last wallet's.
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -132,6 +143,12 @@ function Watches({ params }: { params: Record<string, string> }) {
       queryClient.removeQueries({ queryKey: WATCHES_KEY });
     };
   }, [queryClient]);
+
+  // What the form holds now, for a change that answers after the form moved on (see add).
+  const draftRef = useRef(draft);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   // Inspector's button, or a deep link, names a token: it goes into the form, which gets focus. Nothing is sent. The
   // shell stores a fresh params object on every open that carries params, and keeps it between renders, so the form
@@ -199,32 +216,42 @@ function Watches({ params }: { params: Record<string, string> }) {
   const add = async (value: string, from: "form" | "drop" = "form") => {
     const token = value.trim();
     const valid = isAddress(token, { strict: false });
-    // A token the form can't send yet waits in it: a drop while a change is under way (the Watch button is disabled,
-    // so nothing else gets here), or while the list is still on its way and there is no form on the page (it shows
-    // the token once the list has arrived). Watch sends it then. What isn't an address waits with the complaint.
-    if (!valid || busy || !formShown) {
+    // A token the form can't send yet waits in it: a drop while a change is under way, or at the limit (the Watch
+    // button is disabled either way, so nothing else gets here; the limit sentence says what to do), or while the
+    // list is still on its way and there is no form on the page (it shows the token once the list has arrived).
+    // Watch sends it then. What isn't an address waits with the complaint.
+    if (!valid || busy || atLimit || !formShown) {
       setDraft(token);
-      setFormError(valid ? null : { text: NOT_ADDRESS, invalid: true });
+      setFormError(valid ? null : { text: NOT_ADDRESS, invalid: true, limit: false });
       return;
     }
     setBusy(true);
     setFormError(null);
     const result = await addWatch(token);
+    // The window left the page meanwhile (closed, or taken down by the gates): nothing below is for it.
+    if (!mounted.current) return;
     // Watch was disabled meanwhile and couldn't keep the focus it had: the input takes it, unless the visitor moved on.
     if (from === "form") pendingFocus.current = { kind: "input" };
-    // The form may hold another token by now (dropped, handed by Inspector or typed while the route answered): it
-    // stays. The one sent leaves the form on success, and goes into it after a refusal only when the form was empty
-    // (a drop).
     if (!result.ok) {
       setBusy(false);
       refused(result);
       // The limit moved under the window (another tab or device added a token): the list on screen is stale.
       if (result.status === 409) void query.refetch();
-      setDraft((current) => (current === "" ? token : current));
-      // Only the route's 400 faults the address itself; a limit or an outage says nothing against it.
-      setFormError({ text: result.error, invalid: result.status === 400 });
+      // The complaint is the form's while the form holds the token sent, or nothing: a dropped token goes into an
+      // empty form with it, so the visitor sees what was refused; a form the visitor emptied meanwhile stays empty,
+      // and isn't marked for a token it no longer holds. A form that holds another token by now (dropped, handed by
+      // Inspector or typed while the route answered) keeps it, and the complaint, which isn't about it, goes to a
+      // toast that names the token refused. Only the route's 400 faults the address itself; a limit or an outage says
+      // nothing against it.
+      const current = draftRef.current;
+      const refill = from === "drop" && current === "";
+      if (refill) setDraft(token);
+      const own = refill || current.trim() === token;
+      if (own || current === "") setFormError({ text: result.error, invalid: own && result.status === 400, limit: result.status === 409 });
+      else notify(`${shortAddress(token)}: ${result.error}`, "warn");
       return;
     }
+    // The token sent leaves the form; another the form was given meanwhile stays, for Watch to send.
     setDraft((current) => (current.trim() === token ? "" : current));
     await show(result.list);
     setBusy(false);
@@ -236,6 +263,8 @@ function Watches({ params }: { params: Record<string, string> }) {
     setBusy(true);
     const before = list.watches.map((row) => row.token);
     const result = await removeWatch(token);
+    // The window left the page meanwhile: nothing below is for it (see add).
+    if (!mounted.current) return;
     if (!result.ok) {
       // The row stays: focus returns to its button.
       pendingFocus.current = { kind: "row", key: token };
@@ -244,6 +273,8 @@ function Watches({ params }: { params: Record<string, string> }) {
       return notify(result.error, "warn");
     }
     pendingFocus.current = focusAfterRemoval(before, token, result.list.watches.map((row) => row.token));
+    // A row left: the last Watch's complaint that the list was full is answered. Any other complaint stands.
+    setFormError((error) => (error?.limit ? null : error));
     await show(result.list);
     setBusy(false);
   };
@@ -327,7 +358,8 @@ function Watches({ params }: { params: Record<string, string> }) {
                     Watch
                   </button>
                 </div>
-                {atLimit && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
+                {/* The route's 409 says the same words as an alert: the muted sentence waits until the complaint has gone. */}
+                {atLimit && formError === null && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
                 {formError && (
                   <p id={errorId} className="text-xs text-danger-text" role="alert">
                     {formError.text}
@@ -388,10 +420,20 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // The poll reads /api/auth/me itself and hands the gate only an answer that changes it: the chat pressed Start
-  // (linked), or the session is gone (null, so the sign-in prompt comes back). A read that fails, or still says
-  // unlinked, leaves the window waiting: a single failed read out of the wait's hundred-odd would otherwise put the
-  // gate in its "unavailable" view and take the window, with the link, away. One read at a time.
+  // Whether the section is still on the page, for a read that answers after it left: the gate it would tell is the
+  // last wallet's (its refresh closure reads the session for that wallet's address).
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  // The poll reads /api/auth/me itself (readSession) and hands the gate only an answer that changes it: the chat
+  // pressed Start (linked), or the session is gone (null, so the sign-in prompt comes back). A read that fails, or
+  // still says unlinked, leaves the window waiting: a single failed read out of the wait's hundred-odd would
+  // otherwise put the gate in its "unavailable" view and take the window, with the link, away. One read at a time.
   useEffect(() => {
     if (!waiting || linked) return;
     let live = true;
@@ -403,9 +445,7 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
       }
       if (document.visibilityState !== "visible" || asking) return;
       asking = true;
-      // A read gives up after the poll's own interval, so one that hangs (the phone changed networks) can't hold the
-      // next ones back; a read that gave up answers "unavailable", which moves nothing.
-      void fetchSession((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(LINK_POLL_MS) }))
+      void readSession()
         .then((session) => {
           if (!live) return;
           if (session === null || (session !== "unavailable" && session.telegram === "linked")) void refresh();
@@ -468,17 +508,26 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
     window.open(result.url, "_blank", "noopener,noreferrer");
   };
 
+  // The chat is gone once the route has answered (or so is the session: a 401). The form is released then: the view
+  // follows the session the gate holds, which is read again, but no read holds the Unlink button (a second press
+  // repeats a DELETE the route answers 200 to, and reads again). The window reads first, with readSession's timeout,
+  // and tells the gate only when the read answered: the gate's own re-read, failing, would show its "unavailable"
+  // view in the body's place, list and form included, until the window is opened again. A read that fails leaves the
+  // linked view, with Unlink to press again. The Link Telegram button takes the focus as the view changes (above).
   const unlink = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     const result = await unlinkTelegram();
-    if (result.ok || result.status === 401) {
-      setWaiting(null);
-      await refresh();
-    }
     setBusy(false);
-    if (!result.ok) setError(result.error);
+    if (!result.ok && result.status !== 401) return setError(result.error);
+    setWaiting(null);
+    if (!result.ok) {
+      void refresh();
+      return setError(result.error);
+    }
+    const session = await readSession();
+    if (alive.current && session !== "unavailable") void refresh();
   };
 
   return (

@@ -181,6 +181,48 @@ describe("Watchdog's window over the shared query cache", () => {
     expect(client.getQueryData(["watches"])).toEqual(list(row(TOKEN, "A-ONE")));
   });
 
+  it("reads nothing again from a 409 that answers after the window has left the page, and tells the gate of no 401", async () => {
+    // A's window shows 2 of 3 while the server already has 3 (A added one on the phone). A clicks Watch and, while
+    // the route answers, the connected account changes: the gates take the body down, and the cleanup drops the
+    // entry. The POST answers 409. The read a 409 asks for would GET A's list with A's still-valid cookie and build the
+    // entry again, for B to start from: no read goes out, and the entry stays gone.
+    gets = [json(200, list(row(TOKEN, "A-ONE"), row(OTHER, "A-TWO")))];
+    await mount();
+    await settle();
+    expect(names()).toEqual(["A-ONE", "A-TWO"]);
+    const post = held();
+    posts = [post.answer];
+    await watch(THIRD);
+    await unmount();
+    expect(client.getQueryCache().find({ queryKey: ["watches"] })).toBeUndefined();
+    const requests = fetchStub.mock.calls.length;
+    await post.release(json(409, { error: "You can watch up to 3 tokens. Remove one to add another." }));
+    expect(fetchStub.mock.calls.length).toBe(requests);
+    expect(client.getQueryCache().find({ queryKey: ["watches"] })).toBeUndefined();
+    expect(state.refresh).not.toHaveBeenCalled();
+
+    // B signs in: its list is loading, and nothing of A's is on the page or in the cache.
+    state.address = WALLET_B;
+    const b = held();
+    gets = [b.answer];
+    await mount();
+    expect(host.textContent).toContain("Loading your watches.");
+    expect(names()).toEqual([]);
+    expect(host.querySelector('button[aria-label^="Remove"]')).toBeNull();
+    await b.release(json(200, list(row(THIRD, "B-ONE"))));
+    expect(names()).toEqual(["B-ONE"]);
+
+    // A 401 answered after the body left the page tells no gate either: the refresh closure the change holds reads
+    // the session for the last wallet's address, and would put the gate B signed into back to its prompt.
+    const post2 = held();
+    posts = [post2.answer];
+    await watch(TOKEN);
+    await unmount();
+    await post2.release(json(401, { error: "Not signed in." }));
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(client.getQueryCache().find({ queryKey: ["watches"] })).toBeUndefined();
+  });
+
   it("doesn't show the next wallet the 401 the last poll answered, nor tell the gate of it again", async () => {
     // A's cookie expired under the open window: the list answers 401, the gate is told, and the body goes down.
     gets = [json(401, { error: "Not signed in." })];
