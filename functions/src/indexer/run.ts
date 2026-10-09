@@ -2,12 +2,14 @@ import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import type { Address, NetworkId } from "@arcos/chain";
 import { v4PoolKeys, type IndexerDoc, type TokenDoc } from "@arcos/data";
 import { indexedPools } from "@arcos/data/server";
-import type { ExtraPool, PoolScan, Report } from "@arcos/inspector";
+import type { ChainReader, ExtraPool, PoolScan, Report } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
 import { decodeLogs, sourcesFor } from "./events";
 import { afterFailure, expired, pickQueue } from "./queue";
 import { bestPoolOf, summarize } from "./report";
 import { RangeRefused, type LogChain } from "./rpc";
+import type { TelegramSender } from "./telegram";
+import { runWatch, type WatchResult } from "./watch";
 import {
   finishRun,
   halt,
@@ -46,11 +48,23 @@ export type RunSettings = {
 };
 
 /**
- * The run's bounds (design 1.3): at most 10 windows, none started after 40 s, and no RPC call of the window phase waited
- * for past 55 s (`windowsDeadlineMs`); inspections none started after 80 s, each cut off after 15 s (inspect.ts). So the
- * last inspection ends by about 95 s, and the feeds and the end of the run fit in the function's 120 s.
+ * The run's bounds (design 1.3, and Watchdog's design 4): at most 10 windows, none started after 40 s, and no RPC call
+ * of the window phase waited for past 55 s (`windowsDeadlineMs`); the Watchdog step starts only before 55 s, starts no
+ * read after 62 s (each at most 5 s, so the reads end by 67 s), starts no fan-out page after 68 s and no send after
+ * 72 s (each at most 4 s, so the sends end by 76 s); inspections none started after 80 s, each cut off after 15 s
+ * (inspect.ts). So the last inspection ends by about 95 s, and the feeds and the end of the run fit in the function's
+ * 120 s. Watchdog never moves the run's end: at worst it narrows the window in which inspections may start.
  */
-export const LIMITS = { maxWindows: 10, windowsUntilMs: 40_000, windowsDeadlineMs: 55_000, inspectUntilMs: 80_000 } as const;
+export const LIMITS = {
+  maxWindows: 10,
+  windowsUntilMs: 40_000,
+  windowsDeadlineMs: 55_000,
+  watchStartUntilMs: 55_000,
+  watchReadsUntilMs: 62_000,
+  watchFanoutUntilMs: 68_000,
+  watchSendUntilMs: 72_000,
+  inspectUntilMs: 80_000,
+} as const;
 
 /**
  * Refused windows one run may halve through. Halving 10,000 reaches one block in 14 steps, and a node with a lower cap costs one refusal a window; more than this means the
@@ -66,7 +80,13 @@ export type RunDeps = {
   settings: RunSettings;
   now?: () => number;
   log?: Logger;
-  limits?: Partial<typeof LIMITS>;
+  /** Overrides of LIMITS, for the tests. */
+  limits?: Partial<Record<keyof typeof LIMITS, number>>;
+  /**
+   * Watchdog's reader and sender (step 4b). Absent, the step is skipped. `telegram` is null when no bot token is
+   * configured: the checks and the fan-out still run, and the deliveries wait.
+   */
+  watch?: { reader: ChainReader; telegram: TelegramSender | null };
 };
 
 export type RunResult =
@@ -89,9 +109,24 @@ export type RunResult =
       expired: number;
       feeds: number;
       explorerCalls: number;
-      /** The name of the error that cut the inspections or the feeds short, or null. The run still ended normally. */
+      /** Watchdog's counters, or null when the step didn't run (no deps, or not mainnet). */
+      watch: WatchResult | null;
+      /**
+       * The name of the error that cut the Watchdog step (one of its phases), the inspections or the feeds short, or
+       * null. The run still ended normally.
+       */
       error: string | null;
     };
+
+/**
+ * The result as the run line logs it: every field but Watchdog's `cursor`, a watchState doc id that names a watched
+ * token (`network:0x…`). No log line carries an address; the cursor is read in Firestore, `indexer/{network}.watchCursor`.
+ */
+export function runLogFields(result: RunResult): Record<string, unknown> {
+  if (result.status !== "ran" || result.watch === null) return result;
+  const watch = Object.fromEntries(Object.entries(result.watch).filter(([key]) => key !== "cursor"));
+  return { ...result, watch };
+}
 
 const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -103,9 +138,12 @@ const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
  * 3. reads new logs in windows of at most 10,000 blocks, one combined eth_getLogs each, halving a refused window;
  *    at most 10 windows read, none started after 40 s; a window that fails ends this phase, and the next run repeats it;
  * 4. records the qualifying pools and their tokens as idempotent upserts, then the cursor, window by window;
+ * 4b. (Watchdog, mainnet only, when `deps.watch` is given) checks a page of watched tokens at the tip, writes each
+ *    change with its alerts in one batch, fans the alerts out to deliveries, and sends the oldest pending ones to
+ *    Telegram, each phase within its own time limit (watch.ts); the page cursor is kept in the run's end (step 6);
  * 5. inspects up to INSPECT_PER_TICK queued tokens, liquid first, then newest, within the explorer budget;
  * 6. brings the four Radar feeds up to date, rebuilding one of them in turn, and ends the run, giving the lease back.
- * Steps 5 and 6 can't keep the run from ending: an error there is logged and named in the result.
+ * Steps 4b, 5 and 6 can't keep the run from ending: an error there is logged and named in the result.
  */
 export async function runIndexer(deps: RunDeps): Promise<RunResult> {
   const { db, network } = deps;
@@ -193,6 +231,33 @@ async function leased(
     for (const doc of written.changed) changed.set(doc.address, doc);
   }
 
+  // 4b. Watchdog. Its own reader and sender, its own time limits, and no explorer call; whatever fails in it, the
+  // inspections and the feeds still run. A fan-out or send failure comes back named in the result, with the checks'
+  // counters and cursor (watch.ts); only the checks' own page read rejects, and then the cursor, which rides on
+  // finishRun, keeps the last run's.
+  let error: string | null = null;
+  let watch: WatchResult | null = null;
+  if (deps.watch && network === "mainnet") {
+    try {
+      watch = await runWatch({
+        db,
+        network,
+        tip,
+        reader: deps.watch.reader,
+        telegram: deps.watch.telegram,
+        state,
+        now,
+        elapsed,
+        limits,
+        log,
+      });
+      error ??= watch.error;
+    } catch (e) {
+      error ??= nameOf(e);
+      log.error("arcosIndexer watch stopped", { phase: "checks", ...errorFields(e) });
+    }
+  }
+
   // 5. The inspection queue.
   const today = utcDay(started);
   const before = state.explorerCalls.day === today ? state.explorerCalls.count : 0;
@@ -211,7 +276,6 @@ async function leased(
   let inspected = 0;
   let failed = 0;
   let expiredCount = 0;
-  let error: string | null = null;
   const perTick = Math.max(0, Math.floor(settings.inspectPerTick));
   // Whatever fails here (a queue read, a write), the feeds still take what changed and the run still ends with the
   // explorer calls it spent, so the day's budget can't be overrun by runs that failed after spending.
@@ -251,7 +315,7 @@ async function leased(
       }
     }
   } catch (e) {
-    error = nameOf(e);
+    error ??= nameOf(e);
     log.error("arcosIndexer inspections stopped", errorFields(e));
   }
 
@@ -263,7 +327,7 @@ async function leased(
     error ??= nameOf(e);
     log.error("arcosIndexer feeds failed", errorFields(e));
   }
-  await finishRun(db, network, now(), { day: today, calls: spent - before }, runId);
+  await finishRun(db, network, now(), { day: today, calls: spent - before }, runId, watch?.cursor);
 
   return {
     status: "ran",
@@ -279,6 +343,7 @@ async function leased(
     expired: expiredCount,
     feeds,
     explorerCalls: spent - before,
+    watch,
     error,
   };
 }

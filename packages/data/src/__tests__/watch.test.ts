@@ -5,6 +5,7 @@ import type { AlertDetail, AlertKind, WatchStateRecord } from "../docs";
 import {
   alertText,
   diffWatchState,
+  displaySymbol,
   formatTokenUnits,
   isBurnAddress,
   nextWatchState,
@@ -609,6 +610,37 @@ describe("sanitizeSymbol", () => {
   });
 });
 
+describe("displaySymbol", () => {
+  it("is the sanitised symbol when it is plain", () => {
+    expect(displaySymbol("DUKE")).toBe("DUKE");
+    expect(displaySymbol("wETH 2")).toBe("wETH 2");
+    expect(displaySymbol("DUKE_v2-beta")).toBe("DUKE_v2-beta");
+    expect(displaySymbol("ＤＵＫＥ‮")).toBe("DUKE");
+    expect(displaySymbol("abcdefghijklmnopqrstuvwxyz")).toBe("abcdefghijklmnop");
+    expect(displaySymbol("USDC2")).toBe("USDC2");
+    expect(displaySymbol("X100000")).toBe("X100000");
+    expect(displaySymbol("A123 456")).toBe("A123 456");
+  });
+
+  it("is null for nothing, and for a symbol that is not plain", () => {
+    expect(displaySymbol(null)).toBeNull();
+    expect(displaySymbol(undefined)).toBeNull();
+    expect(displaySymbol("")).toBeNull();
+    expect(displaySymbol("‮")).toBeNull();
+    for (const hostile of ["t.me/x", "example.com", "@someone", "/start", "#airdrop", "$DUKE", "DUKE.", "DUKE:", "DUKE!", "a@b", "4155551234", "1-800-555", "😀", "DUKE 😀"]) {
+      expect(displaySymbol(hostile), hostile).toBeNull();
+    }
+  });
+
+  it("is null for a phone number beside a letter: a run of seven or more digits, with or without separators", () => {
+    for (const phone of ["+1 415 555 0100", "A4155550100", "x1234567", "DUKE 4155550100", "DUKE 555-0100-1", "A 415 555 0100", "A415_555_0100"]) {
+      expect(displaySymbol(phone), phone).toBeNull();
+    }
+    // Two separators in a row break the run: six digits and six digits are not one number.
+    expect(displaySymbol("A123456_-123456")).toBe("A123456_-123456");
+  });
+});
+
 describe("short and formatTokenUnits", () => {
   it("shows six characters, an ellipsis and four", () => {
     expect(short("0x1234567890abcdef1234567890abcdef1234abcd")).toBe("0x1234…abcd");
@@ -709,12 +741,35 @@ describe("alertText", () => {
     expect(text("paused", { symbol: "‮\n" }).text).toBe("0x8f3a…913c: paused at block 1,234,567");
   });
 
-  it("sanitises the symbol: a direction override, a newline and a long URL never reach the message", () => {
+  it("sanitises the symbol: a direction override and a newline never reach the message", () => {
     expect(text("paused", { symbol: "DUKE‮" }).text).toBe(`${T}: paused at block 1,234,567`);
     expect(text("paused", { symbol: "DU\nKE" }).text).toBe(`${T}: paused at block 1,234,567`);
-    expect(text("paused", { symbol: "https://evil.example/claim-your-airdrop-now-at-this-link-here" }).text).toBe(
-      "https://evil.exa (0x8f3a…913c): paused at block 1,234,567",
-    );
+  });
+
+  it("shows a plain symbol: letters, digits, spaces, underscores and hyphens", () => {
+    expect(text("paused", { symbol: "wETH 2" }).text).toBe("wETH 2 (0x8f3a…913c): paused at block 1,234,567");
+    expect(text("paused", { symbol: "DUKE_v2-beta" }).text).toBe("DUKE_v2-beta (0x8f3a…913c): paused at block 1,234,567");
+    expect(text("paused", { symbol: "1INCH" }).text).toBe("1INCH (0x8f3a…913c): paused at block 1,234,567");
+    expect(text("paused", { symbol: "ÉTOILE" }).text).toBe("ÉTOILE (0x8f3a…913c): paused at block 1,234,567");
+  });
+
+  it("leaves out a symbol Telegram would make tappable in plain text: a URL, a domain, a mention, a command, a tag, a phone number", () => {
+    const plain = "0x8f3a…913c: paused at block 1,234,567";
+    expect(text("paused", { symbol: "https://evil.example/claim-your-airdrop-now-at-this-link-here" }).text).toBe(plain);
+    expect(text("paused", { symbol: "t.me/x" }).text).toBe(plain);
+    expect(text("paused", { symbol: "example.com" }).text).toBe(plain);
+    expect(text("paused", { symbol: "@someone" }).text).toBe(plain);
+    expect(text("paused", { symbol: "/start" }).text).toBe(plain);
+    expect(text("paused", { symbol: "#airdrop" }).text).toBe(plain);
+    expect(text("paused", { symbol: "$DUKE" }).text).toBe(plain);
+    expect(text("paused", { symbol: "+1 415 555 0100" }).text).toBe(plain);
+    expect(text("paused", { symbol: "4155551234" }).text).toBe(plain);
+    expect(text("paused", { symbol: "A4155550100" }).text).toBe(plain);
+    expect(text("paused", { symbol: "x1234567" }).text).toBe(plain);
+    expect(text("paused", { symbol: "DUKE" }).text).toBe("DUKE (0x8f3a…913c): paused at block 1,234,567");
+    expect(text("paused", { symbol: "USDC2" }).text).toBe("USDC2 (0x8f3a…913c): paused at block 1,234,567");
+    expect(text("paused", { symbol: "DUKE:" }).text).toBe(plain);
+    expect(text("paused", { symbol: "😀" }).text).toBe(plain);
   });
 
   it("groups the block number", () => {
