@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useConnection, useSignMessage } from "wagmi";
 import { activeChain } from "@arcos/chain";
 import { fetchSession, signInWithWallet, signOut, type SessionInfo, type SignOutOutcome } from "@/lib/sign-in-client";
@@ -67,29 +67,45 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     setState({ kind: "loading" });
   }
 
-  // The address the gate is reading for. A read that answers after the account changed (the effect's, or load()'s
-  // after a sign-in, a sign-out or an app's refresh) is the last wallet's: it sets nothing, so the last wallet's
-  // session can't come back over the loading view, or over the new wallet's answer.
-  const readingFor = useRef(address);
-
-  const load = useCallback(async () => {
-    const session = await readSession();
-    if (readingFor.current === address) setState(stateFor(session, address));
-  }, [address]);
-
-  useEffect(() => {
-    readingFor.current = address;
-    let live = true;
-    void readSession().then((session) => {
-      if (live) setState(stateFor(session, address));
-    });
+  // Every read of the session below (the effect's, and load()'s after a sign-in, a sign-out, Retry or an app's
+  // refresh) acts only for the gate as it was when the read began: the same wallet, and no later read. `turn` counts
+  // the moves: the account changing (the layout effect, in the commit itself, so no answer can land between the
+  // change and the count), the gate leaving the page, and every read begun. A read checks the count right after its
+  // await (`movedOn`) and sets nothing when it has moved: an answer for the last wallet can't come back over the
+  // loading view or over the new wallet's answer, and an older read of the same wallet can't overwrite a newer one,
+  // whichever answers first. Without the count, two reads could be out at once (the Watchdog window's link poll asks
+  // for a refresh every 5 s until the gate has answered, and a read may take 10 s), and the older one, landing last,
+  // put back what the newer one had corrected: "Telegram linked." with Unlink after an unlink that succeeded, the app
+  // under a cleared cookie after a read that said signed out, or the "unavailable" view over Retry's loading view.
+  // `wallet` is the connected address as of the same commit: a read that is still the latest is for it.
+  const turn = useRef(0);
+  const wallet = useRef(address);
+  const movedOn = (mine: number) => mine !== turn.current;
+  useLayoutEffect(() => {
+    turn.current += 1;
+    wallet.current = address;
     return () => {
-      live = false;
+      turn.current += 1;
     };
   }, [address]);
 
+  const load = useCallback(async () => {
+    const mine = ++turn.current;
+    const session = await readSession();
+    if (movedOn(mine)) return;
+    setState(stateFor(session, wallet.current));
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [address, load]);
+
+  // The prompt the sign-in sets is this wallet's: when the account changes while the wallet signs, the prompt has
+  // left the page with the loading view, and the outcome sets nothing (a session the sign-in made is the last
+  // wallet's; the new wallet's read answers for it). The count is read, not moved: a sign-in is no read.
   const signIn = async () => {
     if (!address) return;
+    const mine = turn.current;
     setState({ kind: "signed-out", error: null, busy: true });
     const outcome = await signInWithWallet({
       address,
@@ -97,8 +113,9 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
       signMessage: ({ message }) => signMessage.mutateAsync({ message }),
       siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     });
+    if (movedOn(mine)) return;
     if (outcome.ok) await load();
-    else if (readingFor.current === address) setState({ kind: "signed-out", error: outcome.error, busy: false });
+    else setState({ kind: "signed-out", error: outcome.error, busy: false });
   };
 
   // A read that failed, or gave up (a slow connection: the 10 s above): Retry reads again, the loading view meanwhile.
@@ -113,7 +130,7 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     return (
       <div className={box}>
         <div>
-          <p className="text-muted">Sign-in isn&apos;t available right now. Try again later.</p>
+          <p className="text-muted">Sign-in isn&apos;t available right now.</p>
           <button type="button" className={button} onClick={retry}>
             Retry
           </button>
@@ -139,10 +156,15 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
   const { session } = state;
   const value: SignedIn = {
     ...session,
+    // A sign-out that succeeded ended the cookie, whoever is connected now: the session is read again, and that read
+    // is the latest (above). One that failed adds its sentence to the signed-in view of the wallet that pressed it, as
+    // the gate holds that view now, not as it was at the press: a read that landed meanwhile (an app's refresh, with
+    // the Telegram chat linked) stands, and when the view is another wallet's, or the sign-in prompt, there is
+    // nothing to add it to.
     signOut: async () => {
       const outcome = await signOut();
       if (outcome.ok) await load();
-      else if (readingFor.current === address) setState({ kind: "signed-in", session, signOutError: outcome.error });
+      else setState((s) => (s.kind === "signed-in" && s.session.address === session.address ? { ...s, signOutError: outcome.error } : s));
       return outcome;
     },
     refresh: load,

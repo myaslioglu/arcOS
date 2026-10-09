@@ -6,8 +6,9 @@ import type { SignedIn } from "../SignInGate";
 
 /**
  * The gate mounted in jsdom over a stubbed `fetch` and a wallet fixture the test moves: what it shows while the
- * session is read, what an account change in the wallet does to the app under it, how long a read may take, and the
- * sign-out path (review 1, Minor 4). Nothing here reaches the network, and every address is a test fixture.
+ * session is read, what an account change in the wallet does to the app under it, how long a read may take, which of
+ * two reads out at once the gate follows, and the sign-out path (review 1, Minor 4). Nothing here reaches the network,
+ * and every address is a test fixture.
  */
 
 const wallet = vi.hoisted(() => ({ address: "0x1111111111111111111111111111111111111111" as string | undefined }));
@@ -23,9 +24,9 @@ const WALLET_B = "0x2222222222222222222222222222222222222222";
 const ME = "/api/auth/me";
 const LOGOUT = "/api/auth/logout";
 const FAILED = "Couldn't sign out. Try again.";
-const UNAVAILABLE = "Sign-in isn't available right now. Try again later.";
+const UNAVAILABLE = "Sign-in isn't available right now.";
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-const session = (address: string) => json(200, { address, telegram: "unlinked" });
+const session = (address: string, telegram: "linked" | "unlinked" = "unlinked") => json(200, { address, telegram });
 /** A session answer held back until the test releases it. */
 const held = () => {
   let release!: (res: Response) => void;
@@ -42,7 +43,7 @@ const calls: Call[] = [];
 /** What /api/auth/me answers, each time it is read. */
 let me: () => Response | Promise<Response>;
 /** What POST /api/auth/logout answers. */
-let logout: () => Response;
+let logout: () => Response | Promise<Response>;
 const fetchStub = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
   calls.push({ input: String(input), init });
   if (String(input) === ME) return me();
@@ -215,6 +216,95 @@ describe("SignInGate", () => {
     expect(text()).not.toContain(WALLET_A);
   });
 
+  it("follows the newest read of the same wallet, whichever answers first: an unlink that succeeded stays unlinked", async () => {
+    // The Watchdog window's link poll asks for a refresh every 5 s until the gate has answered, and a gate read may
+    // take 10 s, so two reads of the same wallet can be out at once. The older one, landing last, must not put back
+    // what the newer one corrected: here the chat was unlinked between the two reads (Unlink: DELETE, then the
+    // window's own read, then refresh), and the older read's "linked" is a session that has gone.
+    me = () => session(WALLET_A, "linked");
+    await mount();
+    await settle();
+    expect(seen!.telegram).toBe("linked");
+
+    const older = held();
+    me = () => older.answer;
+    const first = seen!.refresh();
+    const newer = held();
+    me = () => newer.answer;
+    const second = seen!.refresh();
+    expect(meCalls()).toHaveLength(3);
+
+    await act(async () => newer.release(session(WALLET_A, "unlinked")));
+    await second;
+    await settle();
+    expect(seen!.telegram).toBe("unlinked");
+
+    await act(async () => older.release(session(WALLET_A, "linked")));
+    await first;
+    await settle();
+    expect(seen!.telegram).toBe("unlinked");
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("keeps the sign-in prompt a newer read answered when an older read answers with the session after it", async () => {
+    // The window's 401 (the cookie expired under it) asks for a refresh, which answers null; an older refresh, from
+    // the link poll, then lands with the session as it was: the app must not come back under a cleared cookie.
+    await mount();
+    await settle();
+    const older = held();
+    me = () => older.answer;
+    const first = seen!.refresh();
+    const newer = held();
+    me = () => newer.answer;
+    const second = seen!.refresh();
+
+    await act(async () => newer.release(json(401, { error: "Not signed in." })));
+    await second;
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("the app");
+
+    await act(async () => older.release(session(WALLET_A)));
+    await first;
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("the app");
+  });
+
+  it("keeps Retry's loading view when a read older than Retry fails after it", async () => {
+    // Two reads out; the newer fails, so the gate says "unavailable" and the visitor presses Retry. The older read,
+    // failing after that, is not the latest: the loading view stays until Retry's own read answers.
+    await mount();
+    await settle();
+    const older = held();
+    me = () => older.answer;
+    const first = seen!.refresh();
+    const newer = held();
+    me = () => newer.answer;
+    const second = seen!.refresh();
+    await act(async () => newer.release(json(503, { error: "x" })));
+    await second;
+    await settle();
+    expect(text()).toContain(UNAVAILABLE);
+
+    const retried = held();
+    me = () => retried.answer;
+    await act(async () => retryButton().click());
+    expect(loading()).toBe(true);
+    expect(meCalls()).toHaveLength(4);
+
+    await act(async () => older.release(json(503, { error: "x" })));
+    await first;
+    await settle();
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain(UNAVAILABLE);
+
+    await act(async () => retried.release(session(WALLET_A)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
   it("shows the sign-in prompt to a wallet whose session is another's, or none", async () => {
     me = () => session(WALLET_B);
     await mount();
@@ -243,6 +333,32 @@ describe("SignInGate", () => {
     expect(outcome).toEqual({ ok: false, error: FAILED });
     expect(meCalls()).toHaveLength(1);
     expect(alertText()).toBe(FAILED);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("adds a failed sign-out's sentence to the view the gate holds then, not the one at the press", async () => {
+    // The logout is out when a refresh lands with the chat linked: the failure's sentence goes over that session,
+    // not over the unlinked one the press was made under.
+    await mount();
+    await settle();
+    expect(seen!.telegram).toBe("unlinked");
+    const pending = held();
+    logout = () => pending.answer;
+    let outcome: Promise<unknown>;
+    await act(async () => {
+      outcome = seen!.signOut();
+    });
+    me = () => session(WALLET_A, "linked");
+    await act(async () => {
+      await seen!.refresh();
+    });
+    expect(seen!.telegram).toBe("linked");
+
+    await act(async () => pending.release(json(500, { error: "x" })));
+    await expect(outcome!).resolves.toEqual({ ok: false, error: FAILED });
+    await settle();
+    expect(alertText()).toBe(FAILED);
+    expect(seen!.telegram).toBe("linked");
     expect(text()).toContain(`the app for ${WALLET_A}`);
   });
 

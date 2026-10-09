@@ -32,8 +32,6 @@ const LINK = "text-accent-text underline";
 
 const OFF_MAINNET = "Watchdog runs on Arc mainnet only.";
 const LOADING = "Loading your watches.";
-const EMPTY =
-  "No tokens watched yet. Watchdog checks a token's owner, supply, pause state, implementation and deepest pool, and sends an alert when one of them changes. You can watch up to 3 tokens.";
 const NO_CHANGES = "No changes seen yet.";
 const NOT_ADDRESS = "That isn't an address.";
 const TELEGRAM_UNLINKED = "Alerts go to Telegram. Link a chat to receive them.";
@@ -41,8 +39,10 @@ const TELEGRAM_WAITING = "Press Start in the chat that opened. This link works f
 const TELEGRAM_LINKED = "Telegram linked.";
 /** The chat is gone (the route answered 200), but the read that would flip the view failed: a second press reads again. */
 const UNLINK_UNCONFIRMED = "Couldn't confirm the unlink. Press Unlink again.";
-/** The free limit the route states; the footer and the limit sentence read the list's own, which is this today. */
+/** The free limit the route states; the footer and the sentences read the list's own limit, which is this today. */
 const FREE_LIMIT = 3;
+const emptySentence = (limit: number) =>
+  `No tokens watched yet. Watchdog checks a token's owner, supply, pause state, implementation and deepest pool, and sends an alert when one of them changes. You can watch up to ${limit} tokens.`;
 const limitSentence = (limit: number) => `You can watch up to ${limit} tokens. Remove one to add another.`;
 
 /** How long a link code lives (TTL_MS.linkCodes), and so how long the window asks whether the chat got linked. */
@@ -132,12 +132,13 @@ function Watches({ params }: { params: Record<string, string> }) {
   // One change at a time: a second Watch or Remove waits for the first, so the list the route answers is the last one.
   const [busy, setBusy] = useState(false);
 
-  // The list is this wallet's. It leaves the cache with the window (closed, or taken down by the gates when the wallet
-  // signed out or changed), so the next wallet to sign in on this page loads its own list rather than seeing the last
-  // wallet's, or the 401 the last poll answered. The key stays ["watches"] (design 6); the list is only cached while
-  // a window shows it. A change still answering when the window leaves acts on nothing (see add and remove): its list,
-  // or the read a 409 asks for, would put the entry back, for the next wallet to start from, and the gate it would
-  // tell of a 401 is the last wallet's.
+  // The list is this wallet's. It leaves the cache with the body: the window closed, or minimized (on touch, another
+  // window made active), since the shell unmounts a window it doesn't show, or the body taken down by the gates when
+  // the wallet signed out or changed. So the next wallet to sign in on this page loads its own list rather than seeing
+  // the last wallet's, or the 401 the last poll answered, and a restored window reads its list again. The key stays
+  // ["watches"] (design 6); the list is only cached while a window shows it. A change still answering when the body
+  // leaves acts on nothing (see add and remove): its list, or the read a 409 asks for, would put the entry back, for
+  // the next wallet to start from, and the gate it would tell of a 401 is the last wallet's.
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -325,7 +326,7 @@ function Watches({ params }: { params: Record<string, string> }) {
                 </p>
               )}
               {list.watches.length === 0 ? (
-                <p className="text-muted">{EMPTY}</p>
+                <p className="text-muted">{emptySentence(limit)}</p>
               ) : (
                 <ul aria-label="Watched tokens" className="grid gap-2">
                   {list.watches.map((row) => (
@@ -452,7 +453,10 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   // Every continuation below (a route's answer, Unlink's own session read) acts only for the section as it was at the
   // press: on the page, in the same view, with no later press. `turn` counts the moves: a press (`begin`), the view
   // flipping (the layout effect, in the commit itself, so no answer can land between the flip and the count) and the
-  // section leaving the page (the window closed, or the gates took the body down). A continuation checks the count
+  // section leaving the page (the window closed, or minimized, on touch another window made active, since the shell
+  // unmounts a window it doesn't show; or the gates took the body down). The wait leaves with the section: a window
+  // restored after Link Telegram shows the ask again, and a press then makes a new code (the first code's chat,
+  // pressing Start, is linked all the same; only its toast isn't shown). A continuation checks the count
   // right after each await (`movedOn`) and returns when it has moved: what it would have done belongs to a view or a
   // press that has gone. The gate it would tell of a 401 is the last wallet's (its refresh closure reads the session
   // for that wallet's address), the tab it would open is for a chat already linked or a window that is gone, the

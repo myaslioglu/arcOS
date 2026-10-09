@@ -187,6 +187,14 @@ describe("Watchdog", () => {
     expect(html).not.toContain("Link a chat");
   });
 
+  it("builds the empty sentence from the list's own limit, like the footer", () => {
+    listing([], 5);
+    const html = render();
+    expect(html).toContain("You can watch up to 5 tokens.");
+    expect(html).toContain("0 of 5 tokens watched.");
+    expect(html).not.toContain("up to 3");
+  });
+
   it("prefills the form from the token param and sends nothing: the form holds the token, the list is unchanged", () => {
     // Static rendering runs no effect, so the prefill itself is checked in window-wiring.test.ts; here, the param
     // reaches no request and no row: the window shows the token nowhere but, after the effect, in the form.
