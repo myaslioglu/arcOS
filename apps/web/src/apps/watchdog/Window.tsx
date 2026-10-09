@@ -39,6 +39,8 @@ const NOT_ADDRESS = "That isn't an address.";
 const TELEGRAM_UNLINKED = "Alerts go to Telegram. Link a chat to receive them.";
 const TELEGRAM_WAITING = "Press Start in the chat that opened. This link works for 10 minutes.";
 const TELEGRAM_LINKED = "Telegram linked.";
+/** The chat is gone (the route answered 200), but the read that would flip the view failed: a second press reads again. */
+const UNLINK_UNCONFIRMED = "Couldn't confirm the unlink. Press Unlink again.";
 /** The free limit the route states; the footer and the limit sentence read the list's own, which is this today. */
 const FREE_LIMIT = 3;
 const limitSentence = (limit: number) => `You can watch up to ${limit} tokens. Remove one to add another.`;
@@ -183,6 +185,17 @@ function Watches({ params }: { params: Record<string, string> }) {
   const refused = (result: Refusal) => {
     if (result.status === 401) void refresh();
   };
+
+  // A 409's complaint says the list is full. It stands while it is: a Remove in this window answers it (see remove),
+  // and so does a list the minute's poll or the focus refetch brings back under the limit (a token was removed on
+  // another device), as a state adjusted during the render, like the prefill above. Any other complaint stands. The
+  // list the 409 was answered under may still be below the limit (that is what the 409's refetch corrects): only the
+  // limit's going, not its absence, clears the complaint.
+  const [wasAtLimit, setWasAtLimit] = useState(atLimit);
+  if (atLimit !== wasAtLimit) {
+    setWasAtLimit(atLimit);
+    if (!atLimit) setFormError((error) => (error?.limit ? null : error));
+  }
 
   // Where focus goes once a change has ended. add() and remove() only store it: Watch and every Remove button are
   // disabled while busy, and a disabled button can't hold focus, so the effect acts once busy is false again, after
@@ -358,8 +371,8 @@ function Watches({ params }: { params: Record<string, string> }) {
                     Watch
                   </button>
                 </div>
-                {/* The route's 409 says the same words as an alert: the muted sentence waits until the complaint has gone. */}
-                {atLimit && formError === null && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
+                {/* The route's 409 says the same words as an alert: the muted sentence waits until that complaint has gone. Beside any other complaint it stays, so the disabled button is explained. */}
+                {atLimit && formError?.limit !== true && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
                 {formError && (
                   <p id={errorId} className="text-xs text-danger-text" role="alert">
                     {formError.text}
@@ -420,8 +433,10 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Whether the section is still on the page, for a read that answers after it left: the gate it would tell is the
-  // last wallet's (its refresh closure reads the session for that wallet's address).
+  // Whether the section is still on the page, for a route or a read that answers after it left (the window closed,
+  // or the gates took the body down): nothing below the await is for it. The gate it would tell of a 401 is the last
+  // wallet's (its refresh closure reads the session for that wallet's address), the tab it would open is for a window
+  // that is gone, and the event it would count is for a link the visitor never saw.
   const alive = useRef(false);
   useEffect(() => {
     alive.current = true;
@@ -498,6 +513,8 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
     setBusy(true);
     setError(null);
     const result = await linkTelegram();
+    // The section left the page meanwhile: nothing below is for it (see `alive`).
+    if (!alive.current) return;
     setBusy(false);
     if (!result.ok) {
       if (result.status === 401) void refresh();
@@ -513,12 +530,15 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   // repeats a DELETE the route answers 200 to, and reads again). The window reads first, with readSession's timeout,
   // and tells the gate only when the read answered: the gate's own re-read, failing, would show its "unavailable"
   // view in the body's place, list and form included, until the window is opened again. A read that fails leaves the
-  // linked view, with Unlink to press again. The Link Telegram button takes the focus as the view changes (above).
+  // linked view and says so under it, with Unlink to press again; the button takes the focus it dropped while it was
+  // disabled (below). The Link Telegram button takes the focus as the view changes (above).
   const unlink = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     const result = await unlinkTelegram();
+    // The section left the page meanwhile: nothing below is for it (see `alive`).
+    if (!alive.current) return;
     setBusy(false);
     if (!result.ok && result.status !== 401) return setError(result.error);
     setWaiting(null);
@@ -527,8 +547,16 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
       return setError(result.error);
     }
     const session = await readSession();
-    if (alive.current && session !== "unavailable") void refresh();
+    if (!alive.current) return;
+    if (session === "unavailable") return setError(UNLINK_UNCONFIRMED);
+    void refresh();
   };
+
+  // The read after Unlink failed: the sentence is on the page, and the button, enabled again, takes the focus it
+  // dropped to the body while it was disabled, unless the visitor moved on meanwhile.
+  useEffect(() => {
+    if (error === UNLINK_UNCONFIRMED && focusWasLost()) unlinkRef.current?.focus();
+  }, [error]);
 
   return (
     <section aria-label="Telegram" className="grid gap-2 border-t border-border pt-3">

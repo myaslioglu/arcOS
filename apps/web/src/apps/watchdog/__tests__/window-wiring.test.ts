@@ -342,6 +342,66 @@ describe("Watchdog's window wiring", () => {
     expect(state.refetch).not.toHaveBeenCalled();
   });
 
+  it("keeps the limit sentence beside a complaint that isn't the limit's, when the list reaches the limit under it", async () => {
+    // The route's 400 shows under the form at 1 of 3. Before the visitor types again, the minute's poll brings the
+    // list to the limit (two tokens were added on the phone): Watch is disabled, and the muted sentence says why,
+    // once, beside the complaint, which stands.
+    answers = [json(400, { error: "That isn't a token on Arc mainnet." })];
+    await mount();
+    await type(OTHER);
+    await submit();
+    expect(alertText()).toBe("That isn't a token on Arc mainnet.");
+    expect(count(LIMIT)).toBe(0);
+    state.data = list(row(TOKEN), row(THIRD, "THREE"), row(FOURTH, "FOUR"));
+    await mount();
+    expect(button("Watch").disabled).toBe(true);
+    expect(alertText()).toBe("That isn't a token on Arc mainnet.");
+    expect(input().getAttribute("aria-invalid")).toBe("true");
+    expect(count(LIMIT)).toBe(1);
+
+    // The form's own complaint, too.
+    state.data = list(row(TOKEN));
+    await type("0x12");
+    await submit();
+    expect(alertText()).toBe("That isn't an address.");
+    state.data = list(row(TOKEN), row(THIRD, "THREE"), row(FOURTH, "FOUR"));
+    await mount();
+    expect(alertText()).toBe("That isn't an address.");
+    expect(count(LIMIT)).toBe(1);
+  });
+
+  it("drops a 409's complaint when a poll brings the list back under the limit", async () => {
+    // Watch answers 409 and the read it asks for shows the list at the limit, with the complaint as the alert. A
+    // token is then removed on another device: the minute's poll brings the list to 2 of 3, Watch is enabled, and
+    // the alert that said to remove one goes with the limit; the token waits in the form for Watch to send.
+    answers = [json(409, { error: LIMIT })];
+    await mount();
+    await type(FOURTH);
+    await submit();
+    expect(alertText()).toBe(LIMIT);
+    state.data = list(row(TOKEN), row(OTHER, "TWO"), row(THIRD, "THREE"));
+    await mount();
+    expect(button("Watch").disabled).toBe(true);
+    expect(count(LIMIT)).toBe(1);
+    state.data = list(row(TOKEN), row(OTHER, "TWO"));
+    await mount();
+    expect(button("Watch").disabled).toBe(false);
+    expect(alertText()).toBeNull();
+    expect(count(LIMIT)).toBe(0);
+    expect(input().value).toBe(FOURTH);
+    expect(input().hasAttribute("aria-describedby")).toBe(false);
+
+    // A complaint that isn't the limit's stands through the same move.
+    answers = [json(400, { error: "That isn't a token on Arc mainnet." })];
+    await submit();
+    expect(alertText()).toBe("That isn't a token on Arc mainnet.");
+    state.data = list(row(TOKEN), row(OTHER, "TWO"), row(THIRD, "THREE"));
+    await mount();
+    state.data = list(row(TOKEN), row(OTHER, "TWO"));
+    await mount();
+    expect(alertText()).toBe("That isn't a token on Arc mainnet.");
+  });
+
   it("marks the input invalid when the route's 400 faults the address", async () => {
     answers = [json(400, { error: "That isn't a token on Arc mainnet." })];
     await mount();
@@ -863,26 +923,114 @@ describe("Watchdog's window wiring", () => {
     expect(document.activeElement).toBe(button("Link Telegram"));
   });
 
-  it("keeps the window when the session read after Unlink fails, with Unlink to press again", async () => {
+  it("keeps the window when the session read after Unlink fails, says so, and hands the focus back to Unlink", async () => {
+    // The DELETE answers 200 (the chat is gone server-side); the window's own read of the session fails (a 503, or
+    // the 5 s timeout). The gate isn't told (its re-read, failing, would take the body away), the list and the form
+    // stay, and the section says the unlink couldn't be confirmed, with Unlink to press again. Unlink was disabled
+    // while the route answered and couldn't keep the focus it had (the test drops it in the browser's place, through
+    // the input): enabled again, it takes the focus back.
     state.telegram = "linked";
-    answers = [json(200, { telegram: "unlinked" }), json(200, { telegram: "unlinked" })];
+    let release!: (res: Response) => void;
+    answers = [new Promise<Response>((resolve) => (release = resolve)), json(200, { telegram: "unlinked" })];
     me = () => new Response("", { status: 503 });
     await mount();
+    button("Unlink").focus();
     await click(button("Unlink"));
+    expect(button("Unlink").disabled).toBe(true);
+    input().focus();
+    input().blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => release(json(200, { telegram: "unlinked" })));
     await settle();
     expect(meCalls()).toBe(1);
     expect(state.refresh).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Telegram linked.");
     expect(button("Unlink").disabled).toBe(false);
-    expect(alertText()).toBeNull();
+    expect(alertText()).toBe("Couldn't confirm the unlink. Press Unlink again.");
     expect(host.querySelector("input")).not.toBeNull();
+    expect(document.activeElement).toBe(button("Unlink"));
 
-    // Pressed again: the route answers 200 again (there is no chat to take away), and this time the read answers.
+    // Pressed again: the route answers 200 again (there is no chat to take away), and this time the read answers:
+    // the sentence goes, and the gate is told.
     me = () => session("unlinked");
     await click(button("Unlink"));
     await settle();
     expect(meCalls()).toBe(2);
     expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(alertText()).toBeNull();
+  });
+
+  it("leaves focus where a visitor moved it while the session read after Unlink was failing", async () => {
+    state.telegram = "linked";
+    answers = [json(200, { telegram: "unlinked" })];
+    let fail!: (reason: unknown) => void;
+    me = () => new Promise<Response>((_, reject) => (fail = reject)) as unknown as Response;
+    await mount();
+    button("Unlink").focus();
+    await click(button("Unlink"));
+    await settle();
+    expect(meCalls()).toBe(1);
+    input().focus();
+    await act(async () => fail(new DOMException("The operation timed out.", "TimeoutError")));
+    await settle();
+    expect(alertText()).toBe("Couldn't confirm the unlink. Press Unlink again.");
+    expect(document.activeElement).toBe(input());
+  });
+
+  it("acts on nothing when a Telegram route answers after the section has left the page", async () => {
+    // Link Telegram is pressed and, while the route answers, the window is closed (or the gates take the body down:
+    // the wallet signed out or changed). The 200 then opens no tab for a window that is gone, counts no link the
+    // visitor never saw, and a 401 tells no gate: the refresh closure the section holds is the last wallet's.
+    let release!: (res: Response) => void;
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await mount();
+    await click(button("Link Telegram"));
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => release(json(200, { url: T_ME })));
+    await settle();
+    expect(opened).not.toHaveBeenCalled();
+    expect(state.trackEvent).not.toHaveBeenCalled();
+    expect(state.refresh).not.toHaveBeenCalled();
+
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await mount();
+    await click(button("Link Telegram"));
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => release(json(401, { error: "Not signed in." })));
+    await settle();
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(opened).not.toHaveBeenCalled();
+
+    // Unlink, too: a 401 tells no gate, and a 200 reads no session (the read would tell the last wallet's gate).
+    state.telegram = "linked";
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await mount();
+    await click(button("Unlink"));
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => release(json(401, { error: "Not signed in." })));
+    await settle();
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(meCalls()).toBe(0);
+
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await mount();
+    await click(button("Unlink"));
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await act(async () => release(json(200, { telegram: "unlinked" })));
+    await settle();
+    expect(meCalls()).toBe(0);
+    expect(state.refresh).not.toHaveBeenCalled();
+
+    // The section mounted again (the next wallet, or the window opened again) is untouched by any of it.
+    state.telegram = "unlinked";
+    await mount();
+    expect(host.textContent).toContain("Link Telegram");
+    expect(alertText()).toBeNull();
+    expect(calls).toHaveLength(4);
   });
 
   it("leaves focus where a visitor moved it while Unlink was answering", async () => {
