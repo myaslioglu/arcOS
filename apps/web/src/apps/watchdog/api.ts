@@ -8,7 +8,7 @@ import { cleanLabel } from "@arcos/inspector";
 // WatchRow. Nothing here imports @arcos/data or the routes' server code, so the client bundle stays free of both.
 
 /** What a request is made with: `fetch` in the app, a stub in tests. */
-export type Request = typeof fetch;
+export type Fetcher = typeof fetch;
 
 export const UNAVAILABLE = "Watchdog isn't available right now. Try again in a minute.";
 export const TELEGRAM_UNAVAILABLE = "Telegram alerts aren't available right now.";
@@ -101,7 +101,7 @@ async function serverSentence(res: Response): Promise<string | null> {
 }
 
 /** The watch list, at most 10 s; an error status, no answer, or a body that isn't a list throws WatchFetchError. */
-export async function fetchWatches(request: Request = fetch): Promise<WatchList> {
+export async function fetchWatches(request: Fetcher = fetch): Promise<WatchList> {
   let res: Response;
   try {
     res = await request("/api/watches", { credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -119,7 +119,7 @@ export async function fetchWatches(request: Request = fetch): Promise<WatchList>
 }
 
 /** A change that answers the list: the list when it did, else the route's sentence or the one fallback. Never throws. */
-async function change(request: Request, input: string, init: RequestInit, fallback: string): Promise<ChangeResult> {
+async function change(request: Fetcher, input: string, init: RequestInit, fallback: string): Promise<ChangeResult> {
   let res: Response;
   try {
     res = await request(input, { ...init, credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -135,12 +135,12 @@ async function change(request: Request, input: string, init: RequestInit, fallba
 }
 
 /** POST /api/watches: watches the token. `added` is false when the wallet already watched it (the route's 200). */
-export function addWatch(token: string, request: Request = fetch): Promise<ChangeResult> {
+export function addWatch(token: string, request: Fetcher = fetch): Promise<ChangeResult> {
   return change(request, "/api/watches", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) }, UNAVAILABLE);
 }
 
 /** DELETE /api/watches/[token]: stops watching the token. The route answers the list whether or not it was watched. */
-export function removeWatch(token: string, request: Request = fetch): Promise<ChangeResult> {
+export function removeWatch(token: string, request: Fetcher = fetch): Promise<ChangeResult> {
   return change(request, `/api/watches/${encodeURIComponent(token)}`, { method: "DELETE" }, UNAVAILABLE);
 }
 
@@ -161,7 +161,7 @@ export function telegramLinkUrl(value: unknown): string | null {
 }
 
 /** POST /api/telegram/link: a fresh t.me link to the bot's chat, checked by telegramLinkUrl. Never throws. */
-export async function linkTelegram(request: Request = fetch): Promise<LinkResult> {
+export async function linkTelegram(request: Fetcher = fetch): Promise<LinkResult> {
   let res: Response;
   try {
     res = await request("/api/telegram/link", { method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -180,7 +180,7 @@ export async function linkTelegram(request: Request = fetch): Promise<LinkResult
 }
 
 /** DELETE /api/telegram/link: takes the wallet's chat away. Never throws. */
-export async function unlinkTelegram(request: Request = fetch): Promise<UnlinkResult> {
+export async function unlinkTelegram(request: Fetcher = fetch): Promise<UnlinkResult> {
   let res: Response;
   try {
     res = await request("/api/telegram/link", { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });

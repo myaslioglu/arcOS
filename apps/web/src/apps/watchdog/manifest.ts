@@ -1,7 +1,10 @@
 import { ShieldCheck } from "lucide-react";
 import type { AppManifest } from "@arcos/shell";
 
-/** A singleton: the window reads a new `token` param in an effect, as the shell replaces params on an open window. */
+/**
+ * A singleton: the window follows a new `token` param (the prefill is a state adjusted during render; the focus is an
+ * effect), as the shell replaces params on an open window.
+ */
 export const watchdog: AppManifest = {
   id: "watchdog",
   name: "Watchdog",

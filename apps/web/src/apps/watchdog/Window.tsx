@@ -55,6 +55,15 @@ const LINK_POLL_MS = 5_000;
 const focusWasLost = () => document.activeElement === null || document.activeElement === document.body;
 
 /**
+ * The params objects whose token has prefilled the form. The shell keeps one params object per open, so an open
+ * prefills once: Watches mounts anew under the gates whenever the wallet signs in again, and doesn't prefill again.
+ */
+const prefilled = new WeakSet<object>();
+
+/** What the form says under the input: the route's sentence or the client check's, and whether it faults the address itself. */
+type FormError = { text: string; invalid: boolean };
+
+/**
  * Watchdog: the tokens the signed-in wallet watches on Arc mainnet, each with its newest alert, polled every minute;
  * a form (and a drop target) to watch one more, up to the free limit; and the wallet's Telegram chat, where the alerts
  * go. The wallet connects and signs in first (ConnectGate, SignInGate). The testnet site has no watches: its window
@@ -106,26 +115,44 @@ function Watches({ params }: { params: Record<string, string> }) {
   const errorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<FormError | null>(null);
   // One change at a time: a second Watch or Remove waits for the first, so the list the route answers is the last one.
   const [busy, setBusy] = useState(false);
+
+  // The list is this wallet's. It leaves the cache with the window (closed, or taken down by the gates when the wallet
+  // signed out or changed), so the next wallet to sign in on this page loads its own list rather than seeing the last
+  // wallet's, or the 401 the last poll answered. The key stays ["watches"] (design 6); the list is only cached while
+  // a window shows it.
+  useEffect(
+    () => () => {
+      queryClient.removeQueries({ queryKey: WATCHES_KEY });
+    },
+    [queryClient],
+  );
 
   // Inspector's button, or a deep link, names a token: it goes into the form, which gets focus. Nothing is sent. The
   // shell stores a fresh params object on every open that carries params, and keeps it between renders, so the form
   // follows each open, the same token again included, as a state adjusted during the render (React's pattern for
-  // state that follows a prop). Only the focus, outside React, waits for the commit, and for the form to be on the
-  // page: on a fresh open the list is still loading, and the input isn't there to focus until it has arrived.
+  // state that follows a prop), once per params object (`prefilled`, noted after the commit): a token prefilled
+  // before the wallet signed in again isn't prefilled again when Watches remounts under the gates. Only the focus,
+  // outside React, waits for the commit, and for the form to be on the page: on a fresh open the list is still
+  // loading, and the input isn't there to focus until it has arrived.
   const [seenParams, setSeenParams] = useState<Record<string, string> | null>(null);
+  const [prefill, setPrefill] = useState<Record<string, string> | null>(null);
   if (params !== seenParams) {
     setSeenParams(params);
-    if (params.token) {
+    if (params.token && !prefilled.has(params)) {
+      setPrefill(params);
       setDraft(params.token);
       setFormError(null);
     }
   }
   useEffect(() => {
-    if (params.token && formShown) inputRef.current?.focus();
-  }, [params, formShown]);
+    if (prefill) prefilled.add(prefill);
+  }, [prefill]);
+  useEffect(() => {
+    if (prefill && formShown) inputRef.current?.focus();
+  }, [prefill, formShown]);
 
   // The routes answer 401 once the session is gone: the cookie expired under an open window, or the wallet signed out
   // elsewhere. The gate is told (it reads the session again and shows the sign-in prompt); each new 401 tells it once.
@@ -137,9 +164,9 @@ function Watches({ params }: { params: Record<string, string> }) {
     if (result.status === 401) void refresh();
   };
 
-  // Where focus goes once a Remove has ended. remove() only stores it: every Remove button is disabled while busy, and
-  // a disabled button can't hold focus, so the effect acts once busy is false again, after the list has re-rendered
-  // without the removed row. It moves focus only if it was lost; a visitor who tabbed elsewhere meanwhile keeps it.
+  // Where focus goes once a change has ended. add() and remove() only store it: Watch and every Remove button are
+  // disabled while busy, and a disabled button can't hold focus, so the effect acts once busy is false again, after
+  // the list has re-rendered. It moves focus only if it was lost; a visitor who tabbed elsewhere meanwhile keeps it.
   const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const pendingFocus = useRef<FocusTarget | null>(null);
   useEffect(() => {
@@ -152,35 +179,43 @@ function Watches({ params }: { params: Record<string, string> }) {
     (row ?? inputRef.current)?.focus();
   }, [busy]);
 
-  /** The route's list after a change is the list: it replaces the query's data without another fetch. */
-  const show = (next: WatchList) => queryClient.setQueryData(WATCHES_KEY, next);
+  /**
+   * The route's list after a change is the list: it replaces the query's data without another fetch. A refresh still
+   * in flight (the minute's poll, or the focus that came back from the Telegram tab) is cancelled first: it would
+   * otherwise answer the list from before the change and put it back over this one.
+   */
+  const show = async (next: WatchList) => {
+    await queryClient.cancelQueries({ queryKey: WATCHES_KEY });
+    queryClient.setQueryData(WATCHES_KEY, next);
+  };
 
-  const add = async (value: string) => {
+  const add = async (value: string, from: "form" | "drop" = "form") => {
     const token = value.trim();
-    if (!isAddress(token, { strict: false })) {
+    const valid = isAddress(token, { strict: false });
+    // A token the form can't send yet waits in it: a drop while a change is under way (the Watch button is disabled,
+    // so nothing else gets here), or while the list is still on its way and there is no form on the page (it shows
+    // the token once the list has arrived). Watch sends it then. What isn't an address waits with the complaint.
+    if (!valid || busy || !formShown) {
       setDraft(token);
-      setFormError(NOT_ADDRESS);
-      return;
-    }
-    // A drop while a change is under way (the Watch button is disabled, so nothing else gets here): the token waits in
-    // the form, and Watch sends it once the change has ended.
-    if (busy) {
-      setDraft(token);
-      setFormError(null);
+      setFormError(valid ? null : { text: NOT_ADDRESS, invalid: true });
       return;
     }
     setBusy(true);
     setFormError(null);
     const result = await addWatch(token);
-    setBusy(false);
+    // Watch was disabled meanwhile and couldn't keep the focus it had: the input takes it, unless the visitor moved on.
+    if (from === "form") pendingFocus.current = { kind: "input" };
     if (!result.ok) {
+      setBusy(false);
       refused(result);
       setDraft(token);
-      setFormError(result.error);
+      // Only the route's 400 faults the address itself; a limit or an outage says nothing against it.
+      setFormError({ text: result.error, invalid: result.status === 400 });
       return;
     }
     setDraft("");
-    show(result.list);
+    await show(result.list);
+    setBusy(false);
     if (result.added) trackEvent("watch_add", { watches: result.list.watches.length });
   };
 
@@ -197,14 +232,14 @@ function Watches({ params }: { params: Record<string, string> }) {
       return notify(result.error, "warn");
     }
     pendingFocus.current = focusAfterRemoval(before, token, result.list.watches.map((row) => row.token));
-    show(result.list);
+    await show(result.list);
     setBusy(false);
   };
 
-  // A token file dropped on the window is watched: only its address is read, as the form would read it typed. Drops
-  // land only while the form is on the page, where their outcome is shown.
-  const { over, props: dropProps } = useDropTarget(formShown ? watchdog.acceptsDrop : undefined, (item) => {
-    if (item.kind === "token") void add(item.address);
+  // A token file dropped on the window is watched: only its address is read, as the form would read it typed. Before
+  // the list has arrived, or while a change is under way, the token waits in the form (see add).
+  const { over, props: dropProps } = useDropTarget(watchdog.acceptsDrop, (item) => {
+    if (item.kind === "token") void add(item.address, "drop");
   });
 
   return (
@@ -272,7 +307,7 @@ function Watches({ params }: { params: Record<string, string> }) {
                     placeholder="Token address (0x…)"
                     spellCheck={false}
                     autoComplete="off"
-                    aria-invalid={formError !== null}
+                    aria-invalid={formError?.invalid === true}
                     aria-describedby={formError !== null ? errorId : undefined}
                     className={INPUT}
                   />
@@ -283,7 +318,7 @@ function Watches({ params }: { params: Record<string, string> }) {
                 {atLimit && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
                 {formError && (
                   <p id={errorId} className="text-xs text-danger-text" role="alert">
-                    {formError}
+                    {formError.text}
                   </p>
                 )}
               </form>
@@ -304,9 +339,10 @@ function Row({ row, busy, remove, buttonRef }: { row: WatchItem; busy: boolean; 
   return (
     <li className="grid gap-1 rounded-lg border border-border bg-surface px-3 py-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="min-w-0 break-all">
+        {/* A line breaks only where it must (wrap-anywhere, which the grid's columns also measure by), and never inside the address. */}
+        <p className="min-w-0 wrap-anywhere">
           <span className="font-medium">{name}</span>{" "}
-          <span className="font-mono text-xs text-muted" title={row.token}>
+          <span className="font-mono text-xs whitespace-nowrap text-muted" title={row.token}>
             {short}
           </span>
         </p>
@@ -314,7 +350,7 @@ function Row({ row, busy, remove, buttonRef }: { row: WatchItem; busy: boolean; 
           Remove
         </button>
       </div>
-      <p className="break-words text-xs text-muted">
+      <p className="wrap-anywhere text-xs text-muted">
         {row.latestAlert === null ? (
           NO_CHANGES
         ) : row.latestAlert.link === null ? (
@@ -381,12 +417,21 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
     }
   }, [linked, waiting, notify]);
 
-  // The Link Telegram button leaves the page as the wait begins, which drops focus to the body: the "Open the link
-  // again" anchor takes it, so a keyboard user, or a browser that let no tab open, has the way in under the cursor.
+  // The section's views replace one another's controls, and the one that had focus drops it to the body as it leaves
+  // the page. The view that comes next takes it, so a keyboard user keeps their place: the "Open the link again"
+  // anchor as the wait begins (the way in, too, for a browser that let no tab open), and the Link Telegram button
+  // when the wait has run out or Unlink has ended the chat. A visitor who moved on meanwhile keeps their focus.
   const againRef = useRef<HTMLAnchorElement>(null);
+  const linkRef = useRef<HTMLButtonElement>(null);
+  const view = linked ? "linked" : waiting ? "waiting" : "unlinked";
+  const lastView = useRef(view);
   useEffect(() => {
-    if (waiting && !linked && focusWasLost()) againRef.current?.focus();
-  }, [waiting, linked]);
+    const from = lastView.current;
+    lastView.current = view;
+    if (from === view || !focusWasLost()) return;
+    if (view === "waiting") againRef.current?.focus();
+    else if (view === "unlinked") linkRef.current?.focus();
+  }, [view]);
 
   const link = async () => {
     if (busy) return;
@@ -435,7 +480,7 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-muted">{TELEGRAM_UNLINKED}</p>
-          <button type="button" className={BUTTON} disabled={busy} onClick={() => void link()}>
+          <button ref={linkRef} type="button" className={BUTTON} disabled={busy} onClick={() => void link()}>
             Link Telegram
           </button>
         </div>

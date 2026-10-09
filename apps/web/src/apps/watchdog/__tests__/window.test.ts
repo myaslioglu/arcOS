@@ -92,8 +92,8 @@ describe("Watchdog", () => {
     let html = render();
     expect(html).toContain('role="status" aria-live="polite">Loading your watches.</p>');
     expect(html).not.toContain("Add a token");
-    // No form yet, so no drop target: a drop's outcome would have nowhere to show.
-    expect(html).toContain('data-accepts=""');
+    // Drops land already: a dropped token waits in the form, which shows it once the list has arrived.
+    expect(html).toContain('data-accepts="token"');
 
     state.query = { ...state.query, isPending: false };
     listing([]);
@@ -112,6 +112,7 @@ describe("Watchdog", () => {
     expect(html).not.toContain("SECRET-db");
     expect(html).not.toContain("Add a token");
     expect(html).not.toContain("Link Telegram");
+    expect(html).toContain('data-accepts="token"');
   });
 
   it("says when nothing is watched yet, with the footer, the form and the Telegram ask", () => {
@@ -135,6 +136,11 @@ describe("Watchdog", () => {
     expect(html).toContain('aria-label="Watched tokens"');
     expect(html).toContain(">WDG</span>");
     expect(html).toMatch(/<span class="font-mono[^"]*" title="0x470f09ae20163d5e243f6530fb328912a8fcb099">0x470f…b099<\/span>/);
+    // At phone width a long symbol breaks where it must, never inside the address; an alert's unbroken run breaks
+    // rather than widening the list's column (wrap-anywhere bounds the column's least width; break-words wouldn't).
+    expect(html).toMatch(/<p class="min-w-0 wrap-anywhere"><span class="font-medium">WDG<\/span> <span class="font-mono text-xs whitespace-nowrap text-muted"/);
+    expect(html).toContain('<p class="wrap-anywhere text-xs text-muted">');
+    expect(html).not.toMatch(/\bbreak-(all|words)\b/);
     expect(html).toContain(`<a href="${LINK}" target="_blank" rel="noreferrer noopener"`);
     expect(html).toContain("WDG (0x470f…b099): paused at block 1,234,567</a>");
     // The button's name carries the address too: symbols aren't unique.
