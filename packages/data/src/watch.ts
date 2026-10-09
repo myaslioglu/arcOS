@@ -182,19 +182,26 @@ export function sanitizeSymbol(symbol: string | null | undefined): string | null
 
 /**
  * What a symbol may hold for an alert to show it: letters, digits, spaces, underscores and hyphens, with at least one
- * letter. Telegram makes a URL, a domain, an @mention, a /command, a #hashtag, a $cashtag or a phone number tappable
- * even in plain text, so anything else (a dot, a slash, an at sign, digits alone) keeps the symbol out of the message.
+ * letter. Telegram makes a URL, a domain, an @mention, a /command, a #hashtag or a $cashtag tappable even in plain
+ * text, so anything else (a dot, a slash, an at sign) keeps the symbol out of the message.
  */
 const PLAIN_SYMBOL = /^(?=.*\p{L})[\p{L}\p{Nd} _-]+$/u;
 
 /**
- * A symbol as an alert shows it: `sanitizeSymbol`'s result when it is plain (PLAIN_SYMBOL), else null, and the alert
- * shows the token's short address alone. A sanitised symbol can still spell `t.me/x`, `example.com`, `@someone` or
- * `/start`, each of which Telegram would turn into something tappable beside the explorer link.
+ * A run of seven or more digits, with or without a space, underscore or hyphen between any two: a phone number, which
+ * Telegram's clients make tappable too (`A4155550100`, `DUKE 415 555 0100`). Six digits are fine (`USDC2`, `X100000`).
+ */
+const DIGIT_RUN = /\p{Nd}(?:[ _-]?\p{Nd}){6,}/u;
+
+/**
+ * A symbol as an alert shows it: `sanitizeSymbol`'s result when it is plain (PLAIN_SYMBOL) and holds no run of seven
+ * or more digits (DIGIT_RUN), else null, and the alert shows the token's short address alone. A sanitised symbol can
+ * still spell `t.me/x`, `example.com`, `@someone`, `/start` or `A4155550100`, each of which Telegram would turn into
+ * something tappable beside the explorer link.
  */
 export function displaySymbol(symbol: string | null | undefined): string | null {
   const cleaned = sanitizeSymbol(symbol);
-  return cleaned !== null && PLAIN_SYMBOL.test(cleaned) ? cleaned : null;
+  return cleaned !== null && PLAIN_SYMBOL.test(cleaned) && !DIGIT_RUN.test(cleaned) ? cleaned : null;
 }
 
 /** 0x1234…abcd: six characters, an ellipsis, four characters. */

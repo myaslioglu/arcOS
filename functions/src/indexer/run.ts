@@ -111,7 +111,10 @@ export type RunResult =
       explorerCalls: number;
       /** Watchdog's counters, or null when the step didn't run (no deps, or not mainnet). */
       watch: WatchResult | null;
-      /** The name of the error that cut the Watchdog step, the inspections or the feeds short, or null. The run still ended normally. */
+      /**
+       * The name of the error that cut the Watchdog step (one of its phases), the inspections or the feeds short, or
+       * null. The run still ended normally.
+       */
       error: string | null;
     };
 
@@ -229,7 +232,9 @@ async function leased(
   }
 
   // 4b. Watchdog. Its own reader and sender, its own time limits, and no explorer call; whatever fails in it, the
-  // inspections and the feeds still run. The cursor rides on finishRun, so a step that threw keeps the last run's.
+  // inspections and the feeds still run. A fan-out or send failure comes back named in the result, with the checks'
+  // counters and cursor (watch.ts); only the checks' own page read rejects, and then the cursor, which rides on
+  // finishRun, keeps the last run's.
   let error: string | null = null;
   let watch: WatchResult | null = null;
   if (deps.watch && network === "mainnet") {
@@ -246,9 +251,10 @@ async function leased(
         limits,
         log,
       });
+      error ??= watch.error;
     } catch (e) {
       error ??= nameOf(e);
-      log.error("arcosIndexer watch stopped", errorFields(e));
+      log.error("arcosIndexer watch stopped", { phase: "checks", ...errorFields(e) });
     }
   }
 

@@ -1,5 +1,5 @@
 import { deleteApp, getApps } from "firebase-admin/app";
-import { FieldValue, Timestamp, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, type DocumentReference, type Firestore } from "firebase-admin/firestore";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { Address } from "@arcos/chain";
 import { CallReverted, type ChainReader } from "@arcos/inspector";
@@ -194,6 +194,22 @@ function crashingAt(n: number): Firestore {
   });
 }
 
+/** The database as a process whose `getAll` of docs in `collection` dies (phase C reads the alerts that way, and nothing before it does). */
+function dyingGetAll(collection: string): Firestore {
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === "getAll") {
+        return (...refs: DocumentReference[]) => {
+          if (refs.some((ref) => ref.path.startsWith(`${collection}/`))) return Promise.reject(new Error("the process died"));
+          return target.getAll(...refs);
+        };
+      }
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+}
+
 /** A watched token on first sight, with U1 (linked) and U2 (unlinked) watching it. */
 async function seeded() {
   await startAt(HEAD);
@@ -287,22 +303,42 @@ describe("a change", () => {
     expect((await db.collection(COLLECTIONS.watchState).doc(tokenId("mainnet", A)).get()).updateTime!.toMillis()).toBe(before);
   });
 
-  it("alerts nothing again after a crash past the state batch, and resumes the fan-out next run", async () => {
+  it("alerts nothing again after a crash past the state batch, keeps the checks' counters and cursor, and resumes the fan-out next run", async () => {
     const { chain } = await seeded();
     chain.states[A] = plain({ owner: OWNER_2, pool: PAIR, depth: 5_000_000_000n });
+    // The cursor is cleared so that this run's page starts over: the cursor it ends at is then its own.
+    await db.collection(COLLECTIONS.indexer).doc("mainnet").update({ watchCursor: null });
     const log = recorder();
     // The first batch is the state and its alert; the second, the deliveries, dies.
     const crashed = await run({ head: HEAD + 10, reader: chain.reader, store: crashingAt(2), log });
-    expect(crashed).toMatchObject({ error: "Error", watch: null });
-    expect(log.lines.find((l) => l.message === "arcosIndexer watch stopped")?.data).toEqual({ error: "Error" });
+    expect(crashed).toMatchObject({ error: "Error", watch: { checked: 1, writes: 1, alerts: 1, deliveriesCreated: 0, fannedOut: 0, sent: 0, cursor: tokenId("mainnet", A), error: "Error" } });
+    expect(log.lines.find((l) => l.message === "arcosIndexer watch stopped")?.data).toEqual({ phase: "fanout", error: "Error" });
     expect(await alertsOf(A)).toMatchObject([{ kind: "owner_changed", fannedOut: false }]);
     expect(await count(COLLECTIONS.deliveries)).toBe(0);
-    expect((await indexerDoc()).runId).toBeNull();
+    expect(await indexerDoc()).toMatchObject({ runId: null, watchCursor: tokenId("mainnet", A) });
 
     const telegram = sender();
     const resumed = await run({ head: HEAD + 20, reader: chain.reader, telegram });
-    expect(resumed.watch).toMatchObject({ alerts: 0, writes: 0, deliveriesCreated: 1, fannedOut: 1, sent: 1 });
+    expect(resumed.watch).toMatchObject({ alerts: 0, writes: 0, deliveriesCreated: 1, fannedOut: 1, sent: 1, error: null });
     expect(await alertsOf(A)).toMatchObject([{ kind: "owner_changed", fannedOut: true }]);
+    expect(telegram.sends).toHaveLength(1);
+  });
+
+  it("keeps the checks' and the fan-out's counters and the cursor when the sends' reads fail, and sends next run", async () => {
+    const { chain } = await seeded();
+    chain.states[A] = plain({ paused: true, pool: PAIR, depth: 5_000_000_000n });
+    await db.collection(COLLECTIONS.indexer).doc("mainnet").update({ watchCursor: null });
+    const log = recorder();
+    const telegram = sender();
+    const failed = await run({ head: HEAD + 10, reader: chain.reader, store: dyingGetAll(COLLECTIONS.alerts), telegram, log });
+    expect(failed).toMatchObject({ error: "Error", watch: { checked: 1, writes: 1, alerts: 1, deliveriesCreated: 1, fannedOut: 1, sent: 0, sendFailed: 0, cursor: tokenId("mainnet", A), error: "Error" } });
+    expect(log.lines.find((l) => l.message === "arcosIndexer watch stopped")?.data).toEqual({ phase: "sends", error: "Error" });
+    expect(telegram.sends).toEqual([]);
+    expect(await deliveriesAll()).toMatchObject([{ user: U1, status: "pending", attempts: 0 }]);
+    expect(await indexerDoc()).toMatchObject({ runId: null, watchCursor: tokenId("mainnet", A) });
+
+    const sent = await run({ head: HEAD + 20, reader: chain.reader, telegram });
+    expect(sent).toMatchObject({ error: null, watch: { alerts: 0, deliveriesCreated: 0, sent: 1, error: null } });
     expect(telegram.sends).toHaveLength(1);
   });
 

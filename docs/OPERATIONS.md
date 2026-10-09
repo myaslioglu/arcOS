@@ -140,10 +140,11 @@ one transaction per change). One run:
 - **C. The sends.** Reads the 100 oldest `pending` deliveries with their `users` and `alerts`. One older than a day is
   failed as `expired`, one whose wallet has no chat any more as `unlinked`, one whose alert is gone as `no_alert`. The
   rest go to the Bot API's `sendMessage`, plain text (no parse mode, no link preview), `<words> — <explorer link>`,
-  the words naming the token as `SYMBOL (0x1234…abcd)`, or as the short address alone when the symbol holds anything
-  but letters, digits, spaces, `_` and `-` (Telegram makes a URL, a domain, an `@mention` or a `/command` tappable
-  even in plain text), 4 s per send, 4 chats at a time, each chat's sends in order, at most 3 per chat and 60 in all
-  per run. Send first, then mark (at least once, never lost). A delivery is `sent` on 200; on a 5xx, a timeout or a network failure it stays
+  the words naming the token as `SYMBOL (0x1234…abcd)` when the symbol is plain, else as the short address alone. A
+  symbol is plain when it holds nothing but letters, digits, spaces, `_` and `-`, holds at least one letter, and holds
+  no run of seven or more digits (one space, `_` or `-` between two digits doesn't break the run): Telegram makes a
+  URL, a domain, an `@mention`, a `/command` or a phone number tappable even in plain text. Then 4 s per send, 4 chats
+  at a time, each chat's sends in order, at most 3 per chat and 60 in all per run. Send first, then mark (at least once, never lost). A delivery is `sent` on 200; on a 5xx, a timeout or a network failure it stays
   `pending` with the attempt counted and is tried again on later runs, `failed` after 4 attempts in all; a 403 (the
   chat blocked the bot) or "chat not found" fails it at once and clears the wallet's chat (if it is still that chat);
   any other 400 fails it. A 429 stops this instance's sends for the seconds Telegram asks (1 s to 1 h); a 401 or 404
@@ -159,9 +160,9 @@ The bot token is the function's secret `TELEGRAM_BOT_TOKEN`, read inside the fun
 calls the Bot API). A value that isn't a token (empty, `none`) leaves the sends off: the instance logs
 `arcosIndexer telegram not configured` once, the checks and the fan-out still run, and the deliveries wait. The secret
 is pinned to the version the deploy resolves: to rotate it or replace a wrong value, add a new version (the commands
-are under Setting it up, step 3), deploy the functions again, destroy the old version only after that deploy (the
-running revision is pinned to it until then) and, once the site's webhook exists (part 3,
-[DEPLOYING.md](DEPLOYING.md)), register it again.
+are under Setting it up, step 3), deploy the functions again, and destroy the old version only after that deploy (the
+running revision is pinned to it until then). The webhook is registered once the site's `/api/telegram/webhook` route
+is live (Watchdog part 3); until then rotating the bot token needs no webhook step.
 
 Logs, all under `arcosIndexer`, with names, codes and counts only (never an address, a chat id, a token, a message or a
 URL):
@@ -175,7 +176,7 @@ URL):
 | `arcosIndexer telegram send failed` | `code` (the delivery's error code), `status` (a 5xx), `attempts` | One send failed. At most 5 a run. |
 | `arcosIndexer telegram paused` | `code`: `rate_limited` or `unauthorized`; `seconds` | This instance makes no send for `seconds`. |
 | `arcosIndexer telegram not configured` | | The secret holds no token; sends are off on this instance. |
-| `arcosIndexer watch stopped` | `error`, `code` | The step itself failed (Firestore); the run went on to its inspections, with the error named in the run line. |
+| `arcosIndexer watch stopped` | `phase`: `checks`, `fanout` or `sends`; `error`, `code` | The phase failed on the Firestore side; the run went on to its inspections, with the error named in the run line. A `fanout` or `sends` failure keeps the checks' counters, their cursor and the fan-out's counters in the run line and the cursor in `indexer/mainnet`; a `checks` failure leaves `watch: null` and the cursor as it was. |
 
 Signs to look for: `unread` close to `checked` for many runs (the RPC endpoints are refusing the reads; the breaker
 line says so), `sendFailed` with `code: telegram_5xx` (Telegram's side), `arcosIndexer telegram paused` with

@@ -13,7 +13,7 @@ import {
   type IndexerDoc,
 } from "@arcos/data";
 import type { ChainReader } from "@arcos/inspector";
-import { errorFields } from "./errors";
+import { errorFields, nameOf } from "./errors";
 import type { Logger } from "./run";
 import { UNAUTHORIZED_PAUSE_MS, type SendOutcome, type TelegramSender } from "./telegram";
 import { readWatchToken, type WatchReadInput } from "./watch-read";
@@ -102,6 +102,11 @@ export type WatchResult = {
   skipped: "off" | "late" | null;
   /** The watchState doc id the run's checks ended at, for the next run's page. */
   cursor: string | null;
+  /**
+   * The name of the error that stopped the fan-out or the sends (Firestore failing outright), or null. The counters
+   * and the cursor of the phases before it are kept, so the checks' page is not read again next run.
+   */
+  error: string | null;
 };
 
 /** What the Telegram message of an alert says: the words, then the explorer link. Plain text, within Telegram's 4,096 characters. */
@@ -171,13 +176,17 @@ async function workers(count: number, work: () => Promise<void>): Promise<void> 
 
 type Planned = { delivery: DeliveryRow; chatId: number; text: string };
 
-/** Watchdog's step. Rejects only when Firestore fails outright; a token's own failure is counted and logged. */
+/**
+ * Watchdog's step. Rejects only when phase A's page can't be read (Firestore failing outright before any check); a
+ * token's own failure is counted and logged, and a failure in phase B or C is logged and named in `error`, with the
+ * result built so far (phase A's counters and cursor, phase B's counters) returned rather than lost.
+ */
 export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
-  const { db, network, tip, reader, telegram, state, now, elapsed, limits } = deps;
+  const { db, network, tip, reader, state, now, elapsed, limits } = deps;
   const caps = { ...WATCH, ...deps.caps };
   const log = capped(deps.log, caps.logCap);
   const result: WatchResult = {
-    checked: 0, unread: 0, failed: 0, alerts: 0, writes: 0, deliveriesCreated: 0, fannedOut: 0, sent: 0, sendFailed: 0, skipped: null, cursor: state.watchCursor ?? null,
+    checked: 0, unread: 0, failed: 0, alerts: 0, writes: 0, deliveriesCreated: 0, fannedOut: 0, sent: 0, sendFailed: 0, skipped: null, cursor: state.watchCursor ?? null, error: null,
   };
   if (state.watch === false) return { ...result, skipped: "off" };
   if (elapsed() >= limits.watchStartUntilMs) return { ...result, skipped: "late" };
@@ -229,23 +238,48 @@ export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
   });
   if (lastAttempted >= 0) result.cursor = page[lastAttempted]!.id;
 
-  // B. The fan-out: deliveries for every alert not yet fanned out, within the run's budget of creates.
-  if (elapsed() < limits.watchFanoutUntilMs) {
-    let remaining: number = caps.fanoutPerRun;
-    const budget: FanoutBudget = { remaining: () => remaining, spend: (n) => void (remaining -= n), late: () => elapsed() >= limits.watchFanoutUntilMs };
-    for (const alert of await pendingFanout(db, network, caps.fanoutAlertsPerRun)) {
-      if (budget.late() || remaining <= 0) break;
-      const fanned = await fanoutAlert(db, alert, budget, now());
-      result.deliveriesCreated += fanned.created;
-      if (fanned.done) result.fannedOut++;
-    }
+  // B and C each keep what the phases before them did: a failure there is named, and the cursor still advances.
+  try {
+    await fanout(deps, caps, result);
+  } catch (e) {
+    return stopped(deps.log, "fanout", e, result);
   }
+  try {
+    await send(deps, caps, log, result);
+  } catch (e) {
+    return stopped(deps.log, "sends", e, result);
+  }
+  return result;
+}
 
-  // C. The sends: the oldest pending deliveries, a few chats at a time, each chat's in sequence.
+/** The result as a phase's failure leaves it: the error named, the counters and the cursor as they were. */
+function stopped(log: Logger, phase: "fanout" | "sends", e: unknown, result: WatchResult): WatchResult {
+  log.error("arcosIndexer watch stopped", { phase, ...errorFields(e) });
+  return { ...result, error: nameOf(e) };
+}
+
+type Caps = Record<keyof typeof WATCH, number>;
+
+/** B. The fan-out: deliveries for every alert not yet fanned out, within the run's budget of creates. */
+async function fanout({ db, network, now, elapsed, limits }: WatchDeps, caps: Caps, result: WatchResult): Promise<void> {
+  if (elapsed() >= limits.watchFanoutUntilMs) return;
+  let remaining: number = caps.fanoutPerRun;
+  const budget: FanoutBudget = { remaining: () => remaining, spend: (n) => void (remaining -= n), late: () => elapsed() >= limits.watchFanoutUntilMs };
+  for (const alert of await pendingFanout(db, network, caps.fanoutAlertsPerRun)) {
+    if (budget.late() || remaining <= 0) break;
+    const fanned = await fanoutAlert(db, alert, budget, now());
+    result.deliveriesCreated += fanned.created;
+    if (fanned.done) result.fannedOut++;
+  }
+}
+
+/** C. The sends: the oldest pending deliveries, a few chats at a time, each chat's in sequence. */
+async function send(deps: WatchDeps, caps: Caps, log: ReturnType<typeof capped>, result: WatchResult): Promise<void> {
+  const { db, telegram, state, now, elapsed, limits } = deps;
   const pause = deps.pause ?? instancePause;
-  if (state.telegram === false || telegram === null || pause.until > now() || elapsed() >= limits.watchSendUntilMs) return result;
+  if (state.telegram === false || telegram === null || pause.until > now() || elapsed() >= limits.watchSendUntilMs) return;
   const deliveries = await pendingDeliveries(db, caps.deliveriesPerRun);
-  if (deliveries.length === 0) return result;
+  if (deliveries.length === 0) return;
   const { users, alerts } = await deliveryContext(db, deliveries);
   const byChat = new Map<number, Planned[]>();
   let planned = 0;
@@ -294,5 +328,4 @@ export async function runWatch(deps: WatchDeps): Promise<WatchResult> {
       }
     }
   });
-  return result;
 }

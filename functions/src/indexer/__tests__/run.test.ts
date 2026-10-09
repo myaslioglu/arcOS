@@ -17,14 +17,14 @@ const ran: Extract<RunResult, { status: "ran" }> = {
   expired: 0,
   feeds: 0,
   explorerCalls: 0,
-  watch: { checked: 1, unread: 0, failed: 0, alerts: 1, writes: 1, deliveriesCreated: 1, fannedOut: 1, sent: 1, sendFailed: 0, skipped: null, cursor: "mainnet:0x8f3a00000000000000000000000000000000913c" },
+  watch: { checked: 1, unread: 0, failed: 0, alerts: 1, writes: 1, deliveriesCreated: 1, fannedOut: 1, sent: 1, sendFailed: 0, skipped: null, cursor: "mainnet:0x8f3a00000000000000000000000000000000913c", error: null },
   error: null,
 };
 
 describe("runLogFields", () => {
   it("keeps every counter of a run and leaves out Watchdog's cursor", () => {
     const fields = runLogFields(ran);
-    expect(fields).toEqual({ ...ran, watch: { checked: 1, unread: 0, failed: 0, alerts: 1, writes: 1, deliveriesCreated: 1, fannedOut: 1, sent: 1, sendFailed: 0, skipped: null } });
+    expect(fields).toEqual({ ...ran, watch: { checked: 1, unread: 0, failed: 0, alerts: 1, writes: 1, deliveriesCreated: 1, fannedOut: 1, sent: 1, sendFailed: 0, skipped: null, error: null } });
     expect(fields.watch).not.toHaveProperty("cursor");
     expect(JSON.stringify(fields)).not.toMatch(/0x/i);
     // The result itself still carries it: finishRun writes it, and the emulator tests read it.
