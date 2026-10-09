@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAddress } from "viem";
 import { activeNetwork } from "@arcos/chain";
@@ -425,8 +425,8 @@ function Row({ row, busy, remove, buttonRef }: { row: WatchItem; busy: boolean; 
 
 /**
  * The wallet's Telegram chat. Unlinked: a button that asks the route for a t.me link and opens it in a new tab, then
- * the window asks the session every 5 s, while the tab is visible and for at most the link's ten minutes, whether the
- * chat pressed Start. Linked: an Unlink button.
+ * the window asks the session every 5 s, while the tab is visible and for at most the link's ten minutes (then once
+ * more, visible or not), whether the chat pressed Start. Linked: an Unlink button.
  */
 function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise<void> }) {
   const { notify } = useDesktop();
@@ -434,37 +434,64 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Whether the section is still on the page, for a route or a read that answers after it left (the window closed,
-  // or the gates took the body down): nothing below the await is for it. The gate it would tell of a 401 is the last
-  // wallet's (its refresh closure reads the session for that wallet's address), the tab it would open is for a window
-  // that is gone, and the event it would count is for a link the visitor never saw.
-  const alive = useRef(false);
-  useEffect(() => {
-    alive.current = true;
+  // The view follows the session the gate holds. When it flips (the chat pressed Start, Unlink's read landed, the
+  // chat was linked or taken away on another device), the controls on the page are the new view's, and what the old
+  // view's button had set goes with it, as a state adjusted during the render (the pattern the form uses above): the
+  // button is enabled again (a press still answering acts on nothing, see `turn`), its complaint is gone (a sentence
+  // under a button that left the page), and the wait ends when the linked view does (Unlink, or the chat gone on
+  // another device), so the ask comes back without a stale link. A wait outlives the flip to linked: the toast below
+  // reads it.
+  const [seenLinked, setSeenLinked] = useState(linked);
+  if (linked !== seenLinked) {
+    setSeenLinked(linked);
+    setBusy(false);
+    setError(null);
+    if (!linked) setWaiting(null);
+  }
+
+  // Every continuation below (a route's answer, Unlink's own session read) acts only for the section as it was at the
+  // press: on the page, in the same view, with no later press. `turn` counts the moves: a press (`begin`), the view
+  // flipping (the layout effect, in the commit itself, so no answer can land between the flip and the count) and the
+  // section leaving the page (the window closed, or the gates took the body down). A continuation checks the count
+  // right after each await (`movedOn`) and returns when it has moved: what it would have done belongs to a view or a
+  // press that has gone. The gate it would tell of a 401 is the last wallet's (its refresh closure reads the session
+  // for that wallet's address), the tab it would open is for a chat already linked or a window that is gone, the
+  // event it would count is for a link the visitor never saw, and the sentence it would set is under a button that
+  // isn't there, or is a later press's to set.
+  const turn = useRef(0);
+  const begin = () => ++turn.current;
+  const movedOn = (mine: number) => mine !== turn.current;
+  useLayoutEffect(() => {
+    turn.current += 1;
     return () => {
-      alive.current = false;
+      turn.current += 1;
     };
-  }, []);
+  }, [linked]);
 
   // The poll reads /api/auth/me itself (readSession) and hands the gate only an answer that changes it: the chat
   // pressed Start (linked), or the session is gone (null, so the sign-in prompt comes back). A read that fails, or
   // still says unlinked, leaves the window waiting: a single failed read out of the wait's hundred-odd would
-  // otherwise put the gate in its "unavailable" view and take the window, with the link, away. One read at a time.
+  // otherwise put the gate in its "unavailable" view and take the window, with the link, away. One read at a time,
+  // and only while the tab is visible: the link itself hides it (the t.me tab, or Telegram on the phone, takes its
+  // place). Once the code's ten minutes are up, the tick reads once more, visible or not: the chat may have pressed
+  // Start while the tab was hidden, or since the last read, and the wait would otherwise end on the ask, with alerts
+  // already going to the chat and a press of Link Telegram spending a code to link it again. A last read that says
+  // linked, or signed out, tells the gate and keeps the wait, which the linked view ends (the toast below reads it);
+  // the ticks read on until the gate has answered. One that says unlinked, or fails, ends the wait: the ask comes
+  // back, and a press makes a new code.
   useEffect(() => {
     if (!waiting || linked) return;
     let live = true;
     let asking = false;
     const timer = setInterval(() => {
-      if (Date.now() >= waiting.until) {
-        setWaiting(null);
-        return;
-      }
-      if (document.visibilityState !== "visible" || asking) return;
+      const last = Date.now() >= waiting.until;
+      if (asking || (!last && document.visibilityState !== "visible")) return;
       asking = true;
       void readSession()
         .then((session) => {
           if (!live) return;
           if (session === null || (session !== "unavailable" && session.telegram === "linked")) void refresh();
+          else if (last) setWaiting(null);
         })
         .finally(() => {
           asking = false;
@@ -477,7 +504,8 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   }, [waiting, linked, refresh]);
 
   // The chat pressed Start: the session now says linked, and the window says so once. The wait ends with the link
-  // (the linked view takes over, and the interval above stops); Unlink clears it, so the ask comes back.
+  // (the linked view takes over, and the interval above stops); the flip back to unlinked clears it (above), so the
+  // ask comes back.
   const announced = useRef(false);
   useEffect(() => {
     if (!linked) {
@@ -511,11 +539,13 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
 
   const link = async () => {
     if (busy) return;
+    const mine = begin();
     setBusy(true);
     setError(null);
     const result = await linkTelegram();
-    // The section left the page meanwhile: nothing below is for it (see `alive`).
-    if (!alive.current) return;
+    // The section moved on meanwhile (it left the page, or the gate's session flipped to linked): nothing below is
+    // for it (see `turn`).
+    if (movedOn(mine)) return;
     setBusy(false);
     if (!result.ok) {
       if (result.status === 401) void refresh();
@@ -532,23 +562,29 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   // and tells the gate only when the read answered: the gate's own re-read, failing, would show its "unavailable"
   // view in the body's place, list and form included, until the window is opened again. A read that fails leaves the
   // linked view and says so under it, with Unlink to press again; the button takes the focus it dropped while it was
-  // disabled (below). The Link Telegram button takes the focus as the view changes (above).
+  // disabled (below). The Link Telegram button takes the focus as the view changes (above). A second press while the
+  // first's read is still out (nothing on the page says it is) reads for itself, and the first press is over: its
+  // read, landing late, says nothing, neither the sentence under the view the second press moved the section to, nor
+  // a word to the gate the second press's read may yet fail to give (that press says so then, with Unlink to press
+  // again).
   const unlink = async () => {
     if (busy) return;
+    const mine = begin();
     setBusy(true);
     setError(null);
     const result = await unlinkTelegram();
-    // The section left the page meanwhile: nothing below is for it (see `alive`).
-    if (!alive.current) return;
+    // The section moved on meanwhile (it left the page, or the gate's session flipped): nothing below is for it (see
+    // `turn`).
+    if (movedOn(mine)) return;
     setBusy(false);
     if (!result.ok && result.status !== 401) return setError(result.error);
-    setWaiting(null);
     if (!result.ok) {
       void refresh();
       return setError(result.error);
     }
     const session = await readSession();
-    if (!alive.current) return;
+    // A later press, or the view flipping on its own, is the section's now (see `turn`).
+    if (movedOn(mine)) return;
     if (session === "unavailable") return setError(UNLINK_UNCONFIRMED);
     void refresh();
   };

@@ -830,6 +830,68 @@ describe("Watchdog's window wiring", () => {
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("reads once more at the cutoff, hidden or not, and keeps waiting for the gate when the chat got linked meanwhile", async () => {
+    // The link itself hides the tab (the t.me tab, or Telegram on the phone, takes its place): no tick reads while
+    // it is. Start is pressed at minute 1 and the tab comes back at minute 11: the cutoff tick reads once, hidden or
+    // not, and finds the chat linked. The gate is told and the wait stands, so the ask doesn't come back for a chat
+    // that already gets the alerts (a press would spend a code to link it again), and the linked view, when the
+    // gate's answer lands, says so once.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    answers = [json(200, { url: T_ME })];
+    await mount();
+    await click(button("Link Telegram"));
+    setVisibility("hidden");
+    me = () => session("linked");
+    await tick(9 * 60_000 + 55_000);
+    expect(meCalls()).toBe(0);
+    await tick(5_000);
+    expect(meCalls()).toBe(1);
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Press Start");
+    expect(host.textContent).not.toContain("Link Telegram");
+    // Until the gate has answered, the ticks read on.
+    await tick(5_000);
+    expect(meCalls()).toBe(2);
+    expect(state.refresh).toHaveBeenCalledTimes(2);
+    state.telegram = "linked";
+    await mount();
+    expect(host.textContent).toContain("Telegram linked.");
+    expect(button("Unlink")).toBeDefined();
+    expect(state.notify).toHaveBeenCalledTimes(1);
+    expect(state.notify).toHaveBeenCalledWith("Telegram linked.", "ok");
+    await tick(60_000);
+    expect(meCalls()).toBe(2);
+    expect(state.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the wait at the cutoff when the last read says unlinked, or fails", async () => {
+    // Start was never pressed: the last read says so, and the ask comes back, as it does when that read fails (the
+    // phone is offline): the chat may be linked, and a press of Link Telegram makes a new code.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    answers = [json(200, { url: T_ME })];
+    await mount();
+    await click(button("Link Telegram"));
+    setVisibility("hidden");
+    await tick(10 * 60_000);
+    expect(meCalls()).toBe(1);
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Link Telegram");
+    expect(host.textContent).not.toContain("Press Start");
+    await tick(60_000);
+    expect(meCalls()).toBe(1);
+
+    setVisibility("visible");
+    answers = [json(200, { url: T_ME })];
+    await click(button("Link Telegram"));
+    me = () => new Response("", { status: 503 });
+    setVisibility("hidden");
+    await tick(10 * 60_000);
+    expect(meCalls()).toBe(2);
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Link Telegram");
+    expect(alertText()).toBeNull();
+  });
+
   it("says Telegram linked, once, when the session says so while waiting, and hands the focus to Unlink", async () => {
     answers = [json(200, { url: T_ME })];
     await mount();
@@ -977,6 +1039,70 @@ describe("Watchdog's window wiring", () => {
     expect(document.activeElement).toBe(input());
   });
 
+  it("lets a second Unlink press take over from the first, whose late read then says nothing", async () => {
+    // Unlink is pressed: the DELETE answers 200, the button is released (no read holds it) and the read that would
+    // flip the view hangs. Nothing on the page says so, and Unlink is pressed again: a second DELETE (200), a second
+    // read, which answers unlinked. The gate is told and the view flips. The first read then gives up (readSession's
+    // 5 s): the press it belongs to is over, so it sets no "Press Unlink again." under the Link Telegram view, where
+    // there is no Unlink to press.
+    const reads: Array<{ resolve: (res: Response) => void; reject: (reason: unknown) => void }> = [];
+    me = () => new Promise<Response>((resolve, reject) => reads.push({ resolve, reject })) as unknown as Response;
+    const giveUp = (read: { reject: (reason: unknown) => void }) => act(async () => read.reject(new DOMException("The operation timed out.", "TimeoutError")));
+    const pressTwice = async () => {
+      state.telegram = "linked";
+      state.refresh.mockReset().mockImplementation(async () => {
+        state.telegram = "unlinked";
+      });
+      answers = [json(200, { telegram: "unlinked" }), json(200, { telegram: "unlinked" })];
+      reads.length = 0;
+      await mount();
+      await click(button("Unlink"));
+      await settle();
+      expect(button("Unlink").disabled).toBe(false);
+      await click(button("Unlink"));
+      await settle();
+      expect(reads).toHaveLength(2);
+      expect(calls.filter((c) => c.input === "/api/telegram/link")).toHaveLength(calls.filter((c) => c.input === ME).length);
+    };
+    await pressTwice();
+    await act(async () => reads[1]!.resolve(session("unlinked")));
+    await settle();
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    await mount();
+    expect(host.textContent).toContain("Link Telegram");
+    await giveUp(reads[0]!);
+    await settle();
+    expect(alertText()).toBeNull();
+    expect(host.textContent).toContain("Link Telegram");
+    expect(host.textContent).not.toContain("Press Unlink again");
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+
+    // The other order: the first read answers unlinked, the second fails. The first press is over, so its answer
+    // tells no gate; the second press's read failing says the unlink couldn't be confirmed, under the linked view
+    // with its Unlink to press again, and a third press reads again and tells the gate.
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    calls.length = 0;
+    await pressTwice();
+    await act(async () => reads[0]!.resolve(session("unlinked")));
+    await settle();
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Telegram linked.");
+    await giveUp(reads[1]!);
+    await settle();
+    expect(alertText()).toBe("Couldn't confirm the unlink. Press Unlink again.");
+    expect(host.textContent).toContain("Telegram linked.");
+    expect(button("Unlink").disabled).toBe(false);
+    answers = [json(200, { telegram: "unlinked" })];
+    me = () => session("unlinked");
+    await click(button("Unlink"));
+    await settle();
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(alertText()).toBeNull();
+    await mount();
+    expect(host.textContent).toContain("Link Telegram");
+  });
+
   it("acts on nothing when a Telegram route answers after the section has left the page", async () => {
     // Link Telegram is pressed and, while the route answers, the window is closed (or the gates take the body down:
     // the wallet signed out or changed). The 200 then opens no tab for a window that is gone, counts no link the
@@ -1031,6 +1157,73 @@ describe("Watchdog's window wiring", () => {
     expect(host.textContent).toContain("Link Telegram");
     expect(alertText()).toBeNull();
     expect(calls).toHaveLength(4);
+  });
+
+  it("opens nothing and says nothing when the chat got linked while Link Telegram's route was answering", async () => {
+    // The gate's session flips to linked while the POST is out (the poll told the gate at the end of a wait, and
+    // the gate's own read landed only now; or the chat was linked on another device): the section is in its linked
+    // view, with Unlink enabled, by the time the route answers, and the answer is for a press that is over. No tab
+    // opens for a chat already linked, no telegram_link is counted, no wait begins under the linked view, and
+    // "Telegram linked." isn't said for it.
+    let release!: (res: Response) => void;
+    answers = [new Promise<Response>((resolve) => (release = resolve))];
+    await mount();
+    await click(button("Link Telegram"));
+    expect(button("Link Telegram").disabled).toBe(true);
+    state.telegram = "linked";
+    await mount();
+    expect(host.textContent).toContain("Telegram linked.");
+    expect(button("Unlink").disabled).toBe(false);
+    expect(state.notify).not.toHaveBeenCalled();
+    await act(async () => release(json(200, { url: T_ME })));
+    await settle();
+    expect(opened).not.toHaveBeenCalled();
+    expect(state.trackEvent).not.toHaveBeenCalled();
+    expect(state.notify).not.toHaveBeenCalled();
+    expect(alertText()).toBeNull();
+    expect(button("Unlink").disabled).toBe(false);
+
+    // Unlink then: no wait was begun, so the ask comes back, not "Press Start" for a link never opened.
+    answers = [json(200, { telegram: "unlinked" })];
+    me = () => session("unlinked");
+    state.refresh.mockImplementation(async () => {
+      state.telegram = "unlinked";
+    });
+    await click(button("Unlink"));
+    await settle();
+    await mount();
+    expect(host.textContent).toContain("Link Telegram");
+    expect(host.textContent).not.toContain("Press Start");
+    expect(alertText()).toBeNull();
+  });
+
+  it("drops a button's complaint, and a wait, when the view moves on without it", async () => {
+    // The route refused the link (a 429) and its sentence stands under Link Telegram. The chat is then linked on
+    // another device and the gate's session flips: the sentence was that button's, which left the page.
+    answers = [json(429, { error: "Too many requests. Try again in 30 seconds." })];
+    await mount();
+    await click(button("Link Telegram"));
+    expect(alertText()).toBe("Too many requests. Try again in 30 seconds.");
+    state.telegram = "linked";
+    await mount();
+    expect(alertText()).toBeNull();
+    expect(host.textContent).toContain("Telegram linked.");
+
+    // A wait, too, ends with the linked view: the chat pressed Start (the toast), then was taken away on another
+    // device. The ask comes back, not "Press Start" for a code that is spent.
+    state.telegram = "unlinked";
+    answers = [json(200, { url: T_ME })];
+    await mount();
+    await click(button("Link Telegram"));
+    expect(host.textContent).toContain("Press Start");
+    state.telegram = "linked";
+    await mount();
+    expect(state.notify).toHaveBeenCalledWith("Telegram linked.", "ok");
+    state.telegram = "unlinked";
+    await mount();
+    expect(host.textContent).toContain("Link Telegram");
+    expect(host.textContent).not.toContain("Press Start");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
   });
 
   it("leaves focus where a visitor moved it while Unlink was answering", async () => {

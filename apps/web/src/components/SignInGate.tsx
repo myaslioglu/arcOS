@@ -101,11 +101,23 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     else if (readingFor.current === address) setState({ kind: "signed-out", error: outcome.error, busy: false });
   };
 
+  // A read that failed, or gave up (a slow connection: the 10 s above): Retry reads again, the loading view meanwhile.
+  // Nothing else re-reads for this view, so without it the window would have to be opened again.
+  const retry = () => {
+    setState({ kind: "loading" });
+    void load();
+  };
+
   if (state.kind === "loading") return <div className={box} aria-busy="true" />;
   if (state.kind === "unavailable") {
     return (
       <div className={box}>
-        <p className="text-muted">Sign-in isn&apos;t available right now. Try again later.</p>
+        <div>
+          <p className="text-muted">Sign-in isn&apos;t available right now. Try again later.</p>
+          <button type="button" className={button} onClick={retry}>
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

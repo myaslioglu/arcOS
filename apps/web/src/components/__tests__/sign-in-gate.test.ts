@@ -70,6 +70,7 @@ const settle = () => act(async () => void (await new Promise((resolve) => setTim
 const text = () => host.textContent!.replaceAll("’", "'");
 const loading = () => host.querySelector('[aria-busy="true"]') !== null;
 const alertText = () => host.querySelector('[role="alert"]')?.textContent ?? null;
+const retryButton = () => [...host.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchStub);
@@ -112,17 +113,43 @@ describe("SignInGate", () => {
     expect(text()).toContain(`the app for ${WALLET_A}`);
   });
 
-  it("lands on 'unavailable' when the read times out", async () => {
-    const read = held();
-    me = () => read.answer;
+  it("lands on 'unavailable' when the read's signal times out, and Retry reads again", async () => {
+    // The bound is driven through the signal `fetch` was given, as the browser drives it: the stub rejects with the
+    // signal's reason when the signal aborts, and nothing else. AbortSignal.timeout's own clock can't be faked in
+    // jsdom, so the test owns the signal: the spy answers a controller's for the 10 s asked, and the controller
+    // aborts in the timeout's place. A read whose signal never aborted would hold the loading view here.
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => controller.signal);
+    me = () =>
+      new Promise<Response>((_, reject) => {
+        const { signal } = meCalls().at(-1)!.init!;
+        signal!.addEventListener("abort", () => reject(signal!.reason));
+      });
     await mount();
     expect(loading()).toBe(true);
-    // What `fetch` does when the signal's 10 s run out: the stub stands in for it.
-    await act(async () => read.fail(new DOMException("The operation timed out.", "TimeoutError")));
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(meCalls()[0]!.init!.signal).toBe(controller.signal);
     await settle();
+    expect(loading()).toBe(true);
+    await act(async () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")));
+    await settle();
+    expect(meCalls()[0]!.init!.signal!.aborted).toBe(true);
     expect(loading()).toBe(false);
     expect(text()).toContain(UNAVAILABLE);
     expect(text()).not.toContain("the app");
+
+    // The view has a way out: Retry reads again (the loading view meanwhile), and the app comes with the session.
+    timeout.mockRestore();
+    const read = held();
+    me = () => read.answer;
+    await act(async () => retryButton().click());
+    expect(loading()).toBe(true);
+    expect(meCalls()).toHaveLength(2);
+    expect(meCalls()[1]!.init!.signal).toBeInstanceOf(AbortSignal);
+    await act(async () => read.release(session(WALLET_A)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
   });
 
   it("takes the last wallet's app off the page the moment the account changes, before the read answers", async () => {
@@ -156,6 +183,34 @@ describe("SignInGate", () => {
     await act(async () => stale.release(session(WALLET_A)));
     await refreshing;
     await settle();
+    expect(text()).toContain(`the app for ${WALLET_B}`);
+    expect(text()).not.toContain(WALLET_A);
+  });
+
+  it("keeps the loading view when the last wallet's read answers before the new wallet's", async () => {
+    // The same switch, with A's stale read landing first: it can't come back over the loading view either, so B's
+    // address never stands over A's list, for however long B's read takes.
+    await mount();
+    await settle();
+    const stale = held();
+    me = () => stale.answer;
+    const refreshing = seen!.refresh();
+    const next = held();
+    me = () => next.answer;
+    wallet.address = WALLET_B;
+    await mount();
+    expect(loading()).toBe(true);
+
+    await act(async () => stale.release(session(WALLET_A)));
+    await refreshing;
+    await settle();
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain("the app");
+    expect(text()).not.toContain(WALLET_A);
+
+    await act(async () => next.release(session(WALLET_B)));
+    await settle();
+    expect(loading()).toBe(false);
     expect(text()).toContain(`the app for ${WALLET_B}`);
     expect(text()).not.toContain(WALLET_A);
   });
