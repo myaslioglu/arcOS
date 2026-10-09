@@ -52,8 +52,9 @@ const LINK_POLL_MS = 5_000;
 /**
  * The window's own read of the session, for the link poll and for Unlink. It gives up after the poll's interval, so
  * one that hangs (the phone changed networks) can't hold the next reads, or the form, back; a read that gave up
- * answers "unavailable", which moves nothing. The gate's own re-read has no timeout, and a failed one puts the gate
- * in its "unavailable" view, in the body's place: the window reads first, and tells the gate only what it saw change.
+ * answers "unavailable", which moves nothing. The gate's own re-read gives up after 10 s, and a failed one puts the
+ * gate in its "unavailable" view, in the body's place: the window reads first, and tells the gate only what it saw
+ * change.
  */
 const readSession = () => fetchSession((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(LINK_POLL_MS) }));
 

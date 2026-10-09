@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useConnection, useSignMessage } from "wagmi";
 import { activeChain } from "@arcos/chain";
 import { fetchSession, signInWithWallet, signOut, type SessionInfo, type SignOutOutcome } from "@/lib/sign-in-client";
@@ -41,6 +41,14 @@ function stateFor(session: SessionInfo | null | "unavailable", address: string |
   return { kind: "signed-out", error: null, busy: false };
 }
 
+/**
+ * How long a read of the session may take. One that hangs (the phone changed networks) would otherwise hold the gate
+ * in whatever view it has, the last wallet's app included, for as long as the browser waits; a read that gave up
+ * answers "unavailable" (fetchSession catches the rejection), and the gate says so.
+ */
+const SESSION_READ_MS = 10_000;
+const readSession = () => fetchSession((input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(SESSION_READ_MS) }));
+
 const box = "grid h-full place-items-center p-6 text-center text-sm";
 const button = "mt-3 rounded-lg border border-border-2 px-3 py-1.5";
 
@@ -49,11 +57,30 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
   const signMessage = useSignMessage();
   const [state, setState] = useState<State>({ kind: "loading" });
 
-  const load = useCallback(async () => setState(stateFor(await fetchSession(), address)), [address]);
+  // The state is the connected wallet's. When the account changes in the wallet, the last wallet's session leaves the
+  // page at once, with the app under it (its list, its buttons), as a state adjusted during the render: the re-read
+  // below answers for the new wallet, and until it does the gate shows its loading view, not the last wallet's app
+  // under the new wallet's address.
+  const [seenAddress, setSeenAddress] = useState(address);
+  if (address !== seenAddress) {
+    setSeenAddress(address);
+    setState({ kind: "loading" });
+  }
+
+  // The address the gate is reading for. A read that answers after the account changed (the effect's, or load()'s
+  // after a sign-in, a sign-out or an app's refresh) is the last wallet's: it sets nothing, so the last wallet's
+  // session can't come back over the loading view, or over the new wallet's answer.
+  const readingFor = useRef(address);
+
+  const load = useCallback(async () => {
+    const session = await readSession();
+    if (readingFor.current === address) setState(stateFor(session, address));
+  }, [address]);
 
   useEffect(() => {
+    readingFor.current = address;
     let live = true;
-    void fetchSession().then((session) => {
+    void readSession().then((session) => {
       if (live) setState(stateFor(session, address));
     });
     return () => {
@@ -71,7 +98,7 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
       siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     });
     if (outcome.ok) await load();
-    else setState({ kind: "signed-out", error: outcome.error, busy: false });
+    else if (readingFor.current === address) setState({ kind: "signed-out", error: outcome.error, busy: false });
   };
 
   if (state.kind === "loading") return <div className={box} aria-busy="true" />;
@@ -103,7 +130,7 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     signOut: async () => {
       const outcome = await signOut();
       if (outcome.ok) await load();
-      else setState({ kind: "signed-in", session, signOutError: outcome.error });
+      else if (readingFor.current === address) setState({ kind: "signed-in", session, signOutError: outcome.error });
       return outcome;
     },
     refresh: load,
