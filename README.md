@@ -22,9 +22,9 @@ Automated analysis, not investment advice.
 | Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
 | Revoke | Lists a wallet's live token approvals and revokes one with a transaction the wallet confirms | Live |
 | Radar | Lists new tokens as the index records them, each with Inspector's checks | Live |
+| Watchdog | Alerts when a token you hold changes | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
-| Watchdog | Alerts when a token you hold changes | Coming soon |
 | Meme | Soon | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet

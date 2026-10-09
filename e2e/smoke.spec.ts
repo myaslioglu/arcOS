@@ -75,6 +75,17 @@ test.describe("desktop", () => {
     await expect(page.getByRole("dialog", { name: "About" })).toBeVisible();
   });
 
+  // Watchdog needs a connected, signed-in wallet, and the browser here has none: the window opens on its connect
+  // prompt, which is ConnectGate's, and that proves the app is live (a grey app would open its "work in progress" window).
+  test("/#app:watchdog deep-links to the Watchdog window, which asks for a wallet", async ({ page }) => {
+    await page.goto("/#app:watchdog");
+    const watchdog = page.getByRole("dialog", { name: "Watchdog" });
+    await expect(watchdog).toBeVisible();
+    await expect(watchdog.getByText("Connect a wallet to use this app.", { exact: true })).toBeVisible();
+    await expect(watchdog.getByRole("button", { name: "Open Wallet" })).toBeVisible();
+    await expect(watchdog.getByText("work in progress", { exact: false })).toHaveCount(0);
+  });
+
   test("/#app:about deep-links to the About window", async ({ page, baseURL }) => {
     await page.goto("/#app:about");
     const about = page.getByRole("dialog", { name: "About" });

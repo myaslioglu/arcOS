@@ -64,6 +64,25 @@ describe("the no-score rule", () => {
     expect(appsFor("mainnet").filter((m) => m.id === "radar")).toHaveLength(1);
     expect(appsFor("testnet").filter((m) => m.id === "radar")).toHaveLength(1);
   });
+
+  it("lists Watchdog as a live app after Inspector, on both networks, and not among the gated apps", () => {
+    const watchdog = LIVE.find((m) => m.id === "watchdog");
+    expect(watchdog).toMatchObject({
+      blurb: "Alerts when a token you hold changes",
+      category: "trust",
+      release: "r1",
+      acceptsDrop: ["token"],
+      requiresWallet: true,
+      window: { w: 480, h: 560 },
+    });
+    expect(watchdog?.comingSoon).toBeFalsy();
+    expect(watchdog?.instanceKey).toBeUndefined();
+    expect(LIVE.indexOf(watchdog!)).toBe(LIVE.findIndex((m) => m.id === "inspector") + 1);
+    expect(SOON.some((m) => m.id === "watchdog")).toBe(false);
+    expect(Object.hasOwn(NEEDS_CONTRACT, "watchdog")).toBe(false);
+    expect(appsFor("mainnet").filter((m) => m.id === "watchdog")).toHaveLength(1);
+    expect(appsFor("testnet").filter((m) => m.id === "watchdog")).toHaveLength(1);
+  });
 });
 
 describe("the no-dates rule", () => {
