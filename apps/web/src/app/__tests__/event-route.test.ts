@@ -57,7 +57,7 @@ describe("POST /api/event", () => {
     expect(lines[0]![0]).toBe('{"severity":"INFO","message":"event","event":"inspect_run","passed":5,"total":8}');
   });
 
-  it("counts each of the nine events with its own props", async () => {
+  it("counts each of the twelve events with its own props", async () => {
     const ip = freshIp();
     await sendEvent("inspect_run", { passed: 3, total: 8 }, { ip });
     await sendEvent("fix_click", { app: "vault" }, { ip });
@@ -68,6 +68,9 @@ describe("POST /api/event", () => {
     await sendEvent("bridge_success", { from: "Base", to: "Arc" }, { ip });
     await sendEvent("revoke_success", undefined, { ip });
     await sendEvent("terminal_run", { command: "balance" }, { ip });
+    await sendEvent("watch_click", undefined, { ip });
+    await sendEvent("watch_add", { watches: 2 }, { ip });
+    await sendEvent("telegram_link", undefined, { ip });
     expect(logged()).toEqual([
       { severity: "INFO", message: "event", event: "inspect_run", passed: 3, total: 8 },
       { severity: "INFO", message: "event", event: "fix_click", app: "vault" },
@@ -78,6 +81,9 @@ describe("POST /api/event", () => {
       { severity: "INFO", message: "event", event: "bridge_success", from: "Base", to: "Arc" },
       { severity: "INFO", message: "event", event: "revoke_success" },
       { severity: "INFO", message: "event", event: "terminal_run", command: "balance" },
+      { severity: "INFO", message: "event", event: "watch_click" },
+      { severity: "INFO", message: "event", event: "watch_add", watches: 2 },
+      { severity: "INFO", message: "event", event: "telegram_link" },
     ]);
   });
 
