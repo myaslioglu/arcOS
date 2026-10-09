@@ -366,8 +366,8 @@ async function reply(message: PrivateMessage, deps: WatchDeps): Promise<string> 
 /**
  * POST /api/telegram/webhook: what Telegram calls with each update for the bot, server to server (no Origin, no
  * cookie). The reply rides in the response body as a Bot API method call, so the site never calls Telegram. In order:
- * the index guard; the secret (TELEGRAM_WEBHOOK_SECRET: 503 with an empty body when it isn't configured, as on
- * testnet); the secret header, compared in constant time through SHA-256 digests, before any limiter, body read or
+ * the index guard; the secret (TELEGRAM_WEBHOOK_SECRET: 503 with an empty body on a mainnet server whose secret is
+ * missing or malformed); the secret header, compared in constant time through SHA-256 digests, before any limiter, body read or
  * store call (401 empty); the instance's limit; the content type and the body (16 KB; 200 empty on anything else, and
  * on a body that isn't JSON); the message, which must be a private, non-bot text message with a safe-integer chat id
  * (200 empty otherwise); the chat's limit; then the commands. A store failure answers 500 with an empty body: the

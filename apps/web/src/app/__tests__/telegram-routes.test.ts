@@ -202,7 +202,7 @@ describe("DELETE /api/telegram/link", () => {
 });
 
 describe("POST /api/telegram/webhook", () => {
-  it("answers 503 with an empty body when the secret isn't configured, as on testnet, and never reaches the store", async () => {
+  it("answers 503 with an empty body when the secret isn't configured, and never reaches the store", async () => {
     const consume = vi.spyOn(fx.memory.watch, "consumeLinkCode");
     for (const secret of [undefined, "", "none", "short-secret", "a".repeat(31), `${"a".repeat(32)}!`, "a".repeat(257)]) {
       fx.env.TELEGRAM_WEBHOOK_SECRET = secret;

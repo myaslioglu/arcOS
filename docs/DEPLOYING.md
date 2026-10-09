@@ -87,7 +87,7 @@ is of 4rc.OS alone.
    `curl -sI https://testnet.4rcos.com | grep -i x-robots-tag` answers `noindex, nofollow`.
 6. **A dry run, and rolling back.**
    - *Dry run:* Actions, Deploy, Run workflow, tick `dry_run`. It runs the checks and the bundle build, scans and signs
-     in, then lists the App Hosting backends and stops. Approval is still needed. Use it after changing anything in the
+     in, then lists the App Hosting backends and stops. Use it after changing anything in the
      setup below. It proves the sign-in and the read access to App Hosting; the upload to Cloud Storage is first
      exercised by a real deploy. Its table should list `arcos`, and `arcos-testnet` once that backend exists. Until
      `ARCOS_TESTNET_READY` is `true`, pick `targets: mainnet` for a dry run, or it fails in `plan`.
@@ -97,8 +97,8 @@ is of 4rc.OS alone.
 
 ## What the setup holds
 
-- **The `production` environment** (repository settings, Environments): a required reviewer, deployment branches limited
-  to `main`, administrator bypass off, and "prevent self-review" off (one maintainer both merges and approves).
+- **The `production` environment** (repository settings, Environments): no required reviewer (a merge into `main` is
+  the deploy decision), deployment branches limited to `main`, and administrator bypass off.
 - **Repository variables** `GCP_WIF_PROVIDER` and `GCP_DEPLOY_SA`: the identity provider's resource name and the service
   account's address. They identify things; they are not secrets.
 - **The secret `BUNDLE_DENY_PATTERNS`**: one regular expression per line, matched without regard to case and written
@@ -321,6 +321,6 @@ export TESTNET_SA="arcos-testnet-web@${PROJECT_ID}.iam.gserviceaccount.com"
    or on GitHub: Settings, Secrets and variables, Actions, the Variables tab, New repository variable, name
    `ARCOS_TESTNET_READY`, value `true`. The value must be exactly `true`, lower case.
 
-8. **The first deploy.** Start a manual run with `targets: testnet` (or merge into `main` for both), approve it, and
+8. **The first deploy.** Start a manual run with `targets: testnet` (or merge into `main` for both), wait for it to finish, and
    check the testnet site as in step 5 of the deploy above. To turn the testnet deploy off again, delete the variable
    (`gh variable delete ARCOS_TESTNET_READY`) or set it to anything but `true`.

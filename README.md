@@ -111,7 +111,7 @@ the suite's types; `npm run lint` covers it too.
 - `packages/contracts` — the three Solidity contracts and their Foundry tests, scripts and
   deployment guide.
 - `docs/QA-R0.md` — the manual test script for this release.
-- `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the owner's approval, the deploy and its smoke checks.
+- `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the deploy and its smoke checks.
 - `docs/OPERATIONS.md` — what runs where, the indexer's console controls, deploying the functions, costs and checks.
 
 ## Contracts
