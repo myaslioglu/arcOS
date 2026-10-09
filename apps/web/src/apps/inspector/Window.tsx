@@ -114,10 +114,23 @@ export default function InspectorWindow({ winId, params }: AppProps) {
                 <FindingRow key={f.id} finding={f} onFix={fix} />
               ))}
             </ul>
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex flex-wrap gap-2">
               <button type="button" className="rounded-md border border-border-2 px-3 py-1.5" onClick={share}>
                 Share proof page
               </button>
+              {/* Watches are on Arc mainnet only (the index the alerts come from holds mainnet data), so the testnet site has no button. */}
+              {activeNetwork() === "mainnet" && (
+                <button
+                  type="button"
+                  className="rounded-md border border-border-2 px-3 py-1.5"
+                  onClick={() => {
+                    trackEvent("watch_click");
+                    open("watchdog", { token: report.address });
+                  }}
+                >
+                  Watch with Watchdog
+                </button>
+              )}
             </div>
           </>
         )}
