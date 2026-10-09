@@ -47,6 +47,21 @@ env:
     secret: ARCOS_SESSION_SECRET@1
     availability:
       - RUNTIME
+  # TELEGRAM_WEBHOOK_SECRET is a Secret Manager secret: what Telegram sends in the X-Telegram-Bot-Api-Secret-Token header
+  # of every call to /api/telegram/webhook (lib/watch-server.ts), 32 to 256 characters of A-Za-z0-9_-, runtime only
+  # and pinned to a version. It has to exist, with access granted to this backend, before a rollout of this file.
+  # Rotating it (a new version, pinned here) takes a setWebhook with the new value afterwards. Without it the site
+  # still runs and the webhook answers 503.
+  - variable: TELEGRAM_WEBHOOK_SECRET
+    secret: TELEGRAM_WEBHOOK_SECRET@1
+    availability:
+      - RUNTIME
+  # TELEGRAM_BOT_USERNAME is the bot's public username (the t.me link /api/telegram/link answers opens its chat), not a
+  # secret. A value that isn't a bot's username ("none", as on testnet) makes /api/telegram/link answer 503.
+  - variable: TELEGRAM_BOT_USERNAME
+    value: arcoscombot
+    availability:
+      - RUNTIME
   # ARCOS_TRUSTED_HOPS is deliberately unset. It is a server-only setting for the rate limits (lib/rate-limit.ts): how many
   # entries, counted from the right of X-Forwarded-For, belong to the site's own proxies. Unset it is 0, and each client is
   # keyed by the rightmost entry, the one the nearest proxy added. If a Google load balancer in front of App Hosting adds

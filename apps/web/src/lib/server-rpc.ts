@@ -60,3 +60,15 @@ export function authRpcClient(): PublicClient {
     inspectionClient(activeChain(), processGlobal("auth.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
   );
 }
+
+/**
+ * Watchdog's own RPC client, one per process, built like authRpcClient(): the same URL list, order and per-attempt
+ * timeout, CCIP-Read off, over its own endpoint-health record, and with `outOfGasIsNodeAnswer`. POST /api/watches runs
+ * one eth_getCode at an address the signed-in wallet chose (lib/watch-deps.ts caps it at 5 s), so an endpoint failing
+ * there cools only this record, never the one the Inspector, /api/pulse, /badge and /t share, nor sign-in's.
+ */
+export function watchRpcClient(): PublicClient {
+  return processGlobal("watch.rpcClient", () =>
+    inspectionClient(activeChain(), processGlobal("watch.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
+  );
+}

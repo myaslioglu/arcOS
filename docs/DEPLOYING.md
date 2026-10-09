@@ -1,10 +1,11 @@
 # Deploying
 
 How a change reaches https://4rcos.com and the testnet site, https://testnet.4rcos.com. A deploy runs from GitHub
-Actions, signs in to Google Cloud without a key file, and starts only after the checks pass and the owner approves it.
-Both sites come from the same commit under the same approval: 4rc.OS from the App Hosting backend `arcos`, the testnet
-site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)). The testnet site takes part only
-once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every deploy is of 4rc.OS alone.
+Actions, signs in to Google Cloud without a key file, and starts as soon as the checks and both bundles pass, so
+merging into `main` is the deploy decision. Both sites come from the same commit in the same run: 4rc.OS from the App
+Hosting backend `arcos`, the testnet site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)).
+The testnet site takes part only once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every deploy
+is of 4rc.OS alone.
 
 1. **A pull request runs CI** ([ci.yml](../.github/workflows/ci.yml)): typecheck, lint, the tests (those of the deploy
    scripts, and a check of the deploy workflow's rules, included), the web build, the ABI drift check and `npm audit`.
@@ -26,15 +27,14 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    (`scripts/apphosting-env.mjs --environment testnet`), so neither can drift from its site. Each checks that its
    settings name its own network, and keeps its build output for one day as an artifact. The owner decides when to
    merge; auto-merge is not used.
-3. **The `production` environment waits for the owner's approval.** The `deploy` job belongs to a GitHub environment
-   named `production`, which names a required reviewer and accepts the `main` branch only. It starts once `checks` and
-   its bundles have passed, and then sits at "Waiting" until the reviewer approves it; no Google Cloud credential exists
-   until then. Rejecting a run skips that deploy. Every merge asks, including one that only changes docs. Runs queue one
+3. **The `production` environment, then the deploy.** The `deploy` job belongs to a GitHub environment named
+   `production`, which accepts the `main` branch only. It starts as soon as `checks` and its bundles have passed; no
+   Google Cloud credential exists until then. Every merge deploys, including one that only changes docs. Runs queue one
    behind another (a newer waiting run replaces an older waiting one), and a deploy that has started is not cancelled.
-   Approve within a day: the bundles are kept for one day, so an approval given later fails at the download and the
-   workflow has to be re-run (all jobs).
+   The bundles are kept for one day, so a `deploy` job started later than that fails at the download and the workflow
+   has to be re-run (all jobs).
 4. **The deploy, then the smoke checks.** The `deploy` job holds the credential, so it runs none of the project's
-   dependencies and none of its build. After approval it:
+   dependencies and none of its build. Once `checks` and the bundles have passed it:
    - downloads each bundle as data, by name, into a temporary folder outside the workspace (the Firebase CLI uploads the
      workspace as the source);
    - scans the bundles (`scripts/scan-bundle.mjs`, taken from this job's own checkout and needing no dependencies) for a
@@ -62,7 +62,7 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    testnet site is gated by the repository variable `ARCOS_TESTNET_READY`:
    - While it is not exactly `true` (unset included), a push builds, scans and deploys 4rc.OS alone; the testnet bundle
      isn't built, and the run shows a notice saying so. A manual run with `targets: both` or `testnet` fails at once in
-     `plan`, before anything is built or approved, and says to run again with `targets: mainnet`. It fails rather than
+     `plan`, before anything is built or deployed, and says to run again with `targets: mainnet`. It fails rather than
      quietly dropping the testnet site, so a manual run never deploys less than it was asked to.
    - Once it is `true`, both legs run as described here.
 
@@ -74,8 +74,8 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    Firestore foundation's steps ([OPERATIONS.md](OPERATIONS.md#deploying)).
 
    The order keeps the testnet site from breaking 4rc.OS:
-   - A bundle that fails to build, either one, stops the run before approval, and nothing is deployed. To ship 4rc.OS
-     while the testnet build is broken, run the workflow with `targets: mainnet`.
+   - A bundle that fails to build, either one, stops the run before the deploy job, and nothing is deployed. To ship
+     4rc.OS while the testnet build is broken, run the workflow with `targets: mainnet`.
    - 4rc.OS deploys first. If its deploy fails, the testnet deploy doesn't start.
    - If the testnet deploy fails (or its environment name check does), 4rc.OS is already live and its smoke checks still
      run; the run is marked failed for the testnet site only. Fix it and start a new manual run with
@@ -87,18 +87,18 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    `curl -sI https://testnet.4rcos.com | grep -i x-robots-tag` answers `noindex, nofollow`.
 6. **A dry run, and rolling back.**
    - *Dry run:* Actions, Deploy, Run workflow, tick `dry_run`. It runs the checks and the bundle build, scans and signs
-     in, then lists the App Hosting backends and stops. Approval is still needed. Use it after changing anything in the
+     in, then lists the App Hosting backends and stops. Use it after changing anything in the
      setup below. It proves the sign-in and the read access to App Hosting; the upload to Cloud Storage is first
      exercised by a real deploy. Its table should list `arcos`, and `arcos-testnet` once that backend exists. Until
      `ARCOS_TESTNET_READY` is `true`, pick `targets: mainnet` for a dry run, or it fails in `plan`.
    - *Rolling back:* in the Firebase console open App Hosting, the `arcos` backend (or `arcos-testnet`), its Rollouts
      tab, and choose "Roll back to this build" on an earlier build. This is instant and does not rebuild. To go back
-     in git as well, revert the commit and merge the revert; that goes through the same approval.
+     in git as well, revert the commit and merge the revert; that goes through the same workflow.
 
 ## What the setup holds
 
-- **The `production` environment** (repository settings, Environments): a required reviewer, deployment branches limited
-  to `main`, administrator bypass off, and "prevent self-review" off (one maintainer both merges and approves).
+- **The `production` environment** (repository settings, Environments): no required reviewer (a merge into `main` is
+  the deploy decision), deployment branches limited to `main`, and administrator bypass off.
 - **Repository variables** `GCP_WIF_PROVIDER` and `GCP_DEPLOY_SA`: the identity provider's resource name and the service
   account's address. They identify things; they are not secrets.
 - **The secret `BUNDLE_DENY_PATTERNS`**: one regular expression per line, matched without regard to case and written
@@ -131,6 +131,75 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
 The workflow never writes a credential into the repository. The sign-in step leaves a credentials file in the workspace,
 which the deploy would upload with the source, so `.gitignore` lists `gha-creds-*.json` and the job fails if it doesn't.
 
+## Watchdog's Telegram settings
+
+Watchdog's routes (`/api/watches`, `/api/telegram/link` and `/api/telegram/webhook`, in `apps/web/src/lib/watch-server.ts`)
+read two more runtime settings from [apps/web/apphosting.yaml](../apps/web/apphosting.yaml). Neither reaches the build
+(`scripts/apphosting-env.test.mjs` checks that), and the rest of the site runs as before without them:
+
+- `TELEGRAM_WEBHOOK_SECRET`, a Secret Manager secret pinned to a version (`TELEGRAM_WEBHOOK_SECRET@1`): what Telegram
+  sends in the `X-Telegram-Bot-Api-Secret-Token` header of every call to the webhook, 32 to 256 characters of
+  `A-Za-z0-9_-`. The route compares it in constant time before it reads anything else, and answers 503 while the
+  setting is missing, or not 32 to 256 characters of `A-Za-z0-9_-`.
+- `TELEGRAM_BOT_USERNAME`, a plain value: the bot's public username, which the link `/api/telegram/link` answers opens
+  (`https://t.me/<username>?start=<code>`). It is public, not a secret. While it is `none`, that route answers 503.
+
+The bot's own token is the indexer's (`TELEGRAM_BOT_TOKEN`, a functions secret that arrives with the indexer step,
+pull request #39, along with its section of [OPERATIONS.md](OPERATIONS.md)); the site never holds it and never calls
+the Bot API. A webhook reply rides in the response body.
+
+### Owner steps
+
+Once, before the pull request that adds the two entries merges: a merge rolls out, and a rollout whose pinned secret is
+missing fails. From a machine signed in as the owner (`gcloud auth login`, `firebase login`), with
+`export PROJECT_ID=arcos-c80cf`:
+
+1. **The secret.** 43 random base64url characters, piped straight into Secret Manager and never printed. Use the
+   replication the session secret has (`gcloud secrets describe ARCOS_SESSION_SECRET --project "$PROJECT_ID"
+   --format='yaml(replication)'`): `--replication-policy=automatic` below, or `--replication-policy=user-managed
+   --locations=europe-west4`.
+
+   ```sh
+   openssl rand 32 | basenc --base64url | tr -d '=\n' | gcloud secrets create TELEGRAM_WEBHOOK_SECRET \
+     --project "$PROJECT_ID" --data-file=- --replication-policy=automatic
+   ```
+
+2. **Access for the mainnet backend.** `arcos` reads it at runtime, as it reads `ARCOS_SESSION_SECRET`:
+
+   ```sh
+   firebase apphosting:secrets:grantaccess TELEGRAM_WEBHOOK_SECRET --backend arcos --project "$PROJECT_ID"
+   ```
+
+   Then compare the two policies, and if the session secret has a member the new one lacks, add the same binding:
+
+   ```sh
+   gcloud secrets get-iam-policy TELEGRAM_WEBHOOK_SECRET --project "$PROJECT_ID"
+   gcloud secrets get-iam-policy ARCOS_SESSION_SECRET --project "$PROJECT_ID"
+   ```
+
+   The testnet backend needs nothing: it reads the value `none` (see [The testnet site](#the-testnet-site)).
+
+3. **The bot's username**, from BotFather, is `TELEGRAM_BOT_USERNAME` in `apps/web/apphosting.yaml` (`arcoscombot`). It
+   is public and needs no secret; a value that isn't a bot's username (`none`, as on testnet) makes `/api/telegram/link`
+   answer 503.
+
+4. **After the rollout**, once https://4rcos.com serves `/api/telegram/webhook`, register the webhook with Telegram.
+   This step also needs `TELEGRAM_BOT_TOKEN`, which the indexer step (pull request #39, its owner steps) creates: run
+   it only once that secret exists too. Both values are read from Secret Manager into the shell and only the HTTP
+   status is printed; expect `200`:
+
+   ```sh
+   TOKEN=$(gcloud secrets versions access 1 --secret TELEGRAM_BOT_TOKEN --project "$PROJECT_ID")
+   HOOK=$(gcloud secrets versions access 1 --secret TELEGRAM_WEBHOOK_SECRET --project "$PROJECT_ID")
+   curl -sS -o /dev/null -w '%{http_code}\n' "https://api.telegram.org/bot${TOKEN}/setWebhook" \
+     --data-urlencode 'url=https://4rcos.com/api/telegram/webhook' --data-urlencode "secret_token=${HOOK}" \
+     --data-urlencode 'allowed_updates=["message"]' -d drop_pending_updates=true -d max_connections=5
+   unset TOKEN HOOK
+   ```
+
+   Use the custom domain, never the `hosted.app` address. To rotate the webhook secret: add a new version, bump the
+   `@N` pin in `apphosting.yaml`, roll out, then run this step again with that version.
+
 ## The testnet site
 
 https://testnet.4rcos.com is the same code built for Arc Testnet, on a backend of its own, `arcos-testnet`. It is where
@@ -159,7 +228,15 @@ name reads `apphosting.yaml` alone. So `apps/web/apphosting.testnet.yaml` names 
   refuses them);
 - `ARCOS_SESSION_SECRET` `none`, also a plain runtime value in place of a mainnet secret: shorter than the 32 bytes a
   session key needs, so the testnet site has no key and sign-in answers 503 there. Signing in on testnet would take a
-  secret of its own, with access granted to `arcos-testnet`, named here.
+  secret of its own, with access granted to `arcos-testnet`, named here;
+- `TELEGRAM_WEBHOOK_SECRET` `none`, a plain runtime value in place of the mainnet secret (see
+  [Watchdog's Telegram settings](#watchdogs-telegram-settings)): shorter than the 32 characters a webhook secret needs,
+  and the backend's account needs access to no secret. `/api/telegram/webhook` answers 404 on the testnet site, like
+  every route over the token index, before it looks at the secret; the `none` only matters for the 503 a mainnet
+  server gives while the secret is missing;
+- `TELEGRAM_BOT_USERNAME` `none`: not a bot's username, so `/api/telegram/link` answers 503 there and no testnet
+  wallet is ever linked to the bot. Watches are mainnet-only anyway: `/api/watches` answers 404 on testnet, like the
+  other routes over the token index.
 
 The WalletConnect project ID and `runConfig` are the base file's. `scripts/apphosting-env.mjs --environment testnet`
 merges the files the same way for the workflow's testnet bundle, and fails if `apphosting.testnet.yaml` is missing.
@@ -245,6 +322,6 @@ export TESTNET_SA="arcos-testnet-web@${PROJECT_ID}.iam.gserviceaccount.com"
    or on GitHub: Settings, Secrets and variables, Actions, the Variables tab, New repository variable, name
    `ARCOS_TESTNET_READY`, value `true`. The value must be exactly `true`, lower case.
 
-8. **The first deploy.** Start a manual run with `targets: testnet` (or merge into `main` for both), approve it, and
+8. **The first deploy.** Start a manual run with `targets: testnet` (or merge into `main` for both), wait for it to finish, and
    check the testnet site as in step 5 of the deploy above. To turn the testnet deploy off again, delete the variable
    (`gh variable delete ARCOS_TESTNET_READY`) or set it to anything but `true`.

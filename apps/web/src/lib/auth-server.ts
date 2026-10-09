@@ -5,6 +5,7 @@ import { verifySiweMessage } from "viem/siwe";
 import { activeChain } from "@arcos/chain";
 import { clientKey, rateLimiter } from "./rate-limit";
 import { readBodyCapped } from "./read-body";
+import { NO_STORE, answer, fail, isSiteOrigin, jsonContentType, tooMany } from "./route-kit";
 import { checkSignInMessage, siteIdentity, type SiteIdentity } from "./siwe";
 import {
   clearedNonceCookie,
@@ -18,9 +19,10 @@ import {
   signSession,
 } from "./session";
 
-// The four sign-in routes (design 1.4 and 1.9) and getSession(), which every route behind a session calls. The routes
-// in app/api/auth/* only pass a request and authDeps() (lib/auth-deps.ts) in here, so tests can run them over an
-// in-memory store. Nothing here logs an address, a message, a signature, a cookie or the secret: a failure logs one
+// The four sign-in routes (design 1.4 and 1.9) and getSession() and requireSession(), which every route behind a
+// session calls. The routes in app/api/auth/* only pass a request and authDeps() (lib/auth-deps.ts) in here, so tests
+// can run them over an in-memory store. The answers, the Origin check and the 429 are lib/route-kit.ts's, shared with
+// the Watchdog routes. Nothing here logs an address, a message, a signature, a cookie or the secret: a failure logs one
 // line naming the step, and nothing of what the request carried.
 
 /** The sign-in store: @arcos/data/server's functions over Firestore in the app, an in-memory one in tests. */
@@ -81,28 +83,13 @@ const meLimiter = rateLimiter(60, 60_000);
 const MAX_VERIFY_BODY_BYTES = 16 * 1024;
 const MAX_SIGNATURE_LENGTH = 12 * 1024;
 
-const NO_STORE = { "cache-control": "no-store" };
-const answer = (status: number, body: unknown, headers: Record<string, string> = {}) =>
-  Response.json(body, { status, headers: { ...NO_STORE, ...headers } });
-const fail = (status: number, error: string, headers: Record<string, string> = {}) => answer(status, { error }, headers);
-
 const UNAVAILABLE = "Sign-in isn't available right now.";
 const FOREIGN = "This request didn't come from this site.";
 const INVALID = "The sign-in request isn't valid.";
 const WRONG_MESSAGE = "The sign-in message isn't for this site or network, or has expired. Try again.";
 const BAD_SIGNATURE = "The signature doesn't match this wallet.";
 const EXPIRED = "This sign-in request has expired or was already used. Try again.";
-const NOT_SIGNED_IN = "Not signed in.";
-const tooMany = (retryAfterSec: number) =>
-  fail(429, "Too many requests. Try again in a minute.", { "retry-after": String(retryAfterSec) });
-
-/**
- * A state-changing request must name this site as its Origin, as the configured site address spells it. A missing
- * Origin is refused too: every browser sends one on a POST. The Host and X-Forwarded-Host headers are never consulted.
- */
-function isSiteOrigin(req: Request, site: SiteIdentity): boolean {
-  return req.headers.get("origin") === site.uri;
-}
+export const NOT_SIGNED_IN = "Not signed in.";
 
 /** A 32-character hex nonce from the operating system's CSPRNG (viem's generateSiweNonce uses Math.random). */
 const newNonce = () => randomBytes(16).toString("hex");
@@ -175,8 +162,7 @@ export async function verifyResponse(req: Request, deps: AuthDeps): Promise<Resp
 
 async function verifySignIn(req: Request, deps: AuthDeps, config: AuthConfig): Promise<Response> {
   if (!isSiteOrigin(req, config.site)) return fail(403, FOREIGN);
-  const type = req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-  if (type !== "application/json") return fail(415, INVALID);
+  if (!jsonContentType(req)) return fail(415, INVALID);
   const limit = verifyLimiter.take(clientKey(req.headers));
   if (!limit.ok) return tooMany(limit.retryAfterSec);
 
@@ -255,6 +241,22 @@ export async function getSession(req: Request, deps: AuthDeps): Promise<Session 
   if (!config) return null;
   const session = await resolveSession(req, deps, config);
   return session ? { address: session.address } : null;
+}
+
+/**
+ * The session a route behind one needs, or the answer to send instead: 401 "Not signed in." without one (no cookie, a
+ * cookie that doesn't count, or sign-in off), 503 when the store can't be read, so a wallet is never signed out by an
+ * outage. A route that needs its own 503 sentence for sign-in being off checks its configuration first.
+ */
+export async function requireSession(req: Request, deps: AuthDeps): Promise<Session | Response> {
+  let session: Session | null;
+  try {
+    session = await getSession(req, deps);
+  } catch {
+    logFailure("read-session");
+    return fail(503, UNAVAILABLE);
+  }
+  return session ?? fail(401, NOT_SIGNED_IN);
 }
 
 /** GET /api/auth/me: `{ address, telegram: "linked" | "unlinked" }`, or 401. */

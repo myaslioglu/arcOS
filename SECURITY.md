@@ -31,10 +31,12 @@ fixed. Coordinated disclosure — please give us time to address a report before
 ## Where the site runs
 
 https://4rcos.com runs on Firebase App Hosting (Cloud Run, behind Google's load balancers), configured in
-`apps/web/apphosting.yaml`. It has two server secrets: `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which
-the server's explorer reads use because explorer.arc.io refuses server requests) and `ARCOS_SESSION_SECRET` (the key of
-the sign-in cookie, below). Both are Secret Manager secrets, pinned to a version and available at runtime only. Neither
-is ever a `NEXT_PUBLIC_` value or in the repository. Every other
+`apps/web/apphosting.yaml`. It has three server secrets: `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which
+the server's explorer reads use because explorer.arc.io refuses server requests), `ARCOS_SESSION_SECRET` (the key of
+the sign-in cookie, below) and `TELEGRAM_WEBHOOK_SECRET` (what Telegram sends in the `X-Telegram-Bot-Api-Secret-Token`
+header of each call to `/api/telegram/webhook`, which the route compares in constant time). All three are Secret Manager
+secrets, pinned to a version and available at runtime only. None is ever a `NEXT_PUBLIC_` value or in the repository.
+Every other
 setting in that file is public: `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, for one, is a client identifier that ships in
 the browser bundle.
 
@@ -146,12 +148,13 @@ sends its own usage and error reports to Circle.
 ## Reading contracts anyone can deploy
 
 Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
-does: the server's three clients (`serverRpcClient`, `approvalsRpcClient` and `authRpcClient` in
+does: the server's four clients (`serverRpcClient`, `approvalsRpcClient`, `authRpcClient` and `watchRpcClient` in
 `apps/web/src/lib/server-rpc.ts`, all built by `inspectionClient` in `packages/inspector/src/inspection-client.ts`, each
 with its own endpoint-health record) — `serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and
 `/api/pulse`; `approvalsRpcClient` behind `/api/approvals` alone, which reads the allowance, symbol, name and decimals
 of whatever token contracts an address has approved; `authRpcClient` behind `/api/auth/verify` alone, which checks
-smart-wallet signatures — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
+smart-wallet signatures; `watchRpcClient` behind `POST /api/watches` alone, which checks that the token address a
+signed-in wallet adds holds code — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
 With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is
 a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
 Swap and Bridge only read Circle's own contracts.
