@@ -13,6 +13,12 @@ export const EVENT_PROPS = {
   bridge_success: ["from", "to"],
   revoke_success: [],
   terminal_run: ["command"],
+  /** Inspector's "Watch with Watchdog" button. */
+  watch_click: [],
+  /** A token watched, with the count of watches after the add. */
+  watch_add: ["watches"],
+  /** Telegram's link opened from Watchdog. */
+  telegram_link: [],
 } as const satisfies Record<string, readonly string[]>;
 
 export type EventName = keyof typeof EVENT_PROPS;

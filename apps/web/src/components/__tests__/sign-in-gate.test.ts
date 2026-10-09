@@ -1,76 +1,425 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { act, createElement, useEffect } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignedIn } from "../SignInGate";
 
-// SignInGate's sign-out path (review 1, Minor 4). Static rendering runs no effects and keeps no state, so the gate's one
-// useState is replaced by a slot the test fills and reads: each render starts from `gate.state`, and whatever the gate
-// sets lands in `gate.set`. Everything else (context, callbacks) is React's own. Nothing here reaches the network.
-const gate = vi.hoisted(() => ({ state: undefined as unknown, set: undefined as unknown as ReturnType<typeof vi.fn> }));
-vi.mock("react", async (importOriginal) => {
-  const react = await importOriginal<typeof import("react")>();
-  return { ...react, useState: () => [gate.state, gate.set] };
-});
+/**
+ * The gate mounted in jsdom over a stubbed `fetch` and a wallet fixture the test moves: what it shows while the
+ * session is read, what an account change in the wallet does to the app under it, how long a read may take, which of
+ * two reads out at once the gate follows, and the sign-out path (review 1, Minor 4). Nothing here reaches the network,
+ * and every address is a test fixture.
+ */
+
+const wallet = vi.hoisted(() => ({
+  address: "0x1111111111111111111111111111111111111111" as string | undefined,
+  /** What the wallet answers a signing request with; a test may hold it. */
+  sign: async (): Promise<string> => "0x",
+}));
 vi.mock("wagmi", () => ({
-  useConnection: () => ({ address: "0x1111111111111111111111111111111111111111" }),
-  useSignMessage: () => ({ mutateAsync: async () => "0x" }),
-}));
-const client = vi.hoisted(() => ({
-  signOut: vi.fn(),
-  fetchSession: vi.fn(),
-}));
-vi.mock("@/lib/sign-in-client", () => ({
-  signOut: client.signOut,
-  fetchSession: client.fetchSession,
-  signInWithWallet: vi.fn(),
+  useConnection: () => ({ address: wallet.address }),
+  useSignMessage: () => ({ mutateAsync: () => wallet.sign() }),
 }));
 
-const { SignInGate, useSession } = await import("../SignInGate");
+import { SignInGate, useSession } from "../SignInGate";
 
-const SESSION = { address: "0x1111111111111111111111111111111111111111", telegram: "unlinked" as const };
+const WALLET_A = "0x1111111111111111111111111111111111111111";
+const WALLET_B = "0x2222222222222222222222222222222222222222";
+const ME = "/api/auth/me";
+const LOGOUT = "/api/auth/logout";
+const NONCE = "/api/auth/nonce";
+const VERIFY = "/api/auth/verify";
 const FAILED = "Couldn't sign out. Try again.";
+const UNAVAILABLE = "Sign-in isn't available right now.";
+const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const session = (address: string, telegram: "linked" | "unlinked" = "unlinked") => json(200, { address, telegram });
+/** A session answer held back until the test releases it. */
+const held = () => {
+  let release!: (res: Response) => void;
+  let fail!: (reason: unknown) => void;
+  const answer = new Promise<Response>((resolve, reject) => {
+    release = resolve;
+    fail = reject;
+  });
+  return { answer, release, fail };
+};
 
-/** Renders the gate from `state` and answers its markup and the session its children saw. */
-function render(state: unknown): { html: string; session: SignedIn } {
-  gate.state = state;
-  let seen: SignedIn | undefined;
-  const Child = () => {
-    seen = useSession();
-    return createElement("p", null, "the app");
-  };
-  const html = renderToStaticMarkup(createElement(SignInGate, null, createElement(Child))).replaceAll("&#x27;", "'");
-  return { html, session: seen! };
-}
+type Call = { input: string; init: RequestInit | undefined };
+const calls: Call[] = [];
+/** What /api/auth/me answers, each time it is read. */
+let me: () => Response | Promise<Response>;
+/** What POST /api/auth/logout answers. */
+let logout: () => Response | Promise<Response>;
+const fetchStub = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+  calls.push({ input: String(input), init });
+  if (String(input) === ME) return me();
+  if (String(input) === LOGOUT) return logout();
+  if (String(input) === NONCE) return json(200, { nonce: "abcdefghijklmnop0123456789" });
+  if (String(input) === VERIFY) return json(200, { address: wallet.address });
+  return new Response("", { status: 500 });
+});
+const meCalls = () => calls.filter((c) => c.input === ME);
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+let root: Root;
+let host: HTMLDivElement;
+/** The session the app under the gate saw last. */
+let seen: SignedIn | undefined;
+
+const Child = () => {
+  const session = useSession();
+  useEffect(() => {
+    seen = session;
+  });
+  return createElement("p", null, `the app for ${session.address}`);
+};
+const mount = () => act(async () => root.render(createElement(SignInGate, null, createElement(Child))));
+/** Lets a stubbed answer land and the gate re-render. */
+const settle = () => act(async () => void (await new Promise((resolve) => setTimeout(resolve, 0))));
+const text = () => host.textContent!.replaceAll("’", "'");
+const loading = () => host.querySelector('[aria-busy="true"]') !== null;
+const alertText = () => host.querySelector('[role="alert"]')?.textContent ?? null;
+const retryButton = () => [...host.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
 
 beforeEach(() => {
-  gate.set = vi.fn();
-  client.signOut.mockReset();
-  client.fetchSession.mockReset();
+  vi.stubGlobal("fetch", fetchStub);
+  calls.length = 0;
+  fetchStub.mockClear();
+  wallet.address = WALLET_A;
+  wallet.sign = async () => "0x";
+  me = () => session(WALLET_A);
+  logout = () => new Response(null, { status: 204 });
+  seen = undefined;
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
 });
 
-describe("SignInGate sign-out", () => {
+afterEach(async () => {
+  await act(async () => root.unmount());
+  host.remove();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("SignInGate", () => {
+  it("shows its loading view until the session is read, with the read bounded at 10 s", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const read = held();
+    me = () => read.answer;
+    await mount();
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain("the app");
+    expect(meCalls()).toHaveLength(1);
+    // The read carries the cookie and gives up on its own: one that hangs can't hold the gate in any view for minutes.
+    expect(meCalls()[0]!.init).toMatchObject({ credentials: "same-origin" });
+    expect(meCalls()[0]!.init!.signal).toBeInstanceOf(AbortSignal);
+    expect(timeout).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledWith(10_000);
+
+    await act(async () => read.release(session(WALLET_A)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("lands on 'unavailable' when the read's signal times out, and Retry reads again", async () => {
+    // The bound is driven through the signal `fetch` was given, as the browser drives it: the stub rejects with the
+    // signal's reason when the signal aborts, and nothing else. AbortSignal.timeout's own clock can't be faked in
+    // jsdom, so the test owns the signal: the spy answers a controller's for the 10 s asked, and the controller
+    // aborts in the timeout's place. A read whose signal never aborted would hold the loading view here.
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => controller.signal);
+    me = () =>
+      new Promise<Response>((_, reject) => {
+        const { signal } = meCalls().at(-1)!.init!;
+        signal!.addEventListener("abort", () => reject(signal!.reason));
+      });
+    await mount();
+    expect(loading()).toBe(true);
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(meCalls()[0]!.init!.signal).toBe(controller.signal);
+    await settle();
+    expect(loading()).toBe(true);
+    await act(async () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")));
+    await settle();
+    expect(meCalls()[0]!.init!.signal!.aborted).toBe(true);
+    expect(loading()).toBe(false);
+    expect(text()).toContain(UNAVAILABLE);
+    expect(text()).not.toContain("the app");
+
+    // The view has a way out: Retry reads again (the loading view meanwhile), and the app comes with the session.
+    timeout.mockRestore();
+    const read = held();
+    me = () => read.answer;
+    await act(async () => retryButton().click());
+    expect(loading()).toBe(true);
+    expect(meCalls()).toHaveLength(2);
+    expect(meCalls()[1]!.init!.signal).toBeInstanceOf(AbortSignal);
+    await act(async () => read.release(session(WALLET_A)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("shows the app after a sign-in that outlived the account changing and changing back, without a second press", async () => {
+    // A has no session and presses Sign in; the wallet holds the signing prompt. Meanwhile the account changes to B
+    // and back to A, and A's new read lands first, with the cookie as it was: the prompt. The signature then
+    // completes and the verify sets A's cookie: the gate reads again and shows A's app, rather than a prompt whose
+    // next press would ask the wallet for a second signature.
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://4rcos.com");
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    me = () => json(401, { error: "Not signed in." });
+    await mount();
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+
+    let release!: (signature: string) => void;
+    wallet.sign = () => new Promise<string>((resolve) => (release = resolve));
+    const signInButton = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Sign in") || b.textContent?.startsWith("Check your wallet"))!;
+    await act(async () => signInButton().click());
+    await settle();
+    expect(text()).toContain("Check your wallet");
+    expect(calls.filter((c) => c.input === NONCE)).toHaveLength(1);
+
+    wallet.address = WALLET_B;
+    await mount();
+    wallet.address = WALLET_A;
+    await mount();
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("Check your wallet");
+
+    // The signature lands and the verify sets the cookie; from here the session reads as A's.
+    me = () => session(WALLET_A);
+    await act(async () => release("0x"));
+    await settle();
+    expect(calls.filter((c) => c.input === VERIFY)).toHaveLength(1);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+    expect(text()).not.toContain("Sign in to use alerts.");
+  });
+
+  it("takes the last wallet's app off the page the moment the account changes, before the read answers", async () => {
+    await mount();
+    await settle();
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+
+    // A's app asks for a refresh (a Telegram link, say) and the read is still answering when the account changes.
+    const stale = held();
+    me = () => stale.answer;
+    const refreshing = seen!.refresh();
+    expect(meCalls()).toHaveLength(2);
+
+    // The account changes to B: A's app leaves the page at once, with its buttons, while B's session is read.
+    const next = held();
+    me = () => next.answer;
+    wallet.address = WALLET_B;
+    await mount();
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain("the app");
+    expect(meCalls()).toHaveLength(3);
+    expect(meCalls()[2]!.init!.signal).toBeInstanceOf(AbortSignal);
+
+    // B's answer lands: the app is B's.
+    await act(async () => next.release(session(WALLET_B)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_B}`);
+
+    // A's stale read answers last: it is the last wallet's, and sets nothing.
+    await act(async () => stale.release(session(WALLET_A)));
+    await refreshing;
+    await settle();
+    expect(text()).toContain(`the app for ${WALLET_B}`);
+    expect(text()).not.toContain(WALLET_A);
+  });
+
+  it("keeps the loading view when the last wallet's read answers before the new wallet's", async () => {
+    // The same switch, with A's stale read landing first: it can't come back over the loading view either, so B's
+    // address never stands over A's list, for however long B's read takes.
+    await mount();
+    await settle();
+    const stale = held();
+    me = () => stale.answer;
+    const refreshing = seen!.refresh();
+    const next = held();
+    me = () => next.answer;
+    wallet.address = WALLET_B;
+    await mount();
+    expect(loading()).toBe(true);
+
+    await act(async () => stale.release(session(WALLET_A)));
+    await refreshing;
+    await settle();
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain("the app");
+    expect(text()).not.toContain(WALLET_A);
+
+    await act(async () => next.release(session(WALLET_B)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_B}`);
+    expect(text()).not.toContain(WALLET_A);
+  });
+
+  it("follows the newest read of the same wallet, whichever answers first: an unlink that succeeded stays unlinked", async () => {
+    // The Watchdog window's link poll asks for a refresh every 5 s until the gate has answered, and a gate read may
+    // take 10 s, so two reads of the same wallet can be out at once. The older one, landing last, must not put back
+    // what the newer one corrected: here the chat was unlinked between the two reads (Unlink: DELETE, then the
+    // window's own read, then refresh), and the older read's "linked" is a session that has gone.
+    me = () => session(WALLET_A, "linked");
+    await mount();
+    await settle();
+    expect(seen!.telegram).toBe("linked");
+
+    const older = held();
+    me = () => older.answer;
+    const first = seen!.refresh();
+    const newer = held();
+    me = () => newer.answer;
+    const second = seen!.refresh();
+    expect(meCalls()).toHaveLength(3);
+
+    await act(async () => newer.release(session(WALLET_A, "unlinked")));
+    await second;
+    await settle();
+    expect(seen!.telegram).toBe("unlinked");
+
+    await act(async () => older.release(session(WALLET_A, "linked")));
+    await first;
+    await settle();
+    expect(seen!.telegram).toBe("unlinked");
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("keeps the sign-in prompt a newer read answered when an older read answers with the session after it", async () => {
+    // The window's 401 (the cookie expired under it) asks for a refresh, which answers null; an older refresh, from
+    // the link poll, then lands with the session as it was: the app must not come back under a cleared cookie.
+    await mount();
+    await settle();
+    const older = held();
+    me = () => older.answer;
+    const first = seen!.refresh();
+    const newer = held();
+    me = () => newer.answer;
+    const second = seen!.refresh();
+
+    await act(async () => newer.release(json(401, { error: "Not signed in." })));
+    await second;
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("the app");
+
+    await act(async () => older.release(session(WALLET_A)));
+    await first;
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("the app");
+  });
+
+  it("keeps Retry's loading view when a read older than Retry fails after it", async () => {
+    // Two reads out; the newer fails, so the gate says "unavailable" and the visitor presses Retry. The older read,
+    // failing after that, is not the latest: the loading view stays until Retry's own read answers.
+    await mount();
+    await settle();
+    const older = held();
+    me = () => older.answer;
+    const first = seen!.refresh();
+    const newer = held();
+    me = () => newer.answer;
+    const second = seen!.refresh();
+    await act(async () => newer.release(json(503, { error: "x" })));
+    await second;
+    await settle();
+    expect(text()).toContain(UNAVAILABLE);
+
+    const retried = held();
+    me = () => retried.answer;
+    await act(async () => retryButton().click());
+    expect(loading()).toBe(true);
+    expect(meCalls()).toHaveLength(4);
+
+    await act(async () => older.release(json(503, { error: "x" })));
+    await first;
+    await settle();
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain(UNAVAILABLE);
+
+    await act(async () => retried.release(session(WALLET_A)));
+    await settle();
+    expect(loading()).toBe(false);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("shows the sign-in prompt to a wallet whose session is another's, or none", async () => {
+    me = () => session(WALLET_B);
+    await mount();
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("the app");
+
+    me = () => json(401, { error: "Not signed in." });
+    wallet.address = WALLET_B;
+    await mount();
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+  });
+
   it("says so when signing out fails, keeps the app, and hands the caller the result", async () => {
-    client.signOut.mockResolvedValue({ ok: false, error: FAILED });
-    const { html, session } = render({ kind: "signed-in", session: SESSION });
-    expect(html).toContain("the app");
-    expect(html).not.toContain(FAILED);
+    await mount();
+    await settle();
+    expect(text()).toContain("the app");
+    expect(alertText()).toBeNull();
 
-    await expect(session.signOut()).resolves.toEqual({ ok: false, error: FAILED });
-    expect(client.fetchSession).not.toHaveBeenCalled();
-    expect(gate.set).toHaveBeenCalledWith({ kind: "signed-in", session: SESSION, signOutError: FAILED });
+    logout = () => json(500, { error: "x" });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await seen!.signOut();
+    });
+    expect(outcome).toEqual({ ok: false, error: FAILED });
+    expect(meCalls()).toHaveLength(1);
+    expect(alertText()).toBe(FAILED);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
 
-    const after = render(gate.set.mock.calls.at(-1)![0]);
-    expect(after.html).toContain(FAILED);
-    expect(after.html).toMatch(/role="alert"/);
-    expect(after.html).toContain("the app");
+  it("adds a failed sign-out's sentence to the view the gate holds then, not the one at the press", async () => {
+    // The logout is out when a refresh lands with the chat linked: the failure's sentence goes over that session,
+    // not over the unlinked one the press was made under.
+    await mount();
+    await settle();
+    expect(seen!.telegram).toBe("unlinked");
+    const pending = held();
+    logout = () => pending.answer;
+    let outcome: Promise<unknown>;
+    await act(async () => {
+      outcome = seen!.signOut();
+    });
+    me = () => session(WALLET_A, "linked");
+    await act(async () => {
+      await seen!.refresh();
+    });
+    expect(seen!.telegram).toBe("linked");
+
+    await act(async () => pending.release(json(500, { error: "x" })));
+    await expect(outcome!).resolves.toEqual({ ok: false, error: FAILED });
+    await settle();
+    expect(alertText()).toBe(FAILED);
+    expect(seen!.telegram).toBe("linked");
+    expect(text()).toContain(`the app for ${WALLET_A}`);
   });
 
   it("reads the session again after signing out, and hands the caller the result", async () => {
-    client.signOut.mockResolvedValue({ ok: true });
-    client.fetchSession.mockResolvedValue(null);
-    const { session } = render({ kind: "signed-in", session: SESSION, signOutError: FAILED });
-    await expect(session.signOut()).resolves.toEqual({ ok: true });
-    expect(client.fetchSession).toHaveBeenCalledTimes(1);
-    expect(gate.set).toHaveBeenLastCalledWith({ kind: "signed-out", error: null, busy: false });
+    await mount();
+    await settle();
+    me = () => json(401, { error: "Not signed in." });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await seen!.signOut();
+    });
+    expect(outcome).toEqual({ ok: true });
+    expect(calls.filter((c) => c.input === LOGOUT)[0]!.init).toMatchObject({ method: "POST", credentials: "same-origin" });
+    expect(meCalls()).toHaveLength(2);
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("the app");
   });
 });

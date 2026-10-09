@@ -5,7 +5,7 @@ import { isOwnOrigin, validateEvent } from "../event-validation";
 const event = (name: unknown, props?: unknown) => validateEvent({ name, props });
 
 describe("the event list", () => {
-  it("names the nine events, each with only its own props", () => {
+  it("names the twelve events, each with only its own props", () => {
     expect(EVENT_PROPS).toEqual({
       inspect_run: ["passed", "total"],
       fix_click: ["app"],
@@ -16,8 +16,11 @@ describe("the event list", () => {
       bridge_success: ["from", "to"],
       revoke_success: [],
       terminal_run: ["command"],
+      watch_click: [],
+      watch_add: ["watches"],
+      telegram_link: [],
     });
-    expect(EVENT_NAMES).toHaveLength(9);
+    expect(EVENT_NAMES).toHaveLength(12);
   });
 });
 
@@ -35,6 +38,9 @@ describe("validateEvent: the name", () => {
     });
     expect(event("revoke_success")).toEqual({ event: "revoke_success", props: {} });
     expect(event("terminal_run", { command: "balance" })).toEqual({ event: "terminal_run", props: { command: "balance" } });
+    expect(event("watch_click")).toEqual({ event: "watch_click", props: {} });
+    expect(event("watch_add", { watches: 2 })).toEqual({ event: "watch_add", props: { watches: 2 } });
+    expect(event("telegram_link")).toEqual({ event: "telegram_link", props: {} });
   });
 
   it("counts nothing whose name isn't in the list, prototype names included", () => {
@@ -54,6 +60,9 @@ describe("validateEvent: the props", () => {
   it("keeps only the props the event is allowed, and drops the rest without dropping the event", () => {
     expect(event("proof_share", { app: "vault", anything: 1 })).toEqual({ event: "proof_share", props: {} });
     expect(event("revoke_success", { command: "help", wallet: "x" })).toEqual({ event: "revoke_success", props: {} });
+    // A watch names no token: an address is never a prop, and watch_add carries the count alone.
+    expect(event("watch_add", { watches: 1, token: "0x1111111111111111111111111111111111111111" })).toEqual({ event: "watch_add", props: { watches: 1 } });
+    expect(event("watch_click", { token: "0x1111111111111111111111111111111111111111" })).toEqual({ event: "watch_click", props: {} });
     expect(event("inspect_run", { passed: 3, total: 8, app: "vault", extra: 1, __proto__x: 2 })).toEqual({
       event: "inspect_run",
       props: { passed: 3, total: 8 },

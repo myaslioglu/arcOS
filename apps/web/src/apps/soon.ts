@@ -1,4 +1,4 @@
-import { Hourglass, Lock, ShieldCheck } from "lucide-react";
+import { Hourglass, Lock } from "lucide-react";
 import type { AppManifest } from "@arcos/shell";
 
 type Soon = Pick<AppManifest, "id" | "name" | "blurb" | "icon" | "category" | "release"> & {
@@ -44,19 +44,6 @@ export const SOON: AppManifest[] = [
       "Will release tokens to each recipient on a schedule, with an optional cliff.",
       "Recipients will claim what has vested from their own wallets.",
       "Needs its own contracts and an audit first.",
-    ],
-  }),
-  soon({
-    id: "watchdog",
-    name: "Watchdog",
-    blurb: "Alerts when a token you hold changes",
-    icon: ShieldCheck,
-    category: "trust",
-    release: "r1",
-    details: [
-      "Will watch the tokens you hold for changes to their owner, supply or code.",
-      "Will alert you when one of them changes.",
-      "Needs a server that watches the chain and sends the alerts.",
     ],
   }),
 ];
