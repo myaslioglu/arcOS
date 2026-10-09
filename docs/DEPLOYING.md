@@ -1,10 +1,11 @@
 # Deploying
 
 How a change reaches https://4rcos.com and the testnet site, https://testnet.4rcos.com. A deploy runs from GitHub
-Actions, signs in to Google Cloud without a key file, and starts only after the checks pass and the owner approves it.
-Both sites come from the same commit under the same approval: 4rc.OS from the App Hosting backend `arcos`, the testnet
-site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)). The testnet site takes part only
-once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every deploy is of 4rc.OS alone.
+Actions, signs in to Google Cloud without a key file, and starts as soon as the checks and both bundles pass, so
+merging into `main` is the deploy decision. Both sites come from the same commit in the same run: 4rc.OS from the App
+Hosting backend `arcos`, the testnet site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)).
+The testnet site takes part only once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every deploy
+is of 4rc.OS alone.
 
 1. **A pull request runs CI** ([ci.yml](../.github/workflows/ci.yml)): typecheck, lint, the tests (those of the deploy
    scripts, and a check of the deploy workflow's rules, included), the web build, the ABI drift check and `npm audit`.
@@ -26,15 +27,14 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    (`scripts/apphosting-env.mjs --environment testnet`), so neither can drift from its site. Each checks that its
    settings name its own network, and keeps its build output for one day as an artifact. The owner decides when to
    merge; auto-merge is not used.
-3. **The `production` environment waits for the owner's approval.** The `deploy` job belongs to a GitHub environment
-   named `production`, which names a required reviewer and accepts the `main` branch only. It starts once `checks` and
-   its bundles have passed, and then sits at "Waiting" until the reviewer approves it; no Google Cloud credential exists
-   until then. Rejecting a run skips that deploy. Every merge asks, including one that only changes docs. Runs queue one
+3. **The `production` environment, then the deploy.** The `deploy` job belongs to a GitHub environment named
+   `production`, which accepts the `main` branch only. It starts as soon as `checks` and its bundles have passed; no
+   Google Cloud credential exists until then. Every merge deploys, including one that only changes docs. Runs queue one
    behind another (a newer waiting run replaces an older waiting one), and a deploy that has started is not cancelled.
-   Approve within a day: the bundles are kept for one day, so an approval given later fails at the download and the
-   workflow has to be re-run (all jobs).
+   The bundles are kept for one day, so a `deploy` job started later than that fails at the download and the workflow
+   has to be re-run (all jobs).
 4. **The deploy, then the smoke checks.** The `deploy` job holds the credential, so it runs none of the project's
-   dependencies and none of its build. After approval it:
+   dependencies and none of its build. Once `checks` and the bundles have passed it:
    - downloads each bundle as data, by name, into a temporary folder outside the workspace (the Firebase CLI uploads the
      workspace as the source);
    - scans the bundles (`scripts/scan-bundle.mjs`, taken from this job's own checkout and needing no dependencies) for a
@@ -62,7 +62,7 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    testnet site is gated by the repository variable `ARCOS_TESTNET_READY`:
    - While it is not exactly `true` (unset included), a push builds, scans and deploys 4rc.OS alone; the testnet bundle
      isn't built, and the run shows a notice saying so. A manual run with `targets: both` or `testnet` fails at once in
-     `plan`, before anything is built or approved, and says to run again with `targets: mainnet`. It fails rather than
+     `plan`, before anything is built or deployed, and says to run again with `targets: mainnet`. It fails rather than
      quietly dropping the testnet site, so a manual run never deploys less than it was asked to.
    - Once it is `true`, both legs run as described here.
 
@@ -74,8 +74,8 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
    Firestore foundation's steps ([OPERATIONS.md](OPERATIONS.md#deploying)).
 
    The order keeps the testnet site from breaking 4rc.OS:
-   - A bundle that fails to build, either one, stops the run before approval, and nothing is deployed. To ship 4rc.OS
-     while the testnet build is broken, run the workflow with `targets: mainnet`.
+   - A bundle that fails to build, either one, stops the run before the deploy job, and nothing is deployed. To ship
+     4rc.OS while the testnet build is broken, run the workflow with `targets: mainnet`.
    - 4rc.OS deploys first. If its deploy fails, the testnet deploy doesn't start.
    - If the testnet deploy fails (or its environment name check does), 4rc.OS is already live and its smoke checks still
      run; the run is marked failed for the testnet site only. Fix it and start a new manual run with
@@ -93,7 +93,7 @@ once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every d
      `ARCOS_TESTNET_READY` is `true`, pick `targets: mainnet` for a dry run, or it fails in `plan`.
    - *Rolling back:* in the Firebase console open App Hosting, the `arcos` backend (or `arcos-testnet`), its Rollouts
      tab, and choose "Roll back to this build" on an earlier build. This is instant and does not rebuild. To go back
-     in git as well, revert the commit and merge the revert; that goes through the same approval.
+     in git as well, revert the commit and merge the revert; that goes through the same workflow.
 
 ## What the setup holds
 
@@ -140,12 +140,13 @@ read two more runtime settings from [apps/web/apphosting.yaml](../apps/web/appho
 - `TELEGRAM_WEBHOOK_SECRET`, a Secret Manager secret pinned to a version (`TELEGRAM_WEBHOOK_SECRET@1`): what Telegram
   sends in the `X-Telegram-Bot-Api-Secret-Token` header of every call to the webhook, 32 to 256 characters of
   `A-Za-z0-9_-`. The route compares it in constant time before it reads anything else, and answers 503 while the
-  setting is missing or shorter than 32 characters.
+  setting is missing, or not 32 to 256 characters of `A-Za-z0-9_-`.
 - `TELEGRAM_BOT_USERNAME`, a plain value: the bot's public username, which the link `/api/telegram/link` answers opens
   (`https://t.me/<username>?start=<code>`). It is public, not a secret. While it is `none`, that route answers 503.
 
-The bot's own token is the indexer's (`TELEGRAM_BOT_TOKEN`, a functions secret: [OPERATIONS.md](OPERATIONS.md)); the
-site never holds it and never calls the Bot API. A webhook reply rides in the response body.
+The bot's own token is the indexer's (`TELEGRAM_BOT_TOKEN`, a functions secret that arrives with the indexer step,
+pull request #39, along with its section of [OPERATIONS.md](OPERATIONS.md)); the site never holds it and never calls
+the Bot API. A webhook reply rides in the response body.
 
 ### Owner steps
 
@@ -181,8 +182,10 @@ missing fails. From a machine signed in as the owner (`gcloud auth login`, `fire
 3. **The bot's username**, from BotFather, goes into `apps/web/apphosting.yaml` as `TELEGRAM_BOT_USERNAME` in place of
    `none`, in the same pull request. It is public and needs no secret.
 
-4. **After the rollout**, once https://4rcos.com serves `/api/telegram/webhook`, register the webhook with Telegram. Both
-   values are read from Secret Manager into the shell and only the HTTP status is printed; expect `200`:
+4. **After the rollout**, once https://4rcos.com serves `/api/telegram/webhook`, register the webhook with Telegram.
+   This step also needs `TELEGRAM_BOT_TOKEN`, which the indexer step (pull request #39, its owner steps) creates: run
+   it only once that secret exists too. Both values are read from Secret Manager into the shell and only the HTTP
+   status is printed; expect `200`:
 
    ```sh
    TOKEN=$(gcloud secrets versions access 1 --secret TELEGRAM_BOT_TOKEN --project "$PROJECT_ID")
@@ -227,7 +230,9 @@ name reads `apphosting.yaml` alone. So `apps/web/apphosting.testnet.yaml` names 
   secret of its own, with access granted to `arcos-testnet`, named here;
 - `TELEGRAM_WEBHOOK_SECRET` `none`, a plain runtime value in place of the mainnet secret (see
   [Watchdog's Telegram settings](#watchdogs-telegram-settings)): shorter than the 32 characters a webhook secret needs,
-  so `/api/telegram/webhook` answers 503 on the testnet site, and the backend's account needs access to no secret;
+  and the backend's account needs access to no secret. `/api/telegram/webhook` answers 404 on the testnet site, like
+  every route over the token index, before it looks at the secret; the `none` only matters for the 503 a mainnet
+  server gives while the secret is missing;
 - `TELEGRAM_BOT_USERNAME` `none`: not a bot's username, so `/api/telegram/link` answers 503 there and no testnet
   wallet is ever linked to the bot. Watches are mainnet-only anyway: `/api/watches` answers 404 on testnet, like the
   other routes over the token index.

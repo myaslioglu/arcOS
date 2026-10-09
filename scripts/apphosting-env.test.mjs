@@ -69,7 +69,8 @@ describe("the real apps/web/apphosting.testnet.yaml, merged over apphosting.yaml
     // Without the session secret, the testnet site has no sign-in key and sign-in answers 503 there.
     const session = merged.find((e) => e.variable === "ARCOS_SESSION_SECRET");
     expect(session).toMatchObject({ value: "none", availability: ["RUNTIME"] });
-    // Without the webhook secret and a bot username, the testnet site's Telegram routes answer 503.
+    // Without a bot username /api/telegram/link answers 503 on the testnet site; the webhook answers 404 there, behind the
+    // index guard, before it looks at the secret.
     const webhook = merged.find((e) => e.variable === "TELEGRAM_WEBHOOK_SECRET");
     expect(webhook).toMatchObject({ value: "none", availability: ["RUNTIME"] });
     expect(webhook.secret).toBeUndefined();

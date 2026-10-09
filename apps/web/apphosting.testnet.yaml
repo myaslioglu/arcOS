@@ -18,8 +18,9 @@
 #   the 32 bytes a key needs, the testnet site has no key, so sign-in answers 503 there (sessionKey() in
 #   src/lib/session.ts). RUNTIME only, as in apphosting.yaml.
 # - TELEGRAM_WEBHOOK_SECRET: a secret in apphosting.yaml, what Telegram sends with each call to the bot's webhook.
-#   Replaced by `none`, shorter than the 32 characters a secret needs, the testnet site has no webhook and
-#   /api/telegram/webhook answers 503 there (src/lib/watch-server.ts). RUNTIME only, as in apphosting.yaml.
+#   Replaced by `none`, shorter than the 32 characters a secret needs, the testnet site has no webhook. The route
+#   answers 404 there anyway, behind the index guard, before it looks at the secret (src/lib/watch-server.ts); `none`
+#   only matters for the 503 a mainnet server gives while the secret is missing. RUNTIME only, as in apphosting.yaml.
 # - TELEGRAM_BOT_USERNAME: the bot's username in apphosting.yaml. `none` is not one, so /api/telegram/link answers 503
 #   and no testnet wallet is ever linked to the mainnet bot. Watches are mainnet-only anyway: /api/watches answers 404
 #   on testnet, with the other routes over the token index.

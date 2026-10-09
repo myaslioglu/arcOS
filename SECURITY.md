@@ -31,10 +31,12 @@ fixed. Coordinated disclosure — please give us time to address a report before
 ## Where the site runs
 
 https://4rcos.com runs on Firebase App Hosting (Cloud Run, behind Google's load balancers), configured in
-`apps/web/apphosting.yaml`. It has two server secrets: `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which
-the server's explorer reads use because explorer.arc.io refuses server requests) and `ARCOS_SESSION_SECRET` (the key of
-the sign-in cookie, below). Both are Secret Manager secrets, pinned to a version and available at runtime only. Neither
-is ever a `NEXT_PUBLIC_` value or in the repository. Every other
+`apps/web/apphosting.yaml`. It has three server secrets: `BLOCKSCOUT_API_KEY` (the key for Blockscout's PRO API, which
+the server's explorer reads use because explorer.arc.io refuses server requests), `ARCOS_SESSION_SECRET` (the key of
+the sign-in cookie, below) and `TELEGRAM_WEBHOOK_SECRET` (what Telegram sends in the `X-Telegram-Bot-Api-Secret-Token`
+header of each call to `/api/telegram/webhook`, which the route compares in constant time). All three are Secret Manager
+secrets, pinned to a version and available at runtime only. None is ever a `NEXT_PUBLIC_` value or in the repository.
+Every other
 setting in that file is public: `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, for one, is a client identifier that ships in
 the browser bundle.
 

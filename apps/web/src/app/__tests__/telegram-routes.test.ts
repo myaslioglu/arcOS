@@ -226,6 +226,38 @@ describe("POST /api/telegram/webhook", () => {
     expect(unlinkChat).not.toHaveBeenCalled();
   });
 
+  it("never reads the body before the 401: a wrong secret's body stream is not pulled, a right secret's is", async () => {
+    // A body that records every read. highWaterMark 0, or the stream would pull once on construction to fill its queue.
+    const streaming = (chatId: number) => {
+      const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(privateMessage(chatId, "/stop"))));
+        controller.close();
+      });
+      const body = new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 });
+      const req = (secret: string) =>
+        new Request("https://4rcos.com/api/telegram/webhook", {
+          method: "POST",
+          headers: { "x-real-ip": ip, "content-type": "application/json", "x-telegram-bot-api-secret-token": secret },
+          body,
+          duplex: "half",
+        } as RequestInit);
+      return { pull, req };
+    };
+    const wrong = streaming(freshChat());
+    const refused = wrong.req(`${WEBHOOK_SECRET}x`);
+    expect((await webhookPOST(refused)).status).toBe(401);
+    expect(wrong.pull).not.toHaveBeenCalled();
+    expect(refused.bodyUsed).toBe(false);
+
+    const chat = freshChat();
+    const right = streaming(chat);
+    const accepted = right.req(WEBHOOK_SECRET);
+    const res = await webhookPOST(accepted);
+    expect(await res.json()).toEqual({ method: "sendMessage", chat_id: chat, text: STOPPED });
+    expect(right.pull).toHaveBeenCalled();
+    expect(accepted.bodyUsed).toBe(true);
+  });
+
   it("answers 404 on testnet", async () => {
     vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
     expect((await webhook(privateMessage(freshChat(), "/stop"))).status).toBe(404);
@@ -371,12 +403,19 @@ describe("POST /api/telegram/webhook", () => {
     expect((await webhook(privateMessage(freshChat(), "/stop"))).status).toBe(500);
   });
 
-  it("limits the instance to 300 calls a minute, answering 200 empty and logging the step", async () => {
+  it("limits the instance to 300 calls a minute, answering 200 empty and logging the step, and a wrong secret takes none of it", async () => {
     // The limiter is one per server instance (a module-level counter keyed "telegram"), so this test runs the route over
     // a module instance of its own: the one the other tests share keeps its allowance.
     vi.resetModules();
     const { POST } = await import("@/app/api/telegram/webhook/route");
     const unlinkChat = vi.spyOn(fx.memory.watch, "unlinkChat");
+    // More wrong-secret calls than the allowance first: each is refused before the limiter, so the 300 right ones below
+    // still go through. Were the limiter ahead of the secret check, the 301st here would answer 200 empty instead.
+    for (let i = 0; i < 301; i += 1) {
+      const res = await webhook(privateMessage(freshChat(), "/stop"), { secret: `${WEBHOOK_SECRET}x` }, POST);
+      expect(res.status, String(i)).toBe(401);
+    }
+    expect(unlinkChat).not.toHaveBeenCalled();
     for (let i = 0; i < 300; i += 1) {
       const res = await webhook(privateMessage(freshChat(), "/stop"), {}, POST);
       expect(res.status, String(i)).toBe(200);

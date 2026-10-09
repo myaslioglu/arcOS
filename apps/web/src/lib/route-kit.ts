@@ -4,7 +4,8 @@ import type { SiteIdentity } from "./siwe";
 
 // What the routes behind a session share (lib/auth-server.ts, lib/watch-server.ts): the no-store answers, the 429, the
 // Origin check against the configured site, the content-type check and the guard on the token index. Pure: no request
-// is kept, nothing is logged, and nothing here reads process.env, so a test passes the env it wants.
+// is kept and nothing is logged. The network comes from activeNetwork() (process.env.NEXT_PUBLIC_ARC_NETWORK, which
+// the route tests stub); only the index guard reads the env passed in, so a test passes the env it wants there.
 
 export const NO_STORE = { "cache-control": "no-store" } as const;
 
