@@ -169,14 +169,14 @@ URL):
 
 | Line | Fields | Meaning |
 |---|---|---|
-| `arcosIndexer run` | `watch: {checked, unread, failed, alerts, writes, deliveriesCreated, fannedOut, sent, sendFailed, skipped}` | The step's counters; `watch: null` when the step didn't run. `skipped` is `off` (the switch) or `late` (the run reached 55 s before the step). The page cursor is left out of the line (it is a `watchState` doc id, which names a token); read it in Firestore, `indexer/mainnet.watchCursor`. |
+| `arcosIndexer run` | `watch: {checked, unread, failed, alerts, writes, deliveriesCreated, fannedOut, sent, sendFailed, skipped, error}` | The step's counters; `watch: null` when the step didn't run. `skipped` is `off` (the switch) or `late` (the run reached 55 s before the step). `error` is the name of the error that stopped the fan-out or the sends, else `null`. The page cursor is left out of the line (it is a `watchState` doc id, which names a token); read it in Firestore, `indexer/mainnet.watchCursor`. |
 | `arcosIndexer watch read failed` | `code`: `timeout`, `transport` or `reverted` | One token's read failed; its fields stay as stored. At most 5 a run, then `{suppressed: true}`. |
 | `arcosIndexer watch reads stopped` | `code: breaker` | 3 consecutive transport or timeout failures: the run's remaining reads were skipped. |
 | `arcosIndexer watch check failed` | `error`, `code`, `details` (masked) | A token's Firestore read or write failed; it is read again on its next turn. At most 5 a run. |
 | `arcosIndexer telegram send failed` | `code` (the delivery's error code), `status` (a 5xx), `attempts` | One send failed. At most 5 a run. |
 | `arcosIndexer telegram paused` | `code`: `rate_limited` or `unauthorized`; `seconds` | This instance makes no send for `seconds`. |
 | `arcosIndexer telegram not configured` | | The secret holds no token; sends are off on this instance. |
-| `arcosIndexer watch stopped` | `phase`: `checks`, `fanout` or `sends`; `error`, `code` | The phase failed on the Firestore side; the run went on to its inspections, with the error named in the run line. A `fanout` or `sends` failure keeps the checks' counters, their cursor and the fan-out's counters in the run line and the cursor in `indexer/mainnet`; a `checks` failure leaves `watch: null` and the cursor as it was. |
+| `arcosIndexer watch stopped` | `phase`: `checks`, `fanout` or `sends`; `error`, `code`, `details` (masked) | The phase failed on the Firestore side; the run went on to its inspections, with the error named in the run line. A `fanout` or `sends` failure keeps the checks' counters, their cursor and the fan-out's counters in the run line and the cursor in `indexer/mainnet`; a `checks` failure leaves `watch: null` and the cursor as it was. |
 
 Signs to look for: `unread` close to `checked` for many runs (the RPC endpoints are refusing the reads; the breaker
 line says so), `sendFailed` with `code: telegram_5xx` (Telegram's side), `arcosIndexer telegram paused` with
