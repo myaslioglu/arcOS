@@ -179,8 +179,9 @@ missing fails. From a machine signed in as the owner (`gcloud auth login`, `fire
 
    The testnet backend needs nothing: it reads the value `none` (see [The testnet site](#the-testnet-site)).
 
-3. **The bot's username**, from BotFather, goes into `apps/web/apphosting.yaml` as `TELEGRAM_BOT_USERNAME` in place of
-   `none`, in the same pull request. It is public and needs no secret.
+3. **The bot's username**, from BotFather, is `TELEGRAM_BOT_USERNAME` in `apps/web/apphosting.yaml` (`arcoscombot`). It
+   is public and needs no secret; a value that isn't a bot's username (`none`, as on testnet) makes `/api/telegram/link`
+   answer 503.
 
 4. **After the rollout**, once https://4rcos.com serves `/api/telegram/webhook`, register the webhook with Telegram.
    This step also needs `TELEGRAM_BOT_TOKEN`, which the indexer step (pull request #39, its owner steps) creates: run
