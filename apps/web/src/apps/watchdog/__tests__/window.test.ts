@@ -92,12 +92,15 @@ describe("Watchdog", () => {
     let html = render();
     expect(html).toContain('role="status" aria-live="polite">Loading your watches.</p>');
     expect(html).not.toContain("Add a token");
+    // No form yet, so no drop target: a drop's outcome would have nowhere to show.
+    expect(html).toContain('data-accepts=""');
 
     state.query = { ...state.query, isPending: false };
     listing([]);
     html = render();
     expect(html).toContain('role="status" aria-live="polite"></p>');
     expect(html).not.toContain("Loading your watches.");
+    expect(html).toContain('data-accepts="token"');
   });
 
   it("says when the list couldn't load, with a Retry button, and never the error's words", () => {
@@ -134,7 +137,8 @@ describe("Watchdog", () => {
     expect(html).toMatch(/<span class="font-mono[^"]*" title="0x470f09ae20163d5e243f6530fb328912a8fcb099">0x470f…b099<\/span>/);
     expect(html).toContain(`<a href="${LINK}" target="_blank" rel="noreferrer noopener"`);
     expect(html).toContain("WDG (0x470f…b099): paused at block 1,234,567</a>");
-    expect(html).toContain('aria-label="Remove WDG"');
+    // The button's name carries the address too: symbols aren't unique.
+    expect(html).toContain('aria-label="Remove WDG 0x470f…b099"');
     // A token without a symbol is named by its short address, twice: once as the name, once in mono.
     expect(html).toContain(">0x2222…2222</span>");
     expect(html).toContain('aria-label="Remove 0x2222…2222"');

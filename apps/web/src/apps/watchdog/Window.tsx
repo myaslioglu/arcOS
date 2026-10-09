@@ -9,7 +9,20 @@ import { ConnectGate } from "@/components/ConnectGate";
 import { SignInGate, useSession } from "@/components/SignInGate";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
-import { UNAVAILABLE, WATCHES_KEY, addWatch, linkTelegram, removeWatch, unlinkTelegram, watchesQueryOptions, type WatchItem, type WatchList } from "./api";
+import { fetchSession } from "@/lib/sign-in-client";
+import {
+  UNAVAILABLE,
+  WATCHES_KEY,
+  WatchFetchError,
+  addWatch,
+  linkTelegram,
+  removeWatch,
+  unlinkTelegram,
+  watchesQueryOptions,
+  type Refusal,
+  type WatchItem,
+  type WatchList,
+} from "./api";
 import { watchdog } from "./manifest";
 
 /** Every control is at least 32px high, 44px on touch. */
@@ -36,6 +49,12 @@ const LINK_TTL_MS = 10 * 60_000;
 const LINK_POLL_MS = 5_000;
 
 /**
+ * Whether focus was lost: nothing holds it, or the page body does, which is where it lands when the element that had
+ * it left the page or was disabled. A visitor who has moved on meanwhile keeps their place.
+ */
+const focusWasLost = () => document.activeElement === null || document.activeElement === document.body;
+
+/**
  * Watchdog: the tokens the signed-in wallet watches on Arc mainnet, each with its newest alert, polled every minute;
  * a form (and a drop target) to watch one more, up to the free limit; and the wallet's Telegram chat, where the alerts
  * go. The wallet connects and signs in first (ConnectGate, SignInGate). The testnet site has no watches: its window
@@ -58,16 +77,33 @@ export default function WatchdogWindow({ params }: AppProps) {
   );
 }
 
+/** Where focus goes once a Remove has ended: a row's Remove button, or the add-token input. */
+type FocusTarget = { kind: "row"; key: string } | { kind: "input" };
+
+/**
+ * Where focus goes after a row left the list: the row now in its place, else the last row, else the add-token input.
+ * `before` is the list the Remove was clicked in, `after` the list the route answered.
+ */
+function focusAfterRemoval(before: readonly string[], removed: string, after: readonly string[]): FocusTarget {
+  if (after.length === 0) return { kind: "input" };
+  const idx = Math.max(0, before.indexOf(removed));
+  return { kind: "row", key: after[Math.min(idx, after.length - 1)]! };
+}
+
 function Watches({ params }: { params: Record<string, string> }) {
   const session = useSession();
+  const refresh = session.refresh;
   const { notify } = useDesktop();
   const queryClient = useQueryClient();
   const query = useQuery(watchesQueryOptions());
   const list = query.data;
   const limit = list?.limit || FREE_LIMIT;
   const atLimit = list !== undefined && list.watches.length >= limit;
+  // The form, with its input, is on the page once the list is.
+  const formShown = list !== undefined;
 
   const inputId = useId();
+  const errorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -75,19 +111,46 @@ function Watches({ params }: { params: Record<string, string> }) {
   const [busy, setBusy] = useState(false);
 
   // Inspector's button, or a deep link, names a token: it goes into the form, which gets focus. Nothing is sent. The
-  // shell replaces the params of an open window, so the form follows each new token, as a state adjusted during the
-  // render (React's pattern for state that follows a prop); only the focus, outside React, waits for the commit.
-  const [seenToken, setSeenToken] = useState<string | undefined>(undefined);
-  if (params.token !== seenToken) {
-    setSeenToken(params.token);
+  // shell stores a fresh params object on every open that carries params, and keeps it between renders, so the form
+  // follows each open, the same token again included, as a state adjusted during the render (React's pattern for
+  // state that follows a prop). Only the focus, outside React, waits for the commit, and for the form to be on the
+  // page: on a fresh open the list is still loading, and the input isn't there to focus until it has arrived.
+  const [seenParams, setSeenParams] = useState<Record<string, string> | null>(null);
+  if (params !== seenParams) {
+    setSeenParams(params);
     if (params.token) {
       setDraft(params.token);
       setFormError(null);
     }
   }
   useEffect(() => {
-    if (params.token) inputRef.current?.focus();
-  }, [params.token]);
+    if (params.token && formShown) inputRef.current?.focus();
+  }, [params, formShown]);
+
+  // The routes answer 401 once the session is gone: the cookie expired under an open window, or the wallet signed out
+  // elsewhere. The gate is told (it reads the session again and shows the sign-in prompt); each new 401 tells it once.
+  const unauthorized = query.error instanceof WatchFetchError && query.error.status === 401 ? query.error : null;
+  useEffect(() => {
+    if (unauthorized) void refresh();
+  }, [unauthorized, refresh]);
+  const refused = (result: Refusal) => {
+    if (result.status === 401) void refresh();
+  };
+
+  // Where focus goes once a Remove has ended. remove() only stores it: every Remove button is disabled while busy, and
+  // a disabled button can't hold focus, so the effect acts once busy is false again, after the list has re-rendered
+  // without the removed row. It moves focus only if it was lost; a visitor who tabbed elsewhere meanwhile keeps it.
+  const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const pendingFocus = useRef<FocusTarget | null>(null);
+  useEffect(() => {
+    if (busy) return;
+    const target = pendingFocus.current;
+    if (target === null) return;
+    pendingFocus.current = null;
+    if (!focusWasLost()) return;
+    const row = target.kind === "row" ? rowRefs.current[target.key] : null;
+    (row ?? inputRef.current)?.focus();
+  }, [busy]);
 
   /** The route's list after a change is the list: it replaces the query's data without another fetch. */
   const show = (next: WatchList) => queryClient.setQueryData(WATCHES_KEY, next);
@@ -99,12 +162,19 @@ function Watches({ params }: { params: Record<string, string> }) {
       setFormError(NOT_ADDRESS);
       return;
     }
-    if (busy) return;
+    // A drop while a change is under way (the Watch button is disabled, so nothing else gets here): the token waits in
+    // the form, and Watch sends it once the change has ended.
+    if (busy) {
+      setDraft(token);
+      setFormError(null);
+      return;
+    }
     setBusy(true);
     setFormError(null);
     const result = await addWatch(token);
     setBusy(false);
     if (!result.ok) {
+      refused(result);
       setDraft(token);
       setFormError(result.error);
       return;
@@ -115,109 +185,132 @@ function Watches({ params }: { params: Record<string, string> }) {
   };
 
   const remove = async (token: string) => {
-    if (busy) return;
+    if (busy || !list) return;
     setBusy(true);
+    const before = list.watches.map((row) => row.token);
     const result = await removeWatch(token);
-    setBusy(false);
-    if (!result.ok) return notify(result.error, "warn");
+    if (!result.ok) {
+      // The row stays: focus returns to its button.
+      pendingFocus.current = { kind: "row", key: token };
+      setBusy(false);
+      refused(result);
+      return notify(result.error, "warn");
+    }
+    pendingFocus.current = focusAfterRemoval(before, token, result.list.watches.map((row) => row.token));
     show(result.list);
+    setBusy(false);
   };
 
-  // A token file dropped on the window is watched: only its address is read, as the form would read it typed.
-  const { over, props: dropProps } = useDropTarget(watchdog.acceptsDrop, (item) => {
+  // A token file dropped on the window is watched: only its address is read, as the form would read it typed. Drops
+  // land only while the form is on the page, where their outcome is shown.
+  const { over, props: dropProps } = useDropTarget(formShown ? watchdog.acceptsDrop : undefined, (item) => {
     if (item.kind === "token") void add(item.address);
   });
 
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
-      <div className="grid min-h-0 flex-1 content-start gap-3 overflow-auto p-3">
+      <div className="min-h-0 flex-1 overflow-auto p-3">
         {/* Always mounted, so a screen reader hears the text when it arrives: a live region mounted with its text is never announced. */}
         <p className="text-muted" role="status" aria-live="polite">
           {query.isPending ? LOADING : ""}
         </p>
-        {query.isLoadingError && (
-          <div className="grid justify-items-start gap-2">
-            <p className="text-danger-text" role="alert">
-              {UNAVAILABLE}
-            </p>
-            <button type="button" className={BUTTON} onClick={() => void query.refetch()}>
-              Retry
-            </button>
-          </div>
-        )}
-        {list && (
-          <>
-            {query.isRefetchError && (
-              <p className="text-xs text-muted" role="status">
-                {"Couldn't refresh the list. Showing the last one."}
+        <div className="grid gap-3">
+          {query.isLoadingError && (
+            <div className="grid justify-items-start gap-2">
+              <p className="text-danger-text" role="alert">
+                {UNAVAILABLE}
               </p>
-            )}
-            {list.watches.length === 0 ? (
-              <p className="text-muted">{EMPTY}</p>
-            ) : (
-              <ul aria-label="Watched tokens" className="grid gap-2">
-                {list.watches.map((row) => (
-                  <Row key={row.token} row={row} busy={busy} remove={() => void remove(row.token)} />
-                ))}
-              </ul>
-            )}
-            <p className="text-xs text-muted">{`${list.watches.length} of ${limit} tokens watched.`}</p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void add(draft);
-              }}
-              className="grid gap-2"
-            >
-              <label htmlFor={inputId} className="text-xs text-muted">
-                Add a token
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  ref={inputRef}
-                  id={inputId}
-                  value={draft}
-                  onChange={(e) => {
-                    setDraft(e.target.value);
-                    setFormError(null);
-                  }}
-                  placeholder="Token address (0x…)"
-                  spellCheck={false}
-                  autoComplete="off"
-                  aria-invalid={formError !== null}
-                  className={INPUT}
-                />
-                <button type="submit" className={BUTTON} disabled={busy || atLimit}>
-                  Watch
-                </button>
-              </div>
-              {atLimit && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
-              {formError && (
-                <p className="text-xs text-danger-text" role="alert">
-                  {formError}
+              <button type="button" className={BUTTON} onClick={() => void query.refetch()}>
+                Retry
+              </button>
+            </div>
+          )}
+          {list && (
+            <>
+              {query.isRefetchError && (
+                <p className="text-xs text-muted" role="status">
+                  {"Couldn't refresh the list. Showing the last one."}
                 </p>
               )}
-            </form>
-            <Telegram linked={session.telegram === "linked"} refresh={session.refresh} />
-          </>
-        )}
+              {list.watches.length === 0 ? (
+                <p className="text-muted">{EMPTY}</p>
+              ) : (
+                <ul aria-label="Watched tokens" className="grid gap-2">
+                  {list.watches.map((row) => (
+                    <Row
+                      key={row.token}
+                      row={row}
+                      busy={busy}
+                      remove={() => void remove(row.token)}
+                      buttonRef={(el) => {
+                        rowRefs.current[row.token] = el;
+                      }}
+                    />
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-muted">{`${list.watches.length} of ${limit} tokens watched.`}</p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void add(draft);
+                }}
+                className="grid gap-2"
+              >
+                <label htmlFor={inputId} className="text-xs text-muted">
+                  Add a token
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    ref={inputRef}
+                    id={inputId}
+                    value={draft}
+                    onChange={(e) => {
+                      setDraft(e.target.value);
+                      setFormError(null);
+                    }}
+                    placeholder="Token address (0x…)"
+                    spellCheck={false}
+                    autoComplete="off"
+                    aria-invalid={formError !== null}
+                    aria-describedby={formError !== null ? errorId : undefined}
+                    className={INPUT}
+                  />
+                  <button type="submit" className={BUTTON} disabled={busy || atLimit}>
+                    Watch
+                  </button>
+                </div>
+                {atLimit && <p className="text-xs text-muted">{limitSentence(limit)}</p>}
+                {formError && (
+                  <p id={errorId} className="text-xs text-danger-text" role="alert">
+                    {formError}
+                  </p>
+                )}
+              </form>
+              <Telegram linked={session.telegram === "linked"} refresh={refresh} />
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function Row({ row, busy, remove }: { row: WatchItem; busy: boolean; remove: () => void }) {
-  const name = row.symbol ?? shortAddress(row.token);
+function Row({ row, busy, remove, buttonRef }: { row: WatchItem; busy: boolean; remove: () => void; buttonRef: (el: HTMLButtonElement | null) => void }) {
+  const short = shortAddress(row.token);
+  const name = row.symbol ?? short;
+  // Symbols aren't unique (a look-alike copies one on purpose), so the button's name carries the address too.
+  const label = row.symbol === null ? `Remove ${short}` : `Remove ${row.symbol} ${short}`;
   return (
     <li className="grid gap-1 rounded-lg border border-border bg-surface px-3 py-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="min-w-0 break-all">
           <span className="font-medium">{name}</span>{" "}
           <span className="font-mono text-xs text-muted" title={row.token}>
-            {shortAddress(row.token)}
+            {short}
           </span>
         </p>
-        <button type="button" className={BUTTON} disabled={busy} aria-label={`Remove ${name}`} onClick={remove}>
+        <button ref={buttonRef} type="button" className={BUTTON} disabled={busy} aria-label={label} onClick={remove}>
           Remove
         </button>
       </div>
@@ -247,16 +340,31 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The poll reads /api/auth/me itself and hands the gate only an answer that changes it: the chat pressed Start
+  // (linked), or the session is gone (null, so the sign-in prompt comes back). A read that fails, or still says
+  // unlinked, leaves the window waiting: a single failed read out of the wait's hundred-odd would otherwise put the
+  // gate in its "unavailable" view and take the window, with the link, away. One read at a time.
   useEffect(() => {
     if (!waiting || linked) return;
+    let live = true;
+    let asking = false;
     const timer = setInterval(() => {
       if (Date.now() >= waiting.until) {
         setWaiting(null);
         return;
       }
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState !== "visible" || asking) return;
+      asking = true;
+      void fetchSession().then((session) => {
+        asking = false;
+        if (!live) return;
+        if (session === null || (session !== "unavailable" && session.telegram === "linked")) void refresh();
+      });
     }, LINK_POLL_MS);
-    return () => clearInterval(timer);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   }, [waiting, linked, refresh]);
 
   // The chat pressed Start: the session now says linked, and the window says so once. The wait ends with the link
@@ -273,13 +381,23 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
     }
   }, [linked, waiting, notify]);
 
+  // The Link Telegram button leaves the page as the wait begins, which drops focus to the body: the "Open the link
+  // again" anchor takes it, so a keyboard user, or a browser that let no tab open, has the way in under the cursor.
+  const againRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (waiting && !linked && focusWasLost()) againRef.current?.focus();
+  }, [waiting, linked]);
+
   const link = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     const result = await linkTelegram();
     setBusy(false);
-    if (!result.ok) return setError(result.error);
+    if (!result.ok) {
+      if (result.status === 401) void refresh();
+      return setError(result.error);
+    }
     trackEvent("telegram_link");
     setWaiting({ url: result.url, until: Date.now() + LINK_TTL_MS });
     window.open(result.url, "_blank", "noopener,noreferrer");
@@ -290,7 +408,7 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
     setBusy(true);
     setError(null);
     const result = await unlinkTelegram();
-    if (result.ok) {
+    if (result.ok || result.status === 401) {
       setWaiting(null);
       await refresh();
     }
@@ -310,7 +428,7 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
       ) : waiting ? (
         <p className="text-muted">
           {TELEGRAM_WAITING}{" "}
-          <a href={waiting.url} target="_blank" rel="noreferrer noopener" className={LINK}>
+          <a ref={againRef} href={waiting.url} target="_blank" rel="noreferrer noopener" className={LINK}>
             Open the link again
           </a>
         </p>

@@ -37,11 +37,19 @@ export class WatchFetchError extends Error {
   }
 }
 
-/** A change's outcome: the list as the route answered it after the change, or the sentence to show. */
-export type ChangeResult = { ok: true; added: boolean; list: WatchList } | { ok: false; error: string };
+/**
+ * A request that failed: the sentence to show, and the status the route answered (null when it didn't answer, or
+ * answered something that isn't an answer). A 401 tells the window the session is gone, so it can ask the gate.
+ */
+export type Refusal = { ok: false; error: string; status: number | null };
 
-export type LinkResult = { ok: true; url: string } | { ok: false; error: string };
-export type UnlinkResult = { ok: true } | { ok: false; error: string };
+/** A change's outcome: the list as the route answered it after the change, or the refusal to show. */
+export type ChangeResult = { ok: true; added: boolean; list: WatchList } | Refusal;
+
+export type LinkResult = { ok: true; url: string } | Refusal;
+export type UnlinkResult = { ok: true } | Refusal;
+
+const refused = (error: string, status: number | null): Refusal => ({ ok: false, error, status });
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 /** Three watches today; a limit of up to 100 is believed, so a wrong answer can't draw an endless footer. */
@@ -116,13 +124,13 @@ async function change(request: Request, input: string, init: RequestInit, fallba
   try {
     res = await request(input, { ...init, credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch {
-    return { ok: false, error: fallback };
+    return refused(fallback, null);
   }
-  if (!res.ok) return { ok: false, error: (await serverSentence(res)) ?? fallback };
+  if (!res.ok) return refused((await serverSentence(res)) ?? fallback, res.status);
   try {
     return { ok: true, added: res.status === 201, list: parseWatchesAnswer(await res.json()) };
   } catch {
-    return { ok: false, error: fallback };
+    return refused(fallback, null);
   }
 }
 
@@ -158,9 +166,9 @@ export async function linkTelegram(request: Request = fetch): Promise<LinkResult
   try {
     res = await request("/api/telegram/link", { method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch {
-    return { ok: false, error: TELEGRAM_UNAVAILABLE };
+    return refused(TELEGRAM_UNAVAILABLE, null);
   }
-  if (!res.ok) return { ok: false, error: (await serverSentence(res)) ?? TELEGRAM_UNAVAILABLE };
+  if (!res.ok) return refused((await serverSentence(res)) ?? TELEGRAM_UNAVAILABLE, res.status);
   let url: string | null;
   try {
     const body = (await res.json()) as { url?: unknown };
@@ -168,7 +176,7 @@ export async function linkTelegram(request: Request = fetch): Promise<LinkResult
   } catch {
     url = null;
   }
-  return url ? { ok: true, url } : { ok: false, error: TELEGRAM_UNAVAILABLE };
+  return url ? { ok: true, url } : refused(TELEGRAM_UNAVAILABLE, null);
 }
 
 /** DELETE /api/telegram/link: takes the wallet's chat away. Never throws. */
@@ -177,11 +185,12 @@ export async function unlinkTelegram(request: Request = fetch): Promise<UnlinkRe
   try {
     res = await request("/api/telegram/link", { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch {
-    return { ok: false, error: TELEGRAM_UNAVAILABLE };
+    return refused(TELEGRAM_UNAVAILABLE, null);
   }
-  if (!res.ok) return { ok: false, error: (await serverSentence(res)) ?? TELEGRAM_UNAVAILABLE };
+  if (!res.ok) return refused((await serverSentence(res)) ?? TELEGRAM_UNAVAILABLE, res.status);
   return { ok: true };
 }
+
 
 /** The query's key: what the window reads the list under, and what a change writes the route's answer to. */
 export const WATCHES_KEY = ["watches"] as const;

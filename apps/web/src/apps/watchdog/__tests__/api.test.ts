@@ -131,21 +131,21 @@ describe("addWatch", () => {
     expect(JSON.parse(first?.init?.body as string)).toEqual({ token: TOKEN });
   });
 
-  it("shows the route's own sentence as given, cut at 200 characters", async () => {
+  it("shows the route's own sentence as given, cut at 200 characters, with the status", async () => {
     const limit = "You can watch up to 3 tokens. Remove one to add another.";
-    expect(await addWatch(TOKEN, stub(json(409, { error: limit })).request)).toEqual({ ok: false, error: limit });
-    expect(await addWatch(TOKEN, stub(json(400, { error: "No contract at that address." })).request)).toEqual({ ok: false, error: "No contract at that address." });
-    expect(await addWatch(TOKEN, stub(json(401, { error: "Not signed in." })).request)).toEqual({ ok: false, error: "Not signed in." });
+    expect(await addWatch(TOKEN, stub(json(409, { error: limit })).request)).toEqual({ ok: false, error: limit, status: 409 });
+    expect(await addWatch(TOKEN, stub(json(400, { error: "No contract at that address." })).request)).toEqual({ ok: false, error: "No contract at that address.", status: 400 });
+    expect(await addWatch(TOKEN, stub(json(401, { error: "Not signed in." })).request)).toEqual({ ok: false, error: "Not signed in.", status: 401 });
     const long = await addWatch(TOKEN, stub(json(503, { error: "x".repeat(250) })).request);
-    expect(long).toEqual({ ok: false, error: "x".repeat(200) });
+    expect(long).toEqual({ ok: false, error: "x".repeat(200), status: 503 });
   });
 
-  it("shows the one fallback when the route gave no sentence, no answer, or not a list", async () => {
-    expect(await addWatch(TOKEN, stub(text(500, "boom")).request)).toEqual({ ok: false, error: UNAVAILABLE });
-    expect(await addWatch(TOKEN, stub(json(503, { error: "" })).request)).toEqual({ ok: false, error: UNAVAILABLE });
-    expect(await addWatch(TOKEN, stub(json(429, { message: "slow down" })).request)).toEqual({ ok: false, error: UNAVAILABLE });
-    expect(await addWatch(TOKEN, stub(new TypeError("offline")).request)).toEqual({ ok: false, error: UNAVAILABLE });
-    expect(await addWatch(TOKEN, stub(json(201, { nope: 1 })).request)).toEqual({ ok: false, error: UNAVAILABLE });
+  it("shows the one fallback when the route gave no sentence, no answer, or not a list, and the status the route answered, or null without one", async () => {
+    expect(await addWatch(TOKEN, stub(text(500, "boom")).request)).toEqual({ ok: false, error: UNAVAILABLE, status: 500 });
+    expect(await addWatch(TOKEN, stub(json(503, { error: "" })).request)).toEqual({ ok: false, error: UNAVAILABLE, status: 503 });
+    expect(await addWatch(TOKEN, stub(json(429, { message: "slow down" })).request)).toEqual({ ok: false, error: UNAVAILABLE, status: 429 });
+    expect(await addWatch(TOKEN, stub(new TypeError("offline")).request)).toEqual({ ok: false, error: UNAVAILABLE, status: null });
+    expect(await addWatch(TOKEN, stub(json(201, { nope: 1 })).request)).toEqual({ ok: false, error: UNAVAILABLE, status: null });
   });
 });
 
@@ -158,8 +158,8 @@ describe("removeWatch", () => {
   });
 
   it("shows the route's sentence, or the fallback", async () => {
-    expect(await removeWatch(TOKEN, stub(json(400, { error: "That isn't an address." })).request)).toEqual({ ok: false, error: "That isn't an address." });
-    expect(await removeWatch(TOKEN, stub(new TypeError("offline")).request)).toEqual({ ok: false, error: UNAVAILABLE });
+    expect(await removeWatch(TOKEN, stub(json(400, { error: "That isn't an address." })).request)).toEqual({ ok: false, error: "That isn't an address.", status: 400 });
+    expect(await removeWatch(TOKEN, stub(new TypeError("offline")).request)).toEqual({ ok: false, error: UNAVAILABLE, status: null });
   });
 });
 
@@ -202,16 +202,16 @@ describe("linkTelegram", () => {
   });
 
   it("never answers a link that isn't on t.me", async () => {
-    expect(await linkTelegram(stub(json(200, { url: "https://evil.example/start" })).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE });
-    expect(await linkTelegram(stub(json(200, { url: "https://t.me@evil.example/start" })).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE });
-    expect(await linkTelegram(stub(json(200, {})).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE });
+    expect(await linkTelegram(stub(json(200, { url: "https://evil.example/start" })).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE, status: null });
+    expect(await linkTelegram(stub(json(200, { url: "https://t.me@evil.example/start" })).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE, status: null });
+    expect(await linkTelegram(stub(json(200, {})).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE, status: null });
   });
 
   it("shows the route's sentence, or the fallback", async () => {
-    expect(await linkTelegram(stub(json(503, { error: "Telegram alerts aren't available right now." })).request)).toEqual({ ok: false, error: "Telegram alerts aren't available right now." });
-    expect(await linkTelegram(stub(json(429, { error: "Too many requests. Try again in 30 seconds." })).request)).toEqual({ ok: false, error: "Too many requests. Try again in 30 seconds." });
-    expect(await linkTelegram(stub(new TypeError("offline")).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE });
-    expect(await linkTelegram(stub(text(502, "bad gateway")).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE });
+    expect(await linkTelegram(stub(json(503, { error: "Telegram alerts aren't available right now." })).request)).toEqual({ ok: false, error: "Telegram alerts aren't available right now.", status: 503 });
+    expect(await linkTelegram(stub(json(429, { error: "Too many requests. Try again in 30 seconds." })).request)).toEqual({ ok: false, error: "Too many requests. Try again in 30 seconds.", status: 429 });
+    expect(await linkTelegram(stub(new TypeError("offline")).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE, status: null });
+    expect(await linkTelegram(stub(text(502, "bad gateway")).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE, status: 502 });
   });
 });
 
@@ -224,8 +224,8 @@ describe("unlinkTelegram", () => {
   });
 
   it("shows the route's sentence, or the fallback", async () => {
-    expect(await unlinkTelegram(stub(json(401, { error: "Not signed in." })).request)).toEqual({ ok: false, error: "Not signed in." });
-    expect(await unlinkTelegram(stub(new TypeError("offline")).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE });
+    expect(await unlinkTelegram(stub(json(401, { error: "Not signed in." })).request)).toEqual({ ok: false, error: "Not signed in.", status: 401 });
+    expect(await unlinkTelegram(stub(new TypeError("offline")).request)).toEqual({ ok: false, error: TELEGRAM_UNAVAILABLE, status: null });
   });
 });
 
