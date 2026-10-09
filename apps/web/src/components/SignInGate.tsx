@@ -100,9 +100,11 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
     void load();
   }, [address, load]);
 
-  // The prompt the sign-in sets is this wallet's: when the account changes while the wallet signs, the prompt has
-  // left the page with the loading view, and the outcome sets nothing (a session the sign-in made is the last
-  // wallet's; the new wallet's read answers for it). The count is read, not moved: a sign-in is no read.
+  // A sign-in that succeeded always reads again: the read is the latest, for the wallet connected now (the session it
+  // made shows that wallet its app, another wallet its prompt), and it covers the account changing and changing back
+  // while the wallet signed, when the new wallet's read may have landed before the sign-in's cookie existed. A failed
+  // one sets its sentence only on the prompt it was pressed from: when the account changed meanwhile, that prompt has
+  // left the page with the loading view. The count is read, not moved: a sign-in is no read.
   const signIn = async () => {
     if (!address) return;
     const mine = turn.current;
@@ -113,9 +115,12 @@ export function SignInGate({ children }: { children: React.ReactNode }) {
       signMessage: ({ message }) => signMessage.mutateAsync({ message }),
       siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     });
+    if (outcome.ok) {
+      await load();
+      return;
+    }
     if (movedOn(mine)) return;
-    if (outcome.ok) await load();
-    else setState({ kind: "signed-out", error: outcome.error, busy: false });
+    setState({ kind: "signed-out", error: outcome.error, busy: false });
   };
 
   // A read that failed, or gave up (a slow connection: the 10 s above): Retry reads again, the loading view meanwhile.

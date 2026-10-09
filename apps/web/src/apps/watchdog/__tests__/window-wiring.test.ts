@@ -1106,7 +1106,7 @@ describe("Watchdog's window wiring", () => {
   it("acts on nothing when a Telegram route answers after the section has left the page", async () => {
     // Link Telegram is pressed and, while the route answers, the window is closed (or the gates take the body down:
     // the wallet signed out or changed). The 200 then opens no tab for a window that is gone, counts no link the
-    // visitor never saw, and a 401 tells no gate: the refresh closure the section holds is the last wallet's.
+    // visitor never saw, and a 401 tells no gate: a refresh for a section that has gone is a read the page didn't ask for.
     let release!: (res: Response) => void;
     answers = [new Promise<Response>((resolve) => (release = resolve))];
     await mount();
@@ -1129,7 +1129,7 @@ describe("Watchdog's window wiring", () => {
     expect(state.refresh).not.toHaveBeenCalled();
     expect(opened).not.toHaveBeenCalled();
 
-    // Unlink, too: a 401 tells no gate, and a 200 reads no session (the read would tell the last wallet's gate).
+    // Unlink, too: a 401 tells no gate, and a 200 reads no session (a read for a section that has gone).
     state.telegram = "linked";
     answers = [new Promise<Response>((resolve) => (release = resolve))];
     await mount();

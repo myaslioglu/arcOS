@@ -212,8 +212,8 @@ describe("Watchdog's window over the shared query cache", () => {
     await b.release(json(200, list(row(THIRD, "B-ONE"))));
     expect(names()).toEqual(["B-ONE"]);
 
-    // A 401 answered after the body left the page tells no gate either: the refresh closure the change holds reads
-    // the session for the last wallet's address, and would put the gate B signed into back to its prompt.
+    // A 401 answered after the body left the page tells no gate either: a refresh for a body that has gone is a read
+    // the page didn't ask for.
     const post2 = held();
     posts = [post2.answer];
     await watch(TOKEN);

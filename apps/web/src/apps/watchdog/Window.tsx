@@ -138,7 +138,7 @@ function Watches({ params }: { params: Record<string, string> }) {
   // the last wallet's, or the 401 the last poll answered, and a restored window reads its list again. The key stays
   // ["watches"] (design 6); the list is only cached while a window shows it. A change still answering when the body
   // leaves acts on nothing (see add and remove): its list, or the read a 409 asks for, would put the entry back, for
-  // the next wallet to start from, and the gate it would tell of a 401 is the last wallet's.
+  // the next wallet to start from, and the read it would ask of the gate on a 401 is one the page didn't ask for.
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -458,10 +458,9 @@ function Telegram({ linked, refresh }: { linked: boolean; refresh: () => Promise
   // restored after Link Telegram shows the ask again, and a press then makes a new code (the first code's chat,
   // pressing Start, is linked all the same; only its toast isn't shown). A continuation checks the count
   // right after each await (`movedOn`) and returns when it has moved: what it would have done belongs to a view or a
-  // press that has gone. The gate it would tell of a 401 is the last wallet's (its refresh closure reads the session
-  // for that wallet's address), the tab it would open is for a chat already linked or a window that is gone, the
-  // event it would count is for a link the visitor never saw, and the sentence it would set is under a button that
-  // isn't there, or is a later press's to set.
+  // press that has gone. The read it would ask of the gate on a 401 is one the page didn't ask for, the tab it would
+  // open is for a chat already linked or a window that is gone, the event it would count is for a link the visitor
+  // never saw, and the sentence it would set is under a button that isn't there, or is a later press's to set.
   const turn = useRef(0);
   const begin = () => ++turn.current;
   const movedOn = (mine: number) => mine !== turn.current;

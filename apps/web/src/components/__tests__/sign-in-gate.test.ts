@@ -11,10 +11,14 @@ import type { SignedIn } from "../SignInGate";
  * and every address is a test fixture.
  */
 
-const wallet = vi.hoisted(() => ({ address: "0x1111111111111111111111111111111111111111" as string | undefined }));
+const wallet = vi.hoisted(() => ({
+  address: "0x1111111111111111111111111111111111111111" as string | undefined,
+  /** What the wallet answers a signing request with; a test may hold it. */
+  sign: async (): Promise<string> => "0x",
+}));
 vi.mock("wagmi", () => ({
   useConnection: () => ({ address: wallet.address }),
-  useSignMessage: () => ({ mutateAsync: async () => "0x" }),
+  useSignMessage: () => ({ mutateAsync: () => wallet.sign() }),
 }));
 
 import { SignInGate, useSession } from "../SignInGate";
@@ -23,6 +27,8 @@ const WALLET_A = "0x1111111111111111111111111111111111111111";
 const WALLET_B = "0x2222222222222222222222222222222222222222";
 const ME = "/api/auth/me";
 const LOGOUT = "/api/auth/logout";
+const NONCE = "/api/auth/nonce";
+const VERIFY = "/api/auth/verify";
 const FAILED = "Couldn't sign out. Try again.";
 const UNAVAILABLE = "Sign-in isn't available right now.";
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -48,6 +54,8 @@ const fetchStub = vi.fn(async (input: string | URL | Request, init?: RequestInit
   calls.push({ input: String(input), init });
   if (String(input) === ME) return me();
   if (String(input) === LOGOUT) return logout();
+  if (String(input) === NONCE) return json(200, { nonce: "abcdefghijklmnop0123456789" });
+  if (String(input) === VERIFY) return json(200, { address: wallet.address });
   return new Response("", { status: 500 });
 });
 const meCalls = () => calls.filter((c) => c.input === ME);
@@ -78,6 +86,7 @@ beforeEach(() => {
   calls.length = 0;
   fetchStub.mockClear();
   wallet.address = WALLET_A;
+  wallet.sign = async () => "0x";
   me = () => session(WALLET_A);
   logout = () => new Response(null, { status: 204 });
   seen = undefined;
@@ -151,6 +160,43 @@ describe("SignInGate", () => {
     await settle();
     expect(loading()).toBe(false);
     expect(text()).toContain(`the app for ${WALLET_A}`);
+  });
+
+  it("shows the app after a sign-in that outlived the account changing and changing back, without a second press", async () => {
+    // A has no session and presses Sign in; the wallet holds the signing prompt. Meanwhile the account changes to B
+    // and back to A, and A's new read lands first, with the cookie as it was: the prompt. The signature then
+    // completes and the verify sets A's cookie: the gate reads again and shows A's app, rather than a prompt whose
+    // next press would ask the wallet for a second signature.
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://4rcos.com");
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    me = () => json(401, { error: "Not signed in." });
+    await mount();
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+
+    let release!: (signature: string) => void;
+    wallet.sign = () => new Promise<string>((resolve) => (release = resolve));
+    const signInButton = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Sign in") || b.textContent?.startsWith("Check your wallet"))!;
+    await act(async () => signInButton().click());
+    await settle();
+    expect(text()).toContain("Check your wallet");
+    expect(calls.filter((c) => c.input === NONCE)).toHaveLength(1);
+
+    wallet.address = WALLET_B;
+    await mount();
+    wallet.address = WALLET_A;
+    await mount();
+    await settle();
+    expect(text()).toContain("Sign in to use alerts.");
+    expect(text()).not.toContain("Check your wallet");
+
+    // The signature lands and the verify sets the cookie; from here the session reads as A's.
+    me = () => session(WALLET_A);
+    await act(async () => release("0x"));
+    await settle();
+    expect(calls.filter((c) => c.input === VERIFY)).toHaveLength(1);
+    expect(text()).toContain(`the app for ${WALLET_A}`);
+    expect(text()).not.toContain("Sign in to use alerts.");
   });
 
   it("takes the last wallet's app off the page the moment the account changes, before the read answers", async () => {
