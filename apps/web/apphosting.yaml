@@ -57,9 +57,9 @@ env:
     availability:
       - RUNTIME
   # TELEGRAM_BOT_USERNAME is the bot's public username (the t.me link /api/telegram/link answers opens its chat), not a
-  # secret. The owner's bot username goes here before the rollout; "none" makes /api/telegram/link answer 503.
+  # secret. A value that isn't a bot's username ("none", as on testnet) makes /api/telegram/link answer 503.
   - variable: TELEGRAM_BOT_USERNAME
-    value: none
+    value: arcoscombot
     availability:
       - RUNTIME
   # ARCOS_TRUSTED_HOPS is deliberately unset. It is a server-only setting for the rate limits (lib/rate-limit.ts): how many

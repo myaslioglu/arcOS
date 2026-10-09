@@ -5,20 +5,38 @@
 import * as logger from "firebase-functions/logger";
 import { defineSecret } from "firebase-functions/params";
 import { onSchedule } from "firebase-functions/scheduler";
+import { CHAINS } from "@arcos/chain";
 import { arcosDb } from "@arcos/data/server";
+import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer, viemReader, type ChainReader } from "@arcos/inspector";
 import { liveInspector } from "./indexer/inspect";
 import { rpcLogChain } from "./indexer/rpc";
-import { runIndexer } from "./indexer/run";
+import { runIndexer, runLogFields } from "./indexer/run";
 import { INDEXER_NETWORK, INDEXER_OPTIONS, INDEXER_RPC_URL, indexerSettings } from "./indexer/schedule";
+import { BOT_TOKEN_FORMAT, telegramSender, type TelegramSender } from "./indexer/telegram";
 
 /** The Blockscout PRO key, the site's own secret. A deploy pins the version it resolves. */
 const blockscoutApiKey = defineSecret("BLOCKSCOUT_API_KEY");
+/**
+ * Watchdog's bot token, read here and nowhere else: the function is the only caller of the Bot API. A deploy pins the
+ * version it resolves; rotating it means deploying again. A value that isn't a token (empty, "none") leaves sends off.
+ */
+const telegramBotToken = defineSecret("TELEGRAM_BOT_TOKEN");
 
 // One inspector per instance, so its RPC cooldowns carry from one run to the next.
 let inspector: ReturnType<typeof liveInspector> | undefined;
+// Watchdog's own reader, with its own endpoint health: a watch read's failure never cools the inspector's endpoints.
+let watchReader: ChainReader | undefined;
+// Watchdog's sender, once per instance; null once an instance found no token, so it warns once.
+let telegram: TelegramSender | null | undefined;
 
-export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscoutApiKey] }, async () => {
+export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscoutApiKey, telegramBotToken] }, async () => {
   inspector ??= liveInspector({ network: INDEXER_NETWORK, apiKey: blockscoutApiKey.value() });
+  watchReader ??= viemReader(inspectionClient(CHAINS[INDEXER_NETWORK], endpointHealth(), outOfGasIsNodeAnswer));
+  if (telegram === undefined) {
+    const token = telegramBotToken.value().trim();
+    telegram = BOT_TOKEN_FORMAT.test(token) ? telegramSender({ token }) : null;
+    if (telegram === null) logger.warn("arcosIndexer telegram not configured");
+  }
   const result = await runIndexer({
     db: arcosDb(),
     network: INDEXER_NETWORK,
@@ -26,8 +44,11 @@ export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscou
     inspectToken: inspector,
     settings: indexerSettings(process.env),
     log: logger,
+    watch: { reader: watchReader, telegram },
   });
-  if (result.status === "halted") logger.error("arcosIndexer halted", result);
-  else if (result.status === "busy") logger.warn("arcosIndexer busy", result);
-  else logger.info("arcosIndexer run", result);
+  // Logged without Watchdog's cursor, a watchState doc id that would name a watched token.
+  const fields = runLogFields(result);
+  if (result.status === "halted") logger.error("arcosIndexer halted", fields);
+  else if (result.status === "busy") logger.warn("arcosIndexer busy", fields);
+  else logger.info("arcosIndexer run", fields);
 });

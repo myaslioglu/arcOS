@@ -36,7 +36,7 @@ describe("the built codebase", () => {
     for (const name of Object.keys(manifest.endpoints)) expect(name.startsWith("arcos")).toBe(true);
   });
 
-  it("deploys arcosIndexer with design 1.3's settings, the Blockscout key as its only secret, and no prompted params", () => {
+  it("deploys arcosIndexer with design 1.3's settings, the Blockscout key and the bot token as its only secrets, and no prompted params", () => {
     expect(manifest.endpoints.arcosIndexer).toMatchObject({
       platform: "gcfv2",
       region: [INDEXER_OPTIONS.region],
@@ -45,12 +45,13 @@ describe("the built codebase", () => {
       maxInstances: 1,
       concurrency: 1,
       serviceAccountEmail: INDEXER_OPTIONS.serviceAccount,
-      secretEnvironmentVariables: [{ key: "BLOCKSCOUT_API_KEY" }],
+      secretEnvironmentVariables: [{ key: "BLOCKSCOUT_API_KEY" }, { key: "TELEGRAM_BOT_TOKEN" }],
       scheduleTrigger: { schedule: "every 1 minutes", timeZone: "Etc/UTC", retryConfig: { retryCount: 0 } },
       entryPoint: "arcosIndexer",
     });
     // A param other than a secret would need a dotenv value or a prompt, and the CI deploy is non-interactive.
     expect((manifest.params ?? []).filter((p) => p.type !== "secret")).toEqual([]);
+    expect((manifest.params ?? []).map((p) => p.name).sort()).toEqual(["BLOCKSCOUT_API_KEY", "TELEGRAM_BOT_TOKEN"]);
   });
 
   it("imports nothing at run time but firebase-functions, firebase-admin and Node's built-ins", () => {
@@ -86,7 +87,7 @@ describe("the manifest, as the deploy job checks it", () => {
   // first, in CI, before anything reaches the deploy job.
   it("passes the manifest the build writes", () => {
     const { script, env } = manifestCheck();
-    expect(Object.keys(env).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRET", "JOBS_ACCOUNT"]);
+    expect(Object.keys(env).sort()).toEqual(["FUNCTIONS_APIS", "FUNCTIONS_ENDPOINT", "FUNCTIONS_REGION", "FUNCTIONS_SECRETS", "JOBS_ACCOUNT"]);
     const temp = mkdtempSync(path.join(os.tmpdir(), "functions-manifest-"));
     try {
       mkdirSync(path.join(temp, "bundle-functions"));

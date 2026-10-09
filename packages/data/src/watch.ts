@@ -180,6 +180,30 @@ export function sanitizeSymbol(symbol: string | null | undefined): string | null
   return cut === "" ? null : cut;
 }
 
+/**
+ * What a symbol may hold for an alert to show it: letters, digits, spaces, underscores and hyphens, with at least one
+ * letter. Telegram makes a URL, a domain, an @mention, a /command, a #hashtag or a $cashtag tappable even in plain
+ * text, so anything else (a dot, a slash, an at sign) keeps the symbol out of the message.
+ */
+const PLAIN_SYMBOL = /^(?=.*\p{L})[\p{L}\p{Nd} _-]+$/u;
+
+/**
+ * A run of seven or more digits, with or without a space, underscore or hyphen between any two: a phone number, which
+ * Telegram's clients make tappable too (`A4155550100`, `DUKE 415 555 0100`). Six digits are fine (`USDC2`, `X100000`).
+ */
+const DIGIT_RUN = /\p{Nd}(?:[ _-]?\p{Nd}){6,}/u;
+
+/**
+ * A symbol as an alert shows it: `sanitizeSymbol`'s result when it is plain (PLAIN_SYMBOL) and holds no run of seven
+ * or more digits (DIGIT_RUN), else null, and the alert shows the token's short address alone. A sanitised symbol can
+ * still spell `t.me/x`, `example.com`, `@someone`, `/start` or `A4155550100`, each of which Telegram would turn into
+ * something tappable beside the explorer link.
+ */
+export function displaySymbol(symbol: string | null | undefined): string | null {
+  const cleaned = sanitizeSymbol(symbol);
+  return cleaned !== null && PLAIN_SYMBOL.test(cleaned) && !DIGIT_RUN.test(cleaned) ? cleaned : null;
+}
+
 /** 0x1234…abcd: six characters, an ellipsis, four characters. */
 export const short = (address: string): string => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
@@ -206,12 +230,12 @@ export type AlertTextInput = { kind: AlertKind; token: string; network: NetworkI
 
 /**
  * The words of an alert, and the explorer link that goes with them. The copy is fixed and plain: the token, what
- * changed, from what to what, at which block. The symbol is sanitised here, so a stored symbol is shown safely whatever
- * it holds.
+ * changed, from what to what, at which block. The symbol is sanitised and screened here (`displaySymbol`), so a stored
+ * symbol is shown safely whatever it holds, and one that isn't plain is left out.
  */
 export function alertText({ kind, token, network, block, detail }: AlertTextInput): { text: string; link: string } {
   const link = explorerUrl("token", token, network);
-  const symbol = sanitizeSymbol(detail.symbol);
+  const symbol = displaySymbol(detail.symbol);
   const T = symbol === null ? short(token) : `${symbol} (${short(token)})`;
   const N = grouped(String(block));
   const at = `at block ${N}`;

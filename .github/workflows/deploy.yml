@@ -321,21 +321,22 @@ jobs:
       # schedule and by nothing else, in europe-west4 only, with no VPC, no environment variables and the default
       # ingress; no extensions, no lifecycle hooks and no required roles; required APIs only from the CLI's standard list
       # (FUNCTIONS_APIS, STANDARD_APIS in firebase-tools' deploy/functions/prepare.js), which it enables without asking;
-      # and no param, and no secret, but BLOCKSCOUT_API_KEY. Anything else, or a file jq can't read, fails here.
+      # and no param, and no secret, but the secrets FUNCTIONS_SECRETS names (BLOCKSCOUT_API_KEY, and Watchdog's
+      # TELEGRAM_BOT_TOKEN). Anything else, or a file jq can't read, fails here.
       - name: Check the functions manifest
         if: env.DEPLOY_FUNCTIONS == 'true'
         env:
           FUNCTIONS_ENDPOINT: arcosIndexer
           JOBS_ACCOUNT: arcos-jobs@arcos-c80cf.iam.gserviceaccount.com
           FUNCTIONS_REGION: europe-west4
-          FUNCTIONS_SECRET: BLOCKSCOUT_API_KEY
+          FUNCTIONS_SECRETS: BLOCKSCOUT_API_KEY,TELEGRAM_BOT_TOKEN
           FUNCTIONS_APIS: cloudfunctions.googleapis.com,runtimeconfig.googleapis.com,cloudbuild.googleapis.com,artifactregistry.googleapis.com,run.googleapis.com,eventarc.googleapis.com,pubsub.googleapis.com,storage.googleapis.com,secretmanager.googleapis.com,cloudscheduler.googleapis.com,cloudtasks.googleapis.com
         run: |
           manifest="$RUNNER_TEMP/bundle-functions/functions.yaml"
           fail() { echo "::error::functions.yaml $1, so nothing is deployed (docs/OPERATIONS.md, Deploying)."; exit 1; }
           check() {
             jq -e --arg endpoint "$FUNCTIONS_ENDPOINT" --arg account "$JOBS_ACCOUNT" --arg region "$FUNCTIONS_REGION" \
-              --arg secret "$FUNCTIONS_SECRET" --arg apis "$FUNCTIONS_APIS" "$1" "$manifest" > /dev/null
+              --arg secrets "$FUNCTIONS_SECRETS" --arg apis "$FUNCTIONS_APIS" "$1" "$manifest" > /dev/null
           }
           jq -e -s 'length == 1 and (.[0] | type == "object")' "$manifest" > /dev/null || fail "is not one JSON object"
           check '.endpoints | type == "object" and keys == [$endpoint]' || fail "declares endpoints other than $FUNCTIONS_ENDPOINT alone"
@@ -350,8 +351,8 @@ jobs:
           check 'has("lifecycleHooks") | not' || fail "declares lifecycle hooks"
           check 'has("requiredRoles") | not' || fail "declares required roles"
           check '($apis | split(",")) as $standard | (.requiredAPIs // []) | all(.api as $api | $standard | any(. == $api))' || fail "requires an API outside the CLI's standard list"
-          check '(.params // []) | all(.type == "secret" and .name == $secret)' || fail "declares a param other than the secret $FUNCTIONS_SECRET"
-          check '.endpoints | all((.secretEnvironmentVariables // []) | all(.key == $secret and (.secret // $secret) == $secret))' || fail "gives an endpoint a secret other than $FUNCTIONS_SECRET"
+          check '($secrets | split(",")) as $ok | (.params // []) | all(.type == "secret" and (.name as $n | $ok | index($n)) != null)' || fail "declares a param other than the secrets $FUNCTIONS_SECRETS"
+          check '($secrets | split(",")) as $ok | .endpoints | all((.secretEnvironmentVariables // []) | all(.key as $k | ($ok | index($k)) != null and (.secret // $k) == $k))' || fail "gives an endpoint a secret other than $FUNCTIONS_SECRETS"
           echo "functions.yaml: $(jq -r '.endpoints | keys | join(", ")' "$manifest"), scheduled, as $JOBS_ACCOUNT, in $FUNCTIONS_REGION."
 
       # The scanned files go where firebase.json's functions source is, beside the package.json, lockfile and .npmrc of
