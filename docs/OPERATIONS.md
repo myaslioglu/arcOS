@@ -310,8 +310,10 @@ removed it, and every later deploy must work with the roles below alone.
    gcloud secrets versions destroy 1 --secret TELEGRAM_BOT_TOKEN --project arcos-c80cf
    ```
 
-   (`1` being the wrong version's number in the list. `npx -y firebase-tools@15.32.0 functions:secrets:prune
-   --project arcos-c80cf` does the same with its own check: it destroys only the versions no deployed function uses.)
+   (`1` being the wrong version's number in the list. `functions:secrets:prune` is no substitute: it lists only the
+   secrets the Firebase CLI created itself, labelled `firebase-managed=true`. `gcloud secrets create` adds no label and
+   the deploy adds none later, so for this secret prune reports "All secrets are in use. Nothing to prune today." and
+   leaves the wrong version enabled; the `gcloud secrets versions destroy` above is the command that works.)
    Before any deploy has pinned the secret, the destroy can follow the add at once, since no function reads the old
    version. Deleting the secret and creating it again also works before any deploy has pinned it, but it drops the
    secret's bindings, so this binding and step 5's (the deployer's) are then added again, and

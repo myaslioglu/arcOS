@@ -983,4 +983,23 @@ describe("docs/OPERATIONS.md, replacing a secret version", () => {
   it("says what destroying a pinned version does to the running function", () => {
     expect(recipe).toMatch(/destroying a version a deployed function is pinned to stops/);
   });
+
+  // The CLI's prune lists only secrets labelled firebase-managed=true (functions/secrets.js, pruneSecrets), and the
+  // runbook creates TELEGRAM_BOT_TOKEN with gcloud, which adds no label; prune never sees it and destroys nothing.
+  // The runbook must not offer prune as the destroy's equivalent, and must say why if it names it at all.
+  const secretsJs = path.join(root, "tools/firebase/node_modules/firebase-tools/lib/functions/secrets.js");
+  it.runIf(fs.existsSync(secretsJs))("pinned CLI's prune lists only firebase-managed secrets", () => {
+    const prune = fs.readFileSync(secretsJs, "utf8").match(/async function pruneSecrets\([\s\S]*?\n\}/);
+    expect(prune, "secrets.js declares pruneSecrets").not.toBeNull();
+    expect(prune[0]).toMatch(/listSecrets\)\(projectId, `labels\.\$\{secretManager_2\.FIREBASE_MANAGED\}=true`\)/);
+  });
+
+  it("does not offer functions:secrets:prune as a way to destroy the wrong version", () => {
+    expect(recipe).not.toMatch(/prune[^.]*does the same/);
+    expect(recipe).not.toMatch(/npx -y firebase-tools@[^\s`]+ functions:secrets:prune/);
+    if (recipe.includes("functions:secrets:prune")) {
+      expect(recipe).toMatch(/firebase-managed=true/);
+      expect(recipe).toMatch(/prune[^.]*(is no substitute|never sees|destroys nothing|Nothing to prune)/);
+    }
+  });
 });
