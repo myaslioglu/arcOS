@@ -507,7 +507,7 @@ contract MultisendTest is Test {
         uint256 gasBefore = gasleft();
         drop.sendNative{value: n * 1 gwei + fee}(_payable(to), amounts);
         uint256 gasUsed = gasBefore - gasleft();
-        // About 9.3M gas for 200 rows (roughly the 40,000 stipend per row); copying the return data cost over a
+        // About 9.4M gas for 200 rows (roughly the 40,000 stipend per row); copying the return data cost over a
         // billion. Arc's block limit is 30M.
         assertLt(gasUsed, 15_000_000);
         assertEq(address(bomb).balance, n * 1 gwei); // the transfers themselves went through
