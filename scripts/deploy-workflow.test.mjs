@@ -867,11 +867,14 @@ describe("the Firestore tests in CI", () => {
     ]);
   });
 
-  it("allows nothing in functions/deploy, and nothing as a runtime dependency except in tools/firebase", () => {
+  it("allows nothing in functions/deploy, and nothing as a runtime dependency except in tools/firebase and the zod exception", () => {
     const allowlist = JSON.parse(read("scripts/audit-allowlist.json"));
     for (const entry of allowlist) {
       expect(entry.paths ?? ["."]).not.toContain("functions/deploy");
-      if (entry.runtime) expect(entry.paths).toEqual(["tools/firebase"]);
+      // The one runtime exception outside tools/firebase: zod GHSA-mrhx-c7xc-m3w5, which has no 3.x patch and whose 4.x
+      // breaks @circle-fin/* (SECURITY.md, "zod"). It expires; the test names it so no other runtime entry slips in.
+      if (entry.runtime && entry.id !== "GHSA-mrhx-c7xc-m3w5") expect(entry.paths).toEqual(["tools/firebase"]);
+      if (entry.id === "GHSA-mrhx-c7xc-m3w5") expect(entry).toMatchObject({ package: "zod", paths: ["."], runtime: true });
     }
   });
 
