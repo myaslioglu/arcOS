@@ -84,6 +84,17 @@ export const SWAP_ADAPTER: Record<NetworkId, Address> = {
 };
 
 /**
+ * Multisends Drop used before the one in `ARCOS[network].multisend`. Drop's sendToken approves the Multisend, so a
+ * token approved to an earlier one stays approved until revoked; Revoke names these so that allowance can be found.
+ * Mainnet's first Multisend (deployed 2026-09-25) was Drop's until 2026-10-30 (packages/contracts/DEPLOY.md,
+ * "Deployments").
+ */
+export const PREVIOUS_MULTISENDS: Record<NetworkId, Address[]> = {
+  mainnet: ["0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47"],
+  testnet: [],
+};
+
+/**
  * The explorer or the multicall couldn't answer: the route says "Couldn't load approvals". `status` is the HTTP status
  * the explorer answered with, when that is what failed (a 402 is Blockscout's PRO API saying the plan's quota or
  * payment is gone, a 429 its per-second limit, a 401 or 403 a refused key); null otherwise. The route logs it: a
@@ -124,7 +135,10 @@ export type Approval = {
   name: string | null;
   decimals: number | null;
   spender: Address;
-  /** "Permit2", "Uniswap Universal Router", "4rc.OS Multisend", …, or null for a contract Revoke doesn't know. */
+  /**
+   * "Permit2", "Uniswap Universal Router", "4rc.OS Multisend", "4rc.OS Multisend (old)", …, or null for a contract
+   * Revoke doesn't know.
+   */
   spenderLabel: string | null;
   /**
    * The live allowance, as a decimal string: an amount for "erc20" and "permit2". An NFT approval and an operator
@@ -187,6 +201,7 @@ export function spenderLabel(spender: string, network: NetworkId): string | null
   if (UNIVERSAL_ROUTERS[network].some((r) => r.toLowerCase() === s)) return "Uniswap Universal Router";
   const multisend = ARCOS[network]?.multisend;
   if (multisend && s === multisend.toLowerCase()) return "4rc.OS Multisend";
+  if (PREVIOUS_MULTISENDS[network].some((m) => m.toLowerCase() === s)) return "4rc.OS Multisend (old)";
   if (s === SWAP_ADAPTER[network].toLowerCase()) return "Circle swap adapter";
   return null;
 }

@@ -10,6 +10,7 @@ import {
   MAX_PAIRS,
   MULTICALL_BUDGET,
   MULTICALL_TIME_BUDGET_MS,
+  PREVIOUS_MULTISENDS,
   SWAP_ADAPTER,
   UNLIMITED,
   approvalPairs,
@@ -511,6 +512,26 @@ describe("spenderLabel", () => {
       expect(spenderLabel(ARCOS[network]!.multisend, network)).toBe("4rc.OS Multisend");
       expect(spenderLabel(SWAP_ADAPTER[network], network)).toBe("Circle swap adapter");
       expect(spenderLabel(SPENDER_X, network)).toBeNull();
+    }
+  });
+
+  it("names mainnet's new Multisend as the one in use, and still names the previous one, in either letter case", () => {
+    const NEW = "0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e";
+    const OLD = "0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47";
+    expect(ARCOS.mainnet!.multisend).toBe(NEW);
+    expect(PREVIOUS_MULTISENDS.mainnet).toEqual([OLD]);
+    expect(spenderLabel(NEW, "mainnet")).toBe("4rc.OS Multisend");
+    expect(spenderLabel(NEW.toLowerCase(), "mainnet")).toBe("4rc.OS Multisend");
+    expect(spenderLabel(OLD, "mainnet")).toBe("4rc.OS Multisend (old)");
+    expect(spenderLabel(OLD.toLowerCase(), "mainnet")).toBe("4rc.OS Multisend (old)");
+    // A network's previous Multisends are its own: mainnet's old one means nothing on testnet, which has none.
+    expect(PREVIOUS_MULTISENDS.testnet).toEqual([]);
+    expect(spenderLabel(OLD, "testnet")).toBeNull();
+    for (const network of ["mainnet", "testnet"] as const) {
+      for (const old of PREVIOUS_MULTISENDS[network]) {
+        expect(getAddress(old), old).toBe(old);
+        expect(old.toLowerCase()).not.toBe(ARCOS[network]!.multisend.toLowerCase());
+      }
     }
   });
 });
