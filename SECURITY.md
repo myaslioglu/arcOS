@@ -182,12 +182,11 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
 - **Package:** `toml` (transitive, pulled in as `@coral-xyz/anchor`'s dependency `"toml": "^3.0.0"`,
   itself required — not optional — by every `@circle-fin/*-kit` sub-package `@circle-fin/app-kit`
   installs, including `swap-kit` and `bridge-kit`, for their Solana-side providers).
-- **Advisories:** GHSA-82x6-q7mm-w9cf (Uncontrolled Recursion, CVSS 7.5) and GHSA-v5mp-jgw5-2x6j
-  (Prototype Pollution via `__proto__` key-path desynchronization, CVSS 8.2), both `severity: high`
-  per `npm audit --omit=dev` and the GitHub Advisory Database, both affecting `toml < 4.2.0`. The
-  installed version (`3.0.0`, the only `3.x` release ever published) has no in-range patch — the
-  first patched release is `4.2.0`, a different major than what `@coral-xyz/anchor@^3.0.0` (checked
-  up to its own latest, `0.32.1`) declares.
+- **Advisories:** GHSA-4qx8-w7c3-pj3p, GHSA-9j65-hcg3-gc64 and GHSA-9qmh-m7c6-f92p (CPU denial of service in
+  `toml.parse()`), all `severity: high`, all affecting `toml <= 5.0.0` (they replace the two advisories
+  GHSA-82x6-q7mm-w9cf and GHSA-v5mp-jgw5-2x6j that the first override, `^4.2.0`, settled on 2026-09-20). The installed
+  version (`3.0.0`, the only `3.x` release ever published) has no in-range patch: the first patched release is
+  `5.0.1`, two majors above what `@coral-xyz/anchor` declares (`^3.0.0`, checked up to its own latest, `0.32.1`).
 - **Why it's unreachable here:** both advisories require parsing attacker-controlled TOML text.
   4rc.OS never parses TOML anywhere in its own code, on the client or the server. Inside
   `@coral-xyz/anchor`, `toml` is used to load `Anchor.toml` workspace configuration — a
@@ -197,14 +196,15 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   the SDK's Solana providers or their CLI tooling.
 - **Override applied (root `package.json`, alongside the existing `ws` override):**
   ```json
-  "overrides": { "toml": "^4.2.0" }
+  "overrides": { "toml": "^5.0.1" }
   ```
-  Resolves to `toml@4.3.0` as of 2026-09-20. `@coral-xyz/anchor@0.31.1` (the version `app-kit`
+  Resolves to `toml@5.0.1` as of 2026-10-30 (it was `4.3.0` from 2026-09-20). `@coral-xyz/anchor@0.31.1` (the version `app-kit`
   pulls) was written against `toml@^3.0.0`; this override installs a newer major than it declares
-  support for. `npm run build`, the full test suite, and a standalone `new AppKit()` smoke script
-  all ran clean against the forced version — `toml`'s own public API (`parse(string) -> object`)
+  support for. On 2026-10-30, against 5.0.1, `npm run build`, the full test suite, a standalone `new AppKit()` smoke script
+  and an import of `@coral-xyz/anchor` all ran clean (5.0.1 is still CommonJS, `engines.node >=20`) — `toml`'s own public API (`parse(string) -> object`)
   is small and unchanged across this jump, and Anchor's usage of it is a single, simple parse call.
-- **Decided by:** the project owner, in chat, 2026-09-20 — a deliberate, documented exception, not
+- **Decided by:** the project owner, in chat, 2026-09-20, for the jump to `^4.2.0`, and again on 2026-10-30 for the move on to `^5.0.1`
+  — a deliberate, documented exception, not
   a default resolution path. This project's normal default is to keep a forced `overrides` bump
   within the same major version, to avoid exactly this kind of unreviewed breaking change; this
   entry is a narrow, explicitly-tracked exception to that default (rather than a silent one),
@@ -214,3 +214,30 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   `@coral-xyz/anchor`) depends on `toml >= 4.2.0` on its own, or drops the CCTP-Solana / Anchor
   dependency entirely for the providers this app doesn't use. Re-run `npm audit --omit=dev` after
   removing it to confirm the override is no longer needed before deleting this section.
+
+### `zod` (via `@circle-fin/*` and `@reown/appkit-wallet`)
+
+- **Advisory:** GHSA-mrhx-c7xc-m3w5 (`severity: high`): validating an oversized array, map or set can exhaust
+  memory (`handleArrayResult` in zod's v4 core). It is fixed in `zod 4.6.6`; no `3.x` release carries a patch. The flagged
+  range `<4.6.6` takes in `3.x`, which is what the Circle and Reown packages import, and that code path (`handleArrayResult`)
+  exists only in `zod/v4/core`, which nothing here imports; npm reports the packages all the same.
+- **Why there is no fix here:** every `@circle-fin/*` package pins `zod` at exactly `3.25.67` (its latest release,
+  `@circle-fin/app-kit 1.19.0`, too) and `@reown/appkit-wallet` pins `3.22.4`. A `zod` override to `4.x` breaks
+  Circle's v3 schemas: `z.function().returns(...)`, which its fee options use, does not exist in `zod 4`
+  (`z.function(...).returns is not a function`), and `required_error`/`invalid_type_error` messages are dropped.
+  `viem`, `abitype` and `wagmi` are flagged only through `abitype`'s optional `zod` peer, which the app never imports (`abitype/zod` is a separate entry point).
+- **Exposure:** a visitor's own browser tab, on input the SDKs validate (the app's forms, their vendors' replies).
+- **Decided by:** the project owner, in chat, 2026-10-30.
+- **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-11-29). Remove it
+  once the Circle and Reown packages move to a patched `zod`.
+
+### `query-string` (via `@walletconnect/utils`)
+
+- **Advisory:** GHSA-qr28-fpjm-wq7f (`decode-uri-component <= 0.5.0`, denial of service). `@walletconnect/utils`
+  (2.21.8 and the 2.21.0 copies under `@reown/*`) declares `query-string 7.1.3`, which needs `decode-uri-component`.
+  The only patched release, `0.5.1`, is ESM-only, so overriding it breaks `query-string 7`
+  (`decodeComponent is not a function`).
+- **Override applied:** `"query-string": "^10.0.0"`, which does not use `decode-uri-component` at all. No file of the
+  installed `@walletconnect/*` or `@reown/*` packages, and nothing in the web build, loads `query-string`; it is a
+  declared dependency only. Remove the override once WalletConnect drops the dependency (the packages are pinned at
+  their last Apache-2.0 release; see `apps/web/src/providers/wagmi.ts`).
