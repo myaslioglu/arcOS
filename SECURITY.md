@@ -203,8 +203,8 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   support for. On 2026-10-30, against 5.0.1, `npm run build`, the full test suite, a standalone `new AppKit()` smoke script
   and an import of `@coral-xyz/anchor` all ran clean (5.0.1 is still CommonJS, `engines.node >=20`) — `toml`'s own public API (`parse(string) -> object`)
   is small and unchanged across this jump, and Anchor's usage of it is a single, simple parse call.
-- **Decided by:** the project owner, in chat, 2026-09-20, for the jump to `^4.2.0`; the move on to `^5.0.1` (2026-10-30)
-  is pending the owner's OK — a deliberate, documented exception, not
+- **Decided by:** the project owner, in chat, 2026-09-20, for the jump to `^4.2.0`, and again on 2026-10-30 for the move on to `^5.0.1`
+  — a deliberate, documented exception, not
   a default resolution path. This project's normal default is to keep a forced `overrides` bump
   within the same major version, to avoid exactly this kind of unreviewed breaking change; this
   entry is a narrow, explicitly-tracked exception to that default (rather than a silent one),
@@ -227,7 +227,7 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   (`z.function(...).returns is not a function`), and `required_error`/`invalid_type_error` messages are dropped.
   `viem`, `abitype` and `wagmi` are flagged only through `abitype`'s optional `zod` peer, which the app never imports (`abitype/zod` is a separate entry point).
 - **Exposure:** a visitor's own browser tab, on input the SDKs validate (the app's forms, their vendors' replies).
-- **Decided by:** pending the project owner's OK (2026-10-30).
+- **Decided by:** the project owner, in chat, 2026-10-30.
 - **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-11-29). Remove it
   once the Circle and Reown packages move to a patched `zod`.
 
