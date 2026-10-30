@@ -13,5 +13,13 @@
     "until": "2026-11-03",
     "paths": ["tools/firebase"],
     "runtime": true
+  },
+  {
+    "id": "GHSA-mrhx-c7xc-m3w5",
+    "package": "zod",
+    "reason": "no zod 3.x patch exists (fixed in 4.6.6+); @circle-fin/* pins zod 3.25.67 and @reown/appkit-wallet 3.22.4, and zod 4 breaks Circle (z.function().returns); a DoS in the visitor's own tab only",
+    "until": "2026-11-29",
+    "paths": ["."],
+    "runtime": true
   }
 ]
