@@ -284,7 +284,9 @@ but does have privileged functions, both the ownership and privileges findings r
   fee can be missed until an index lists it.
 - Drop approves exactly the total a run needs, but a run that stops early (a refused signature, an
   unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until a
-  later run uses it or you revoke it in Revoke.
+  later run uses it or you revoke it in Revoke. Drop on mainnet has used a new Multisend since
+  2026-10-30 (`packages/contracts/DEPLOY.md`, "Deployments"), so an allowance left with the previous one
+  is no longer used by a later run; Revoke lists it as "4rc.OS Multisend (old)".
 - Revoke lists ERC-20 allowances, single NFTs' approvals, operators (ERC-721 and ERC-1155
   `setApprovalForAll`) and Permit2 allowances. "Revoke all" sends one transaction per approval, one
   after another, and every Permit2 pair in a single `lockdown`; it stops at the first one that fails.
