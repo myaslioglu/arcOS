@@ -458,13 +458,22 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
 |---|---|---|
 | Arc Testnet (5042002) | FeeController | [`0xC470753e83c151a6A4A360869270291A6ED70d99`](https://explorer.testnet.arc.io/address/0xC470753e83c151a6A4A360869270291A6ED70d99) |
 | Arc Testnet (5042002) | TokenFactory | [`0x41FaFc54ED3be1545695B82af4aA490607447884`](https://explorer.testnet.arc.io/address/0x41FaFc54ED3be1545695B82af4aA490607447884) |
-| Arc Testnet (5042002) | Multisend | [`0x113f3864C94ff6a14310a789bD671de5b78D6CBf`](https://explorer.testnet.arc.io/address/0x113f3864C94ff6a14310a789bD671de5b78D6CBf) |
+| Arc Testnet (5042002) | Multisend (previous version, still the app's on testnet) | [`0x113f3864C94ff6a14310a789bD671de5b78D6CBf`](https://explorer.testnet.arc.io/address/0x113f3864C94ff6a14310a789bD671de5b78D6CBf) |
 | Arc (5042) | FeeController | [`0x2B37F9a9443B2DfaE6B7C7063586935a574B5699`](https://explorer.arc.io/address/0x2B37F9a9443B2DfaE6B7C7063586935a574B5699) |
 | Arc (5042) | TokenFactory | [`0xa68edD822048C00dC816d93005B72F8a50234a24`](https://explorer.arc.io/address/0xa68edD822048C00dC816d93005B72F8a50234a24) |
-| Arc (5042) | Multisend | [`0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47`](https://explorer.arc.io/address/0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47) |
+| Arc (5042) | Multisend (2026-10-30, from 4fd5f94) | [`0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e`](https://explorer.arc.io/address/0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e) |
+| Arc (5042) | Multisend, previous version (2026-09-25, from 8b9eb2a; not used by the app since 2026-10-30) | [`0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47`](https://explorer.arc.io/address/0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47) |
 
-These are also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app reads. R1's VaultFactory,
-VestingFactory and ProPass are not deployed yet (see "R1" above); they join this table after step 8 there.
+Every row but mainnet's previous Multisend is also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app
+reads.
+R1's VaultFactory, VestingFactory and ProPass are not deployed yet (see "R1" above); they join this table after step
+8 there.
+
+The mainnet Multisend was deployed again on 2026-10-30, against the same FeeController and with the same ABI and fee
+keys. The previous version's `sendNative` copied each recipient's return data into memory; the new one makes the
+native call without an output area (PR #42). The previous contract stays on chain, and Revoke still names it ("4rc.OS
+Multisend (old)", `PREVIOUS_MULTISENDS` in `apps/web/src/lib/approvals.ts`), so an allowance an earlier Drop left with
+it can be found and revoked. The testnet Multisend was not deployed again: it is still the previous version.
 
 The testnet `TokenFactory` predates the current name rule (it checks each byte only for ASCII control characters, so malformed UTF-8 and bidi, line-break and invisible characters still pass there); the
 mainnet deployment uses the current source.

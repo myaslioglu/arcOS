@@ -129,8 +129,12 @@ export type ArcosContracts = {
  * Verify a TokenFactory's source on the explorer BEFORE wiring it here: the Inspector counts every token it created
  * as source-verified through it (`checkVerified` in @arcos/inspector).
  * Mainnet: deployed 2026-09-25 from 8b9eb2a; each contract's `feeController()` was read back on chain and matches, and
- * the runtime bytecode equals that commit's build (immutables masked).
- * Testnet: deployed 2026-09-22; each contract's `feeController()` was read back on chain and matches.
+ * the runtime bytecode equals that commit's build (immutables masked). The Multisend was deployed again on 2026-10-30
+ * from 4fd5f94, against the same FeeController: its `feeController()` was read back and matches, and its runtime
+ * bytecode equals that commit's build. The app no longer uses the previous one; Revoke still names it
+ * (`PREVIOUS_MULTISENDS` in apps/web/src/lib/approvals.ts), and DEPLOY.md's Deployments table keeps it.
+ * Testnet: deployed 2026-09-22; each contract's `feeController()` was read back on chain and matches. Its Multisend is
+ * still the previous version.
  * R1's contracts (vaultFactory, vestingFactory, proPass) go on testnet first, through DeployR1 (DEPLOY.md, "R1"); they
  * stay null until then, and null on mainnet.
  */
@@ -138,7 +142,7 @@ export const ARCOS: Record<NetworkId, ArcosContracts | null> = {
   mainnet: {
     feeController: "0x2B37F9a9443B2DfaE6B7C7063586935a574B5699",
     tokenFactory: "0xa68edD822048C00dC816d93005B72F8a50234a24",
-    multisend: "0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47",
+    multisend: "0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e",
     vaultFactory: null,
     vestingFactory: null,
     proPass: null,
