@@ -92,7 +92,14 @@ contract Multisend is ReentrancyGuard {
         for (uint256 i; i < n; ++i) {
             bool ok;
             if (to[i] != address(0)) {
-                (ok,) = to[i].call{value: amounts[i], gas: CALL_GAS}("");
+                address recipient = to[i];
+                uint256 amount = amounts[i];
+                // Raw call with no output area: a recipient's return data is never copied into this call's
+                // memory. The stipend caps the gas a recipient can burn, but not how much data it can return,
+                // and copying that data is paid for out of the sender's gas.
+                assembly ("memory-safe") {
+                    ok := call(CALL_GAS, recipient, amount, 0, 0, 0, 0)
+                }
             }
             if (!ok) {
                 failedAmount += amounts[i];

@@ -107,6 +107,16 @@ contract HugeReturnToken {
     }
 }
 
+/// A recipient that accepts the transfer and returns ~120 KB, about the most 40,000 gas can pay memory for. Copying
+/// that into the caller's memory used to cost the batch quadratic gas.
+contract ReturnBombReceiver {
+    receive() external payable {
+        assembly {
+            return(0, 120000)
+        }
+    }
+}
+
 contract Rejector {} // no receive(): native transfers to it fail
 
 /// A recipient whose receive() reverts, like a smart-contract wallet with a broken fallback.
@@ -483,6 +493,24 @@ contract MultisendTest is Test {
         uint256 gasUsed = gasBefore - gasleft();
         vm.stopPrank();
         assertLt(gasUsed, 3_000_000);
+    }
+
+    function test_sendNative_returnBombRecipients_gasStaysLinear_andRowsAreDelivered() public {
+        ReturnBombReceiver bomb = new ReturnBombReceiver();
+        uint256 n = 200;
+        (address[] memory to, uint256[] memory amounts) = _lists(n, 1 gwei);
+        for (uint256 i; i < n; ++i) {
+            to[i] = address(bomb);
+        }
+        uint256 fee = drop.quote(n);
+        vm.prank(sender);
+        uint256 gasBefore = gasleft();
+        drop.sendNative{value: n * 1 gwei + fee}(_payable(to), amounts);
+        uint256 gasUsed = gasBefore - gasleft();
+        // About 9.3M gas for 200 rows (roughly the 40,000 stipend per row); copying the return data cost over a
+        // billion. Arc's block limit is 30M.
+        assertLt(gasUsed, 15_000_000);
+        assertEq(address(bomb).balance, n * 1 gwei); // the transfers themselves went through
     }
 
     // ---------------------------------------------------------------------
