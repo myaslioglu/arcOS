@@ -36,7 +36,7 @@ function model(over: Partial<MenuInput> = {}) {
     theme: vi.fn(),
   };
   const menus = menuModel({
-    brand: "4rc.OS",
+    brand: "ArcOS",
     apps: APPS,
     windows: [],
     activeId: null,
@@ -64,8 +64,8 @@ describe("menuModel", () => {
   it("keeps About and Keyboard shortcuts in the brand menu, and the theme out of it", () => {
     const brand = menu(model().menus, "brand");
     expect(brand.brand).toBe(true);
-    expect(brand.name).toBe("4rc.OS menu");
-    expect(items(brand.entries).map((i) => i.label)).toEqual(["About 4rc.OS", "Keyboard shortcuts"]);
+    expect(brand.name).toBe("ArcOS menu");
+    expect(items(brand.entries).map((i) => i.label)).toEqual(["About ArcOS", "Keyboard shortcuts"]);
   });
 
   it("lists every app in File, the grey ones hinted Soon, and opens them", () => {
@@ -119,7 +119,7 @@ describe("menuModel", () => {
   it("opens the Roadmap, the repository and About from Help", () => {
     const { menus, on } = model();
     const help = items(menu(menus, "help").entries);
-    expect(help.map((i) => i.label)).toEqual(["Keyboard shortcuts", "Roadmap", "GitHub ↗", "About 4rc.OS"]);
+    expect(help.map((i) => i.label)).toEqual(["Keyboard shortcuts", "Roadmap", "GitHub ↗", "About ArcOS"]);
     help[1].onSelect();
     help[2].onSelect();
     help[3].onSelect();
@@ -130,6 +130,6 @@ describe("menuModel", () => {
 
   it("leaves GitHub out of Help without a repository URL", () => {
     const help = items(menu(model({ repoUrl: "" }).menus, "help").entries);
-    expect(help.map((i) => i.label)).toEqual(["Keyboard shortcuts", "Roadmap", "About 4rc.OS"]);
+    expect(help.map((i) => i.label)).toEqual(["Keyboard shortcuts", "Roadmap", "About ArcOS"]);
   });
 });

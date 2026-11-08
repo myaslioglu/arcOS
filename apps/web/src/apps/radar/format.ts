@@ -40,14 +40,14 @@ export function liquidityText(depth: string): string {
 }
 
 const SOURCE_LABEL: Record<TokenSource, string> = {
-  factory: "4rc.OS",
+  factory: "ArcOS",
   v2: "Uniswap v2",
   v3: "Uniswap v3",
   v4: "Uniswap v4",
   aero: "Aerodrome",
 };
 
-/** Where the index first saw a token: the 4rc.OS TokenFactory, or the pool factory whose pool named it. */
+/** Where the index first saw a token: the ArcOS TokenFactory, or the pool factory whose pool named it. */
 export function sourceLabel(source: TokenSource): string {
   return SOURCE_LABEL[source];
 }

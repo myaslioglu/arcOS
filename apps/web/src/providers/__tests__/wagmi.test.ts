@@ -212,7 +212,7 @@ describe("WALLETCONNECT_METADATA", () => {
   });
 
   it("names the site the way wallets show it", () => {
-    expect(WALLETCONNECT_METADATA.name).toBe("4rc.OS");
+    expect(WALLETCONNECT_METADATA.name).toBe("ArcOS");
     expect(WALLETCONNECT_METADATA.description).toBe("Small token tools on Arc, as a desktop.");
     expect(WALLETCONNECT_METADATA.url).toBe("https://4rcos.com");
   });
@@ -235,7 +235,7 @@ describe("WALLETCONNECT_METADATA", () => {
     const { WALLETCONNECT_METADATA: testnet } = await import("../wagmi");
     expect(testnet.url).toBe("https://testnet.4rcos.com");
     expect(testnet.icons).toEqual(["https://testnet.4rcos.com/apple-icon"]);
-    expect(testnet.name).toBe("4rc.OS");
+    expect(testnet.name).toBe("ArcOS");
   });
 
   it("uses the site URL's origin, whatever path or slash it ends with", () => {

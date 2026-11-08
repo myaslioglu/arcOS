@@ -46,7 +46,7 @@ export function v4Pool(block: number, token: Address, id: Hex, hooks: Address = 
   };
 }
 
-/** A 4rc.OS TokenFactory TokenCreated. */
+/** A ArcOS TokenFactory TokenCreated. */
 export function created(block: number, token: Address, symbol: string, logIndex = 0): RawLog {
   return {
     address: ARCOS.mainnet!.tokenFactory,

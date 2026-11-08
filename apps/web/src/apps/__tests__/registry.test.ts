@@ -99,7 +99,7 @@ describe("the no-dates rule", () => {
   });
 });
 
-// D6: an app that acts through one of 4rc.OS's own custodial contracts is live only on a network where @arcos/chain's
+// D6: an app that acts through one of ArcOS's own custodial contracts is live only on a network where @arcos/chain's
 // ARCOS names that contract. Elsewhere its grey stand-in shows, so nothing disappears and nothing unaudited is offered.
 describe("the registry, gated per network (D6)", () => {
   const ADDRESS = "0x1111111111111111111111111111111111111111";

@@ -49,7 +49,7 @@ describe("liquidityText", () => {
 
 describe("sourceLabel", () => {
   it("names each of the five sources", () => {
-    expect(sourceLabel("factory")).toBe("4rc.OS");
+    expect(sourceLabel("factory")).toBe("ArcOS");
     expect(sourceLabel("v2")).toBe("Uniswap v2");
     expect(sourceLabel("v3")).toBe("Uniswap v3");
     expect(sourceLabel("v4")).toBe("Uniswap v4");

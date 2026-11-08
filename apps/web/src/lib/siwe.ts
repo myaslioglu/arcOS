@@ -5,7 +5,7 @@ import { createSiweMessage, parseSiweMessage, validateSiweMessage } from "viem/s
 // the server checks it before it looks at the signature (lib/auth-server.ts). Pure: no request, no clock of its own.
 
 /** What the wallet shows above the message. Signing is free, and the copy says so. */
-export const SIGN_IN_STATEMENT = "Sign in to 4rc.OS. Signing is free and sends no transaction.";
+export const SIGN_IN_STATEMENT = "Sign in to ArcOS. Signing is free and sends no transaction.";
 /** How long a signed message stays usable: the same 10 minutes as the nonce in it. */
 export const SIGN_IN_TTL_MS = 10 * 60_000;
 /** A wallet's clock may run a little ahead of the server's. */

@@ -9,7 +9,7 @@ const noop = () => {};
 
 function render(badge?: string): string {
   const bar = createElement(MenuBar, {
-    brand: "4rc.OS",
+    brand: "ArcOS",
     badge,
     windows: [],
     activeId: null,
@@ -31,7 +31,7 @@ function render(badge?: string): string {
   return renderToStaticMarkup(createElement(RegistryProvider, { value: buildRegistry([]) }, bar));
 }
 
-// The testnet site passes "Testnet": a label beside the brand, on every screen size, so no one takes it for 4rc.OS.
+// The testnet site passes "Testnet": a label beside the brand, on every screen size, so no one takes it for ArcOS.
 describe("the menu bar's badge", () => {
   it("shows the badge beside the brand when one is given", () => {
     const html = render("Testnet");

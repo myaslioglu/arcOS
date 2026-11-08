@@ -8,11 +8,11 @@ import Link from "next/link";
 export default function NotFound() {
   return (
     <main className="mx-auto max-w-2xl p-6 text-sm">
-      <p className="text-xs text-muted">4rc.OS</p>
+      <p className="text-xs text-muted">ArcOS</p>
       <h1 className="mt-1 text-xl font-medium">Page not found</h1>
       <p className="mt-2 text-muted">Check the address, or open the desktop.</p>
       <Link className="mt-6 inline-block rounded-md border border-border-2 px-3 py-1.5" href="/">
-        Open 4rc.OS
+        Open ArcOS
       </Link>
     </main>
   );

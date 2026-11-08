@@ -28,7 +28,7 @@ describe("the not-found page", () => {
     expect(text(all.find((n) => n.type === "h1"))).toBe("Page not found");
     const link = all.find((n) => n.props.href !== undefined);
     expect(link?.props.href).toBe("/");
-    expect(text(link)).toBe("Open 4rc.OS");
+    expect(text(link)).toBe("Open ArcOS");
   });
 
   it("is built from the theme's token classes, so it follows the stored theme", () => {

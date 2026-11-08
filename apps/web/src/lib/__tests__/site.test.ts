@@ -7,8 +7,8 @@ describe("the site per network", () => {
   it("labels the testnet site, and not the mainnet one", () => {
     expect(networkBadge("testnet")).toBe("Testnet");
     expect(networkBadge("mainnet")).toBeUndefined();
-    expect(siteTitle("testnet")).toBe("4rc.OS Testnet");
-    expect(siteTitle("mainnet")).toBe("4rc.OS");
+    expect(siteTitle("testnet")).toBe("ArcOS Testnet");
+    expect(siteTitle("mainnet")).toBe("ArcOS");
   });
 
   it("asks search engines not to index or follow the testnet site, in its pages and in every answer's headers", () => {

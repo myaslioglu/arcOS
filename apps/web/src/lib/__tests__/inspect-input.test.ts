@@ -34,7 +34,7 @@ describe("inspectInput", () => {
     expect(calls[0].headers.get("authorization")).toBe("Bearer proapi_k");
   });
 
-  it("names each network's own 4rc.OS TokenFactory, so its tokens can be recognized", () => {
+  it("names each network's own ArcOS TokenFactory, so its tokens can be recognized", () => {
     vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
     expect(inspectInput(T, client).arcosTokenFactory).toBe("0xa68edD822048C00dC816d93005B72F8a50234a24");
     vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");

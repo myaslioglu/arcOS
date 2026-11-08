@@ -18,7 +18,7 @@ const chains = walletChains();
 const DEFAULT_SITE = "https://4rcos.com";
 
 /**
- * How wallets show 4rc.OS when a phone pairs through WalletConnect. The url is the site's own origin, from
+ * How wallets show ArcOS when a phone pairs through WalletConnect. The url is the site's own origin, from
  * NEXT_PUBLIC_SITE_URL (https://4rcos.com on mainnet, https://testnet.4rcos.com on testnet): wallets show it, and
  * WalletConnect's verify service checks it against the page's origin. Wallets fetch the icon themselves, so it is an
  * absolute URL on the same origin, and the 180px PNG the app already serves as its home-screen icon (app/apple-icon.tsx)
@@ -33,7 +33,7 @@ export function walletConnectMetadata(siteUrl: string | undefined) {
     // unset or not a URL: the default
   }
   return {
-    name: "4rc.OS",
+    name: "ArcOS",
     description: "Small token tools on Arc, as a desktop.",
     url: origin,
     icons: [`${origin}/apple-icon`],

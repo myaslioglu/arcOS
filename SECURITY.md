@@ -188,7 +188,7 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   version (`3.0.0`, the only `3.x` release ever published) has no in-range patch: the first patched release is
   `5.0.1`, two majors above what `@coral-xyz/anchor` declares (`^3.0.0`, checked up to its own latest, `0.32.1`).
 - **Why it's unreachable here:** both advisories require parsing attacker-controlled TOML text.
-  4rc.OS never parses TOML anywhere in its own code, on the client or the server. Inside
+  ArcOS never parses TOML anywhere in its own code, on the client or the server. Inside
   `@coral-xyz/anchor`, `toml` is used to load `Anchor.toml` workspace configuration — a
   Solana-CLI/Node-only code path for reading a local project's own config file, not something this
   app's Swap or Bridge windows import or execute; the app only uses `@circle-fin/app-kit`'s

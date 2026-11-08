@@ -250,8 +250,8 @@ describe("deploy.yml", () => {
   });
 });
 
-// Both sites ship from one commit under one approval: 4rc.OS (backend arcos) first, the testnet site (arcos-testnet) only
-// after it. The testnet deploy must never be able to break 4rc.OS's, or stop it in a way nobody chose.
+// Both sites ship from one commit under one approval: ArcOS (backend arcos) first, the testnet site (arcos-testnet) only
+// after it. The testnet deploy must never be able to break ArcOS's, or stop it in a way nobody chose.
 describe("deploy.yml, the two sites", () => {
   const MATRIX = "${{ fromJSON(needs.plan.outputs.sites) }}";
   const deployStep = (id) => steps("deploy").find((s) => new RegExp(`^ {8}id: ${id}$`, "m").test(s));
@@ -296,7 +296,7 @@ describe("deploy.yml, the two sites", () => {
     expect(build).toBeGreaterThan(guard);
   });
 
-  it("deploys 4rc.OS first, and the testnet site only after 4rc.OS's deploy has succeeded or wasn't asked for", () => {
+  it("deploys ArcOS first, and the testnet site only after ArcOS's deploy has succeeded or wasn't asked for", () => {
     const mainnet = deployStep("deploy-mainnet");
     const testnet = deployStep("deploy-testnet");
     expect(mainnet).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_MAINNET == 'true' \}\}$/m);
@@ -313,7 +313,7 @@ describe("deploy.yml, the two sites", () => {
     expect(job("deploy")).not.toMatch(/continue-on-error/);
   });
 
-  // Without the environment name, App Hosting builds arcos-testnet from apphosting.yaml alone: 4rc.OS under another name.
+  // Without the environment name, App Hosting builds arcos-testnet from apphosting.yaml alone: ArcOS under another name.
   it("reads the testnet backend's environment name before deploying it, and stops unless it is testnet", () => {
     const guard = steps("deploy").find((s) => /environment name must be testnet/.test(s));
     expect(guard).toMatch(/^ {8}if: \$\{\{ !inputs\.dry_run && env\.DEPLOY_TESTNET == 'true' \}\}$/m);
@@ -335,13 +335,13 @@ describe("deploy.yml, the two sites", () => {
     expect(deployCode).not.toMatch(/--only "?apphosting"?(\s|$)/);
   });
 
-  it("tells the smoke job whether 4rc.OS's deploy succeeded, so a testnet failure after it doesn't skip its checks", () => {
+  it("tells the smoke job whether ArcOS's deploy succeeded, so a testnet failure after it doesn't skip its checks", () => {
     expect(job("deploy")).toMatch(/^ {4}outputs:\n {6}mainnet: \$\{\{ steps\.deploy-mainnet\.outcome \}\}$/m);
   });
 });
 
 // The testnet leg runs only once the owner has set the repository variable ARCOS_TESTNET_READY to `true`, after the
-// arcos-testnet backend exists with its environment name. Until then a push deploys 4rc.OS alone (the testnet bundle
+// arcos-testnet backend exists with its environment name. Until then a push deploys ArcOS alone (the testnet bundle
 // isn't even built), and a manual run that asks for the testnet site fails before anything builds.
 describe("deploy.yml, the testnet gate", () => {
   /** Runs the plan job's script as Actions runs it (bash -eo pipefail), and returns what it wrote and printed. */
@@ -396,7 +396,7 @@ describe("deploy.yml, the testnet gate", () => {
     }
   });
 
-  it("on a push, deploys 4rc.OS alone until the variable is exactly true, and says so", () => {
+  it("on a push, deploys ArcOS alone until the variable is exactly true, and says so", () => {
     for (const ready of [undefined, "", "false", "TRUE", "True", "1", "yes", " true"]) {
       const result = plan({ ready });
       expect(result.status, String(ready)).toBe(0);

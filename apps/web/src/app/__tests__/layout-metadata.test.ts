@@ -22,10 +22,10 @@ describe("the page metadata", () => {
   let metadata: Metadata;
   let description = "";
 
-  it("is titled 4rc.OS on mainnet", async () => {
+  it("is titled ArcOS on mainnet", async () => {
     metadata = await metadataFor("mainnet");
     description = String(metadata.description);
-    expect(metadata.title).toBe("4rc.OS");
+    expect(metadata.title).toBe("ArcOS");
   });
 
   // The README's intro and the About window's say what the apps do; a link preview and a search result say it from here.
@@ -49,7 +49,7 @@ describe("the page metadata per network", () => {
   it("asks search engines to leave the testnet site out, and titles it as the testnet", async () => {
     const metadata = await metadataFor("testnet");
     expect(metadata.robots).toEqual({ index: false, follow: false });
-    expect(metadata.title).toBe("4rc.OS Testnet");
+    expect(metadata.title).toBe("ArcOS Testnet");
     expect(String(metadata.description)).toBe(String((await metadataFor("mainnet")).description));
   });
 });

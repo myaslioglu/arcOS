@@ -10,7 +10,7 @@ const icon = (() => null) as unknown as DeskItem["icon"];
 const README: DeskItem = {
   id: "readme",
   label: "readme.txt",
-  blurb: "What 4rc.OS is",
+  blurb: "What ArcOS is",
   art: "file",
   ext: "TXT",
   icon,
@@ -88,7 +88,7 @@ describe("DeskFolders", () => {
     expect(labels).toEqual([
       "Desktop",
       "System: 1 item",
-      "readme.txt: What 4rc.OS is",
+      "readme.txt: What ArcOS is",
       "GitHub: The source code (opens in a new tab)",
     ]);
     expect(html.split("os-desk-cell--loose").length - 1).toBe(2);
