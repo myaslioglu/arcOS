@@ -126,7 +126,7 @@ describe("foldStats: Mint", () => {
     expect(state.totals.tokensCreated).toBe(5);
     expect(state.totals.byTemplate).toEqual({ standard: 1, mintable: 1, burnable: 1, mintableBurnable: 2 });
     expect(state.totals.feesMint).toBe(5n * USDC);
-    expect(delta).toEqual({ tokensCreated: 5, drops: 0 });
+    expect(delta).toEqual({ tokensCreated: 5, drops: 0, undated: 0 });
   });
 
   it("prices a Mint at the fee its log index finds: a change in the same block applies to what follows it", () => {
@@ -164,7 +164,7 @@ describe("foldStats: Drop", () => {
     const t = state.totals;
     expect([t.drops, t.dropsNative, t.dropsToken]).toEqual([3, 2, 1]);
     expect([t.rowsSubmitted, t.rowsDelivered, t.rowsFailed]).toEqual([19, 13, 6]);
-    expect(delta).toEqual({ tokensCreated: 0, drops: 3 });
+    expect(delta).toEqual({ tokensCreated: 0, drops: 3, undated: 0 });
   });
 
   it("counts Drop events of the old and the new Multisend together", () => {
@@ -225,7 +225,7 @@ describe("foldStats: the left-out wallet", () => {
     expect(state.totals.drops).toBe(1);
     expect([state.totals.rowsSubmitted, state.totals.rowsDelivered, state.totals.rowsFailed]).toEqual([4, 4, 0]);
     expect(state.totals.feesDrop).toBe(2n * USDC);
-    expect(delta).toEqual({ tokensCreated: 1, drops: 1 });
+    expect(delta).toEqual({ tokensCreated: 1, drops: 1, undated: 0 });
     expect([...days.values()].reduce((n, d) => n + d.tokensCreated + d.drops, 0)).toBe(2);
   });
 
@@ -282,9 +282,10 @@ describe("foldStats: days", () => {
   });
 
   it("counts an event with no block time in the totals and in no day", () => {
-    const { state, days } = fold([tokenCreated({ block: 5, timestamp: null })]);
-    expect(state.totals.tokensCreated).toBe(1);
-    expect(days.size).toBe(0);
+    const { state, days, delta } = fold([tokenCreated({ block: 5, timestamp: null }), drop({ block: 6, timestamp: null }), tokenCreated({ block: 7 })]);
+    expect(delta.undated).toBe(2);
+    expect(state.totals.tokensCreated).toBe(2);
+    expect(days.size).toBe(1);
   });
 });
 
@@ -295,7 +296,7 @@ describe("foldStats: ignored logs", () => {
     const removed: RawLog = { ...drop({ block: 7 }), removed: true };
     const { state, delta } = fold([stranger, unknownTopic, removed]);
     expect(docFieldsOf(state)).toEqual(docFieldsOf(emptyStatsState()));
-    expect(delta).toEqual({ tokensCreated: 0, drops: 0 });
+    expect(delta).toEqual({ tokensCreated: 0, drops: 0, undated: 0 });
   });
 });
 
@@ -329,7 +330,7 @@ describe("the real mainnet logs", () => {
     const events = decodeStatsLogs(LOGS, sources, ALL);
     const everyone = foldStats(emptyStatsState(), events, []);
     expect(everyone.state.totals).toMatchObject({ tokensCreated: 3, drops: 0, feesMint: 3n * USDC, feesDrop: 0n });
-    expect(everyone.delta).toEqual({ tokensCreated: 3, drops: 0 });
+    expect(everyone.delta).toEqual({ tokensCreated: 3, drops: 0, undated: 0 });
     // Every token on mainnet so far was made by the project wallet.
     const standard = foldStats(emptyStatsState(), events);
     expect(standard.state.totals.tokensCreated).toBe(0);

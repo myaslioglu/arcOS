@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { activeNetwork } from "@arcos/chain";
 import { REPO_URL } from "@/lib/site";
@@ -33,6 +33,19 @@ export function statsView(mainnet: boolean, query: StatsQuery): StatsView {
 }
 
 /**
+ * What the always-mounted status line says: loading, a refresh that failed, or counting that is behind the chain. It is
+ * mounted before it has text, so a screen reader announces each change.
+ */
+function statusText(view: StatsView, refreshFailed: boolean, list: StatsList | undefined): string {
+  if (view === "loading") return "Loading the counts…";
+  if (view !== "list") return "";
+  const parts: string[] = [];
+  if (refreshFailed) parts.push("Couldn't refresh the counts. Showing the last ones.");
+  if (list?.asOf && list.asOf.behind > CATCHING_UP_BLOCKS) parts.push("The on-chain counts are still catching up with the chain, so they are lower than the real totals for now.");
+  return parts.join(" ");
+}
+
+/**
  * Stats: how much ArcOS is used. The numbers anyone can recount on Arc mainnet (each with the date it counts from and a
  * link to the contract's logs), then the ones ArcOS keeps itself, polled every 60 s. On the testnet site nothing is
  * fetched: the counter holds mainnet data only, and the window says so.
@@ -48,7 +61,7 @@ export default function StatsWindow() {
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {/* Always mounted, so a screen reader hears the text when it arrives: a live region mounted with its text is never announced. */}
         <p className="text-muted" role="status" aria-live="polite">
-          {view === "loading" ? "Loading the counts…" : ""}
+          {statusText(view, query.isRefetchError, list)}
         </p>
         {view === "elsewhere" && (
           <div className="grid justify-items-start gap-2">
@@ -69,13 +82,13 @@ export default function StatsWindow() {
           </div>
         )}
         {view === "waiting" && <p className="text-muted">Counting hasn&apos;t started yet. The numbers appear once the index has read the chain.</p>}
-        {view === "list" && list && <Numbers list={list} stale={query.isRefetchError} />}
+        {view === "list" && list && <Numbers list={list} />}
       </div>
     </div>
   );
 }
 
-function Numbers({ list, stale }: { list: StatsList; stale: boolean }) {
+function Numbers({ list }: { list: StatsList }) {
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const onchain = list.items.filter((i) => i.source === "onchain");
   const server = list.items.filter((i) => i.source === "server");
@@ -92,16 +105,6 @@ function Numbers({ list, stale }: { list: StatsList; stale: boolean }) {
 
   return (
     <div className="grid gap-4">
-      {stale && (
-        <p className="text-xs text-muted" role="status">
-          {"Couldn't refresh the counts. Showing the last ones."}
-        </p>
-      )}
-      {asOf && asOf.behind > CATCHING_UP_BLOCKS && (
-        <p className="text-xs text-accent-3-text" role="status">
-          The on-chain counts are still catching up with the chain, so they are lower than the real totals for now.
-        </p>
-      )}
       {onchain.length > 0 && <Group title="On Arc mainnet, anyone can check" items={onchain} />}
       {server.length > 0 && <Group title="Recorded by ArcOS" items={server} />}
       <footer className="grid gap-2 border-t border-border pt-3 text-xs text-faint">
@@ -134,9 +137,12 @@ function Numbers({ list, stale }: { list: StatsList; stale: boolean }) {
 }
 
 function Group({ title, items }: { title: string; items: StatsItem[] }) {
+  const id = useId();
   return (
-    <section aria-label={title} className="grid gap-2">
-      <h3 className="text-xs font-medium text-muted">{title}</h3>
+    <section aria-labelledby={id} className="grid gap-2">
+      <h3 id={id} className="text-xs font-medium text-muted">
+        {title}
+      </h3>
       <ul className="grid gap-2">
         {items.map((item) => (
           <Row key={item.id} item={item} />

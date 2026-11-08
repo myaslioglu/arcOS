@@ -33,7 +33,7 @@ const doc = (over: Partial<StatsDoc> = {}): StatsDoc => ({
     watchedTokens: 60,
     tokensIndexed: 8000,
     tokensInspected: 7500,
-    since: { users: at(Date.parse("2026-10-14T08:00:00Z")), watches: at(Date.parse("2026-10-20T08:00:00Z")), tokens: at(Date.parse("2026-10-01T00:30:00Z")) },
+    since: { users: at(Date.parse("2026-10-14T08:00:00Z")), telegram: at(Date.parse("2026-10-16T08:00:00Z")), watches: at(Date.parse("2026-10-20T08:00:00Z")), tokens: at(Date.parse("2026-10-01T00:30:00Z")) },
     countedAt: at(T - 60_000),
   },
   onchainSince: at(Date.parse("2026-09-25T00:00:00Z")),
@@ -58,7 +58,7 @@ describe("statsAnswer", () => {
       ["recipients_delivered", 49_900, "2026-09-25", "onchain"],
       ["rows_failed", 100, "2026-09-25", "onchain"],
       ["wallets_signed_in", 212, "2026-10-14", "server"],
-      ["telegram_linked", 40, "2026-10-14", "server"],
+      ["telegram_linked", 40, "2026-10-16", "server"],
       ["watches", 95, "2026-10-20", "server"],
       ["tokens_indexed", 8000, "2026-10-01", "server"],
       ["tokens_inspected", 7500, "2026-10-01", "server"],
@@ -101,6 +101,10 @@ describe("statsAnswer", () => {
     expect(none.counts.map((c) => c.source)).toEqual(["onchain", "onchain", "onchain", "onchain"]);
     const noSince = statsAnswer(doc({ server: { ...doc().server!, since: { users: null, watches: null, tokens: null } } }));
     expect(noSince.counts.filter((c) => c.source === "server").every((c) => c.since === null)).toBe(true);
+    // A doc written before the Telegram date existed: that count has no date, and never borrows the first sign-in's.
+    const old = doc().server!;
+    const withoutTelegram = statsAnswer(doc({ server: { ...old, since: { users: old.since.users, watches: old.since.watches, tokens: old.since.tokens } } }));
+    expect(withoutTelegram.counts.find((c) => c.id === "telegram_linked")?.since).toBeNull();
   });
 
   it("reads a damaged count as 0 instead of failing, and never answers a negative or fractional number", () => {

@@ -18,7 +18,7 @@ const ran: Extract<RunResult, { status: "ran" }> = {
   feeds: 0,
   explorerCalls: 0,
   watch: { checked: 1, unread: 0, failed: 0, alerts: 1, writes: 1, deliveriesCreated: 1, fannedOut: 1, sent: 1, sendFailed: 0, skipped: null, cursor: "mainnet:0x8f3a00000000000000000000000000000000913c", error: null },
-  stats: { windows: 2, tokensCreated: 3, drops: 1, behind: 0, error: null },
+  stats: { windows: 2, tokensCreated: 3, drops: 1, behind: 0, undated: 0, error: null },
   error: null,
 };
 
@@ -33,8 +33,8 @@ describe("runLogFields", () => {
   });
 
   it("logs the usage counter's counts as they are: counts and a name, never an address", () => {
-    expect(runLogFields(ran).stats).toEqual({ windows: 2, tokensCreated: 3, drops: 1, behind: 0, error: null });
-    expect(Object.keys(runLogFields(ran).stats ?? {}).sort()).toEqual(["behind", "drops", "error", "tokensCreated", "windows"]);
+    expect(runLogFields(ran).stats).toEqual({ windows: 2, tokensCreated: 3, drops: 1, behind: 0, undated: 0, error: null });
+    expect(Object.keys(runLogFields(ran).stats ?? {}).sort()).toEqual(["behind", "drops", "error", "tokensCreated", "undated", "windows"]);
   });
 
   it("passes the other results through as they are", () => {

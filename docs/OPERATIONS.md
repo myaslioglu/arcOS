@@ -110,7 +110,7 @@ In the Firebase console, Firestore, database `arcos`, collection `indexer`, docu
 | `stats` | `false` | Stops the whole Stats step (no `eth_getLogs`, no write to `stats`/`statsDays`, no server counts). The totals and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. |
 | `watchCursor` | (set by the indexer) | The `watchState` doc id Watchdog's checks ended at; the next run's page starts after it. Set it to `null` to start the round from the first token. |
 
-The indexer never writes `paused`, `inspect`, `watch` or `telegram`. Change them only between runs (any time is fine: the
+The indexer never writes `paused`, `inspect`, `watch`, `telegram` or `stats`. Change them only between runs (any time is fine: the
 next run reads them).
 
 ## Watchdog
@@ -223,8 +223,10 @@ recomputed by themselves.
 
 **Server counts**, `stats/mainnet.server`, every 10 minutes (`countedAt`): `users`, `users` with a linked chat,
 `watches` and `watchState` of the network, `tokens` of the network and those whose `inspect.state` is `done`: six
-`count()` aggregations (single-field or equality filters only, so no composite index), and three one-document
-`orderBy(...).limit(1)` reads for the "since" dates (`users.createdAt`, `watches.createdAt`, `tokens.firstSeen`).
+`count()` aggregations (single-field or equality filters only, so no composite index), and four small
+`orderBy(...).limit(25)` reads for the "since" dates (`users.createdAt`, `users.telegram.linkedAt`, and the oldest of the
+first 25 `watches` and `tokens` docs that belong to the network; single-field orders, so no index). The run line's
+`stats.undated` counts events added to the totals that carried no block time and so are in no day bucket.
 
 **The public answer** is `statsAnswer` in `packages/data/src/stats.ts`: counts and dates, no address except ArcOS's own
 public contracts, and no fee or revenue total (they are stored, not served). The route is `GET /api/stats`: mainnet only
@@ -235,19 +237,23 @@ kept 60 s in each instance with the same 1.5 s deadline and 60 s cooldown as `/a
 
 **The first run, and the backfill.** The first run creates `stats/mainnet` with the cursor one block before
 `fromBlock`, then catches up 20 windows a run. From 22,742,796 to the head on 2026-11-08 (block 30.2 million) is 749
-windows: about 38 runs, so about 40 minutes at one run a minute, if the earlier steps leave time for the Stats step (it
-starts no window after 100 s, so a run whose inspections ran long reads fewer). One window took about half a second on
-rpc.mainnet.arc.io (400 ms pacing plus the call). While it catches up the Stats window says the on-chain counts are
+windows: about 38 runs, so 40 to 50 minutes at one run a minute. The step has its own budgets: no window starts after 100 s
+of the run, and none more than 15 s after the step began, so a backfill run is at most about 15 s longer and the next
+minute's tick isn't pushed out (one instance, no retry); a run whose inspections ran long reads fewer windows. One window
+took about half a second on rpc.mainnet.arc.io (400 ms pacing plus the call and the transaction), so the 15 s budget and
+the 20-window cap bind at about the same point. While it catches up the Stats window says the on-chain counts are
 still catching up (`asOf.behind` over 2,000 blocks), and the counts rise as blocks are read; the server counts are
 there from the first run. After that a run applies one window of about 118 blocks.
 
-**Redoing a count.** To count again from the start (the exclusion list changed, say), delete the document
-`stats/mainnet` and the `statsDays` docs in the console and let the next runs backfill again. To pause counting without
-losing anything, set `stats` to `false` on `indexer/mainnet`.
+**Redoing a count.** To count again from the start (the exclusion list changed, say): set `stats` to `false` on
+`indexer/mainnet`, wait for the run in progress to end (`runningUntil` is `null`, or a minute has passed), delete the
+`statsDays` docs and the document `stats/mainnet`, then set `stats` back to `true` (or delete the field) so the next runs
+backfill again. Deleting while a run is in the middle of the step could leave that run's window applied to a doc created
+a moment later. To pause counting without losing anything, set `stats` to `false` and nothing else.
 
-**Cost.** Backfill: about 750 `eth_getLogs`, 750 transactions (1 read and 1 write each, plus a `statsDays` write where
-a window had events); no explorer calls. Steady state: 1 `eth_getLogs` a run (about 43,000 a month), 1 transaction a
-run (about 43,000 reads and 43,000 writes), and every 10 minutes six aggregations and three one-document reads (about
+**Cost.** Backfill: about 750 `eth_getLogs`, 1,500 transactions (the step's own `ensureStats`, which raises `head`, and the window: 2 reads and 2 writes in all,
+plus a `statsDays` write where a window had events); no explorer calls. Steady state: 1 `eth_getLogs` a run (about 43,000 a month),
+2 transactions a run (about 86,000 reads and 86,000 writes), and every 10 minutes six aggregations and four small reads (about
 4,300 rounds a month; an aggregation bills one read per 1,000 index entries it counts). Well under $1 a month.
 
 **Checking a number.** Open the contract's logs from the Stats window (or the README's table), filter the event, and
@@ -633,7 +639,7 @@ minute), a steady-state run makes:
 | Firestore writes (Watchdog) | 0 when nothing changed; 1 per first sight; 1 + k per change with k alerts; 1 per delivery created; 1 per send; the cursor rides on the end of the run | a few a minute at most; the hard ceiling during a fan-out is 1,000 delivery creates + 60 send updates + 40 state writes |
 | Telegram | at most 60 messages a run, 3 per chat | at most 60 a minute |
 | Arc RPC (Stats) | 1 `eth_getLogs` (the window since Stats' own cursor); 20 a run while it backfills | about 43,000; about 750 once for the backfill |
-| Firestore (Stats) | 1 transaction: 1 read, 1 write (plus 1 more write where the window had events); every 10 minutes 6 aggregations and 3 one-document reads | about 43,000 reads and 43,000 writes, plus about 100,000 read units of aggregations; well under $1 |
+| Firestore (Stats) | 2 transactions: `ensureStats` (1 read, 1 write to raise `head`) and the window (1 read, 1 write, plus 1 more write where it had events); every 10 minutes 6 aggregations and 4 small reads | about 86,000 reads and 86,000 writes, plus about 100,000 read units of aggregations; well under $1 |
 
 The first run's 24-hour backfill reads and writes about 6,000 documents once. Firestore single-region prices are about
 half of the multi-region $0.06 per 100,000 reads and $0.18 per 100,000 writes, so the indexer's Firestore use is about

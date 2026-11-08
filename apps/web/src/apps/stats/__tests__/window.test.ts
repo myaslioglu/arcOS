@@ -160,6 +160,26 @@ describe("Stats", () => {
     expect(render()).not.toContain("catching up");
   });
 
+  it("says catching up and a failed refresh in the one status line that is mounted before it has text", () => {
+    state.query = { ...state.query, data: list({ asOf: { block: 22_800_000, atMs: NOW, behind: 1_200_000 } }), isRefetchError: true };
+    const html = render();
+    expect(html).toMatch(/role="status" aria-live="polite">Couldn't refresh the counts\. Showing the last ones\. The on-chain counts are still catching up/);
+    // No other status element is rendered with its text already inside, except the copy-link line, which starts empty.
+    expect(html.match(/role="status"/g)).toHaveLength(2);
+    expect(html).toMatch(/role="status" aria-live="polite" class="text-muted"><\/span>/);
+  });
+
+  it("names each group by its heading", () => {
+    state.query = { ...state.query, data: list() };
+    const html = render();
+    for (const title of ["On Arc mainnet, anyone can check", "Recorded by ArcOS"]) {
+      const id = new RegExp(`<section aria-labelledby="([^"]+)"[^>]*><h3 id="([^"]+)"[^>]*>${title}</h3>`).exec(html);
+      expect(id, title).not.toBeNull();
+      expect(id?.[1]).toBe(id?.[2]);
+    }
+    expect(html).not.toContain("aria-label=");
+  });
+
   it("keeps the last numbers and says so when a refresh failed", () => {
     state.query = { ...state.query, data: list(), isRefetchError: true };
     const html = render();

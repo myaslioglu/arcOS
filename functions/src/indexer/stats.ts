@@ -171,7 +171,8 @@ export function docFieldsOf(state: StatsState): Pick<StatsDoc, "fees" | "totals"
 export type DayCounts = { tokensCreated: number; drops: number; rowsDelivered: number };
 
 /** What a window added in all, as the run line reports it. */
-export type StatsDelta = { tokensCreated: number; drops: number };
+/** `undated` counts the events added to the totals that carried no block time, so they are in no day bucket. */
+export type StatsDelta = { tokensCreated: number; drops: number; undated: number };
 
 /** The UTC day of a block timestamp in seconds. */
 export const dayOf = (seconds: number): string => new Date(seconds * 1000).toISOString().slice(0, 10);
@@ -197,10 +198,13 @@ export function foldStats(
     totals: { ...state.totals, byTemplate: { ...state.totals.byTemplate } },
     excluded: { ...state.excluded },
   };
-  const delta: StatsDelta = { tokensCreated: 0, drops: 0 };
+  const delta: StatsDelta = { tokensCreated: 0, drops: 0, undated: 0 };
   const days = new Map<string, DayCounts>();
   const day = (e: Position): DayCounts | null => {
-    if (e.timestamp === null) return null;
+    if (e.timestamp === null) {
+      delta.undated++;
+      return null;
+    }
     const key = dayOf(e.timestamp);
     let counts = days.get(key);
     if (!counts) days.set(key, (counts = { tokensCreated: 0, drops: 0, rowsDelivered: 0 }));

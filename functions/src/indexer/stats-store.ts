@@ -14,18 +14,30 @@ export const SERVER_COUNT_EVERY_MS = 10 * 60_000;
 
 /**
  * The stats doc, created on the first run: no totals, the cursor one block before `from.block` (so that block's logs are
- * counted), and counting dated `from.at`. Two first runs can't both create it: the transaction makes the second read the first's.
+ * counted), `head` at the run's `tip` (so a fresh doc reads as far behind), and counting dated `from.at`. An existing doc's `head` is raised to `tip`. Two first runs can't both create it: the transaction makes the second read the first's.
  */
-export async function ensureStats(db: Firestore, network: NetworkId, from: { block: number; at: string }, now: number): Promise<StatsDoc> {
+export async function ensureStats(
+  db: Firestore,
+  network: NetworkId,
+  from: { block: number; at: string },
+  now: number,
+  tip: number,
+): Promise<StatsDoc> {
   const ref = statsRef(db, network);
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
-    if (snap.exists) return snap.data() as StatsDoc;
+    if (snap.exists) {
+      // The head moves on every run, whether or not a window is applied, so `head - block` is how far behind counting is.
+      const stored = snap.data() as StatsDoc;
+      if ((stored.head ?? 0) >= tip) return stored;
+      tx.update(ref, { head: tip });
+      return { ...stored, head: tip };
+    }
     const doc: StatsDoc = {
       network,
       block: from.block - 1,
       fromBlock: from.block,
-      head: from.block - 1,
+      head: Math.max(tip, from.block - 1),
       ...docFieldsOf(emptyStatsState()),
       server: null,
       onchainSince: Timestamp.fromMillis(Date.parse(`${from.at}T00:00:00Z`)),
@@ -92,9 +104,12 @@ export async function applyStatsWindow(
 }
 
 const total = async (query: Query): Promise<number> => (await query.count().get()).data().count;
-const oldest = async (query: Query, field: string): Promise<Timestamp | null> => {
-  const snap = await query.orderBy(field).limit(1).get();
-  const value: unknown = snap.docs[0]?.get(field);
+/** The oldest of the first `SINCE_SCAN` docs by `field` that `keep` accepts: a single-field order, so no composite index. */
+const SINCE_SCAN = 25;
+const oldest = async (query: Query, field: string, keep: (doc: { get(field: string): unknown }) => boolean = () => true): Promise<Timestamp | null> => {
+  const snap = await query.orderBy(field).limit(SINCE_SCAN).get();
+  const doc = snap.docs.find((d) => keep(d));
+  const value: unknown = doc?.get(field);
   return value instanceof Timestamp ? value : null;
 };
 
@@ -108,7 +123,8 @@ const oldest = async (query: Query, field: string): Promise<Timestamp | null> =>
  */
 export async function writeServerCounts(db: Firestore, network: NetworkId, now: number): Promise<void> {
   const c = (name: string) => db.collection(name);
-  const [users, telegramLinked, watches, watchedTokens, tokensIndexed, tokensInspected, usersSince, watchesSince, tokensSince] = await Promise.all([
+  const ofNetwork = (d: { get(field: string): unknown }) => d.get("network") === network;
+  const [users, telegramLinked, watches, watchedTokens, tokensIndexed, tokensInspected, usersSince, telegramSince, watchesSince, tokensSince] = await Promise.all([
     total(c(COLLECTIONS.users)),
     total(c(COLLECTIONS.users).where("telegram.linkedAt", "!=", null)),
     total(c(COLLECTIONS.watches).where("network", "==", network)),
@@ -116,8 +132,9 @@ export async function writeServerCounts(db: Firestore, network: NetworkId, now: 
     total(c(COLLECTIONS.tokens).where("network", "==", network)),
     total(c(COLLECTIONS.tokens).where("network", "==", network).where("inspect.state", "==", "done")),
     oldest(c(COLLECTIONS.users), "createdAt"),
-    oldest(c(COLLECTIONS.watches), "createdAt"),
-    oldest(c(COLLECTIONS.tokens), "firstSeen"),
+    oldest(c(COLLECTIONS.users).where("telegram.linkedAt", "!=", null), "telegram.linkedAt"),
+    oldest(c(COLLECTIONS.watches), "createdAt", ofNetwork),
+    oldest(c(COLLECTIONS.tokens), "firstSeen", ofNetwork),
   ]);
   await statsRef(db, network).update({
     server: {
@@ -127,7 +144,7 @@ export async function writeServerCounts(db: Firestore, network: NetworkId, now: 
       watchedTokens,
       tokensIndexed,
       tokensInspected,
-      since: { users: usersSince, watches: watchesSince, tokens: tokensSince },
+      since: { users: usersSince, telegram: telegramSince, watches: watchesSince, tokens: tokensSince },
       countedAt: Timestamp.fromMillis(now),
     } satisfies NonNullable<StatsDoc["server"]>,
   });

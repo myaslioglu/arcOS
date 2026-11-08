@@ -321,7 +321,7 @@ export type StatsDoc = {
     watchedTokens: number;
     tokensIndexed: number;
     tokensInspected: number;
-    since: { users: TimestampLike | null; watches: TimestampLike | null; tokens: TimestampLike | null };
+    since: { users: TimestampLike | null; telegram?: TimestampLike | null; watches: TimestampLike | null; tokens: TimestampLike | null };
     countedAt: TimestampLike;
   } | null;
   /** When counting began: the time of `fromBlock`, a date at midnight UTC. */

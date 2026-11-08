@@ -119,9 +119,10 @@ export function statsAnswer(doc: StatsDoc | null): StatsAnswer {
   const s = doc.server;
   if (s) {
     const since = s.since ?? { users: null, watches: null, tokens: null };
+    const telegramSince = since.telegram ?? null;
     counts.push(
       { id: "wallets_signed_in", label: "Wallets signed in", value: count(s.users), since: dateOf(since.users), source: "server" },
-      { id: "telegram_linked", label: "Wallets with Telegram alerts", value: count(s.telegramLinked), since: dateOf(since.users), source: "server" },
+      { id: "telegram_linked", label: "Wallets with Telegram alerts", value: count(s.telegramLinked), since: dateOf(telegramSince), source: "server" },
       { id: "watches", label: "Token watches", value: count(s.watches), since: dateOf(since.watches), source: "server" },
       { id: "tokens_indexed", label: "Tokens indexed by Radar", value: count(s.tokensIndexed), since: dateOf(since.tokens), source: "server" },
       { id: "tokens_inspected", label: "Tokens inspected automatically", value: count(s.tokensInspected), since: dateOf(since.tokens), source: "server" },
