@@ -8,6 +8,7 @@ import { decodeLogs, sourcesFor } from "./events";
 import { afterFailure, expired, pickQueue } from "./queue";
 import { bestPoolOf, summarize } from "./report";
 import { RangeRefused, type LogChain } from "./rpc";
+import { runStats, type StatsDeps, type StatsResult } from "./stats-run";
 import type { TelegramSender } from "./telegram";
 import { runWatch, type WatchResult } from "./watch";
 import {
@@ -87,6 +88,11 @@ export type RunDeps = {
    * configured: the checks and the fan-out still run, and the deliveries wait.
    */
   watch?: { reader: ChainReader; telegram: TelegramSender | null };
+  /**
+   * The usage counter (Stats, step 6b), with its own cursor in stats/{network} (stats-run.ts). Absent, the step is
+   * skipped. The `stats` switch of indexer/{network} turns it off at runtime.
+   */
+  stats?: StatsDeps;
 };
 
 export type RunResult =
@@ -111,6 +117,8 @@ export type RunResult =
       explorerCalls: number;
       /** Watchdog's counters, or null when the step didn't run (no deps, or not mainnet). */
       watch: WatchResult | null;
+      /** The usage counter's counts (windows applied, what they added, blocks behind), or null when the step didn't run (no deps, or switched off). */
+      stats: StatsResult | null;
       /**
        * The name of the error that cut the Watchdog step (one of its phases), the inspections or the feeds short, or
        * null. The run still ended normally.
@@ -142,8 +150,11 @@ const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
  *    change with its alerts in one batch, fans the alerts out to deliveries, and sends the oldest pending ones to
  *    Telegram, each phase within its own time limit (watch.ts); the page cursor is kept in the run's end (step 6);
  * 5. inspects up to INSPECT_PER_TICK queued tokens, liquid first, then newest, within the explorer budget;
- * 6. brings the four Radar feeds up to date, rebuilding one of them in turn, and ends the run, giving the lease back.
- * Steps 4b, 5 and 6 can't keep the run from ending: an error there is logged and named in the result.
+ * 6. brings the four Radar feeds up to date, rebuilding one of them in turn;
+ * 6b. (Stats, when `deps.stats` is given and the console switch isn't off) counts ArcOS's usage on chain in windows of its
+ *    own cursor, and refreshes the counts of its own data every 10 minutes, none started after 100 s (stats-run.ts); then
+ *    the run ends, giving the lease back.
+ * Steps 4b, 5, 6 and 6b can't keep the run from ending: an error there is logged and named in the result.
  */
 export async function runIndexer(deps: RunDeps): Promise<RunResult> {
   const { db, network } = deps;
@@ -327,6 +338,17 @@ async function leased(
     error ??= nameOf(e);
     log.error("arcosIndexer feeds failed", errorFields(e));
   }
+  // 6b. Stats: the usage counter, last, with limits of its own (stats-run.ts). Its failure is named and the run still ends.
+  let stats: StatsResult | null = null;
+  if (deps.stats && state.stats !== false) {
+    try {
+      stats = await runStats({ db, network, chain, tip, now, started, elapsed, log, deps: deps.stats });
+      error ??= stats.error;
+    } catch (e) {
+      error ??= nameOf(e);
+      log.error("arcosIndexer stats stopped", errorFields(e));
+    }
+  }
   await finishRun(db, network, now(), { day: today, calls: spent - before }, runId, watch?.cursor);
 
   return {
@@ -344,6 +366,7 @@ async function leased(
     feeds,
     explorerCalls: spent - before,
     watch,
+    stats,
     error,
   };
 }

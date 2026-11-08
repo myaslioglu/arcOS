@@ -8,6 +8,8 @@ import {
   poolId,
   radarFeedFilter,
   radarFeedId,
+  statsDaysId,
+  statsId,
   tokenId,
   userId,
   watchId,
@@ -139,6 +141,23 @@ describe("radarFeedFilter", () => {
     expect(radarFeedFilter({ liquid: true, passing: false })).toBe("liquid");
     expect(radarFeedFilter({ liquid: false, passing: true })).toBe("passing");
     expect(radarFeedFilter({ liquid: true, passing: true })).toBe("liquid-passing");
+  });
+});
+
+describe("statsId and statsDaysId", () => {
+  it("name the stats doc by its network and the day buckets by network and UTC month", () => {
+    expect(statsId("mainnet")).toBe("mainnet");
+    expect(statsId("testnet")).toBe("testnet");
+    expect(statsDaysId("mainnet", "2026-10")).toBe("mainnet:2026-10");
+    expect(statsDaysId("testnet", "2027-01")).toBe("testnet:2027-01");
+  });
+
+  it("refuse a network that isn't one and a month that isn't YYYY-MM", () => {
+    expect(refusal(() => statsId("devnet" as never)).code).toBe("network");
+    for (const month of ["", "2026-1", "2026-13", "2026-00", "26-10", "2026-10-01", "2026/10", " 2026-10", "2026-10\n", "../2026-10"]) {
+      expect(refusal(() => statsDaysId("mainnet", month)).code, month).toBe("stats-month");
+    }
+    expect(refusal(() => statsDaysId("mainnet", 202610 as never)).code).toBe("stats-month");
   });
 });
 

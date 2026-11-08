@@ -45,6 +45,7 @@ export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscou
     settings: indexerSettings(process.env),
     log: logger,
     watch: { reader: watchReader, telegram },
+    stats: {},
   });
   // Logged without Watchdog's cursor, a watchState doc id that would name a watched token.
   const fields = runLogFields(result);

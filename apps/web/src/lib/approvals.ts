@@ -10,7 +10,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import { ARCOS, PERMIT2, UNIVERSAL_ROUTERS, type NetworkId } from "@arcos/chain";
+import { ARCOS, PERMIT2, PREVIOUS_MULTISENDS, UNIVERSAL_ROUTERS, type NetworkId } from "@arcos/chain";
 import { cleanLabel } from "@arcos/inspector";
 
 /**
@@ -83,16 +83,8 @@ export const SWAP_ADAPTER: Record<NetworkId, Address> = {
   testnet: "0xBBD70b01a1CAbc96d5b7b129Ae1AAabdf50dd40b",
 };
 
-/**
- * Multisends Drop used before the one in `ARCOS[network].multisend`. Drop's sendToken approves the Multisend, so a
- * token approved to an earlier one stays approved until revoked; Revoke names these so that allowance can be found.
- * Mainnet's first Multisend (deployed 2026-09-25) was Drop's until 2026-10-30 (packages/contracts/DEPLOY.md,
- * "Deployments").
- */
-export const PREVIOUS_MULTISENDS: Record<NetworkId, Address[]> = {
-  mainnet: ["0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47"],
-  testnet: [],
-};
+// PREVIOUS_MULTISENDS lives in @arcos/chain (usage.ts), where the indexer reads it too; it is re-exported here.
+export { PREVIOUS_MULTISENDS };
 
 /**
  * The explorer or the multicall couldn't answer: the route says "Couldn't load approvals". `status` is the HTTP status

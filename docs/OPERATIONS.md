@@ -9,9 +9,9 @@ All of it is in the Firebase project `arcos-c80cf`, region `europe-west4`.
 
 | Piece | Runs as | Reads | Writes |
 |---|---|---|---|
-| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, radarFeed, indexer) | nothing in Firestore yet |
+| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, radarFeed, indexer, stats) | nothing in Firestore yet |
 | App Hosting `arcos-testnet`: https://testnet.4rcos.com | `arcos-testnet-web@` | Arc testnet RPC and explorer | nothing; it has no Firestore access |
-| Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API, the Telegram Bot API (sends only), Firestore `arcos` (`watches`, `users`) | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed`, `watchState`, `alerts`, `deliveries`, `users.telegram` (cleared when a chat blocked the bot) |
+| Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API, the Telegram Bot API (sends only), Firestore `arcos` (`watches`, `users`; `count()` aggregations of `users`, `watches`, `watchState`, `tokens`) | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed`, `watchState`, `alerts`, `deliveries`, `stats`, `statsDays`, `users.telegram` (cleared when a chat blocked the bot) |
 | Cloud Scheduler job of `arcosIndexer`, every minute (UTC) | calls the function with an OIDC token of `arcos-jobs@` | | |
 | Firestore database `arcos` (Native, `europe-west4`) | | | |
 
@@ -62,11 +62,13 @@ in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s coold
    tokens the run changed, and rebuilds one of the four from its query, a different one each minute, writing a page
    only when it changed. A page that missed a change (a run that died between an inspection and this step) is whole
    again within four runs.
+6b. Stats (below): counts ArcOS's usage on chain in windows of its own cursor, and refreshes the counts of ArcOS's own
+   data every 10 minutes. Skipped when the `stats` switch is `false`.
 7. Ends the run: `lastRunAt` (never moved back), the run's explorer calls added to the day's count, Watchdog's page
    cursor (`watchCursor`) when the step ran, and the lease given back if it is still this run's.
 
 Once the window phase (steps 2 to 4) is over, steps 5, 6 and 7 run whatever fails in step 4b, steps 6 and 7 run
-whatever fails in step 5, and a failure in step 6 doesn't stop step 7; the error's name is in the run's log line
+whatever fails in step 5, and a failure in step 6 or 6b doesn't stop step 7; the error's name is in the run's log line
 (`error`), with its `code` when it has one, and, for a Firestore error, its `details` with URLs and addresses masked,
 cut to 200 characters (never the message, which could carry a node's URL). Before that, they don't: a run that can't read the head, halts, or fails to write a window's pools,
 tokens or cursor ends there, with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's
@@ -105,6 +107,7 @@ In the Firebase console, Firestore, database `arcos`, collection `indexer`, docu
 | `runningUntil`, `runId` | (set by the indexer) | The lease of the run in progress, `null` between runs. While `runningUntil` is in the future, a new run skips. Leave them alone: a lease left by a run that died expires 150 seconds after it was taken. |
 | `watch` | `false` | Stops the whole Watchdog step (no check, no fan-out, no send). A missing field reads as `true`. |
 | `telegram` | `false` | Stops Watchdog's Telegram sends only: the checks still run, alerts and deliveries are still written, and the deliveries wait as `pending` (they expire after a day). A missing field reads as `true`. |
+| `stats` | `false` | Stops the whole Stats step (no `eth_getLogs`, no write to `stats`/`statsDays`, no server counts). The totals and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. |
 | `watchCursor` | (set by the indexer) | The `watchState` doc id Watchdog's checks ended at; the next run's page starts after it. Set it to `null` to start the round from the first token. |
 
 The indexer never writes `paused`, `inspect`, `watch` or `telegram`. Change them only between runs (any time is fine: the
@@ -184,11 +187,84 @@ line says so), `sendFailed` with `code: telegram_5xx` (Telegram's side), `arcosI
 step 3, and deploy), and
 `deliveries` docs expiring (`error: expired`) while `telegram` is `true` (sends were paused or failing for a day).
 
+## Stats
+
+The usage counter behind the Stats window and `GET /api/stats`. It is step 6b of the indexer run (mainnet only), with a
+cursor and totals of its own, apart from the indexer's.
+
+**What it reads.** One `eth_getLogs` per window of at most 10,000 blocks, over four contracts: the TokenFactory
+(`TokenCreated`), both Multisends (`Drop`: the current `0x8459…480e` and the previous `0x03dd…af47`, from
+`PREVIOUS_MULTISENDS` in `packages/chain/src/usage.ts`) and the FeeController (`KeyAdded`, `FeeChanged`). The fee events
+rebuild the Mint and Drop fees at each block, so the fee totals are exact. Windows are halved when refused, like the
+indexer's. A step is bounded: at most 20 windows a run, none started after 100 s, no call waited for past 108 s.
+
+**What it writes** (Firestore `arcos`, deny-all rules, the Admin SDK only):
+
+- `stats/mainnet`: `block` (the cursor: the last block folded), `fromBlock` (22,742,796, the FeeController's
+  deployment, 2026-09-25), `head` (the finalized head the last window was read against), `fees` (the three values as of
+  `block`), `totals` (counts, `byTemplate`, `rowsSubmitted`/`rowsDelivered`/`rowsFailed`, `feesMint`/`feesDrop` in wei
+  as decimal strings), `excluded` (what the left-out wallets did, counted apart), `server` (below), `onchainSince`,
+  `updatedAt`. No address is stored.
+- `statsDays/mainnet:{yyyy-mm}`: `days.{yyyy-mm-dd}.{tokensCreated, drops, rowsDelivered}`, by increments in the same
+  transaction as the totals. Nothing reads them yet.
+
+**Exactly once.** A window is applied in one transaction that reads `stats/mainnet` and then: stops if `block` is
+already at or past the window's end (applied before); stops if `block` is not the block before the window's start
+(another run moved it; the next pass reads again from the doc's cursor); otherwise folds the window's logs into the totals
+and writes the totals, the fees, `block`, `head`, `updatedAt` and the day increments together. A crash before the commit
+writes nothing and the window is read again; one after it is "applied before". Each log is counted once per window
+(a duplicate at the same block and log index is dropped, one outside the window is ignored), and logs are folded in
+(block, log index) order.
+
+**Left out.** The project wallet's own `TokenCreated` and `Drop` events (`STATS_EXCLUDED_WALLETS` in
+`functions/src/indexer/stats.ts`) go to `excluded` and into no total, template, fee or day. The public answer says so in
+words and gives no address. To change the list, change the constant and reset the stats doc (below): the totals are not
+recomputed by themselves.
+
+**Server counts**, `stats/mainnet.server`, every 10 minutes (`countedAt`): `users`, `users` with a linked chat,
+`watches` and `watchState` of the network, `tokens` of the network and those whose `inspect.state` is `done`: six
+`count()` aggregations (single-field or equality filters only, so no composite index), and three one-document
+`orderBy(...).limit(1)` reads for the "since" dates (`users.createdAt`, `watches.createdAt`, `tokens.firstSeen`).
+
+**The public answer** is `statsAnswer` in `packages/data/src/stats.ts`: counts and dates, no address except ArcOS's own
+public contracts, and no fee or revenue total (they are stored, not served). The route is `GET /api/stats`: mainnet only
+(404 elsewhere), 60 requests a minute a client, `cache-control: public, s-maxage=60, stale-while-revalidate=300`,
+`access-control-allow-origin: *`, 503 with `retry-after: 60` when `stats/mainnet` can't be read. It reads one document,
+kept 60 s in each instance with the same 1.5 s deadline and 60 s cooldown as `/api/radar`; the site's
+`roles/datastore.user` on `arcos` covers it. Logs: `stats failed <name> [<gRPC code>]`.
+
+**The first run, and the backfill.** The first run creates `stats/mainnet` with the cursor one block before
+`fromBlock`, then catches up 20 windows a run. From 22,742,796 to the head on 2026-11-08 (block 30.2 million) is 749
+windows: about 38 runs, so about 40 minutes at one run a minute, if the earlier steps leave time for the Stats step (it
+starts no window after 100 s, so a run whose inspections ran long reads fewer). One window took about half a second on
+rpc.mainnet.arc.io (400 ms pacing plus the call). While it catches up the Stats window says the on-chain counts are
+still catching up (`asOf.behind` over 2,000 blocks), and the counts rise as blocks are read; the server counts are
+there from the first run. After that a run applies one window of about 118 blocks.
+
+**Redoing a count.** To count again from the start (the exclusion list changed, say), delete the document
+`stats/mainnet` and the `statsDays` docs in the console and let the next runs backfill again. To pause counting without
+losing anything, set `stats` to `false` on `indexer/mainnet`.
+
+**Cost.** Backfill: about 750 `eth_getLogs`, 750 transactions (1 read and 1 write each, plus a `statsDays` write where
+a window had events); no explorer calls. Steady state: 1 `eth_getLogs` a run (about 43,000 a month), 1 transaction a
+run (about 43,000 reads and 43,000 writes), and every 10 minutes six aggregations and three one-document reads (about
+4,300 rounds a month; an aggregation bills one read per 1,000 index entries it counts). Well under $1 a month.
+
+**Checking a number.** Open the contract's logs from the Stats window (or the README's table), filter the event, and
+count: `TokenCreated` on the TokenFactory, `Drop` on both Multisends. The explorer's totals include the left-out wallet's
+events, which `stats/mainnet.excluded` holds in the console. `fees` should match the FeeController's `feeOf` for
+`MINT_FLAT`, `DROP_PER_RECIPIENT` and `DROP_MIN` (read on the explorer) once the counter is caught up.
+
+The run line gains `stats: { windows, tokensCreated, drops, behind, error }`: counts and the name of an error, no
+address. `behind` is the blocks the Stats cursor is short of the run's head.
+
 ## The site's reads
 
 - `GET /api/pools/[token]` answers the token's indexed pools, v4 pool keys included, kept 60 seconds at the CDN.
 - `GET /api/radar` answers the first Radar page of a filter (the newest 50 tokens, each with Inspector's counts), kept 20
   seconds at the CDN; the Radar window polls it every 20 seconds.
+- `GET /api/stats` answers the usage counts (above, "Stats"), kept 60 seconds at the CDN; the Stats window polls it every
+  60 seconds. Public, with CORS open to any origin; 404 on testnet.
 - `/api/inspect`, `/t` and `/badge` pass the index's v4 pools to the Inspector, and the Inspector window reads them from
   `/api/pools`. This is how a v4 pool with a hook, or with a fee outside the five standard tiers, gets inspected.
 - The site reads the index only on mainnet, and only on App Hosting (or against the emulator), so a dev server never
@@ -534,7 +610,7 @@ resource.type="cloud_run_revision" resource.labels.service_name="arcosindexer" j
 ```
 
 Each run logs one line: `arcosIndexer run` with `from`, `to`, `windows`, `pools`, `tokens`, `inspected`, `failed`,
-`expired`, `feeds`, `explorerCalls` and Watchdog's `watch` counters (above); a halted indexer logs `arcosIndexer halted`
+`expired`, `feeds`, `explorerCalls`, Watchdog's `watch` counters (above) and Stats' `stats` counters; a halted indexer logs `arcosIndexer halted`
 with its reason. No line carries an address: the run line leaves out Watchdog's page cursor, a `watchState` doc id
 that names a token. In Firestore, `indexer/mainnet` shows the cursor (`block`), `lastRunAt`, the day's explorer calls
 and Watchdog's `watchCursor`.
@@ -556,6 +632,8 @@ minute), a steady-state run makes:
 | Firestore reads (Watchdog) | about 2 + 3 per token on the page (the `watchState`, `tokens` and `pools` docs), at most about 122; plus the fan-out's and the sends' reads only when there is work | about 5.3 million at the cap, about $1.60 |
 | Firestore writes (Watchdog) | 0 when nothing changed; 1 per first sight; 1 + k per change with k alerts; 1 per delivery created; 1 per send; the cursor rides on the end of the run | a few a minute at most; the hard ceiling during a fan-out is 1,000 delivery creates + 60 send updates + 40 state writes |
 | Telegram | at most 60 messages a run, 3 per chat | at most 60 a minute |
+| Arc RPC (Stats) | 1 `eth_getLogs` (the window since Stats' own cursor); 20 a run while it backfills | about 43,000; about 750 once for the backfill |
+| Firestore (Stats) | 1 transaction: 1 read, 1 write (plus 1 more write where the window had events); every 10 minutes 6 aggregations and 3 one-document reads | about 43,000 reads and 43,000 writes, plus about 100,000 read units of aggregations; well under $1 |
 
 The first run's 24-hour backfill reads and writes about 6,000 documents once. Firestore single-region prices are about
 half of the multi-region $0.06 per 100,000 reads and $0.18 per 100,000 writes, so the indexer's Firestore use is about
@@ -573,4 +651,10 @@ are made on RPC only and marked `degraded` unless the budget grows.
   rebuilt in turn, the lease and the cursor that only moves forward; and Watchdog's step: first sight, a change with
   its alerts and deliveries, the fan-out resumed after a crash, retries and the 4-attempt limit, a blocked chat
   unlinked, the 429 pause, the switches, the 40-token page and its cursor, the time limits, the breaker and the logs.
-- `npm run test:live -w @arcos/functions`: three read-only calls to Arc mainnet. Not part of CI.
+  Stats' unit tests (`stats.test.ts`) decode and fold generated logs of both Multisends: fee changes in a window and in
+  one block by log index, the minimum fee, failed rows, native against token drops, the left-out wallet, removed logs,
+  unknown topics, duplicates, day keys. Stats' emulator suite (`stats.test.ts`) applies a window twice, from two runs at
+  once, out of order and across a month; runs the step through `runIndexer` (cursor, window cap, time limit, switch,
+  refused and failed windows, the 10-minute server counts, no address in a log line).
+- `npm run test:live -w @arcos/functions`: read-only calls to Arc mainnet (the indexer's three, and Stats' decode of the
+  first window from the FeeController's deployment). Not part of CI.

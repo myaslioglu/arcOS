@@ -65,6 +65,17 @@ describe("the no-score rule", () => {
     expect(appsFor("testnet").filter((m) => m.id === "radar")).toHaveLength(1);
   });
 
+  it("lists Stats as a live app in the System folder, on both networks, with no wallet and no contract gate", () => {
+    const stats = LIVE.find((m) => m.id === "stats");
+    expect(stats).toMatchObject({ name: "Stats", blurb: "How much ArcOS is used", category: "system", requiresWallet: false, window: { w: 440, h: 520 } });
+    expect(stats?.comingSoon).toBeFalsy();
+    expect(SOON.some((m) => m.id === "stats")).toBe(false);
+    expect(Object.hasOwn(NEEDS_CONTRACT, "stats")).toBe(false);
+    expect(appsFor("mainnet").filter((m) => m.id === "stats")).toHaveLength(1);
+    expect(appsFor("testnet").filter((m) => m.id === "stats")).toHaveLength(1);
+    expect(LIVE.filter((m) => m.category === "system").map((m) => m.id)).toEqual(["finder", "wallet", "about", "stats", "revoke", "terminal"]);
+  });
+
   it("lists Watchdog as a live app after Inspector, on both networks, and not among the gated apps", () => {
     const watchdog = LIVE.find((m) => m.id === "watchdog");
     expect(watchdog).toMatchObject({
