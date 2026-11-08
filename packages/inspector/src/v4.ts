@@ -4,7 +4,7 @@ import type { Hex } from "./bytecode";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { CallReverted, type ChainReader, type ExtraPool, type Pool, type PoolKey } from "./types";
 
-/** v4's native currency: address(0). On Arc that is USDC, with 18 decimals. */
+/** v4's native currency: address(0). What it is, and its decimals, come from the chain's config (`InspectInput.nativeQuote`). */
 export const NATIVE: Address = "0x0000000000000000000000000000000000000000";
 
 /** The fee and tick spacing pairs Inspector probes without an index: the ones most pools on Arc launch with (design F17). */
@@ -105,7 +105,7 @@ export function quoteInRange(p: { sqrtPriceX96: bigint; tick: number; tickSpacin
   return p.sqrtPriceX96 <= lowerRatio ? 0n : (p.liquidity * (p.sqrtPriceX96 - lowerRatio)) / Q96;
 }
 
-/** A currency pools can quote against, with the decimals its amounts carry: 6 for USDC's ERC-20 view and EURC, 18 for native USDC. */
+/** A currency pools can quote against, with the decimals its amounts carry (on Arc: 6 for the USDC ERC-20 and EURC, 18 for native USDC). */
 export type V4Quote = { address: Address; symbol: string; decimals: number };
 
 export type V4Read = {
@@ -157,7 +157,8 @@ function candidates(token: Address, quotes: readonly V4Quote[], extra: readonly 
   return out;
 }
 
-const toSixDecimals = (raw: bigint, decimals: number): bigint =>
+/** A raw amount of a currency with `decimals` decimals, in 6 decimals (cut, not rounded). */
+export const toSixDecimals = (raw: bigint, decimals: number): bigint =>
   decimals >= 6 ? raw / 10n ** BigInt(decimals - 6) : raw * 10n ** BigInt(6 - decimals);
 
 /**

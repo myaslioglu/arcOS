@@ -13,11 +13,13 @@ import { describe, expect, it } from "vitest";
 import { DEX, EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
 import { checkTrade, findPools } from "../src/checks";
 import { inspect } from "../src/inspect";
-import { simulateTrade, simulatorAddresses, STATUS } from "../src/simulate";
+import { simulateTrade, simulatorAddresses, STATUS, tradeSetup } from "../src/simulate";
 import type { InspectInput, PoolScan } from "../src/types";
 import { reader } from "./arc";
+import { arcFields } from "../src/__tests__/fixtures/arc";
 
 const input = (address: `0x${string}`, dex: DexConfig | null = DEX.mainnet): InspectInput => ({
+  ...arcFields("mainnet"),
   address, network: "mainnet", reader, explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.arc.io",
 });
 const m = DEX.mainnet!;
@@ -29,7 +31,7 @@ const lower = (a: string) => a.toLowerCase();
 /** The round trip `simulateTrade` ran in the first pool it measured, failing the test with what it got instead. */
 async function ran(address: `0x${string}`, dex: DexConfig) {
   const scan: PoolScan = await findPools(input(address, dex));
-  const measured = await simulateTrade(reader, address, scan);
+  const measured = await simulateTrade(reader, address, scan, tradeSetup(input(address, dex))!);
   const run = measured.kind === "measured" ? measured.attempts[0] : undefined;
   if (run?.kind !== "ran") throw new Error(`no round trip for ${address}: ${run?.kind ?? measured.kind}`);
   return { scan, run };

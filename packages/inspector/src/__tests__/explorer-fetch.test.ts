@@ -3,6 +3,7 @@ import { ExplorerUnavailable, blockscoutSource } from "../explorer";
 import { inspect } from "../inspect";
 import { CallReverted, type ChainReader } from "../types";
 import { explorerFetch } from "../explorer-fetch";
+import { arcFields } from "./fixtures/arc";
 
 const API = "https://explorer.test/api/v2";
 const TOKEN = "0x1111111111111111111111111111111111111111";
@@ -131,7 +132,7 @@ describe("an inspection whose explorer requests were cut off", () => {
     const explorer = blockscoutSource(API, explorerFetch(async () => {}, inspection.signal, fetchFn));
     await expect(explorer.token(TOKEN)).rejects.toBeInstanceOf(ExplorerUnavailable);
 
-    const r = await inspect({ address: TOKEN, network: "testnet", reader, explorer, dex: null, knownLockers: [], explorerBase: "https://explorer.test" });
+    const r = await inspect({ ...arcFields("testnet"), address: TOKEN, network: "testnet", reader, explorer, dex: null, knownLockers: [], explorerBase: "https://explorer.test" });
     expect(sent).toEqual([]);
     expect(r.explorerReachable).toBe(false);
     expect(r.degraded).toBe(true);

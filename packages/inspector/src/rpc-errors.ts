@@ -1,3 +1,5 @@
+import type { OutOfGasShape } from "@arcos/chain";
+
 /**
  * Whether a failed RPC call is the node answering, or the endpoint failing. One rule, used by the reader's
  * revert/transport split and by the web app's RPC transport:
@@ -86,18 +88,23 @@ export function isDecodeFailure(e: unknown): boolean {
   return links.some((l) => named(l, "ContractFunctionExecutionError")) && !links.some((l) => named(l, "CallExecutionError")) && !endpointFailed(links);
 }
 
-/** Arc's code and text for an eth_call that ran out of gas mid-execution (not -32000 "intrinsic gas too low"). */
-const OUT_OF_GAS_CODE = -32003;
-const OUT_OF_GAS_TEXT = /^out of gas/i;
+/** One error, not its cause chain, is the node saying the call ran out of gas in one of the chain's ways (`shapes`). */
+export function outOfGasLink(e: unknown, shapes: readonly OutOfGasShape[]): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  const link = e as Link;
+  return shapes.some((s) => link.code === s.code && s.text.test(nodeText(link)));
+}
 
 /**
- * The node said the call ran out of gas during execution: Arc's -32003 "out of gas: gas required exceeds: N", anywhere in
- * viem's cause chain, with no HTTP failure or timeout in it. Not a revert, and not read as one by `isRevert`: it only means
- * "the node answered" for a call that set its own gas limit (a v4 quote), where the same call gets the same answer anywhere.
+ * The node said the call ran out of gas during execution, in one of the ways the chain's nodes say it (`shapes`, from
+ * `InspectChain.outOfGas`: on Arc, -32003 "out of gas: gas required exceeds: N", never -32000 "intrinsic gas too low"),
+ * anywhere in viem's cause chain, with no HTTP failure or timeout in it. Not a revert, and not read as one by `isRevert`:
+ * it only means "the node answered" for a call that set its own gas limit (a v4 quote), where the same call gets the same
+ * answer anywhere.
  */
-export function isOutOfGas(e: unknown): boolean {
+export function isOutOfGas(e: unknown, shapes: readonly OutOfGasShape[]): boolean {
   const links = chain(e);
-  return !endpointFailed(links) && links.some((l) => l.code === OUT_OF_GAS_CODE && OUT_OF_GAS_TEXT.test(nodeText(l)));
+  return !endpointFailed(links) && links.some((l) => outOfGasLink(l, shapes));
 }
 
 /**

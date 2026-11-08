@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublicClient } from "viem";
-import { DEX, activeChain } from "@arcos/chain";
+import { DEX, USDC, activeChain, arcInspectChain } from "@arcos/chain";
 import { inspectInput } from "../inspect-input";
 
 const T = "0x1111111111111111111111111111111111111111";
@@ -52,6 +52,21 @@ describe("inspectInput", () => {
     expect(inspectInput(T, client).dex?.v4).toBeDefined();
     expect(inspectInput(T, client).dex?.aero).toBeUndefined();
     expect(inspectInput(T, client).extraPools).toBeUndefined();
+  });
+
+  it("describes Arc on the site's network from its registry entry: the chain, its quotes and its PREVRANDAO wording", () => {
+    for (const [network, chainId] of [["mainnet", 5042], ["testnet", 5042002]] as const) {
+      vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+      expect(inspectInput(T, client), network).toMatchObject({
+        network,
+        chain: { key: "arc", chainId },
+        nativeQuote: { address: "0x0000000000000000000000000000000000000000", symbol: "USDC", decimals: 18 },
+        tradeQuote: { token: USDC, balanceSlot: null },
+        lockersVetted: true,
+        unscanned: [],
+        prevrandao: arcInspectChain(network).prevrandao,
+      });
+    }
   });
 
   it("keeps linking evidence to the public explorer either way", () => {

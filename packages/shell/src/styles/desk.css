@@ -316,6 +316,8 @@
 .os-search-pill:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .os-search-pill svg { width: 14px; height: 14px; }
 .os-search-pill kbd { font-family: inherit; }
+/* On a phone the shortcut hint is noise; the icon alone frees room for the wallet button. */
+@media (max-width: 479px) { .os-search-pill kbd { display: none; } .os-search-pill { padding-inline: 0.55rem; } }
 @media (hover: none) { .os-search-pill { display: none; } }
 
 /* Touch: menu rows get a 44px target; menu titles take the bar's full 40px height, the most the bar allows. */

@@ -1,5 +1,5 @@
 import type { Abi } from "viem";
-import type { Address, DexConfig, NetworkId } from "@arcos/chain";
+import type { Address, DexConfig, InspectChainKey, NativeQuote, NetworkId, PrevrandaoCopy, TradeQuote } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import type { ExplorerSource } from "./explorer";
 
@@ -28,7 +28,11 @@ export type Finding = {
 
 export type Report = {
   address: Address;
+  /** The site's network (its build), which every report of it carries, whichever chain it read. */
   network: NetworkId;
+  /** The chain the report read (`InspectInput.chain`), and its chain id. */
+  chain: InspectChainKey;
+  chainId: number;
   token: { name: string | null; symbol: string | null; decimals: number | null; totalSupply: string | null };
   findings: Finding[];
   /** Kept for compatibility: passed === counts.pass, total === findings.length. */
@@ -74,18 +78,24 @@ export interface ChainReader {
    * One eth_call with some accounts' state replaced for that call only (the RPC's third parameter): the trade simulation's
    * code and USDC balance at a throwaway address. Resolves with what the call returned, `0x` included (code that never ran,
    * when a node ignores the override, answers that). The gas limit is always set, so it rejects with `CallReverted` when
-   * the call reverts or runs out of that gas (Arc's -32003), both the node's answer; anything else, a node refusing the
-   * override included, is passed on as it came.
+   * the call reverts or runs out of that gas (the chain's out-of-gas answer, `InspectChain.outOfGas`), both the node's
+   * answer; anything else, a node refusing the override included, is passed on as it came.
    */
   callWithOverride(call: OverrideCall, overrides: readonly StateOverride[]): Promise<Hex>;
 }
 
 /** The call `ChainReader.callWithOverride` makes, at `gasPrice` (wei per gas), which `from` must hold enough to prepay. */
 export type OverrideCall = { from: Address; to: Address; data: Hex; gas: bigint; gasPrice: bigint };
-/** One account's state for one call: its code, its native balance (in wei), or both. */
-export type StateOverride = { address: Address; code?: Hex; balance?: bigint };
+/**
+ * One account's state for one call: its code, its native balance (in wei), and storage words to write over its own
+ * (`stateDiff`: each slot set to its 32-byte value, the rest of its storage kept), each optional.
+ */
+export type StateOverride = { address: Address; code?: Hex; balance?: bigint; stateDiff?: { slot: Hex; value: Hex }[] };
 
-/** A Uniswap v4 pool's identity. Its id is keccak256(abi.encode(key)). `currency0 < currency1`, and address(0) is native USDC. */
+/**
+ * A Uniswap v4 pool's identity. Its id is keccak256(abi.encode(key)). `currency0 < currency1`, and address(0) is the chain's
+ * native currency (`InspectInput.nativeQuote`; on Arc, USDC).
+ */
 export type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
 
 /**
@@ -100,7 +110,7 @@ export type Pool = {
   /** Where the pool's tokens sit: the pair or pool contract, or for v4 the PoolManager, which holds the tokens of every v4 pool. */
   address: Address;
   version: PoolVersion;
-  /** The quote currency's symbol. Native USDC on v4 is "USDC" too. */
+  /** The quote currency's symbol: a quote token's, or on v4 the native currency's (`InspectInput.nativeQuote`, "USDC" on Arc). */
   quote: string;
   /**
    * In units of the quote currency, 6 decimals. v2, v3 and Aerodrome: the pool's balance of the quote token. v4: what the
@@ -149,9 +159,17 @@ export type PoolScan = {
   silent: string[];
 };
 
+/**
+ * One inspection. The fields that describe the chain (`chain`, `dex`, `knownLockers`, `explorerBase`, `arcosTokenFactory`,
+ * `nativeQuote`, `tradeQuote`, `lockersVetted`, `unscanned`, `prevrandao`) come from its registry entry (`InspectChain` in
+ * @arcos/chain), through `chainInput`: nothing in the engine assumes which chain it reads.
+ */
 export type InspectInput = {
   address: Address;
+  /** The site's network (its build), carried into the report. */
   network: NetworkId;
+  /** The chain read, as the report names it. */
+  chain: { key: InspectChainKey; name: string; chainId: number };
   reader: ChainReader;
   explorer: ExplorerSource | null;
   dex: DexConfig | null;
@@ -161,6 +179,30 @@ export type InspectInput = {
   /** The ArcOS TokenFactory on this network. A token it created (`isArcosToken`) runs one of the factory's fixed
    * templates, whose source is published with the factory's verified source. */
   arcosTokenFactory?: Address | null;
+  /**
+   * Uniswap v4's native currency (`address(0)`) as a quote currency, with its symbol and decimals and the ERC-20 that shows
+   * the same balances (`erc20View`): on Arc, USDC with 18 decimals, viewed by the USDC ERC-20 at 0x3600. null: v4 pools
+   * against the native currency aren't looked for.
+   */
+  nativeQuote: NativeQuote | null;
+  /**
+   * What the trade check buys with, and how the simulation funds the throwaway account with it: on Arc, the USDC ERC-20 at
+   * 0x3600 (6 decimals), the native quote's `erc20View`, funded through the native balance (`balanceSlot: null`). null: no
+   * trade is simulated.
+   */
+  tradeQuote: TradeQuote | null;
+  /**
+   * `knownLockers` is a vetted list of the chain's lock contracts, so LP held anywhere else can be called unlocked (Arc's
+   * is). Where it isn't, lp-lock never fails: LP that isn't burned is unknown.
+   */
+  lockersVetted: boolean;
+  /**
+   * The kinds of pool on the chain that discovery can't see, by name. Arc has none. The liquidity checks don't read this
+   * yet: they treat discovery as complete, so no registry entry may name any until they do (inspect-chains.test.ts).
+   */
+  unscanned: string[];
+  /** The prevrandao check's warning on this chain. */
+  prevrandao: PrevrandaoCopy;
   /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */
   extraPools?: ExtraPool[];
   /**

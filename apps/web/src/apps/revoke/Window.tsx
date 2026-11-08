@@ -9,6 +9,7 @@ import { dragSourceProps, useDesktop, useDropTarget, type AppProps } from "@arco
 import { ConnectGate } from "@/components/ConnectGate";
 import { spenderLabel, type Approval } from "@/lib/approvals";
 import { shortAddress } from "@/lib/format";
+import { notifyBalanceChanged } from "@/lib/balance-refresh";
 import { revokeStep, type RevokeClient, type RowOutcome } from "./flow";
 import {
   approvalText,
@@ -237,7 +238,8 @@ function ApprovalList({ owner, canRevoke }: { owner: Address; canRevoke: boolean
     void revokeSession.run(
       owner,
       revokeSteps(targets),
-      (step, onSent) => revokeStep(step, { ...deps, onSent }),
+      // Gas is spent whatever the outcome, so every step re-reads the balances once it settles.
+      (step, onSent) => revokeStep(step, { ...deps, onSent }).finally(notifyBalanceChanged),
       (outcomes: RowOutcome[]) => {
         pendingFocus.current = focusAfterRun(keysBefore, outcomes);
       },

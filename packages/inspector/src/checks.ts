@@ -47,11 +47,12 @@
  *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing.
  * - lp-lock: no DEX is configured, pool discovery failed, the pool contracts never answered (or a
  *   family didn't and no pool was found), only pools other than Uniswap v2 exist (positions in v3, v4
- *   and Aerodrome pools can't be read without an index), or the v2 pair's LP totalSupply is zero (no
- *   evidence to compute a locked share from).
+ *   and Aerodrome pools can't be read without an index), the v2 pair's LP totalSupply is zero (no
+ *   evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain
+ *   whose lock contracts aren't vetted (`lockersVetted`), where the rest may sit in one.
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
- * - trade: no DEX is configured, pool discovery failed, no USDC pool was found, or the round trip
+ * - trade: no DEX or no trade quote is configured, pool discovery failed, no USDC pool was found, or the round trip
  *   (see `checkTrade` and simulate.ts) didn't measure a sell: the buy reverted, a leg ran out of the
  *   gas it was given, nothing was spent, the pool paid nothing out, or the RPC refused, ignored or
  *   failed the state-overridden eth_call (or the gas price read). A `fail` takes a buy that went
@@ -66,14 +67,14 @@
  * running NOW and stand unchanged.
  */
 import { parseAbi } from "viem";
-import { BURN_ADDRESSES, USDC, type Address, type DexConfig } from "@arcos/chain";
+import { BURN_ADDRESSES, type Address, type DexConfig } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
-import { NATIVE, readV4Pools, type V4Quote } from "./v4";
-import { MIN_DEPTH, STATUS, buyDidNotTrade, poolCouldNotTrade, orderDepth, v2Out, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, type TradeAttempt } from "./simulate";
+import { readV4Pools, toSixDecimals, type V4Quote } from "./v4";
+import { MIN_DEPTH, STATUS, buyDidNotTrade, poolCouldNotTrade, orderDepth, v2Out, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, tradeSetup, type TradeAttempt, type TradeSetup } from "./simulate";
 
 export const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -337,13 +338,17 @@ const uniswapVersions = (dex: DexConfig): ("v2" | "v3" | "v4")[] => [
 const uniswapV2V3Name = (dex: DexConfig): string => `Uniswap ${listWith("and", [dex.v2Factory && "v2", dex.v3Factory && "v3"].filter((v): v is string => Boolean(v)))}`;
 
 /**
- * What can be quoted against: the config's quote tokens and, on v4, native USDC (currency `address(0)`, the same asset as the
- * USDC ERC-20 view, with 18 decimals). A token is never its own quote, so inspecting USDC leaves out both forms of it.
+ * What can be quoted against on v4: the config's quote tokens (6 decimals, USDC and EURC) and the chain's native currency
+ * (`input.nativeQuote`, currency `address(0)`), when it has one: on Arc, native USDC with 18 decimals. A token is never its
+ * own quote, and the native currency and its ERC-20 view (`nativeQuote.erc20View`, Arc's USDC at 0x3600) are one asset, so
+ * inspecting that ERC-20 leaves out both forms of it.
  */
-function v4Quotes(dex: DexConfig, token: Address): V4Quote[] {
-  const quotes = dex.quoteTokens.filter((q) => lower(q.address) !== lower(token)).map((q) => ({ ...q, decimals: 6 }));
-  const native = dex.quoteTokens.some((q) => lower(q.address) === lower(USDC)) && lower(token) !== lower(USDC);
-  return native ? [...quotes, { address: NATIVE, symbol: "USDC", decimals: 18 }] : quotes;
+function v4Quotes(input: InspectInput, dex: DexConfig): V4Quote[] {
+  const token = lower(input.address);
+  const quotes = dex.quoteTokens.filter((q) => lower(q.address) !== token).map((q) => ({ ...q, decimals: 6 }));
+  const native = input.nativeQuote;
+  const isNative = native !== null && (lower(native.address) === token || (native.erc20View !== null && lower(native.erc20View) === token));
+  return native && !isNative ? [...quotes, { address: native.address, symbol: native.symbol, decimals: native.decimals }] : quotes;
 }
 
 /** Rejects if any call fails at the transport level — the caller decides what "pools unknown" means. */
@@ -402,7 +407,7 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     return [v2Pool, ...v3Pools];
   });
   const v4 = dex.v4
-    ? readV4Pools({ reader, v4: dex.v4, token: address, quotes: v4Quotes(dex, address), extra: input.extraPools ?? [], quoteUnits: MIN_DEPTH / 1_000_000n })
+    ? readV4Pools({ reader, v4: dex.v4, token: address, quotes: v4Quotes(input, dex), extra: input.extraPools ?? [], quoteUnits: MIN_DEPTH / 1_000_000n })
     : null;
 
   // Aerodrome Slipstream: the factory's `getPool` for every quote and every tick spacing the config lists, in one multicall
@@ -871,6 +876,15 @@ export async function checkLpLock(input: InspectInput, scan: PoolScan | null): P
       : "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.";
     return finding("lp-lock", "unknown", "Couldn't check liquidity locks", detail, { fixAppId: null });
   }
+  // "Isn't locked" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
+  // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
+  if (pct < 95 && !input.lockersVetted) {
+    return finding(
+      "lp-lock", "unknown", "Couldn't check liquidity locks",
+      `${formatPct(100 - pct)} of the v2 LP supply isn't burned or in a known lock contract, and the lock contracts on ${input.chain.name} aren't recognized yet, so whether it can be withdrawn can't be told.`,
+      { evidenceUrl: url, fixAppId: null },
+    );
+  }
   return pct >= 95
     ? finding("lp-lock", "pass", "Liquidity is burned or locked", `${formatPct(pct)} of the v2 LP supply can't be withdrawn.`, { evidenceUrl: url })
     : finding("lp-lock", "fail", "Liquidity isn't locked", `${formatPct(100 - pct)} of the v2 LP supply sits in wallets that can withdraw it.`, { evidenceUrl: url, fixAppId: "vault" });
@@ -881,8 +895,10 @@ export function checkPrevrandao(input: InspectInput, logicCode: string | null, g
     const { title, detail } = LOGIC_GAP[gap ?? "logic-unreadable"];
     return finding("prevrandao", "unknown", title, detail);
   }
+  // What PREVRANDAO gives is the chain's: on Arc it is always 0 (`InspectChain.prevrandao`).
+  const { warnTitle, detail, evidenceUrl } = input.prevrandao;
   return usesOpcode(logicCode, 0x44)
-    ? finding("prevrandao", "warn", "Uses PREVRANDAO, which is always 0 on Arc", "Any randomness derived from it is predictable.", { evidenceUrl: "https://docs.arc.io/arc/references/evm-differences" })
+    ? finding("prevrandao", "warn", warnTitle, detail, { evidenceUrl })
     : finding("prevrandao", "pass", "Doesn't rely on on-chain randomness", "The PREVRANDAO opcode isn't used.");
 }
 
@@ -988,7 +1004,7 @@ function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label:
     );
   }
   if (r.sold === 0n) return undecided(`Buying from ${other}, tried instead, went through, but the pool would give nothing back for the tokens bought, so no sell was sent`);
-  const toSix = (raw: bigint) => (second.decimals === 18 ? raw / 10n ** 12n : raw);
+  const toSix = (raw: bigint) => toSixDecimals(raw, second.decimals);
   if (r.received === 0n) {
     return fail(`${first} Selling into ${other}, tried instead, went through, but nothing came back for ${usdcAmount(toSix(r.spent))} USDC of tokens. ${SIMULATED}`);
   }
@@ -1011,12 +1027,15 @@ function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label:
  * pool counted was. A `pass` needs every round trip counted to pass, one of them in a liquid pool, and none of these, each
  * of which caps it at `warn`: a pool counted that read `unknown`, more pools to try than were tried, another pool of the
  * scan that is liquid or undecided and wasn't traded against (hooked, against EURC), or a pool deeper than one measured
- * that wasn't (a v2 pair with no tokens aside). No DEX, no pool scan or no USDC pool: `unknown`.
+ * that wasn't (a v2 pair with no tokens aside). No DEX, no trade quote (`tradeSetup`), no pool scan or no USDC pool: `unknown`.
  */
 export async function checkTrade(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
   if (!input.dex) return finding("trade", "unknown", "Trades aren't simulated on this network", "No DEX registry is configured here.");
+  // What the round trip buys with, and how it is funded, is the chain's (on Arc, USDC through the native balance).
+  const setup = tradeSetup(input);
+  if (!setup) return finding("trade", "unknown", "Trades aren't simulated on this network", "No currency to trade with is configured here.");
   if (scan === null) return finding("trade", "unknown", TRADE_UNKNOWN, "The network didn't answer the pool lookup.");
-  const run = await simulateTrade(input.reader, input.address, scan, input.deadlineAt);
+  const run = await simulateTrade(input.reader, input.address, scan, setup, input.deadlineAt);
   if (run.kind === "no-pool") {
     const why = !scan.factoriesAnswered ? FACTORIES_SILENT : (silentNote(scan) ?? "No USDC pool was found to trade against.");
     return finding("trade", "unknown", TRADE_UNKNOWN, why);
@@ -1074,10 +1093,10 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
       : "",
     tooMany ? ` It has ${run.candidates} pools to try; ${attempts.length} were tried.` : "",
     otherLive.length > 0
-      ? ` ${capitalized(listWith("and", otherLive.map((p) => `${untriedName(p)} (${p.liquid === true ? "liquid" : "liquidity undecided"})`)))} ${otherLive.length === 1 ? "wasn't" : "weren't"} traded against.`
+      ? ` ${capitalized(listWith("and", otherLive.map((p) => `${untriedName(p, setup)} (${p.liquid === true ? "liquid" : "liquidity undecided"})`)))} ${otherLive.length === 1 ? "wasn't" : "weren't"} traded against.`
       : "",
     deeper.length > 0
-      ? ` ${capitalized(listWith("and", deeper.map(untriedName)))}, deeper than a pool measured, ${deeper.length === 1 ? "wasn't" : "weren't"} measured.`
+      ? ` ${capitalized(listWith("and", deeper.map((p) => untriedName(p, setup))))}, deeper than a pool measured, ${deeper.length === 1 ? "wasn't" : "weren't"} measured.`
       : "",
   ].join("");
   if (f.status === "pass" && (unknown.length > 0 || notes !== "")) {
@@ -1103,8 +1122,8 @@ function lossOf(attempt: TradeAttempt): bigint | null {
   return r.received >= r.spent ? 0n : ((r.spent - r.received) * 1_000_000n) / r.spent;
 }
 
-/** A pool never traded against, with what it trades against when that isn't USDC: "Uniswap v3 0x1234…abcd (EURC)". */
-const untriedName = (p: Pool): string => (p.quote === "USDC" ? poolName(p) : `${poolName(p)} (${p.quote})`);
+/** A pool never traded against, with what it trades against when that isn't the trade's currency (USDC): "Uniswap v3 0x1234…abcd (EURC)". */
+const untriedName = (p: Pool, setup: TradeSetup): string => (p.quote === setup.symbol ? poolName(p) : `${poolName(p)} (${p.quote})`);
 
 /**
  * What to call a pool measured: "its deepest pool" when the scan found none deeper; otherwise "a liquid pool" for one found
@@ -1139,7 +1158,7 @@ function attemptFinding(input: InspectInput, run: TradeAttempt, label: string): 
     return finding("trade", "unknown", TRADE_UNKNOWN, `The pool on ${VENUE[pool.version]} can't serve a buy: it has no liquidity at its price, or gives nothing for the amount.`, at);
   }
   const { result } = run;
-  const toSix = (raw: bigint) => (run.decimals === 18 ? raw / 10n ** 12n : raw);
+  const toSix = (raw: bigint) => toSixDecimals(raw, run.decimals);
   const paid = usdcAmount(run.amount);
   switch (result.status) {
     case STATUS.buyReverted:
