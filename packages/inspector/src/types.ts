@@ -158,7 +158,7 @@ export type InspectInput = {
   knownLockers: Address[];
   /** e.g. https://explorer.arc.io — evidence links are built from it. */
   explorerBase: string;
-  /** The 4rc.OS TokenFactory on this network. A token it created (`isArcosToken`) runs one of the factory's fixed
+  /** The ArcOS TokenFactory on this network. A token it created (`isArcosToken`) runs one of the factory's fixed
    * templates, whose source is published with the factory's verified source. */
   arcosTokenFactory?: Address | null;
   /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */

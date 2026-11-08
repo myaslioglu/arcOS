@@ -27,7 +27,7 @@ export default function AboutWindow() {
 
   return (
     <div className="p-5 text-sm leading-6">
-      <p className="text-base font-medium">4rc.OS</p>
+      <p className="text-base font-medium">ArcOS</p>
       <p className="mt-2 text-muted">
         {"A desktop for Circle's Arc network: inspect a token, mint one, send to many wallets at once, swap, bridge, revoke token approvals, and read the chain from a terminal."}
       </p>

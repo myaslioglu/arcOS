@@ -17,7 +17,7 @@ export default function Home() {
     <Web3Provider>
       <DesktopShell
         apps={APPS}
-        brand="4rc.OS"
+        brand="ArcOS"
         badge={networkBadge(activeNetwork())}
         aboutAppId="about"
         repoUrl={REPO_URL}

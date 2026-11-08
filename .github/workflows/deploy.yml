@@ -8,10 +8,10 @@ name: Deploy
 #
 # Both sites come from the same commit under one approval. A push to main deploys both; a manual run can pick one
 # (`targets`). The testnet site takes part only once the repository variable ARCOS_TESTNET_READY is `true`, which the
-# owner sets after its backend exists (docs/DEPLOYING.md, The testnet site). Until then a push builds and deploys 4rc.OS
+# owner sets after its backend exists (docs/DEPLOYING.md, The testnet site). Until then a push builds and deploys ArcOS
 # alone, and a manual run that asks for the testnet site fails before any bundle is built. The mainnet site goes first,
-# and the testnet deploy starts only after it has succeeded, so a testnet failure never touches 4rc.OS. A bundle that
-# fails to build stops the whole run before approval, nothing deployed; to ship 4rc.OS while the testnet build is broken,
+# and the testnet deploy starts only after it has succeeded, so a testnet failure never touches ArcOS. A bundle that
+# fails to build stops the whole run before approval, nothing deployed; to ship ArcOS while the testnet build is broken,
 # run the workflow by hand with `targets: mainnet`.
 #
 # The functions (docs/OPERATIONS.md) take part only once the repository variable ARCOS_FUNCTIONS_READY is `true`, which
@@ -73,7 +73,7 @@ env:
 jobs:
   # Chooses what this run builds and deploys, from the `targets` input and the repository variables ARCOS_TESTNET_READY
   # and ARCOS_FUNCTIONS_READY, before anything is built. A push has no inputs (TARGETS is empty): both sites once the
-  # testnet variable is exactly `true`, 4rc.OS alone with a notice until then; and the functions once the functions
+  # testnet variable is exactly `true`, ArcOS alone with a notice until then; and the functions once the functions
   # variable is exactly `true`, with a notice until then. A manual run that asks for something whose variable
   # isn't `true` fails here, so it never deploys less than it asked for. No checkout, no token, no project code.
   plan:
@@ -105,10 +105,10 @@ jobs:
           esac
           if [ "$testnet" = true ] && [ "$TESTNET_READY" != true ]; then
             if [ -n "$TARGETS" ]; then
-              echo "::error::The testnet site isn't set up yet: the repository variable ARCOS_TESTNET_READY is not true (docs/DEPLOYING.md, The testnet site). To deploy 4rc.OS, run again with targets: mainnet."
+              echo "::error::The testnet site isn't set up yet: the repository variable ARCOS_TESTNET_READY is not true (docs/DEPLOYING.md, The testnet site). To deploy ArcOS, run again with targets: mainnet."
               exit 1
             fi
-            echo "::notice::ARCOS_TESTNET_READY is not true, so this run builds and deploys 4rc.OS only (docs/DEPLOYING.md, The testnet site)."
+            echo "::notice::ARCOS_TESTNET_READY is not true, so this run builds and deploys ArcOS only (docs/DEPLOYING.md, The testnet site)."
             testnet=false
           fi
           if [ "$functions" = true ] && [ "$FUNCTIONS_READY" != true ]; then
@@ -262,7 +262,7 @@ jobs:
       DEPLOY_MAINNET: ${{ needs.plan.outputs.mainnet }}
       DEPLOY_TESTNET: ${{ needs.plan.outputs.testnet }}
       DEPLOY_FUNCTIONS: ${{ needs.plan.outputs.functions }}
-    # Whether the mainnet deploy succeeded, for the smoke job: it checks 4rc.OS even when the testnet deploy after it failed.
+    # Whether the mainnet deploy succeeded, for the smoke job: it checks ArcOS even when the testnet deploy after it failed.
     outputs:
       mainnet: ${{ steps.deploy-mainnet.outcome }}
     steps:
@@ -400,7 +400,7 @@ jobs:
         run: tools/firebase/node_modules/.bin/firebase deploy --only "apphosting:${APPHOSTING_BACKEND}" --project "$FIREBASE_PROJECT" --non-interactive
 
       # App Hosting picks a backend's settings by its environment name. Without `testnet`, arcos-testnet would be built
-      # from apphosting.yaml alone: a copy of 4rc.OS, its fee recipient included. So the testnet deploy reads it first
+      # from apphosting.yaml alone: a copy of ArcOS, its fee recipient included. So the testnet deploy reads it first
       # (nothing written), after the mainnet deploy, so this check can only ever stop the testnet one.
       - name: The testnet backend's environment name must be testnet
         if: ${{ !inputs.dry_run && env.DEPLOY_TESTNET == 'true' }}
@@ -427,7 +427,7 @@ jobs:
         timeout-minutes: 30
         run: tools/firebase/node_modules/.bin/firebase deploy --only functions:arcos --project "$FIREBASE_PROJECT" --non-interactive
 
-  # No credentials here: it only reads the public site. It checks 4rc.OS whenever its deploy succeeded, the testnet deploy
+  # No credentials here: it only reads the public site. It checks ArcOS whenever its deploy succeeded, the testnet deploy
   # after it included or not; a run that deployed only the testnet site skips it (scripts/smoke.mjs reads mainnet).
   smoke:
     name: Smoke checks

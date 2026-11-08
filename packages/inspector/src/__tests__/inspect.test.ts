@@ -1396,7 +1396,7 @@ describe("degraded", () => {
   });
 });
 
-describe("source verification through the 4rc.OS TokenFactory", () => {
+describe("source verification through the ArcOS TokenFactory", () => {
   const FACTORY = "0xfa00000000000000000000000000000000000fac";
   const made = { [`${FACTORY}.isArcosToken(${TOKEN})`]: true };
   const notMade = { [`${FACTORY}.isArcosToken(${TOKEN})`]: false };
@@ -1410,7 +1410,7 @@ describe("source verification through the 4rc.OS TokenFactory", () => {
   it("passes a token the factory created, even while the explorer hasn't verified the address itself", async () => {
     const v = find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: { ...made, [`${TOKEN}.owner()`]: ZERO } }, unverified), "verified");
     expect(v.status).toBe("pass");
-    expect(v.title).toContain("4rc.OS");
+    expect(v.title).toContain("ArcOS");
     expect(v.evidenceUrl).toBe(`https://explorer.test/address/${FACTORY}?tab=contract`);
   });
 
@@ -1426,7 +1426,7 @@ describe("source verification through the 4rc.OS TokenFactory", () => {
   it("uses the explorer's own record when the address itself is verified", async () => {
     const v = find(await withFactory({ code: { [TOKEN]: PLAIN }, reads: made }, explorer()), "verified");
     expect(v.status).toBe("pass");
-    expect(v.title).not.toContain("4rc.OS");
+    expect(v.title).not.toContain("ArcOS");
     expect(v.evidenceUrl).toBe(`https://explorer.test/address/${TOKEN}?tab=contract`);
   });
 
@@ -1440,6 +1440,6 @@ describe("source verification through the 4rc.OS TokenFactory", () => {
 
   it("never claims it for code that forwards its calls", async () => {
     const r = await withFactory({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN }, reads: made }, unverified);
-    expect(find(r, "verified").title).not.toContain("4rc.OS");
+    expect(find(r, "verified").title).not.toContain("ArcOS");
   });
 });

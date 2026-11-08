@@ -1,6 +1,6 @@
-# 4rc.OS
+# ArcOS
 
-4rc.OS is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
+ArcOS (live at https://4rcos.com) is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
 contract, mint one without writing code, send a token to many wallets in one flow, swap and
 bridge, and revoke token approvals. A Terminal reads the chain and opens apps from typed
 commands, and a Roadmap window lists the apps still on the way.
@@ -18,7 +18,7 @@ Automated analysis, not investment advice.
 | Swap | USDC, EURC and cirBTC | Live |
 | Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
-| About | What 4rc.OS is, read from inside the app | Live |
+| About | What ArcOS is, read from inside the app | Live |
 | Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
 | Revoke | Lists a wallet's live token approvals and revokes one with a transaction the wallet confirms | Live |
 | Radar | Lists new tokens as the index records them, each with Inspector's checks | Live |
@@ -62,7 +62,7 @@ window runs in your browser, so it isn't affected. The pages the server builds (
 from Blockscout's PRO API when `BLOCKSCOUT_API_KEY` is set. It's a server-only variable, never
 `NEXT_PUBLIC_`; on App Hosting it's a Secret Manager secret. Without it, the explorer-backed checks
 on those pages (source verification, holder concentration) read "unknown", except that a token made
-by 4rc.OS's own TokenFactory still passes source verification through the factory (see below).
+by ArcOS's own TokenFactory still passes source verification through the factory (see below).
 Revoke's list (`/api/approvals`) reads approval events through the same key; without one it asks the
 public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
@@ -268,7 +268,7 @@ but does have privileged functions, both the ownership and privileges findings r
   pools (Uniswap v4's PoolManager among them) and lock contracts. A list the explorer won't confirm
   is complete gives a floor, not a concentration.
 - The name and symbol are chosen by whoever deployed the contract and can imitate another token.
-- A token made by this network's 4rc.OS TokenFactory passes source verification through the factory:
+- A token made by this network's ArcOS TokenFactory passes source verification through the factory:
   `isArcosToken(token)` is on-chain evidence that its code is one of the factory's four fixed
   templates, whose source is part of the factory's verified source. Its own explorer page can still say
   it isn't verified. This never applies to code that forwards its calls.
@@ -286,7 +286,7 @@ but does have privileged functions, both the ownership and privileges findings r
   unconfirmed batch) leaves the unspent part of that allowance with the Multisend contract until a
   later run uses it or you revoke it in Revoke. Drop on mainnet has used a new Multisend since
   2026-10-30 (`packages/contracts/DEPLOY.md`, "Deployments"), so an allowance left with the previous one
-  is no longer used by a later run; Revoke lists it as "4rc.OS Multisend (old)".
+  is no longer used by a later run; Revoke lists it as "ArcOS Multisend (old)".
 - Revoke lists ERC-20 allowances, single NFTs' approvals, operators (ERC-721 and ERC-1155
   `setApprovalForAll`) and Permit2 allowances. "Revoke all" sends one transaction per approval, one
   after another, and every Permit2 pair in a single `lockdown`; it stops at the first one that fails.

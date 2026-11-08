@@ -1,4 +1,4 @@
-# Deploying 4rc.OS contracts
+# Deploying ArcOS contracts
 
 You sign every transaction yourself, either with a keystore key in your terminal or in your browser wallet. Your private
 key is never pasted into a chat, a file or an env var.
@@ -471,7 +471,7 @@ R1's VaultFactory, VestingFactory and ProPass are not deployed yet (see "R1" abo
 
 The mainnet Multisend was deployed again on 2026-10-30, against the same FeeController and with the same ABI and fee
 keys. The previous version's `sendNative` copied each recipient's return data into memory; the new one makes the
-native call without an output area (PR #42). The previous contract stays on chain, and Revoke still names it ("4rc.OS
+native call without an output area (PR #42). The previous contract stays on chain, and Revoke still names it ("ArcOS
 Multisend (old)", `PREVIOUS_MULTISENDS` in `apps/web/src/lib/approvals.ts`), so an allowance an earlier Drop left with
 it can be found and revoked. The testnet Multisend was not deployed again: it is still the previous version.
 

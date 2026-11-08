@@ -111,7 +111,7 @@ export const UNIVERSAL_ROUTERS: Record<NetworkId, Address[]> = {
   testnet: ["0x4fcA4a51Ab4F23A7447b3284fBd7D73289A89Fb1"],
 };
 
-/** Lock contracts whose token holdings count as locked. 4rc.OS Vault joins this list in R2. */
+/** Lock contracts whose token holdings count as locked. ArcOS Vault joins this list in R2. */
 export const KNOWN_LOCKERS: Record<NetworkId, Address[]> = { mainnet: [], testnet: [] };
 
 export type ArcosContracts = {

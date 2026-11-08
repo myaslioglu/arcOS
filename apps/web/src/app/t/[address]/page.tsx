@@ -30,9 +30,9 @@ async function load(address: string): Promise<LoadResult> {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const robots = { index: false, follow: false };
   const report = await load((await params).address);
-  if (report === "busy") return { title: "4rc.OS is busy — try again shortly", robots };
-  if (report === "error") return { title: "Couldn't read the chain right now — 4rc.OS", robots };
-  if (!report) return { title: "Token not found — 4rc.OS", robots };
+  if (report === "busy") return { title: "ArcOS is busy — try again shortly", robots };
+  if (report === "error") return { title: "Couldn't read the chain right now — ArcOS", robots };
+  if (!report) return { title: "Token not found — ArcOS", robots };
   return { title: summaryLine(report), description: "An automated reading of this token's contract on Arc. Not investment advice.", robots };
 }
 
@@ -44,10 +44,10 @@ const MARK = { pass: "✓", warn: "!", fail: "✗", unknown: "?" } as const;
 function DegradedPage({ address, message }: { address: string; message: string }) {
   return (
     <main className="mx-auto max-w-2xl p-6 text-sm">
-      <p className="text-xs text-muted">4rc.OS · proof page</p>
+      <p className="text-xs text-muted">ArcOS · proof page</p>
       <p className="mt-4">{message}</p>
       <a className="mt-6 inline-block rounded-md border border-border-2 px-3 py-1.5" href={`/${formatAppHash("inspector", { token: address })}`}>
-        Open in 4rc.OS
+        Open in ArcOS
       </a>
       <p className="mt-6 text-xs text-faint">Automated analysis, not investment advice.</p>
     </main>
@@ -57,7 +57,7 @@ function DegradedPage({ address, message }: { address: string; message: string }
 export default async function ProofPage({ params }: Props) {
   const { address } = await params;
   const report = await load(address);
-  if (report === "busy") return <DegradedPage address={address} message="4rc.OS is busy reading other tokens. Reload in a few seconds." />;
+  if (report === "busy") return <DegradedPage address={address} message="ArcOS is busy reading other tokens. Reload in a few seconds." />;
   if (report === "error") {
     return <DegradedPage address={address} message="Couldn't read the chain for this token right now. Try again in a minute." />;
   }
@@ -68,13 +68,13 @@ export default async function ProofPage({ params }: Props) {
   if (!report) notFound();
   return (
     <main className="mx-auto max-w-2xl p-6 text-sm">
-      <p className="text-xs text-muted">4rc.OS · proof page</p>
+      <p className="text-xs text-muted">ArcOS · proof page</p>
       <h1 className="mt-1 text-xl font-medium break-words">{report.token.name ?? tokenLabel(report)}</h1>
       <p className="mt-1 text-xs text-muted">{NAME_DISCLOSURE}</p>
       <a className="break-all font-mono text-xs text-accent-text" href={explorerUrl("token", report.address)}>{report.address}</a>
       <p className="mt-4 inline-block rounded-md bg-surface-2 px-2 py-1">{passLine(report)}</p>
       {!report.explorerReachable && (
-        <p className="mt-2 text-xs text-muted">{"The explorer didn't answer this server, so some checks are unknown here. Open the token in 4rc.OS for the full reading."}</p>
+        <p className="mt-2 text-xs text-muted">{"The explorer didn't answer this server, so some checks are unknown here. Open the token in ArcOS for the full reading."}</p>
       )}
       <ul className="mt-4">
         {report.findings.map((f) => (
@@ -89,7 +89,7 @@ export default async function ProofPage({ params }: Props) {
         ))}
       </ul>
       <a className="mt-6 inline-block rounded-md border border-border-2 px-3 py-1.5" href={`/${formatAppHash("inspector", { token: report.address })}`}>
-        Open in 4rc.OS
+        Open in ArcOS
       </a>
       <p className="mt-6 text-xs text-faint">Automated analysis, not investment advice. {readAtLine(report)}.</p>
     </main>

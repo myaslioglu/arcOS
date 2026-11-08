@@ -11,7 +11,7 @@ import { shouldFocusOnClick, shouldInterceptTab } from "./keyboard";
 import * as log from "./log";
 import styles from "./terminal.module.css";
 
-const PROMPT = "4rc:~$";
+const PROMPT = "arc:~$";
 /** This window's command history is kept only while it's open, capped so a very long session can't
  * grow it without bound. */
 const MAX_HISTORY = 100;
@@ -165,7 +165,7 @@ export default function TerminalWindow() {
       <div className={styles.content}>
         <div ref={logRef} className={styles.log} role="log" aria-live="polite" aria-label="Terminal output">
           {state.lines.length === 0 && (
-            <p className={`${styles.line} ${styles.dim}`}>4rc.OS terminal. Type help for the commands.</p>
+            <p className={`${styles.line} ${styles.dim}`}>ArcOS terminal. Type help for the commands.</p>
           )}
           {state.lines.map((line, i) => (
             <p

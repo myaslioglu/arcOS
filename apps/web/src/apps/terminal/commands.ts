@@ -221,10 +221,10 @@ const COMMANDS: Command[] = [
   {
     name: "about",
     usage: "about",
-    about: "What 4rc.OS is",
+    about: "What ArcOS is",
     run: () =>
       out(
-        "4rc.OS is a desktop for Circle's Arc network: inspect a token, mint one, send to many wallets at once, swap, bridge, revoke token approvals, and read the chain from a terminal.",
+        "ArcOS is a desktop for Circle's Arc network: inspect a token, mint one, send to many wallets at once, swap, bridge, revoke token approvals, and read the chain from a terminal.",
         "Type open about for more.",
       ),
   },

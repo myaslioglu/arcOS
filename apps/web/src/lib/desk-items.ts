@@ -15,7 +15,7 @@ export function deskItems(
     {
       id: "readme",
       label: "readme.txt",
-      blurb: "What 4rc.OS is",
+      blurb: "What ArcOS is",
       art: "file",
       ext: "TXT",
       icon: FileText,

@@ -46,7 +46,7 @@ export const TOPICS = {
 export type Source = { kind: TokenSource; address: Address; topic0: Hex; abi: Abi };
 
 /**
- * The contracts and events of design 1.3, step 4: the 4rc.OS TokenFactory, the Uniswap v2 and v3 factories, the v4
+ * The contracts and events of design 1.3, step 4: the ArcOS TokenFactory, the Uniswap v2 and v3 factories, the v4
  * PoolManager and the Aerodrome Slipstream factory, as far as the network has them. Five addresses, under the 20 a
  * filter may name (F6).
  */
@@ -66,7 +66,7 @@ export function sourcesFor(network: NetworkId): Source[] {
 /** Where a sighting sits on the chain, and when. */
 export type LogPosition = { block: number; logIndex: number; timestamp: number | null };
 
-/** A token the 4rc.OS TokenFactory created. */
+/** A token the ArcOS TokenFactory created. */
 export type TokenSighting = LogPosition & {
   kind: "token";
   token: Address;

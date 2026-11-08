@@ -136,7 +136,7 @@ export type Approval = {
   decimals: number | null;
   spender: Address;
   /**
-   * "Permit2", "Uniswap Universal Router", "4rc.OS Multisend", "4rc.OS Multisend (old)", …, or null for a contract
+   * "Permit2", "Uniswap Universal Router", "ArcOS Multisend", "ArcOS Multisend (old)", …, or null for a contract
    * Revoke doesn't know.
    */
   spenderLabel: string | null;
@@ -200,8 +200,8 @@ export function spenderLabel(spender: string, network: NetworkId): string | null
   if (s === PERMIT2.toLowerCase()) return "Permit2";
   if (UNIVERSAL_ROUTERS[network].some((r) => r.toLowerCase() === s)) return "Uniswap Universal Router";
   const multisend = ARCOS[network]?.multisend;
-  if (multisend && s === multisend.toLowerCase()) return "4rc.OS Multisend";
-  if (PREVIOUS_MULTISENDS[network].some((m) => m.toLowerCase() === s)) return "4rc.OS Multisend (old)";
+  if (multisend && s === multisend.toLowerCase()) return "ArcOS Multisend";
+  if (PREVIOUS_MULTISENDS[network].some((m) => m.toLowerCase() === s)) return "ArcOS Multisend (old)";
   if (s === SWAP_ADAPTER[network].toLowerCase()) return "Circle swap adapter";
   return null;
 }

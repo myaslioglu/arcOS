@@ -509,7 +509,7 @@ describe("spenderLabel", () => {
   it("names Permit2, Drop's Multisend and Circle's swap adapter on each network, and nothing else", () => {
     for (const network of ["mainnet", "testnet"] as const) {
       expect(spenderLabel(PERMIT2.toLowerCase(), network)).toBe("Permit2");
-      expect(spenderLabel(ARCOS[network]!.multisend, network)).toBe("4rc.OS Multisend");
+      expect(spenderLabel(ARCOS[network]!.multisend, network)).toBe("ArcOS Multisend");
       expect(spenderLabel(SWAP_ADAPTER[network], network)).toBe("Circle swap adapter");
       expect(spenderLabel(SPENDER_X, network)).toBeNull();
     }
@@ -520,10 +520,10 @@ describe("spenderLabel", () => {
     const OLD = "0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47";
     expect(ARCOS.mainnet!.multisend).toBe(NEW);
     expect(PREVIOUS_MULTISENDS.mainnet).toEqual([OLD]);
-    expect(spenderLabel(NEW, "mainnet")).toBe("4rc.OS Multisend");
-    expect(spenderLabel(NEW.toLowerCase(), "mainnet")).toBe("4rc.OS Multisend");
-    expect(spenderLabel(OLD, "mainnet")).toBe("4rc.OS Multisend (old)");
-    expect(spenderLabel(OLD.toLowerCase(), "mainnet")).toBe("4rc.OS Multisend (old)");
+    expect(spenderLabel(NEW, "mainnet")).toBe("ArcOS Multisend");
+    expect(spenderLabel(NEW.toLowerCase(), "mainnet")).toBe("ArcOS Multisend");
+    expect(spenderLabel(OLD, "mainnet")).toBe("ArcOS Multisend (old)");
+    expect(spenderLabel(OLD.toLowerCase(), "mainnet")).toBe("ArcOS Multisend (old)");
     // A network's previous Multisends are its own: mainnet's old one means nothing on testnet, which has none.
     expect(PREVIOUS_MULTISENDS.testnet).toEqual([]);
     expect(spenderLabel(OLD, "testnet")).toBeNull();

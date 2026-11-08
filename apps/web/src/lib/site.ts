@@ -9,7 +9,7 @@ export const REPO_URL = "https://github.com/myaslioglu/arcOS";
 
 /** The title every page has unless it sets its own: the testnet site's names it, so a tab or a bookmark tells them apart. */
 export function siteTitle(network: NetworkId): string {
-  return network === "testnet" ? "4rc.OS Testnet" : "4rc.OS";
+  return network === "testnet" ? "ArcOS Testnet" : "ArcOS";
 }
 
 /** The label the shell shows beside the brand. Only the testnet site (https://testnet.4rcos.com) has one. */
@@ -18,7 +18,7 @@ export function networkBadge(network: NetworkId): string | undefined {
 }
 
 /**
- * The testnet site asks search engines not to index or follow it, so a search for 4rc.OS finds the mainnet site. Mainnet
+ * The testnet site asks search engines not to index or follow it, so a search for ArcOS finds the mainnet site. Mainnet
  * sets no robots rule of its own (indexable, Next's default). Pages that set their own robots, such as the token pages,
  * replace this one, and say noindex on both networks.
  */
