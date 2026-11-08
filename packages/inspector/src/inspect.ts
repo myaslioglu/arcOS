@@ -23,14 +23,32 @@ export class NotAContract extends Error {
 const ORDER: CheckId[] = ["verified", "ownership", "privileges", "proxy", "holders", "liquidity", "lp-lock", "prevrandao", "trade"];
 const DELEGATECALL = 0xf4;
 
-/** A check that throws becomes an "unknown" finding; one bad RPC call never sinks the report. The
- * real error is logged for operators — it never reaches the report, which could otherwise leak
- * internal URLs or other transport detail to whoever's reading the finding. */
+/**
+ * The first code in an error's cause chain: a JSON-RPC error code, an HTTP status, or a short word (`ECONNRESET`). Never
+ * text: an RPC error's message and details carry the request's URL, which for a keyed endpoint holds the key.
+ */
+function errorCode(e: unknown): number | string | undefined {
+  let c: unknown = e;
+  for (let depth = 0; typeof c === "object" && c !== null && depth < 16; depth++, c = (c as { cause?: unknown }).cause) {
+    const { code, status } = c as { code?: unknown; status?: unknown };
+    if (typeof code === "number" && Number.isFinite(code)) return code;
+    if (typeof code === "string" && /^[\w.-]{1,64}$/.test(code)) return code;
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+  }
+  return undefined;
+}
+
+/**
+ * A check that throws becomes an "unknown" finding; one bad RPC call never sinks the report. Operators get the error's
+ * name and its code (`errorCode`), as the site's routes log theirs. Neither the report nor the log ever gets its message,
+ * which could leak an internal URL, or an RPC key in one, to whoever reads the finding or the logs.
+ */
 async function guard(id: CheckId, run: () => Finding | Promise<Finding>): Promise<Finding> {
   try {
     return await run();
   } catch (e) {
-    console.error(`inspector: check "${id}" failed`, e);
+    const code = errorCode(e);
+    console.error(`inspector: check "${id}" failed`, e instanceof Error ? e.name : "unknown", ...(code === undefined ? [] : [code]));
     return { id, status: "unknown", title: "This check couldn't run", detail: "This check couldn't run — the network didn't answer.", evidenceUrl: null, fixAppId: null };
   }
 }
@@ -432,6 +450,8 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   return {
     address,
     network: input.network,
+    chain: input.chain.key,
+    chainId: input.chain.chainId,
     token: {
       name: cleanLabel(name, 64),
       symbol: cleanLabel(symbol, 32),

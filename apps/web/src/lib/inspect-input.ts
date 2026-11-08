@@ -1,7 +1,13 @@
 import type { PublicClient } from "viem";
-import { ARCOS, DEX, KNOWN_LOCKERS, activeChain, activeNetwork, type Address } from "@arcos/chain";
-import { blockscoutSource, viemReader, type ExplorerApi, type ExtraPool, type InspectInput } from "@arcos/inspector";
+import { activeNetwork, arcInspectChain, type Address } from "@arcos/chain";
+import { blockscoutSource, chainInput, viemReader, type ExplorerApi, type ExtraPool, type InspectInput } from "@arcos/inspector";
 
+/**
+ * An inspection of `address` on Arc, the site's own chain on its network (`arcInspectChain`): the browser Inspector and the
+ * server both build their input here. Everything about the chain comes from its registry entry: the pools read, the
+ * lockers, the evidence links, the TokenFactory, the native and trade quotes, the PREVRANDAO wording and how its nodes say
+ * a call ran out of gas.
+ */
 export function inspectInput(
   address: Address,
   client: PublicClient,
@@ -13,19 +19,16 @@ export function inspectInput(
   deadlineAt?: number,
 ): InspectInput {
   const network = activeNetwork();
-  const explorer = activeChain().blockExplorers?.default;
-  const apiUrl = explorerApi?.url ?? explorer?.apiUrl;
+  const chain = arcInspectChain(network);
+  const apiUrl = explorerApi?.url ?? chain.explorer.publicApiUrl;
   return {
     address,
     network,
-    reader: viemReader(client),
+    reader: viemReader(client, chain),
     explorer: apiUrl ? blockscoutSource(apiUrl, fetchFn, explorerApi?.apiKey) : null,
-    dex: DEX[network],
-    knownLockers: KNOWN_LOCKERS[network],
-    // Evidence links are for people, and the public explorer answers browsers.
-    explorerBase: explorer?.url ?? "",
-    // A token our own TokenFactory made counts as source-verified through the factory (see checkVerified).
-    arcosTokenFactory: ARCOS[network]?.tokenFactory ?? null,
+    // Evidence links are for people, and the public explorer answers browsers. A token our own TokenFactory made counts
+    // as source-verified through the factory (see checkVerified).
+    ...chainInput(chain),
     ...(extraPools && extraPools.length > 0 ? { extraPools } : {}),
     ...(deadlineAt === undefined ? {} : { deadlineAt }),
   };

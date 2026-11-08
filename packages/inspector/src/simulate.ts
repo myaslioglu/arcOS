@@ -1,7 +1,7 @@
-import { decodeFunctionResult, encodeFunctionData, getAddress } from "viem";
-import { USDC, tradeSimulatorAbi, tradeSimulatorRuntime, type Address } from "@arcos/chain";
+import { decodeFunctionResult, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, numberToHex } from "viem";
+import { tradeSimulatorAbi, tradeSimulatorRuntime, type Address, type DexConfig, type QuoteToken, type TradeQuote } from "@arcos/chain";
 import { NATIVE } from "./v4";
-import { CallReverted, type ChainReader, type Pool, type PoolKey, type PoolScan } from "./types";
+import { CallReverted, type ChainReader, type Pool, type PoolKey, type PoolScan, type StateOverride } from "./types";
 
 /**
  * Check 10's trade simulation: one `eth_call` that buys the token with USDC from its deepest USDC pool and sells it straight
@@ -12,8 +12,9 @@ import { CallReverted, type ChainReader, type Pool, type PoolKey, type PoolScan 
 /**
  * Where the simulator's code goes for the call (S), and where its second copy, the router that moves the token on a sell,
  * goes (R): two fresh random addresses for every call, so a token can't recognise a fixed one. The call is from S to S, so
- * `tx.origin == msg.sender` inside the simulator, which gets past the common "no contracts" guard. S's overridden native
- * balance is also its USDC ERC-20 balance, on both networks (design F1-F3).
+ * `tx.origin == msg.sender` inside the simulator, which gets past the common "no contracts" guard. How S is given the USDC
+ * it buys with is the chain's (`TradeSetup.funding`): on Arc, S's overridden native balance is also its USDC ERC-20
+ * balance (design F1-F3).
  */
 export type SimulatorAddresses = { simulator: Address; router: Address };
 
@@ -88,12 +89,46 @@ const DYNAMIC_FEE_FLAG = 0x800000;
 const lower = (a: string) => a.toLowerCase();
 const NO_KEY: PoolKey = { currency0: NATIVE, currency1: NATIVE, fee: 0, tickSpacing: 0, hooks: NATIVE };
 
-/** Which USDC a pool trades: the ERC-20 at 0x3600 for v2, v3 and Aerodrome; for v4, whichever of its currencies isn't the token. */
-function usdcOf(pool: Pool, token: Address): Address | null {
-  if (pool.version !== "v4") return pool.quote === "USDC" ? USDC : null;
+/**
+ * What the round trip buys with, from the chain's config (`tradeSetup`). `token` is the ERC-20 it buys with, USDC, whose
+ * amounts here are all in 6 decimals, and `symbol` its symbol among the DEX config's quote tokens: a pool that isn't v4
+ * names its quote by symbol (`Pool.quote`). `funding` is how the call's state override gives the throwaway account S some:
+ * - `native`: the token's balance IS the native balance (on Arc, the USDC ERC-20 at 0x3600 shows the native USDC balance in
+ *   6 decimals), so S's native balance is set, in the native currency's `decimals`. A v4 pool against the native currency
+ *   (`address`) trades the same asset, so it is traded too, in those decimals.
+ * - `slot`: S's balance is written into the token's `balanceOf` mapping, which sits at storage slot `slot`.
+ */
+export type TradeSetup = {
+  token: Address;
+  symbol: string | null;
+  funding: { kind: "native"; address: Address; decimals: number } | { kind: "slot"; slot: number };
+};
+
+/**
+ * The trade setup the chain's config gives (`InspectInput.tradeQuote`, `nativeQuote` and `dex`), or null when no trade can be
+ * simulated: there is no trade quote, or it is funded through the native balance (`balanceSlot: null`) and the native
+ * currency isn't configured.
+ */
+export function tradeSetup(input: { tradeQuote: TradeQuote | null; nativeQuote: QuoteToken | null; dex: DexConfig | null }): TradeSetup | null {
+  const quote = input.tradeQuote;
+  if (!quote) return null;
+  const symbol = input.dex?.quoteTokens.find((q) => lower(q.address) === lower(quote.token))?.symbol ?? null;
+  if (quote.balanceSlot !== null) return { token: quote.token, symbol, funding: { kind: "slot", slot: quote.balanceSlot } };
+  const native = input.nativeQuote;
+  return native ? { token: quote.token, symbol, funding: { kind: "native", address: native.address, decimals: native.decimals } } : null;
+}
+
+/**
+ * What a pool trades the token against, when the round trip can buy with it: `setup.token` for v2, v3 and Aerodrome (a
+ * pool against it carries its symbol); for v4, whichever of its currencies isn't the token, when that is `setup.token` or,
+ * funded through the native balance, the native currency.
+ */
+function usdcOf(pool: Pool, token: Address, setup: TradeSetup): Address | null {
+  if (pool.version !== "v4") return setup.symbol !== null && pool.quote === setup.symbol ? setup.token : null;
   if (!pool.key) return null;
   const other = lower(pool.key.currency0) === lower(token) ? pool.key.currency1 : pool.key.currency0;
-  return lower(other) === lower(USDC) || lower(other) === lower(NATIVE) ? other : null;
+  const native = setup.funding.kind === "native" ? setup.funding.address : null;
+  return lower(other) === lower(setup.token) || (native !== null && lower(other) === lower(native)) ? other : null;
 }
 
 /** A v4 pool with a hook, which runs inside every swap. */
@@ -153,14 +188,14 @@ export const unitBuyLimit = (depth: bigint): bigint => {
  * and nothing else) is left out. Depth still doesn't prove a pool trades: USDC sent to a v3 or Aerodrome pool with no
  * liquidity raises its balance, so every liquid pool is measured, not only the deepest (`simulateTrade`).
  */
-export function tradePools(scan: PoolScan, token: Address): Pool[] {
-  const usable = scan.pools.filter((p) => usdcOf(p, token) !== null && p.tradable !== false);
+export function tradePools(scan: PoolScan, token: Address, setup: TradeSetup): Pool[] {
+  const usable = scan.pools.filter((p) => usdcOf(p, token, setup) !== null && p.tradable !== false);
   return [...byDepth(usable.filter((p) => !hooked(p))), ...byDepth(usable.filter(hooked))];
 }
 
 /** The first pool `tradePools` would try, or `null` when there is none. */
-export function tradePool(scan: PoolScan, token: Address): Pool | null {
-  return tradePools(scan, token)[0] ?? null;
+export function tradePool(scan: PoolScan, token: Address, setup: TradeSetup): Pool | null {
+  return tradePools(scan, token, setup)[0] ?? null;
 }
 
 /**
@@ -208,14 +243,14 @@ export function poolCanRefuseSell(pool: Pool): boolean {
  * Anyone can create an empty pair or pool for nothing, and its failed buy must not stand in for a sell that went through.
  * `exclude` are pools already found not to trade. `null` when there is none.
  */
-export function fallbackPool(scan: PoolScan, token: Address, refused: Pool, exclude: readonly Pool[] = []): Pool | null {
+export function fallbackPool(scan: PoolScan, token: Address, setup: TradeSetup, refused: Pool, exclude: readonly Pool[] = []): Pool | null {
   const amount = testAmount(refused);
   return deepest(
     scan.pools.filter(
       (p) =>
         p !== refused &&
         !exclude.includes(p) &&
-        usdcOf(p, token) !== null &&
+        usdcOf(p, token, setup) !== null &&
         !poolCanRefuseSell(p) &&
         p.liquid === true &&
         orderDepth(p) >= amount,
@@ -269,8 +304,9 @@ export function roundTripFee(pool: Pool): bigint | null {
 }
 
 /**
- * What the simulator said, in the pool's USDC units (6 decimals, or 18 for native USDC on v4) for `spent` and `received`.
- * `paidOut` is what the pool paid out on the buy, in token units, next to `bought`, what arrived.
+ * What the simulator said, in the units of the currency the pool trades for `spent` and `received` (`TradeAttempt.decimals`:
+ * 6 for the USDC ERC-20, the native currency's own for a v4 pool against it, 18 for Arc's native USDC). `paidOut` is what the
+ * pool paid out on the buy, in token units, next to `bought`, what arrived.
  */
 export type SimulatorResult = { status: number; spent: bigint; paidOut: bigint; bought: bigint; sold: bigint; received: bigint };
 
@@ -289,7 +325,7 @@ export type TradeAttempt =
    * reverted in a pool that can refuse one on its own account (`poolCanRefuseSell`); absent when that wasn't needed or there
    * is no such pool.
    */
-  | { kind: "ran"; pool: Pool; amount: bigint; decimals: 6 | 18; result: SimulatorResult; second?: TradeAttempt };
+  | { kind: "ran"; pool: Pool; amount: bigint; decimals: number; result: SimulatorResult; second?: TradeAttempt };
 
 /**
  * What `simulateTrade` measured. `attempts` are the round trips, one per pool tried (`tradeCandidates`, up to `MAX_POOLS`),
@@ -304,8 +340,8 @@ export type TradeRun = { kind: "no-pool" } | { kind: "measured"; attempts: Trade
  * pool has no USDC in range and a quote that can't pay, yet sells into it). A liquid decoy then can't hide a thinner real
  * pool. When there is none of those, the deepest pool `tradePools` gives, hooked or not.
  */
-export function tradeCandidates(scan: PoolScan, token: Address): Pool[] {
-  const all = tradePools(scan, token);
+export function tradeCandidates(scan: PoolScan, token: Address, setup: TradeSetup): Pool[] {
+  const all = tradePools(scan, token, setup);
   const hookless = all.filter((p) => !hooked(p));
   const liquid = hookless.filter((p) => p.liquid === true);
   const thin = hookless
@@ -317,7 +353,7 @@ export function tradeCandidates(scan: PoolScan, token: Address): Pool[] {
 
 /**
  * Runs the round trips: one in each of the first `MAX_POOLS` of `tradeCandidates`, each its own eth_call from fresh S and R
- * addresses, in parallel, at the network's gas price. When a sell reverts in a pool that can refuse a sell on its own
+ * addresses, in parallel, at the network's gas price (see `funding`). When a sell reverts in a pool that can refuse a sell on its own
  * account, that pool's round trip is tried again in the deepest liquid Uniswap v2 or hookless v4 USDC pool, if there is
  * one. The gas price read and every pool's round trips must end by `deadlineAt` (ms since the epoch, the inspection's
  * deadline less `DEADLINE_MARGIN_MS`), or within `DEFAULT_TRADE_MS` without one: a gas price read that doesn't is
@@ -326,13 +362,13 @@ export function tradeCandidates(scan: PoolScan, token: Address): Pool[] {
  *
  * At most: one eth_gasPrice and 2 * `MAX_POOLS` eth_calls (12).
  */
-export async function simulateTrade(reader: ChainReader, token: Address, scan: PoolScan, deadlineAt?: number): Promise<TradeRun> {
-  const candidates = tradeCandidates(scan, token);
+export async function simulateTrade(reader: ChainReader, token: Address, scan: PoolScan, setup: TradeSetup, deadlineAt?: number): Promise<TradeRun> {
+  const candidates = tradeCandidates(scan, token, setup);
   if (candidates.length === 0) return { kind: "no-pool" };
   const pools = candidates.slice(0, MAX_POOLS);
   // A v2 pair with tokens where no amount within `unitBuyLimit` buys anything isn't tried, but it is still a pool the
   // token could trade in, so it counts among the candidates and caps a pass as any pool left untried does.
-  const unbuyable = tradePools(scan, token).filter(
+  const unbuyable = tradePools(scan, token, setup).filter(
     (p) => !hooked(p) && p.version === "v2" && (p.tokenReserve ?? 0n) > 0n && tradeAmount(p) === null && !candidates.includes(p),
   ).length;
   const end = deadlineAt === undefined ? Date.now() + DEFAULT_TRADE_MS : deadlineAt - DEADLINE_MARGIN_MS;
@@ -348,7 +384,7 @@ export async function simulateTrade(reader: ChainReader, token: Address, scan: P
   } catch {
     return failed("call-failed");
   }
-  const attempts = await Promise.all(pools.map((pool) => withPoolDeadline(pool, poolRoundTrips(reader, token, scan, pool, gasPrice), end)));
+  const attempts = await Promise.all(pools.map((pool) => withPoolDeadline(pool, poolRoundTrips(reader, token, scan, setup, pool, gasPrice), end)));
   return { kind: "measured", attempts, candidates: candidates.length + unbuyable };
 }
 
@@ -370,11 +406,11 @@ function within<T>(p: Promise<T>, end: number): Promise<T> {
 }
 
 /** A pool's round trip, and the retry in another pool when its sell was refused there. */
-async function poolRoundTrips(reader: ChainReader, token: Address, scan: PoolScan, pool: Pool, gasPrice: bigint): Promise<TradeAttempt> {
-  const first = await roundTrip(reader, token, pool, gasPrice);
+async function poolRoundTrips(reader: ChainReader, token: Address, scan: PoolScan, setup: TradeSetup, pool: Pool, gasPrice: bigint): Promise<TradeAttempt> {
+  const first = await roundTrip(reader, token, setup, pool, gasPrice);
   if (first.kind !== "ran" || first.result.status !== STATUS.sellReverted || !poolCanRefuseSell(pool)) return first;
-  const other = fallbackPool(scan, token, pool);
-  return other ? { ...first, second: await roundTrip(reader, token, other, gasPrice) } : first;
+  const other = fallbackPool(scan, token, setup, pool);
+  return other ? { ...first, second: await roundTrip(reader, token, setup, other, gasPrice) } : first;
 }
 
 /** `attempt`, or `timed-out` for `pool` once `end` (ms since the epoch) has passed. */
@@ -385,20 +421,46 @@ function withPoolDeadline(pool: Pool, attempt: Promise<TradeAttempt>, end: numbe
   );
 }
 
+/** `units` of a 6-decimal amount in `decimals` decimals: the inverse of `toSixDecimals`. */
+const fromSixDecimals = (units: bigint, decimals: number): bigint =>
+  decimals >= 6 ? units * 10n ** BigInt(decimals - 6) : units / 10n ** BigInt(6 - decimals);
+
 /**
- * One round trip against `pool`, from a fresh S with a fresh router R, at `gasPrice`. The call's gas is prepaid from S's
- * balance before anything runs, so S is funded with the test amount plus `TRADE_GAS * gasPrice`; the legs measure balance
- * changes, so what is prepaid never shows in the result.
+ * The call's gas price and S's state, as `setup.funding` says. The call's gas is prepaid from S's native balance before
+ * anything runs, at the call's gas price; the legs measure balance changes, so what is prepaid never shows in the result.
+ * `maxAmount` is in 6 decimals.
+ * - `native`: one balance, two views. S's native balance is `maxAmount` in the native currency's decimals plus the prepaid
+ *   gas: on Arc, `maxAmount` USDC in the ERC-20's 6 decimals and in native's 18 alike. The call pays the node's gas price.
+ * - `slot`: S's native balance only pays for the gas, with room for twice what the node's price prepays; its token balance
+ *   is written into the `balanceOf` mapping at keccak256(abi.encode(S, slot)). The call pays the node's price and a quarter,
+ *   so a node that holds it against the block's base fee (EIP-1559) doesn't refuse the call as underpriced.
  */
-async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPrice: bigint): Promise<TradeAttempt> {
+function funding(setup: TradeSetup, simulator: Address, maxAmount: bigint, gasPrice: bigint): { gasPrice: bigint; simulator: StateOverride; token: StateOverride[] } {
+  const code = tradeSimulatorRuntime;
+  if (setup.funding.kind === "native") {
+    return { gasPrice, simulator: { address: simulator, code, balance: fromSixDecimals(maxAmount, setup.funding.decimals) + TRADE_GAS * gasPrice }, token: [] };
+  }
+  const slot = keccak256(encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [simulator, BigInt(setup.funding.slot)]));
+  return {
+    gasPrice: (gasPrice * 5n) / 4n,
+    simulator: { address: simulator, code, balance: TRADE_GAS * gasPrice * 2n },
+    token: [{ address: setup.token, stateDiff: [{ slot, value: numberToHex(maxAmount, { size: 32 }) }] }],
+  };
+}
+
+/**
+ * One round trip against `pool`, from a fresh S with a fresh router R, at `gasPrice` (the node's), with S funded as
+ * `funding` says for the most the buy may take.
+ */
+async function roundTrip(reader: ChainReader, token: Address, setup: TradeSetup, pool: Pool, gasPrice: bigint): Promise<TradeAttempt> {
   const amount = tradeAmount(pool) ?? testAmount(pool);
   // A v3, Slipstream or v4 buy may be raised, in the simulator, to buy whole raw units of a token with few decimals, up to
   // `unitBuyLimit`; S is funded for that. A v2 buy is sized here (`tradeAmount`).
   const limit = unitBuyLimit(pool.depth);
   const maxAmount = pool.version === "v2" || limit < amount ? amount : limit;
-  const usdc = usdcOf(pool, token)!;
-  const native = lower(usdc) === lower(NATIVE);
-  const decimals = native ? 18 : 6;
+  const usdc = usdcOf(pool, token, setup)!;
+  // A v4 pool against the native currency is paid in the native currency's decimals; everything else in the token's 6.
+  const decimals = setup.funding.kind === "native" && lower(usdc) === lower(setup.funding.address) ? setup.funding.decimals : 6;
   const { simulator, router } = simulatorAddresses();
   const trade = {
     kind: KIND[pool.version],
@@ -406,10 +468,11 @@ async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPri
     token,
     usdc,
     router,
-    amount: native ? amount * 10n ** 12n : amount,
-    maxAmount: native ? maxAmount * 10n ** 12n : maxAmount,
+    amount: fromSixDecimals(amount, decimals),
+    maxAmount: fromSixDecimals(maxAmount, decimals),
     key: pool.version === "v4" ? pool.key! : NO_KEY,
   };
+  const funded = funding(setup, simulator, maxAmount, gasPrice);
   let answer: `0x${string}`;
   try {
     answer = await reader.callWithOverride(
@@ -418,14 +481,10 @@ async function roundTrip(reader: ChainReader, token: Address, pool: Pool, gasPri
         to: simulator,
         data: encodeFunctionData({ abi: tradeSimulatorAbi, functionName: "simulate", args: [trade] }),
         gas: TRADE_GAS,
-        gasPrice,
+        gasPrice: funded.gasPrice,
       },
-      // One balance, two views: past the prepaid gas, this is `amount` USDC in the ERC-20's 6 decimals and in native's 18
-      // alike. R needs only the code.
-      [
-        { address: simulator, code: tradeSimulatorRuntime, balance: maxAmount * 10n ** 12n + TRADE_GAS * gasPrice },
-        { address: router, code: tradeSimulatorRuntime },
-      ],
+      // R, the router, needs only the code.
+      [funded.simulator, { address: router, code: tradeSimulatorRuntime }, ...funded.token],
     );
   } catch (e) {
     return e instanceof CallReverted ? { kind: "call-reverted", pool, amount } : { kind: "call-failed", pool, amount };

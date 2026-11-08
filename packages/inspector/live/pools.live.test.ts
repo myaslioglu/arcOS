@@ -18,6 +18,7 @@ import { findPools } from "../src/checks";
 import { inspect } from "../src/inspect";
 import type { ExtraPool, InspectInput, PoolScan } from "../src/types";
 import { client, paced, reader } from "./arc";
+import { arcFields } from "../src/__tests__/fixtures/arc";
 import { NATIVE, quoteInRange, quoterAbi, sqrtRatioAtTick, stateViewAbi, v4PoolId, v4PoolKey } from "../src/v4";
 
 // --- Pinned pools (block = when it was read or emitted; Arc mainnet, 2026-09-29) ---
@@ -41,6 +42,7 @@ const WETH = "0x128cC466B61f542da60c70e3aA11c10e19B84EDB";
 const AERO_WETH_POOL = "0x6F302dECb49fB30B2D2c609BDD16e04e7Dd096FC";
 
 const input = (address: `0x${string}`, dex: DexConfig | null, extraPools?: ExtraPool[]): InspectInput => ({
+  ...arcFields("mainnet"),
   address, network: "mainnet", reader, explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.arc.io", extraPools,
 });
 const v4Only: DexConfig = { quoteTokens: DEX.mainnet!.quoteTokens, v4: UNISWAP_V4 };

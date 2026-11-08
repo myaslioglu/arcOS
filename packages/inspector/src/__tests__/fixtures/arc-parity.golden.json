@@ -1,0 +1,2838 @@
+{
+  "a plain renounced token with no pool, mainnet": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap or Aerodrome pool found",
+          "detail": "Looked at Uniswap v2, Uniswap v3, Uniswap v4 and Aerodrome pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "an owned mintable token with a liquid v2 pair, unlocked LP and a round trip that passes": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "warn",
+          "title": "Owned by a wallet",
+          "detail": "0x3333333333333333333333333333333333333333 controls owner-only functions.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x3333333333333333333333333333333333333333",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "fail",
+          "title": "Owner can mint new supply",
+          "detail": "Found: mint(address,uint256).",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "warn",
+          "title": "All 2 wallets hold 40%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "50,000 USDC of liquidity on Uniswap v2",
+          "detail": "1 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "fail",
+          "title": "Liquidity isn't locked",
+          "detail": "90% of the v2 LP supply sits in wallets that can withdraw it.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x4444444444444444444444444444444444444444?tab=holders",
+          "fixAppId": "vault"
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "pass",
+          "title": "Bought and sold back in a simulation",
+          "detail": "Bought with 10 USDC on Uniswap v2 and sold straight back for 9.94 USDC: 0.6% lost. The pool's fees for the two swaps come to 0.6%. Simulated in one eth_call against the pool itself; nothing was sent.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        }
+      ],
+      "passed": 5,
+      "total": 9,
+      "counts": {
+        "pass": 5,
+        "warn": 2,
+        "fail": 2,
+        "unknown": 0
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":0,\"pool\":\"0x4444444444444444444444444444444444444444\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000n\",\"maxAmount\":\"10000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"10100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getCode 0x3333333333333333333333333333333333333333",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x4444444444444444444444444444444444444444 getReserves [] {}",
+      "read 0x4444444444444444444444444444444444444444 token0 [] {}",
+      "read 0x4444444444444444444444444444444444444444 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a sell refused by a v3 pool and tried again in the v2 pair": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "20,000 USDC of liquidity on Uniswap v3",
+          "detail": "2 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x7777777777777777777777777777777777777777",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "The deepest pool is a Uniswap v3 position, which can't be read without an index yet.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "warn",
+          "title": "Can't be sold into its deepest pool",
+          "detail": "Uniswap v3 0x7777…7777: Selling into its deepest pool (Uniswap v3 0x7777…7777) reverted; selling into the Uniswap v2 pair (0x4444…4444) went through (5 USDC came back as 4.97). Uniswap v3 pools refuse a token that arrives short (a transfer tax), so a tax alone reverts this sell. Simulated in one eth_call against the pool itself; nothing was sent.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x7777777777777777777777777777777777777777",
+          "fixAppId": null
+        }
+      ],
+      "passed": 7,
+      "total": 9,
+      "counts": {
+        "pass": 7,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":0,\"pool\":\"0x4444444444444444444444444444444444444444\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"5000000n\",\"maxAmount\":\"5000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"5100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":0,\"pool\":\"0x4444444444444444444444444444444444444444\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"5000000n\",\"maxAmount\":\"5000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"5100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":1,\"pool\":\"0x7777777777777777777777777777777777777777\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000n\",\"maxAmount\":\"400000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"400100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x3600000000000000000000000000000000000000 balanceOf [\"0x7777777777777777777777777777777777777777\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x4444444444444444444444444444444444444444 getReserves [] {}",
+      "read 0x4444444444444444444444444444444444444444 token0 [] {}",
+      "read 0x4444444444444444444444444444444444444444 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "an Aerodrome USDC pool beside a deeper EURC pair the trade can't use": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "90,000 EURC of liquidity on Uniswap v2",
+          "detail": "2 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x9999999999999999999999999999999999999999",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "The v2 LP token's totalSupply is 0.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "warn",
+          "title": "Another liquid pool wasn't measured",
+          "detail": "Bought with 2 USDC on Aerodrome and sold straight back for 1.99 USDC: 0.5% lost. This pool's fee can change from one swap to the next, so up to 5% counts as fees. Simulated in one eth_call against the pool itself; nothing was sent. Uniswap v2 0x9999…9999 (EURC) (liquid) wasn't traded against. A pass needs a round trip that went through in a liquid pool and in every other pool tried, and no liquid or undecided pool left untried.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x8888888888888888888888888888888888888888",
+          "fixAppId": null
+        }
+      ],
+      "passed": 7,
+      "total": 9,
+      "counts": {
+        "pass": 7,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":1,\"pool\":\"0x8888888888888888888888888888888888888888\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"2000000n\",\"maxAmount\":\"40000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"40100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x3600000000000000000000000000000000000000 balanceOf [\"0x8888888888888888888888888888888888888888\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0x9999999999999999999999999999999999999999 getReserves [] {}",
+      "read 0x9999999999999999999999999999999999999999 token0 [] {}",
+      "read 0x9999999999999999999999999999999999999999 totalSupply [] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "v4 pools against native USDC (liquid) and the USDC ERC-20 (short), each traded": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "fail",
+          "title": "All 2 wallets hold 60%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": "vesting"
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "1,000 USDC can be swapped out of Uniswap v4",
+          "detail": "The v4 quoter can pay out 1,000 USDC from this pool. 0 USDC in range at the current price; liquidity outside the current tick range isn't counted. 2 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "pass",
+          "title": "Bought and sold back in a simulation",
+          "detail": "hookless Uniswap v4 pool 0x0911…c941: Bought with 0.01 USDC on Uniswap v4 and sold straight back for 0.0099 USDC: 1% lost. The pool's fees for the two swaps come to 0.6%. Simulated in one eth_call against the pool itself; nothing was sent. Round trips in all 2 pools counted went through; the worst is shown.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        }
+      ],
+      "passed": 7,
+      "total": 9,
+      "counts": {
+        "pass": 7,
+        "warn": 0,
+        "fail": 1,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":2,\"pool\":\"0x8366a39CC670B4001A1121B8F6A443A643e40951\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x0000000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000000000000n\",\"maxAmount\":\"20000000000000000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x1111111111111111111111111111111111111111\",\"fee\":3000,\"tickSpacing\":60,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"20100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":2,\"pool\":\"0x8366a39CC670B4001A1121B8F6A443A643e40951\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"422599n\",\"maxAmount\":\"20000000n\",\"key\":{\"currency0\":\"0x1111111111111111111111111111111111111111\",\"currency1\":\"0x3600000000000000000000000000000000000000\",\"fee\":500,\"tickSpacing\":10,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"20100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94 quoteExactOutputSingle [{\"poolKey\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x1111111111111111111111111111111111111111\",\"fee\":3000,\"tickSpacing\":60,\"hooks\":\"0x0000000000000000000000000000000000000000\"},\"zeroForOne\":false,\"exactAmount\":\"1000000000000000000000n\",\"hookData\":\"0x\"}] {\"gas\":\"2000000n\"}",
+      "read 0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94 quoteExactOutputSingle [{\"poolKey\":{\"currency0\":\"0x1111111111111111111111111111111111111111\",\"currency1\":\"0x3600000000000000000000000000000000000000\",\"fee\":500,\"tickSpacing\":10,\"hooks\":\"0x0000000000000000000000000000000000000000\"},\"zeroForOne\":true,\"exactAmount\":\"1000000000n\",\"hookData\":\"0x\"}] {\"gas\":\"2000000n\"}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a hooked native-USDC v4 pool the index lists, the only pool": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "unknown",
+          "title": "Couldn't verify Uniswap v4 liquidity",
+          "detail": "A Uniswap v4 pool has a hook, which can change what a swap pays, so a quote can't judge its liquidity.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "warn",
+          "title": "Measured on a pool of undecided liquidity",
+          "detail": "Bought with 0.01 USDC on Uniswap v4 and sold straight back for 0.0098 USDC: 2% lost. This pool's fee can change from one swap to the next, so up to 5% counts as fees. Simulated in one eth_call against the pool itself; nothing was sent. It was measured on a pool whose liquidity is undecided (hooked Uniswap v4 pool 0xedf1…b328, 0 USDC in range). A pass needs a round trip that went through in a liquid pool and in every other pool tried, and no liquid or undecided pool left untried.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":2,\"pool\":\"0x8366a39CC670B4001A1121B8F6A443A643e40951\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x0000000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000000000000n\",\"maxAmount\":\"20000000000000000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x1111111111111111111111111111111111111111\",\"fee\":3000,\"tickSpacing\":60,\"hooks\":\"0x94f8be2402C0e2eb65F3218a7282A5301371E044\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"20100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 32 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0xb81f1f9f8e9acae9 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "USDC itself on mainnet: neither form of USDC is a quote": {
+    "report": {
+      "address": "0x3600000000000000000000000000000000000000",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x3600000000000000000000000000000000000000?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x3600000000000000000000000000000000000000?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x3600000000000000000000000000000000000000?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x3600000000000000000000000000000000000000?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x3600000000000000000000000000000000000000?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap or Aerodrome pool found",
+          "detail": "Looked at Uniswap v2, Uniswap v3, Uniswap v4 and Aerodrome pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x3600000000000000000000000000000000000000",
+      "getStorageAt 0x3600000000000000000000000000000000000000 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x3600000000000000000000000000000000000000 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x3600000000000000000000000000000000000000 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x3600000000000000000000000000000000000000 decimals [] {}",
+      "read 0x3600000000000000000000000000000000000000 getOwner [] {}",
+      "read 0x3600000000000000000000000000000000000000 name [] {}",
+      "read 0x3600000000000000000000000000000000000000 owner [] {}",
+      "read 0x3600000000000000000000000000000000000000 symbol [] {}",
+      "read 0x3600000000000000000000000000000000000000 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x3600000000000000000000000000000000000000\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 10 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x06c3b0231df832a9 {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 6 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0x740ed39e7cbc1a21 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x3600000000000000000000000000000000000000\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x3600000000000000000000000000000000000000\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x3600000000000000000000000000000000000000\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x3600000000000000000000000000000000000000\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "USDC itself on testnet": {
+    "report": {
+      "address": "0x3600000000000000000000000000000000000000",
+      "network": "testnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x3600000000000000000000000000000000000000?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x3600000000000000000000000000000000000000?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x3600000000000000000000000000000000000000?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x3600000000000000000000000000000000000000?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x3600000000000000000000000000000000000000?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap v4 pool found",
+          "detail": "Looked at Uniswap v4 pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x3600000000000000000000000000000000000000",
+      "getStorageAt 0x3600000000000000000000000000000000000000 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x3600000000000000000000000000000000000000 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x3600000000000000000000000000000000000000 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x3600000000000000000000000000000000000000 decimals [] {}",
+      "read 0x3600000000000000000000000000000000000000 getOwner [] {}",
+      "read 0x3600000000000000000000000000000000000000 name [] {}",
+      "read 0x3600000000000000000000000000000000000000 owner [] {}",
+      "read 0x3600000000000000000000000000000000000000 symbol [] {}",
+      "read 0x3600000000000000000000000000000000000000 totalSupply [] {}",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 10 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x871845f884ca3114 {}"
+    ]
+  },
+  "EURC on testnet with a native-USDC v4 pool": {
+    "report": {
+      "address": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+      "network": "testnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "1,000 USDC can be swapped out of Uniswap v4",
+          "detail": "The v4 quoter can pay out 1,000 USDC from this pool. 0 USDC in range at the current price; liquidity outside the current tick range isn't counted. 1 pool(s) found.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "pass",
+          "title": "Bought and sold back in a simulation",
+          "detail": "Bought with 0.01 USDC on Uniswap v4 and sold straight back for 0.0099 USDC: 1% lost. The pool's fees for the two swaps come to 0.1%. Simulated in one eth_call against the pool itself; nothing was sent.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        }
+      ],
+      "passed": 8,
+      "total": 9,
+      "counts": {
+        "pass": 8,
+        "warn": 0,
+        "fail": 0,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":2,\"pool\":\"0x8366a39CC670B4001A1121B8F6A443A643e40951\",\"token\":\"0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a\",\"usdc\":\"0x0000000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000000000000n\",\"maxAmount\":\"20000000000000000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a\",\"fee\":500,\"tickSpacing\":10,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"20100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+      "getStorageAt 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a\"] {}",
+      "read 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a decimals [] {}",
+      "read 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a getOwner [] {}",
+      "read 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a name [] {}",
+      "read 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a owner [] {}",
+      "read 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a symbol [] {}",
+      "read 0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a totalSupply [] {}",
+      "read 0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94 quoteExactOutputSingle [{\"poolKey\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a\",\"fee\":500,\"tickSpacing\":10,\"hooks\":\"0x0000000000000000000000000000000000000000\"},\"zeroForOne\":false,\"exactAmount\":\"1000000000000000000000n\",\"hookData\":\"0x\"}] {\"gas\":\"2000000n\"}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 20 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x9a83728647086157 {}"
+    ]
+  },
+  "a token that uses PREVRANDAO, testnet": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "testnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap v4 pool found",
+          "detail": "Looked at Uniswap v4 pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "warn",
+          "title": "Uses PREVRANDAO, which is always 0 on Arc",
+          "detail": "Any randomness derived from it is predictable.",
+          "evidenceUrl": "https://docs.arc.io/arc/references/evm-differences",
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 5,
+      "total": 9,
+      "counts": {
+        "pass": 5,
+        "warn": 2,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x45b6a2f74324180e {}"
+    ]
+  },
+  "an EIP-1967 proxy with an admin, renounced": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Both this proxy and the implementation it runs (0x2222222222222222222222222222222222222222) are verified.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "warn",
+          "title": "Control can be restored by an upgrade",
+          "detail": "owner() is a burn address. The proxy admin 0x5555…5555 can replace this contract's code, so that only describes the logic running now.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "warn",
+          "title": "Privileges can be restored by an upgrade",
+          "detail": "Found mint(address,uint256), but ownership is renounced. The proxy admin 0x5555…5555 can replace this contract's code, so that only describes the logic running now.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "fail",
+          "title": "Upgradeable — admin 0x5555…5555",
+          "detail": "0x5555555555555555555555555555555555555555 holds the EIP-1967 admin slot and can replace this contract's logic.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap or Aerodrome pool found",
+          "detail": "Looked at Uniswap v2, Uniswap v3, Uniswap v4 and Aerodrome pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "warn",
+          "title": "Randomness can be added by an upgrade",
+          "detail": "The PREVRANDAO opcode isn't used. The proxy admin 0x5555…5555 can replace this contract's code, so that only describes the logic running now.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 2,
+      "total": 9,
+      "counts": {
+        "pass": 2,
+        "warn": 4,
+        "fail": 1,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getCode 0x2222222222222222222222222222222222222222",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103 undefined",
+      "getStorageAt 0x2222222222222222222222222222222222222222 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x2222222222222222222222222222222222222222 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x2222222222222222222222222222222222222222 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a clone of code that uses PREVRANDAO, testnet": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "testnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Both this proxy and the implementation it runs (0x2222222222222222222222222222222222222222) are verified.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "warn",
+          "title": "Owned by a wallet",
+          "detail": "0x3333333333333333333333333333333333333333 controls owner-only functions.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x3333333333333333333333333333333333333333",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Minimal proxy — not upgradeable",
+          "detail": "An EIP-1167 clone of 0x2222222222222222222222222222222222222222; its logic can't be replaced.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x2222222222222222222222222222222222222222",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap v4 pool found",
+          "detail": "Looked at Uniswap v4 pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "warn",
+          "title": "Uses PREVRANDAO, which is always 0 on Arc",
+          "detail": "Any randomness derived from it is predictable.",
+          "evidenceUrl": "https://docs.arc.io/arc/references/evm-differences",
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 4,
+      "total": 9,
+      "counts": {
+        "pass": 4,
+        "warn": 3,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getCode 0x2222222222222222222222222222222222222222",
+      "getCode 0x3333333333333333333333333333333333333333",
+      "getStorageAt 0x2222222222222222222222222222222222222222 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x2222222222222222222222222222222222222222 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x2222222222222222222222222222222222222222 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x45b6a2f74324180e {}"
+    ]
+  },
+  "a token the ArcOS TokenFactory made, unverified on the explorer, testnet": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "testnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified (through the ArcOS TokenFactory)",
+          "detail": "The ArcOS TokenFactory created this token, and it can only deploy four fixed templates, whose source is part of its verified source. This address's own explorer page may still say it isn't verified.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x41FaFc54ED3be1545695B82af4aA490607447884?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "Ownership is renounced",
+          "detail": "owner() is a burn address.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap v4 pool found",
+          "detail": "Looked at Uniswap v4 pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 1,
+        "fail": 0,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x45b6a2f74324180e {}"
+    ]
+  },
+  "the explorer down and the RPC failing on some reads": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": null,
+        "symbol": null,
+        "decimals": null,
+        "totalSupply": null
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "unknown",
+          "title": "Couldn't check source verification",
+          "detail": "The explorer didn't answer.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "unknown",
+          "title": "Couldn't read the owner",
+          "detail": "The network didn't answer the owner() call.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "unknown",
+          "title": "Couldn't tell if this contract forwards",
+          "detail": "This contract's EIP-1967 and ZeppelinOS proxy slots couldn't be read, so whether the code scanned here is the code that actually runs was never established.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "unknown",
+          "title": "This check couldn't run",
+          "detail": "This check couldn't run — the network didn't answer.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "unknown",
+          "title": "Couldn't check holder concentration",
+          "detail": "The explorer didn't answer, or total supply is unknown.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "unknown",
+          "title": "Couldn't read liquidity pools",
+          "detail": "The network didn't answer the pool lookup.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't read liquidity pools",
+          "detail": "The network didn't answer the pool lookup.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "unknown",
+          "title": "Couldn't tell if this contract forwards",
+          "detail": "This contract's EIP-1967 and ZeppelinOS proxy slots couldn't be read, so whether the code scanned here is the code that actually runs was never established.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "The network didn't answer the pool lookup.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 0,
+      "total": 9,
+      "counts": {
+        "pass": 0,
+        "warn": 0,
+        "fail": 0,
+        "unknown": 9
+      },
+      "explorerReachable": false,
+      "degraded": true,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a buy the pool paid out for and no tokens arrived": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "50,000 USDC of liquidity on Uniswap v2",
+          "detail": "1 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "pass",
+          "title": "Liquidity is burned or locked",
+          "detail": "100% of the v2 LP supply can't be withdrawn.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x4444444444444444444444444444444444444444?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "fail",
+          "title": "Buying delivers no tokens",
+          "detail": "Buying with 10 USDC on Uniswap v2 went through and the pool paid out, but none of the tokens arrived, so nothing could be sold back. Simulated in one eth_call against the pool itself; nothing was sent.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        }
+      ],
+      "passed": 8,
+      "total": 9,
+      "counts": {
+        "pass": 8,
+        "warn": 0,
+        "fail": 1,
+        "unknown": 0
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":0,\"pool\":\"0x4444444444444444444444444444444444444444\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000n\",\"maxAmount\":\"10000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"10100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x4444444444444444444444444444444444444444 getReserves [] {}",
+      "read 0x4444444444444444444444444444444444444444 token0 [] {}",
+      "read 0x4444444444444444444444444444444444444444 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a node that ignores the state override": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "50,000 USDC of liquidity on Uniswap v2",
+          "detail": "1 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "pass",
+          "title": "Liquidity is burned or locked",
+          "detail": "100% of the v2 LP supply can't be withdrawn.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x4444444444444444444444444444444444444444?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "The RPC didn't run the simulation: it needs eth_call to accept a state override.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        }
+      ],
+      "passed": 8,
+      "total": 9,
+      "counts": {
+        "pass": 8,
+        "warn": 0,
+        "fail": 0,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":0,\"pool\":\"0x4444444444444444444444444444444444444444\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000n\",\"maxAmount\":\"10000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"10100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x4444444444444444444444444444444444444444 getReserves [] {}",
+      "read 0x4444444444444444444444444444444444444444 token0 [] {}",
+      "read 0x4444444444444444444444444444444444444444 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a gas price that can't be read": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "50,000 USDC of liquidity on Uniswap v2",
+          "detail": "1 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "pass",
+          "title": "Liquidity is burned or locked",
+          "detail": "100% of the v2 LP supply can't be withdrawn.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x4444444444444444444444444444444444444444?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "The RPC refused the simulation or didn't answer.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        }
+      ],
+      "passed": 8,
+      "total": 9,
+      "counts": {
+        "pass": 8,
+        "warn": 0,
+        "fail": 0,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": true,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x4444444444444444444444444444444444444444 getReserves [] {}",
+      "read 0x4444444444444444444444444444444444444444 token0 [] {}",
+      "read 0x4444444444444444444444444444444444444444 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a sell that reverts in a v2 pair, LP burned": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "50,000 USDC of liquidity on Uniswap v2",
+          "detail": "1 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "pass",
+          "title": "Liquidity is burned or locked",
+          "detail": "100% of the v2 LP supply can't be withdrawn.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x4444444444444444444444444444444444444444?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "fail",
+          "title": "Can't be sold",
+          "detail": "Buying with 10 USDC on Uniswap v2 went through. Selling straight back, in the same transaction and from a contract, reverted.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x4444444444444444444444444444444444444444",
+          "fixAppId": null
+        }
+      ],
+      "passed": 8,
+      "total": 9,
+      "counts": {
+        "pass": 8,
+        "warn": 0,
+        "fail": 1,
+        "unknown": 0
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"160000000000n\",\"trade\":{\"kind\":0,\"pool\":\"0x4444444444444444444444444444444444444444\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"10000000n\",\"maxAmount\":\"10000000n\",\"key\":{\"currency0\":\"0x0000000000000000000000000000000000000000\",\"currency1\":\"0x0000000000000000000000000000000000000000\",\"fee\":0,\"tickSpacing\":0,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"10800000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x4444444444444444444444444444444444444444 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x4444444444444444444444444444444444444444 getReserves [] {}",
+      "read 0x4444444444444444444444444444444444444444 token0 [] {}",
+      "read 0x4444444444444444444444444444444444444444 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "only an EURC pair: no USDC pool to trade against": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "pass",
+          "title": "90,000 EURC of liquidity on Uniswap v2",
+          "detail": "1 pool(s) found.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x9999999999999999999999999999999999999999",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "fail",
+          "title": "Liquidity isn't locked",
+          "detail": "100% of the v2 LP supply sits in wallets that can withdraw it.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x9999999999999999999999999999999999999999?tab=holders",
+          "fixAppId": "vault"
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 7,
+      "total": 9,
+      "counts": {
+        "pass": 7,
+        "warn": 0,
+        "fail": 1,
+        "unknown": 1
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0x9999999999999999999999999999999999999999 balanceOf [\"0x0000000000000000000000000000000000000000\"] {}",
+      "read 0x9999999999999999999999999999999999999999 balanceOf [\"0x000000000000000000000000000000000000dEaD\"] {}",
+      "read 0x9999999999999999999999999999999999999999 getReserves [] {}",
+      "read 0x9999999999999999999999999999999999999999 token0 [] {}",
+      "read 0x9999999999999999999999999999999999999999 totalSupply [] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "holders concentrated in one wallet, the PoolManager left out": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "fail",
+          "title": "The only wallet holds 60%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": "vesting"
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap or Aerodrome pool found",
+          "detail": "Looked at Uniswap v2, Uniswap v3, Uniswap v4 and Aerodrome pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 5,
+      "total": 9,
+      "counts": {
+        "pass": 5,
+        "warn": 1,
+        "fail": 1,
+        "unknown": 2
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "a v4 quote that fails at the transport level, testnet": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "testnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "unknown",
+          "title": "Couldn't verify Uniswap v4 liquidity",
+          "detail": "The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "The RPC refused the simulation or didn't answer.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x8366a39CC670B4001A1121B8F6A443A643e40951",
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 0,
+        "fail": 0,
+        "unknown": 3
+      },
+      "explorerReachable": true,
+      "degraded": true,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "callWithOverride {\"from\":\"<S>\",\"to\":\"<S>\",\"gas\":\"5000000n\",\"gasPrice\":\"20000000000n\",\"trade\":{\"kind\":2,\"pool\":\"0x8366a39CC670B4001A1121B8F6A443A643e40951\",\"token\":\"0x1111111111111111111111111111111111111111\",\"usdc\":\"0x3600000000000000000000000000000000000000\",\"router\":\"<R>\",\"amount\":\"422599n\",\"maxAmount\":\"20000000n\",\"key\":{\"currency0\":\"0x1111111111111111111111111111111111111111\",\"currency1\":\"0x3600000000000000000000000000000000000000\",\"fee\":500,\"tickSpacing\":10,\"hooks\":\"0x0000000000000000000000000000000000000000\"}},\"overrides\":[{\"address\":\"<S>\",\"code\":\"<simulator>\",\"balance\":\"20100000000000000000n\"},{\"address\":\"<R>\",\"code\":\"<simulator>\"}]}",
+      "gasPrice",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0x8Dc178eFB8111BB0973Dd9d722ebeFF267c98F94 quoteExactOutputSingle [{\"poolKey\":{\"currency0\":\"0x1111111111111111111111111111111111111111\",\"currency1\":\"0x3600000000000000000000000000000000000000\",\"fee\":500,\"tickSpacing\":10,\"hooks\":\"0x0000000000000000000000000000000000000000\"},\"zeroForOne\":true,\"exactAmount\":\"1000000000n\",\"hookData\":\"0x\"}] {\"gas\":\"2000000n\"}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x45b6a2f74324180e {}"
+    ]
+  },
+  "v4 and Aerodrome silent while v2 and v3 answer": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "mainnet",
+      "token": {
+        "name": "Token",
+        "symbol": "TKN",
+        "decimals": 18,
+        "totalSupply": "1000"
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "pass",
+          "title": "Source code is verified",
+          "detail": "Anyone can read what this contract does.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "pass",
+          "title": "No owner function",
+          "detail": "The contract exposes no owner() or getOwner().",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=read_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "pass",
+          "title": "All 2 wallets hold 15%",
+          "detail": "Excludes burn addresses, liquidity pools and known lock contracts.",
+          "evidenceUrl": "https://explorer.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "unknown",
+          "title": "Couldn't read liquidity pools",
+          "detail": "Uniswap v4 and Aerodrome didn't answer, so a pool there can't be ruled out.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "Uniswap v4 and Aerodrome didn't answer, so a pool there can't be ruled out.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "Uniswap v4 and Aerodrome didn't answer, so a pool there can't be ruled out.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 6,
+      "total": 9,
+      "counts": {
+        "pass": 6,
+        "warn": 0,
+        "fail": 0,
+        "unknown": 3
+      },
+      "explorerReachable": true,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\"] {}",
+      "read 0x89e5db8b5aa49aa85ac63f691524311aeb649eba getPair [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\"] {}",
+      "read 0xa68edD822048C00dC816d93005B72F8a50234a24 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 12 calls to 0xb89Df768aF2CFE637ceB352c587Fe8edAf491d03 0xd4b7f11390e38cbf {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x70f0f51e5e1ee8a5 {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0x3600000000000000000000000000000000000000\",500] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",10000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",100] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",3000] {}",
+      "read 0xf0db7b58379503491d857db50ac9ece64c653918 getPool [\"0x1111111111111111111111111111111111111111\",\"0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1\",500] {}"
+    ]
+  },
+  "testnet's v4 alone, nothing found": {
+    "report": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "network": "testnet",
+      "token": {
+        "name": null,
+        "symbol": null,
+        "decimals": null,
+        "totalSupply": null
+      },
+      "findings": [
+        {
+          "id": "verified",
+          "status": "unknown",
+          "title": "Couldn't check source verification",
+          "detail": "The explorer didn't answer.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "ownership",
+          "status": "warn",
+          "title": "Owned by a wallet",
+          "detail": "0x3333333333333333333333333333333333333333 controls owner-only functions.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x3333333333333333333333333333333333333333",
+          "fixAppId": null
+        },
+        {
+          "id": "privileges",
+          "status": "pass",
+          "title": "No privileged functions found",
+          "detail": "No mint, blacklist, fee, limit or pause function in the dispatcher.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=write_contract",
+          "fixAppId": null
+        },
+        {
+          "id": "proxy",
+          "status": "pass",
+          "title": "Not a proxy",
+          "detail": "No EIP-1967 or ZeppelinOS proxy slots are set and the code doesn't delegate calls.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/address/0x1111111111111111111111111111111111111111?tab=contract",
+          "fixAppId": null
+        },
+        {
+          "id": "holders",
+          "status": "unknown",
+          "title": "Couldn't check holder concentration",
+          "detail": "The explorer didn't answer, or total supply is unknown.",
+          "evidenceUrl": "https://explorer.testnet.arc.io/token/0x1111111111111111111111111111111111111111?tab=holders",
+          "fixAppId": null
+        },
+        {
+          "id": "liquidity",
+          "status": "warn",
+          "title": "No Uniswap v4 pool found",
+          "detail": "Looked at Uniswap v4 pools against USDC and EURC. Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "lp-lock",
+          "status": "unknown",
+          "title": "Couldn't check liquidity locks",
+          "detail": "No pool was found.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "prevrandao",
+          "status": "pass",
+          "title": "Doesn't rely on on-chain randomness",
+          "detail": "The PREVRANDAO opcode isn't used.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        },
+        {
+          "id": "trade",
+          "status": "unknown",
+          "title": "Couldn't simulate a trade",
+          "detail": "No USDC pool was found to trade against.",
+          "evidenceUrl": null,
+          "fixAppId": null
+        }
+      ],
+      "passed": 3,
+      "total": 9,
+      "counts": {
+        "pass": 3,
+        "warn": 2,
+        "fail": 0,
+        "unknown": 4
+      },
+      "explorerReachable": false,
+      "degraded": false,
+      "blockNumber": "123",
+      "generatedAt": "2026-11-08T00:00:00.000Z"
+    },
+    "calls": [
+      "blockNumber",
+      "getCode 0x1111111111111111111111111111111111111111",
+      "getCode 0x3333333333333333333333333333333333333333",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 undefined",
+      "getStorageAt 0x1111111111111111111111111111111111111111 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 undefined",
+      "read 0x1111111111111111111111111111111111111111 decimals [] {}",
+      "read 0x1111111111111111111111111111111111111111 getOwner [] {}",
+      "read 0x1111111111111111111111111111111111111111 name [] {}",
+      "read 0x1111111111111111111111111111111111111111 owner [] {}",
+      "read 0x1111111111111111111111111111111111111111 symbol [] {}",
+      "read 0x1111111111111111111111111111111111111111 totalSupply [] {}",
+      "read 0x41FaFc54ED3be1545695B82af4aA490607447884 isArcosToken [\"0x1111111111111111111111111111111111111111\"] {}",
+      "read 0xcA11bde05977b3631167028862bE2a173976CA11 aggregate3 30 calls to 0xF3334192D15450CdD385c8B70e03f9A6bD9E673b 0x45b6a2f74324180e {}"
+    ]
+  }
+}

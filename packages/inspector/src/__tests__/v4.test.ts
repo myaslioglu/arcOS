@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { EURC, USDC } from "@arcos/chain";
-import type { PoolKey } from "../types";
+import { EURC, UNISWAP_V4, USDC, type DexConfig } from "@arcos/chain";
+import { findPools } from "../checks";
+import type { InspectInput, PoolKey } from "../types";
 import { NATIVE, STANDARD_V4_TIERS, quoteInRange, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
+import { arcFields } from "./fixtures/arc";
+import { fakeChain, type FakeReader } from "./fixtures/chain-fake";
 
 const Q96 = 1n << 96n;
 
@@ -136,5 +139,49 @@ describe("quoteInRange", () => {
     const p = { sqrtPriceX96: Q96, tick: 0, tickSpacing: 60, liquidity: 10n ** 12n };
     expect(quoteInRange({ ...p, quoteIsCurrency0: true })).toBe(2995354955n);
     expect(quoteInRange({ ...p, quoteIsCurrency0: false })).toBe(0n);
+  });
+});
+
+// v4's address(0) is the chain's native currency, whatever the chain's config (`InspectInput.nativeQuote`) says it is: on
+// Arc, USDC with 18 decimals. Without a native quote, no pool against it is looked for, and nothing calls it USDC.
+describe("v4's native currency comes from the chain's config", () => {
+  const TOKEN = "0x1111111111111111111111111111111111111111";
+  const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }], v4: UNISWAP_V4 };
+  const nativeKey = v4PoolKey(TOKEN, NATIVE, 500, 10);
+  const pool = { sqrtPriceX96: sqrtRatioAtTick(-1251), tick: -1251, liquidity: 10n ** 12n, quote: { amountIn: 1n } };
+  const inputFor = (reader: FakeReader, over: Partial<InspectInput> = {}): InspectInput => ({
+    ...arcFields("mainnet"), address: TOKEN, network: "mainnet", reader, explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.test", ...over,
+  });
+  const askedIds = (chain: FakeReader) => chain.batches[0]!.calls.filter((c) => c.fn === "getSlot0").map((c) => c.args[0]);
+
+  it("on Arc, reads pools against native USDC, named USDC and quoted in 18 decimals", async () => {
+    const chain = fakeChain({ v4: { [v4PoolId(nativeKey)]: pool } });
+    const scan = await findPools(inputFor(chain));
+    expect(askedIds(chain)).toEqual(standardV4Keys(TOKEN, [USDC, NATIVE]).map(v4PoolId));
+    expect(scan.pools).toMatchObject([{ quote: "USDC", key: nativeKey, liquid: true }]);
+    expect(chain.quotes.map((q) => q.exactAmount)).toEqual([1_000n * 10n ** 18n]);
+  });
+
+  it("without a native quote, reads no pool against address(0): it isn't USDC there", async () => {
+    const chain = fakeChain({ v4: { [v4PoolId(nativeKey)]: pool } });
+    const scan = await findPools(inputFor(chain, { nativeQuote: null }));
+    expect(askedIds(chain)).toEqual(standardV4Keys(TOKEN, [USDC]).map(v4PoolId));
+    expect(scan.pools).toEqual([]);
+  });
+
+  it("names and sizes a native pool by the chain's own native currency", async () => {
+    const chain = fakeChain({ v4: { [v4PoolId(nativeKey)]: pool } });
+    const scan = await findPools(inputFor(chain, { nativeQuote: { address: NATIVE, symbol: "NAT", decimals: 8, usd: "stable" } }));
+    expect(scan.pools).toMatchObject([{ quote: "NAT", key: nativeKey }]);
+    expect(chain.quotes.map((q) => q.exactAmount)).toEqual([1_000n * 10n ** 8n]);
+  });
+
+  it("leaves out both forms of USDC when inspecting Arc's USDC, but only the ERC-20 where the two are different assets", async () => {
+    const arc = fakeChain();
+    await findPools(inputFor(arc, { address: USDC }));
+    expect(arc.batches).toEqual([]); // USDC was the only quote token, and native USDC is the same asset
+    const elsewhere = fakeChain();
+    await findPools(inputFor(elsewhere, { address: USDC, tradeQuote: { token: USDC, balanceSlot: 9 } }));
+    expect(askedIds(elsewhere)).toEqual(standardV4Keys(USDC, [NATIVE]).map(v4PoolId));
   });
 });

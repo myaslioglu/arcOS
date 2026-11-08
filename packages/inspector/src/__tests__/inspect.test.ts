@@ -8,6 +8,7 @@ import { NotAContract, inspect } from "../inspect";
 import { CallReverted, type ChainReader, type Finding, type Report } from "../types";
 import { MINTABLE_TOKEN_DEPLOYED, STANDARD_TOKEN_DEPLOYED } from "./fixtures/tokens";
 import { v2PairReads } from "./fixtures/chain-fake";
+import { arcFields } from "./fixtures/arc";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const IMPL = "0x2222222222222222222222222222222222222222";
@@ -93,6 +94,7 @@ const explorer = (over: Partial<ExplorerSource> = {}): ExplorerSource => ({
 
 const run = (f: Fake, ex: ExplorerSource | null = explorer(), d: DexConfig | null = null): Promise<Report> =>
   inspect({
+    ...arcFields("testnet"),
     address: TOKEN, network: "testnet", reader: reader(f), explorer: ex, dex: d, knownLockers: [],
     explorerBase: "https://explorer.test", now: () => new Date("2026-09-20T00:00:00Z"),
   });
@@ -148,6 +150,23 @@ describe("inspect", () => {
   it("warns on PREVRANDAO", async () => {
     const r = await run({ code: { [TOKEN]: "0x4400" } });
     expect(find(r, "prevrandao").status).toBe("warn");
+  });
+
+  it("words the PREVRANDAO warning as the chain's config does, Arc's by default", async () => {
+    const code = { [TOKEN]: "0x63a9059cbb4400" }; // PUSH4 transfer, PREVRANDAO, STOP
+    expect(find(await run({ code }), "prevrandao")).toMatchObject({
+      status: "warn", title: "Uses PREVRANDAO, which is always 0 on Arc", detail: "Any randomness derived from it is predictable.", evidenceUrl: "https://docs.arc.io/arc/references/evm-differences",
+    });
+    const prevrandao = { warnTitle: "Uses PREVRANDAO, which is 1 here", detail: "It is a constant.", evidenceUrl: "https://docs.example/prevrandao" };
+    const r = await inspect({ ...arcFields("testnet"), prevrandao, address: TOKEN, network: "testnet", reader: reader({ code }), explorer: explorer(), dex: null, knownLockers: [], explorerBase: "https://explorer.test" });
+    expect(find(r, "prevrandao")).toMatchObject({ status: "warn", title: prevrandao.warnTitle, detail: prevrandao.detail, evidenceUrl: prevrandao.evidenceUrl });
+  });
+
+  it("names the chain it read in the report, next to the site's network", async () => {
+    const r = await run({ code: { [TOKEN]: PLAIN } });
+    expect(r).toMatchObject({ network: "testnet", chain: "arc", chainId: 5042002 });
+    const keys = Object.keys(r);
+    expect(keys.slice(0, 4)).toEqual(["address", "network", "chain", "chainId"]);
   });
 
   it("marks explorer-backed checks unknown when the explorer is down, and keeps the rest", async () => {
@@ -401,7 +420,33 @@ describe("inspect", () => {
     const r = await run({ code: { [TOKEN]: PLAIN }, storageError: boom });
     expect(JSON.stringify(r)).not.toContain("rpc.internal.example.com");
     expect(find(r, "proxy")).toMatchObject({ status: "unknown", detail: "This check couldn't run — the network didn't answer." });
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proxy"), boom);
+    // The log names the check and the error's name, never its message (see the next test).
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proxy"), "Error");
+    expect(spy.mock.calls.flat().map(String).join(" ")).not.toContain("rpc.internal.example.com");
+    spy.mockRestore();
+  });
+
+  it("logs a failed check's error name and code only: never the message, where a keyed RPC URL would be", async () => {
+    // viem's shape: an HTTP failure whose message, details and url carry the endpoint, the key in its path, under an
+    // error that wraps it. What reaches the log is the outer error's name and the first code in the chain.
+    const KEYED = "https://eth-mainnet.example.com/v2/SECRETKEY123";
+    const http = Object.assign(new Error(`HTTP request failed. URL: ${KEYED}`), { name: "HttpRequestError", status: 401, url: KEYED, details: `Unauthorized ${KEYED}` });
+    const wrapped = Object.assign(new Error(`Request failed: ${KEYED}`, { cause: http }), { name: "CallExecutionError", shortMessage: KEYED });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await run({ code: { [TOKEN]: PLAIN }, storageError: wrapped });
+    expect(find(r, "proxy").status).toBe("unknown");
+    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "CallExecutionError", 401]]);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain("SECRETKEY123");
+    expect(JSON.stringify(r)).not.toContain("SECRETKEY123");
+
+    // A JSON-RPC code comes first when the chain has one; a thrown non-Error is "unknown", and nothing else is logged.
+    spy.mockClear();
+    const rpc = Object.assign(new Error(`upstream ${KEYED}`), { code: -32603 });
+    await run({ code: { [TOKEN]: PLAIN }, storageError: Object.assign(new Error(KEYED, { cause: rpc }), { name: "RpcRequestError" }) });
+    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "RpcRequestError", -32603]]);
+    spy.mockClear();
+    await run({ code: { [TOKEN]: PLAIN }, storageError: KEYED as unknown as Error });
+    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "unknown"]]);
     spy.mockRestore();
   });
 
@@ -1135,6 +1180,7 @@ describe("inspect", () => {
 
   it("checksums the inspected address regardless of the casing passed in", async () => {
     const r = await inspect({
+      ...arcFields("testnet"),
       address: DEAD as `0x${string}`, // all-lowercase input
       network: "testnet",
       reader: reader({ code: { [DEAD]: PLAIN } }),
@@ -1402,6 +1448,7 @@ describe("source verification through the ArcOS TokenFactory", () => {
   const notMade = { [`${FACTORY}.isArcosToken(${TOKEN})`]: false };
   const withFactory = (f: Fake, ex: ExplorerSource | null): Promise<Report> =>
     inspect({
+      ...arcFields("testnet"),
       address: TOKEN, network: "testnet", reader: reader(f), explorer: ex, dex: null, knownLockers: [],
       explorerBase: "https://explorer.test", arcosTokenFactory: FACTORY, now: () => new Date("2026-09-20T00:00:00Z"),
     });

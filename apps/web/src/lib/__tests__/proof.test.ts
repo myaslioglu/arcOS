@@ -5,6 +5,8 @@ import { NAME_DISCLOSURE, badgeColor, badgeSvg, passLine, rankFindings, readAtLi
 const report = (over: Partial<Report> = {}): Report => ({
   address: "0x1111111111111111111111111111111111111111",
   network: "mainnet",
+  chain: "arc",
+  chainId: 5042,
   token: { name: "Duke", symbol: "DUKE", decimals: 18, totalSupply: "1" },
   findings: [],
   passed: 3,

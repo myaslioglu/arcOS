@@ -12,6 +12,8 @@ function report(statuses: Finding["status"][], over: Partial<Report> = {}): Repo
   return {
     address: "0x470F09ae20163d5E243F6530fb328912A8Fcb099",
     network: "mainnet",
+    chain: "arc",
+    chainId: 5042,
     token: { name: "T", symbol: "T", decimals: 18, totalSupply: "1" },
     findings,
     passed: count("pass"),

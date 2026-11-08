@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, createTransport, type EIP1193RequestFn, type Transport } from "viem";
-import { CHAINS } from "@arcos/chain";
+import { CHAINS, arcInspectChain } from "@arcos/chain";
 import { inspect } from "../inspect";
 import { viemReader } from "../reader";
-import { endpointHealth, outOfGasIsNodeAnswer, rpcTransport } from "../rpc-transport";
+import { endpointHealth, outOfGasIsNodeAnswer, outOfGasIsNodeAnswerFor, rpcTransport } from "../rpc-transport";
+import { arcFields } from "./fixtures/arc";
 
 type Built = ReturnType<ReturnType<typeof rpcTransport>>;
 const blockNumber = (transport: Built) => transport.request({ method: "eth_blockNumber" });
@@ -386,6 +387,7 @@ describe("an inspection over rpcTransport when owner() gets a gateway error", ()
       return reply({ error: { code: 3, message: "execution reverted", data: "0x" } });
     });
     return inspect({
+      ...arcFields("mainnet"),
       address: TOKEN, network: "mainnet", reader: viemReader(createPublicClient({ chain, transport: rpcTransport(chain) })),
       explorer: null, dex: null, knownLockers: [], explorerBase: "https://explorer.test",
     });
@@ -488,5 +490,34 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await expect(call).resolves.toBe("0x10");
     expect(tried).toEqual([urls[0], urls[1]]);
+  });
+});
+
+// The out-of-gas answer is the chain's (`InspectChain.outOfGas`): `outOfGasIsNodeAnswer` is Arc's, and
+// `outOfGasIsNodeAnswerFor` takes any chain's shapes.
+describe("outOfGasIsNodeAnswerFor: the chain's own out-of-gas shapes", () => {
+  const rpcErr = (code: number, message: string) => new RpcRequestError({ body: {}, url: "https://x.test", error: { code, message } });
+  const cases = [
+    rpcErr(-32003, "out of gas: gas required exceeds: 21000000"),
+    rpcErr(-32000, "out of gas"),
+    rpcErr(-32000, "intrinsic gas too low"),
+    rpcErr(-32003, "revert: OutOfFunds"),
+    new TimeoutError({ body: {}, url: "https://x.test" }),
+    null,
+    "out of gas",
+  ];
+
+  it("with Arc's registry entry, answers exactly as outOfGasIsNodeAnswer does", () => {
+    for (const network of ["mainnet", "testnet"] as const) {
+      const arc = outOfGasIsNodeAnswerFor(arcInspectChain(network));
+      expect(cases.map(arc), network).toEqual(cases.map(outOfGasIsNodeAnswer));
+    }
+    expect(cases.map(outOfGasIsNodeAnswer)).toEqual([true, false, false, false, false, false, false]);
+  });
+
+  it("reads another chain's shape as the node's answer, and Arc's -32003 not at all, when that chain doesn't give it", () => {
+    const other = outOfGasIsNodeAnswerFor({ outOfGas: [{ code: -32000, text: /^out of gas$/i }] });
+    expect(cases.map(other)).toEqual([false, true, false, false, false, false, false]);
+    expect(cases.map(outOfGasIsNodeAnswerFor({ outOfGas: [] }))).toEqual([false, false, false, false, false, false, false]);
   });
 });

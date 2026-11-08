@@ -1,4 +1,5 @@
 import { BaseError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
+import { arcInspectChain, type OutOfGasShape } from "@arcos/chain";
 import { isOutOfGas, isRevert, revertPayload } from "./rpc-errors";
 import { CallReverted, type ChainReader } from "./types";
 
@@ -15,13 +16,23 @@ function mapReadError(e: unknown): never {
   throw e;
 }
 
-/** A read that set its own gas limit and ran out of it got the node's answer: the call reverted, with nothing to say why. */
-function mapCappedReadError(e: unknown): never {
-  if (isOutOfGas(e)) throw new CallReverted("out of gas", null);
-  return mapReadError(e);
-}
+/**
+ * A read that set its own gas limit and ran out of it got the node's answer: the call reverted, with nothing to say why. How
+ * a node says so is the chain's (`shapes`).
+ */
+const mapCappedReadError =
+  (shapes: readonly OutOfGasShape[]) =>
+  (e: unknown): never => {
+    if (isOutOfGas(e, shapes)) throw new CallReverted("out of gas", null);
+    return mapReadError(e);
+  };
 
-export function viemReader(client: PublicClient): ChainReader {
+/**
+ * The engine's reader over a viem client. `chain.outOfGas` is how the chain's nodes say a call ran out of the gas it set
+ * (`InspectChain.outOfGas`); an inspection passes its chain's. Without it, Arc's: the site's other readers are all on Arc.
+ */
+export function viemReader(client: PublicClient, chain: { outOfGas: readonly OutOfGasShape[] } = arcInspectChain("mainnet")): ChainReader {
+  const capped = mapCappedReadError(chain.outOfGas);
   return {
     getCode: async (address) => {
       const code = await client.getCode({ address });
@@ -41,10 +52,11 @@ export function viemReader(client: PublicClient): ChainReader {
         ...(options?.gas === undefined ? {} : { gas: options.gas }),
         ...(options?.blockNumber === undefined ? {} : { blockNumber: options.blockNumber }),
       } as Parameters<PublicClient["readContract"]>[0])
-        .catch(options?.gas === undefined ? mapReadError : mapCappedReadError),
+        .catch(options?.gas === undefined ? mapReadError : capped),
     blockNumber: () => client.getBlockNumber(),
     gasPrice: () => client.getGasPrice(),
-    // With `account` and `gas` set, viem never folds this call into a multicall batch.
+    // With `account` and `gas` set, viem never folds this call into a multicall batch. A storage write (`stateDiff`) goes
+    // with its account only when there is one.
     callWithOverride: async (call, overrides) => {
       try {
         const { data } = await client.call({
@@ -53,11 +65,11 @@ export function viemReader(client: PublicClient): ChainReader {
           data: call.data,
           gas: call.gas,
           gasPrice: call.gasPrice,
-          stateOverride: overrides.map((o) => ({ address: o.address, code: o.code, balance: o.balance })),
+          stateOverride: overrides.map((o) => ({ address: o.address, code: o.code, balance: o.balance, ...(o.stateDiff ? { stateDiff: o.stateDiff } : {}) })),
         });
         return data ?? "0x";
       } catch (e) {
-        return mapCappedReadError(e);
+        return capped(e);
       }
     },
   };

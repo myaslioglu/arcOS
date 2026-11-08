@@ -113,4 +113,22 @@ describe("liveInspector", () => {
     await expect(keyed("0x470f09ae20163d5e243f6530fb328912a8fcb099", [], null)).rejects.toMatchObject({ name: "NotAContract" });
     expect(asked).toEqual([]);
   });
+
+  it("inspects Arc on its network, from Arc's registry entry: the report names the chain", async () => {
+    // A node with the same plain token everywhere, whose calls all come back empty.
+    const node = createPublicClient({
+      chain: CHAINS.mainnet,
+      transport: custom({
+        request: (async ({ method }: { method: string }) =>
+          method === "eth_getCode" ? "0x63a9059cbb00"
+          : method === "eth_getStorageAt" ? `0x${"0".repeat(64)}`
+          : method === "eth_call" ? "0x"
+          : "0x1") as unknown as EIP1193RequestFn,
+      }),
+    });
+    for (const [network, chainId] of [["mainnet", 5042], ["testnet", 5042002]] as const) {
+      const { report } = await liveInspector({ network, client: node })("0x470f09ae20163d5e243f6530fb328912a8fcb099", [], null);
+      expect(report, network).toMatchObject({ network, chain: "arc", chainId, total: 9 });
+    }
+  });
 });

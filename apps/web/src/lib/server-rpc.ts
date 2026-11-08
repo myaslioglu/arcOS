@@ -1,7 +1,7 @@
 import "server-only";
 import type { PublicClient } from "viem";
-import { activeChain } from "@arcos/chain";
-import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer } from "@arcos/inspector";
+import { activeChain, activeNetwork, arcInspectChain } from "@arcos/chain";
+import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer, outOfGasIsNodeAnswerFor } from "@arcos/inspector";
 import { processGlobal } from "./process-global";
 import { perSecond } from "./rate-limit";
 
@@ -12,14 +12,16 @@ import { perSecond } from "./rate-limit";
  * deploy. `/api/approvals` and sign-in read Arc through their own clients instead — `approvalsRpcClient()` and
  * `authRpcClient()`, below — each with its own cooldown record, so neither can put this one's endpoints on cooldown.
  *
- * It opts in to `outOfGasIsNodeAnswer`: Inspector's v4 quotes each run with a gas limit of their own, and a pool anyone can
- * create can make one run out of it. That is the node's answer about one call, the same on every endpoint, so it must not
- * fail over to, and cool, every endpoint these routes share.
+ * It reads an out-of-gas answer as the node's, the way Arc's nodes give one (`outOfGasIsNodeAnswerFor` with Arc's registry
+ * entry): Inspector's v4 quotes each run with a gas limit of their own, and a pool anyone can create can make one run out
+ * of it. That is the node's answer about one call, the same on every endpoint, so it must not fail over to, and cool,
+ * every endpoint these routes share.
  */
 export function serverRpcClient(): PublicClient {
-  return processGlobal("server.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("inspect.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
-  );
+  return processGlobal("server.rpcClient", () => {
+    const arc = arcInspectChain(activeNetwork());
+    return inspectionClient(arc.viem, processGlobal("inspect.rpcHealth", endpointHealth), outOfGasIsNodeAnswerFor(arc));
+  });
 }
 
 /**

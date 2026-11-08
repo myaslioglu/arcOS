@@ -3,6 +3,7 @@ import {
   ContractFunctionExecutionError, ContractFunctionRevertedError, ContractFunctionZeroDataError, createPublicClient, encodeErrorResult, http,
   parseAbi, type PublicClient,
 } from "viem";
+import { arcInspectChain } from "@arcos/chain";
 import { viemReader } from "../reader";
 import { isDecodeFailure, isNodeAnswer } from "../rpc-errors";
 import { CallReverted } from "../types";
@@ -279,5 +280,53 @@ describe("viemReader().callWithOverride", () => {
     expect(failed).toBeInstanceOf(Error);
     expect(failed).not.toBeInstanceOf(CallReverted);
     expect(isNodeAnswer(failed)).toBe(false);
+  });
+});
+
+// How a node says a capped call ran out of gas is the chain's (`InspectChain.outOfGas`). Without one the reader is Arc's,
+// as the tests above show; given another chain's, it reads that chain's answer, and Arc's -32003 is then no answer at all.
+describe("viemReader(client, chain): the chain's out-of-gas answer", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const client = () => createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+  const answering = (code: number, message: string) => vi.stubGlobal("fetch", async () => Response.json({ jsonrpc: "2.0", id: 1, error: { code, message } }));
+  const other = { outOfGas: [{ code: -32000, text: /^out of gas$/i }] };
+
+  it("is a CallReverted for the shape the chain names, on a capped read and on the trade simulation's call", async () => {
+    answering(-32000, "out of gas");
+    expect(await viemReader(client(), other).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x)).toBeInstanceOf(CallReverted);
+    const S = "0x00000000000000000000000000000000000a4c05" as const;
+    const call = { from: S, to: S, data: "0x12345678" as const, gas: 5_000_000n, gasPrice: 1n };
+    expect(await viemReader(client(), other).callWithOverride(call, []).catch((x: unknown) => x)).toBeInstanceOf(CallReverted);
+  });
+
+  it("stays an RPC failure for a shape the chain doesn't name, Arc's included", async () => {
+    answering(-32003, "out of gas: gas required exceeds: 2000000");
+    expect(await viemReader(client(), other).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x)).not.toBeInstanceOf(CallReverted);
+    expect(await viemReader(client(), arcInspectChain("mainnet")).read(ADDRESS, abi, "foo", [], { gas: 2_000_000n }).catch((x: unknown) => x)).toBeInstanceOf(CallReverted);
+  });
+});
+
+// A chain whose trade quote keeps balances in a storage slot funds S by writing it (`stateDiff`), which the reader sends
+// with that account's override, in the shape eth_call takes.
+describe("viemReader().callWithOverride: storage writes", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends a stateDiff with its account, and none for an account without one", async () => {
+    const bodies: { params: unknown[] }[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return Response.json({ jsonrpc: "2.0", id: 1, result: "0x" });
+    });
+    const S = "0x00000000000000000000000000000000000a4c05" as const;
+    const TOKEN = "0x00000000000000000000000000000000000c0de5" as const;
+    const slot = `0x${"ab".repeat(32)}` as const;
+    const value = `0x${"0".repeat(56)}3b9aca00` as const;
+    const client = createPublicClient({ transport: http("https://rpc.test", { retryCount: 0 }) });
+    await viemReader(client).callWithOverride(
+      { from: S, to: S, data: "0x12345678", gas: 5_000_000n, gasPrice: 1n },
+      [{ address: S, code: "0x6001600055", balance: 10n }, { address: TOKEN, stateDiff: [{ slot, value }] }],
+    );
+    const [, , state] = bodies[0]!.params as [unknown, unknown, Record<string, Record<string, unknown>>];
+    expect(state).toEqual({ [S]: { code: "0x6001600055", balance: "0xa" }, [TOKEN]: { stateDiff: { [slot]: value } } });
   });
 });

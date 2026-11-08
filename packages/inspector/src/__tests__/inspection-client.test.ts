@@ -5,6 +5,7 @@ import { inspect } from "../inspect";
 import { viemReader } from "../reader";
 import { CallReverted } from "../types";
 import { inspectionClient } from "../inspection-client";
+import { arcFields } from "./fixtures/arc";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const GATEWAY = "https://gateway.attacker.test";
@@ -48,6 +49,7 @@ describe("the server's inspection client and a token's OffchainLookup revert (CC
   it("fetches nothing the token named during a whole inspection, and the report isn't degraded", async () => {
     const { gatewayFetches } = node();
     const r = await inspect({
+      ...arcFields("mainnet"),
       address: TOKEN, network: "mainnet", reader: viemReader(inspectionClient(CHAINS.mainnet)),
       explorer: null, dex: null, knownLockers: [], explorerBase: "https://explorer.test",
     });
