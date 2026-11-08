@@ -171,7 +171,7 @@ describe("v4's native currency comes from the chain's config", () => {
 
   it("names and sizes a native pool by the chain's own native currency", async () => {
     const chain = fakeChain({ v4: { [v4PoolId(nativeKey)]: pool } });
-    const scan = await findPools(inputFor(chain, { nativeQuote: { address: NATIVE, symbol: "NAT", decimals: 8, usd: "stable" } }));
+    const scan = await findPools(inputFor(chain, { nativeQuote: { address: NATIVE, symbol: "NAT", decimals: 8, usd: "stable", erc20View: null } }));
     expect(scan.pools).toMatchObject([{ quote: "NAT", key: nativeKey }]);
     expect(chain.quotes.map((q) => q.exactAmount)).toEqual([1_000n * 10n ** 8n]);
   });
@@ -181,7 +181,16 @@ describe("v4's native currency comes from the chain's config", () => {
     await findPools(inputFor(arc, { address: USDC }));
     expect(arc.batches).toEqual([]); // USDC was the only quote token, and native USDC is the same asset
     const elsewhere = fakeChain();
-    await findPools(inputFor(elsewhere, { address: USDC, tradeQuote: { token: USDC, balanceSlot: 9 } }));
+    const native = arcFields("mainnet").nativeQuote!;
+    await findPools(inputFor(elsewhere, { address: USDC, nativeQuote: { ...native, erc20View: null } }));
     expect(askedIds(elsewhere)).toEqual(standardV4Keys(USDC, [NATIVE]).map(v4PoolId));
+  });
+
+  it("keeps native USDC from being a quote of Arc's USDC whatever the trade check is given, trades off included", async () => {
+    for (const tradeQuote of [null, { token: USDC, decimals: 6, balanceSlot: 9 }]) {
+      const chain = fakeChain();
+      await findPools(inputFor(chain, { address: USDC, tradeQuote }));
+      expect(chain.batches, JSON.stringify(tradeQuote)).toEqual([]);
+    }
   });
 });

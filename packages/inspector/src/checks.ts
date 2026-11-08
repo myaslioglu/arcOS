@@ -47,8 +47,9 @@
  *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing.
  * - lp-lock: no DEX is configured, pool discovery failed, the pool contracts never answered (or a
  *   family didn't and no pool was found), only pools other than Uniswap v2 exist (positions in v3, v4
- *   and Aerodrome pools can't be read without an index), or the v2 pair's LP totalSupply is zero (no
- *   evidence to compute a locked share from).
+ *   and Aerodrome pools can't be read without an index), the v2 pair's LP totalSupply is zero (no
+ *   evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain
+ *   whose lock contracts aren't vetted (`lockersVetted`), where the rest may sit in one.
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  * - trade: no DEX or no trade quote is configured, pool discovery failed, no USDC pool was found, or the round trip
@@ -339,17 +340,15 @@ const uniswapV2V3Name = (dex: DexConfig): string => `Uniswap ${listWith("and", [
 /**
  * What can be quoted against on v4: the config's quote tokens (6 decimals, USDC and EURC) and the chain's native currency
  * (`input.nativeQuote`, currency `address(0)`), when it has one: on Arc, native USDC with 18 decimals. A token is never its
- * own quote, and where the trade quote's balance is the native balance (`tradeQuote.balanceSlot: null`, Arc's USDC ERC-20
- * view) the two are one asset, so inspecting that token leaves out both forms of it.
+ * own quote, and the native currency and its ERC-20 view (`nativeQuote.erc20View`, Arc's USDC at 0x3600) are one asset, so
+ * inspecting that ERC-20 leaves out both forms of it.
  */
 function v4Quotes(input: InspectInput, dex: DexConfig): V4Quote[] {
   const token = lower(input.address);
   const quotes = dex.quoteTokens.filter((q) => lower(q.address) !== token).map((q) => ({ ...q, decimals: 6 }));
   const native = input.nativeQuote;
-  const nativeView = input.tradeQuote?.balanceSlot === null ? lower(input.tradeQuote.token) : null;
-  return native && lower(native.address) !== token && nativeView !== token
-    ? [...quotes, { address: native.address, symbol: native.symbol, decimals: native.decimals }]
-    : quotes;
+  const isNative = native !== null && (lower(native.address) === token || (native.erc20View !== null && lower(native.erc20View) === token));
+  return native && !isNative ? [...quotes, { address: native.address, symbol: native.symbol, decimals: native.decimals }] : quotes;
 }
 
 /** Rejects if any call fails at the transport level — the caller decides what "pools unknown" means. */
@@ -876,6 +875,15 @@ export async function checkLpLock(input: InspectInput, scan: PoolScan | null): P
       ? `The deepest pool is ${rival.version === "aero" ? "an" : "a"} ${VENUE[rival.version]} position, which can't be read without an index yet.`
       : "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.";
     return finding("lp-lock", "unknown", "Couldn't check liquidity locks", detail, { fixAppId: null });
+  }
+  // "Isn't locked" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
+  // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
+  if (pct < 95 && !input.lockersVetted) {
+    return finding(
+      "lp-lock", "unknown", "Couldn't check liquidity locks",
+      `${formatPct(100 - pct)} of the v2 LP supply isn't burned or in a known lock contract, and the lock contracts on ${input.chain.name} aren't recognized yet, so whether it can be withdrawn can't be told.`,
+      { evidenceUrl: url, fixAppId: null },
+    );
   }
   return pct >= 95
     ? finding("lp-lock", "pass", "Liquidity is burned or locked", `${formatPct(pct)} of the v2 LP supply can't be withdrawn.`, { evidenceUrl: url })

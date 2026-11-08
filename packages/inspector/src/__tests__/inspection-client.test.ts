@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeErrorResult, parseAbi } from "viem";
-import { CHAINS } from "@arcos/chain";
+import { CHAINS, arcInspectChain } from "@arcos/chain";
 import { inspect } from "../inspect";
 import { viemReader } from "../reader";
 import { CallReverted } from "../types";
@@ -41,7 +41,7 @@ describe("the server's inspection client and a token's OffchainLookup revert (CC
 
   it("reads it as a revert and never fetches the URL the token named", async () => {
     const { gatewayFetches } = node();
-    const reader = viemReader(inspectionClient(CHAINS.mainnet));
+    const reader = viemReader(inspectionClient(CHAINS.mainnet), arcInspectChain("mainnet"));
     await expect(reader.read(TOKEN, parseAbi(["function owner() view returns (address)"]), "owner")).rejects.toBeInstanceOf(CallReverted);
     expect(gatewayFetches()).toEqual([]);
   });
@@ -50,7 +50,7 @@ describe("the server's inspection client and a token's OffchainLookup revert (CC
     const { gatewayFetches } = node();
     const r = await inspect({
       ...arcFields("mainnet"),
-      address: TOKEN, network: "mainnet", reader: viemReader(inspectionClient(CHAINS.mainnet)),
+      address: TOKEN, network: "mainnet", reader: viemReader(inspectionClient(CHAINS.mainnet), arcInspectChain("mainnet")),
       explorer: null, dex: null, knownLockers: [], explorerBase: "https://explorer.test",
     });
     expect(gatewayFetches()).toEqual([]);

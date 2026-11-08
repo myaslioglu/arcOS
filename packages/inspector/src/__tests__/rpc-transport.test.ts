@@ -3,7 +3,7 @@ import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, cr
 import { CHAINS, arcInspectChain } from "@arcos/chain";
 import { inspect } from "../inspect";
 import { viemReader } from "../reader";
-import { endpointHealth, outOfGasIsNodeAnswer, outOfGasIsNodeAnswerFor, rpcTransport } from "../rpc-transport";
+import { arcOutOfGasIsNodeAnswer, endpointHealth, outOfGasIsNodeAnswerFor, rpcTransport } from "../rpc-transport";
 import { arcFields } from "./fixtures/arc";
 
 type Built = ReturnType<ReturnType<typeof rpcTransport>>;
@@ -388,7 +388,7 @@ describe("an inspection over rpcTransport when owner() gets a gateway error", ()
     });
     return inspect({
       ...arcFields("mainnet"),
-      address: TOKEN, network: "mainnet", reader: viemReader(createPublicClient({ chain, transport: rpcTransport(chain) })),
+      address: TOKEN, network: "mainnet", reader: viemReader(createPublicClient({ chain, transport: rpcTransport(chain) }), arcInspectChain("mainnet")),
       explorer: null, dex: null, knownLockers: [], explorerBase: "https://explorer.test",
     });
   }
@@ -418,19 +418,19 @@ describe("an inspection over rpcTransport when owner() gets a gateway error", ()
 // Revoke's extra classifier (fix round 2, Important 2b): Arc answers an eth_call that runs out of gas during
 // execution with -32003 "out of gas: gas required exceeds: N", unlike a revert's -32003 ("revert: OutOfFunds",
 // above), which the shared classifier already reads as the node's answer through its "revert" text check.
-describe("outOfGasIsNodeAnswer", () => {
+describe("arcOutOfGasIsNodeAnswer", () => {
   const rpcErr = (code: number, message: string) => new RpcRequestError({ body: {}, url: "https://x.test", error: { code, message } });
 
   it("reads Arc's out-of-gas answer as the node's", () => {
-    expect(outOfGasIsNodeAnswer(rpcErr(-32003, "out of gas: gas required exceeds: 21000000"))).toBe(true);
+    expect(arcOutOfGasIsNodeAnswer(rpcErr(-32003, "out of gas: gas required exceeds: 21000000"))).toBe(true);
   });
 
   it("leaves everything else to the shared rule: intrinsic gas too low, an unrelated -32003, a timeout, and junk", () => {
-    expect(outOfGasIsNodeAnswer(rpcErr(-32000, "intrinsic gas too low"))).toBe(false);
-    expect(outOfGasIsNodeAnswer(rpcErr(-32003, "revert: OutOfFunds"))).toBe(false);
-    expect(outOfGasIsNodeAnswer(new TimeoutError({ body: {}, url: "https://x.test" }))).toBe(false);
-    expect(outOfGasIsNodeAnswer(null)).toBe(false);
-    expect(outOfGasIsNodeAnswer("out of gas")).toBe(false);
+    expect(arcOutOfGasIsNodeAnswer(rpcErr(-32000, "intrinsic gas too low"))).toBe(false);
+    expect(arcOutOfGasIsNodeAnswer(rpcErr(-32003, "revert: OutOfFunds"))).toBe(false);
+    expect(arcOutOfGasIsNodeAnswer(new TimeoutError({ body: {}, url: "https://x.test" }))).toBe(false);
+    expect(arcOutOfGasIsNodeAnswer(null)).toBe(false);
+    expect(arcOutOfGasIsNodeAnswer("out of gas")).toBe(false);
   });
 });
 
@@ -451,7 +451,7 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
       tried.push(String(input));
       return String(input) === urls[0] ? respond() : result("0x10");
     });
-    return { tried, transport: rpcTransport(chain, { isNodeAnswer: outOfGasIsNodeAnswer })({ chain }) };
+    return { tried, transport: rpcTransport(chain, { isNodeAnswer: arcOutOfGasIsNodeAnswer })({ chain }) };
   }
 
   it("returns an out-of-gas answer after exactly one attempt, and cools nothing (review 2b)", async () => {
@@ -468,7 +468,7 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
       tried.push(String(input));
       return String(input) === urls[0] ? rpcError(-32000, "intrinsic gas too low")() : result("0x10");
     });
-    const transport = rpcTransport(chain, { isNodeAnswer: outOfGasIsNodeAnswer, health })({ chain });
+    const transport = rpcTransport(chain, { isNodeAnswer: arcOutOfGasIsNodeAnswer, health })({ chain });
     await expect(blockNumber(transport)).resolves.toBe("0x10");
     expect(tried).toEqual([urls[0], urls[1]]);
     // The cooldown map is keyed by chain.rpcUrls.default.http's own (un-normalized) strings, not the trailing-slash
@@ -485,7 +485,7 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
         ? new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason)))
         : Promise.resolve(result("0x10"));
     });
-    const transport = rpcTransport(chain, { isNodeAnswer: outOfGasIsNodeAnswer })({ chain });
+    const transport = rpcTransport(chain, { isNodeAnswer: arcOutOfGasIsNodeAnswer })({ chain });
     const call = blockNumber(transport);
     await vi.advanceTimersByTimeAsync(3_000);
     await expect(call).resolves.toBe("0x10");
@@ -493,7 +493,7 @@ describe("rpcTransport with Revoke's isNodeAnswer override", () => {
   });
 });
 
-// The out-of-gas answer is the chain's (`InspectChain.outOfGas`): `outOfGasIsNodeAnswer` is Arc's, and
+// The out-of-gas answer is the chain's (`InspectChain.outOfGas`): `arcOutOfGasIsNodeAnswer` is Arc's, and
 // `outOfGasIsNodeAnswerFor` takes any chain's shapes.
 describe("outOfGasIsNodeAnswerFor: the chain's own out-of-gas shapes", () => {
   const rpcErr = (code: number, message: string) => new RpcRequestError({ body: {}, url: "https://x.test", error: { code, message } });
@@ -507,12 +507,12 @@ describe("outOfGasIsNodeAnswerFor: the chain's own out-of-gas shapes", () => {
     "out of gas",
   ];
 
-  it("with Arc's registry entry, answers exactly as outOfGasIsNodeAnswer does", () => {
+  it("with Arc's registry entry, answers exactly as arcOutOfGasIsNodeAnswer does", () => {
     for (const network of ["mainnet", "testnet"] as const) {
       const arc = outOfGasIsNodeAnswerFor(arcInspectChain(network));
-      expect(cases.map(arc), network).toEqual(cases.map(outOfGasIsNodeAnswer));
+      expect(cases.map(arc), network).toEqual(cases.map(arcOutOfGasIsNodeAnswer));
     }
-    expect(cases.map(outOfGasIsNodeAnswer)).toEqual([true, false, false, false, false, false, false]);
+    expect(cases.map(arcOutOfGasIsNodeAnswer)).toEqual([true, false, false, false, false, false, false]);
   });
 
   it("reads another chain's shape as the node's answer, and Arc's -32003 not at all, when that chain doesn't give it", () => {

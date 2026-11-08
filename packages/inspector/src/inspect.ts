@@ -38,17 +38,36 @@ function errorCode(e: unknown): number | string | undefined {
   return undefined;
 }
 
+/** The most stack frames logged for a check that failed. */
+const MAX_FRAMES = 12;
+
+/**
+ * Where an error was thrown: its stack's "    at …" lines (code locations), at most `MAX_FRAMES`, and nothing of its
+ * message. A stack starts with the error's name and message, which can run over several lines and hold a URL, so all of it
+ * up to the end of the message is dropped before the frame lines are picked out; when the message can't be found in the
+ * stack (it was changed after the error was made), nothing is logged rather than risk a line of it. Empty without a stack.
+ */
+function stackFrames(e: unknown): string {
+  if (!(e instanceof Error) || typeof e.stack !== "string") return "";
+  const at = e.message ? e.stack.indexOf(e.message) : 0;
+  if (at < 0) return "";
+  const rest = e.message ? e.stack.slice(at + e.message.length) : e.stack;
+  return rest.split("\n").filter((line) => /^\s+at \S/.test(line)).slice(0, MAX_FRAMES).join("\n");
+}
+
 /**
  * A check that throws becomes an "unknown" finding; one bad RPC call never sinks the report. Operators get the error's
- * name and its code (`errorCode`), as the site's routes log theirs. Neither the report nor the log ever gets its message,
- * which could leak an internal URL, or an RPC key in one, to whoever reads the finding or the logs.
+ * name, its code (`errorCode`), as the site's routes log theirs, and where it was thrown (`stackFrames`), so a bug in a
+ * check can be found. Neither the report nor the log ever gets its message, which could leak an internal URL, or an RPC
+ * key in one, to whoever reads the finding or the logs.
  */
 async function guard(id: CheckId, run: () => Finding | Promise<Finding>): Promise<Finding> {
   try {
     return await run();
   } catch (e) {
     const code = errorCode(e);
-    console.error(`inspector: check "${id}" failed`, e instanceof Error ? e.name : "unknown", ...(code === undefined ? [] : [code]));
+    const frames = stackFrames(e);
+    console.error(`inspector: check "${id}" failed`, e instanceof Error ? e.name : "unknown", ...(code === undefined ? [] : [code]), ...(frames ? [frames] : []));
     return { id, status: "unknown", title: "This check couldn't run", detail: "This check couldn't run — the network didn't answer.", evidenceUrl: null, fixAppId: null };
   }
 }

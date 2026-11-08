@@ -26,8 +26,8 @@ export type RpcTransportOptions = {
   /**
    * An additional "the node answered, not the endpoint failing" rule, checked alongside the shared one
    * (rpc-errors.ts) but never in place of it. Opt-in and undefined by default: the server's clients supply one
-   * (`outOfGasIsNodeAnswerFor` or `outOfGasIsNodeAnswer`, below; see server-rpc.ts), since an out-of-gas answer isn't the
-   * right call for every reader of the chain.
+   * (`outOfGasIsNodeAnswerFor`, or `arcOutOfGasIsNodeAnswer`, below; see server-rpc.ts), since an out-of-gas answer isn't
+   * the right call for every reader of the chain.
    */
   isNodeAnswer?: (e: unknown) => boolean;
 };
@@ -116,5 +116,8 @@ export function outOfGasIsNodeAnswerFor(chain: { outOfGas: readonly OutOfGasShap
   return (e) => outOfGasLink(e, shapes);
 }
 
-/** Arc's (`outOfGasIsNodeAnswerFor` with Arc's registry entry): what the site's Arc-only clients use (Revoke, sign-in, Watchdog). */
-export const outOfGasIsNodeAnswer: (e: unknown) => boolean = outOfGasIsNodeAnswerFor(arcInspectChain("mainnet"));
+/**
+ * Arc's rule, on both networks (`outOfGasIsNodeAnswerFor` with Arc's registry entry): what the site's Arc-only clients use
+ * (Revoke, sign-in, Watchdog). An inspection passes its own chain's to `outOfGasIsNodeAnswerFor` instead.
+ */
+export const arcOutOfGasIsNodeAnswer: (e: unknown) => boolean = outOfGasIsNodeAnswerFor(arcInspectChain("mainnet"));

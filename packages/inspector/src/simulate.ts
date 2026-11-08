@@ -1,5 +1,5 @@
 import { decodeFunctionResult, encodeAbiParameters, encodeFunctionData, getAddress, keccak256, numberToHex } from "viem";
-import { tradeSimulatorAbi, tradeSimulatorRuntime, type Address, type DexConfig, type QuoteToken, type TradeQuote } from "@arcos/chain";
+import { tradeSimulatorAbi, tradeSimulatorRuntime, type Address, type DexConfig, type NativeQuote, type TradeQuote } from "@arcos/chain";
 import { NATIVE } from "./v4";
 import { CallReverted, type ChainReader, type Pool, type PoolKey, type PoolScan, type StateOverride } from "./types";
 
@@ -90,9 +90,10 @@ const lower = (a: string) => a.toLowerCase();
 const NO_KEY: PoolKey = { currency0: NATIVE, currency1: NATIVE, fee: 0, tickSpacing: 0, hooks: NATIVE };
 
 /**
- * What the round trip buys with, from the chain's config (`tradeSetup`). `token` is the ERC-20 it buys with, USDC, whose
- * amounts here are all in 6 decimals, and `symbol` its symbol among the DEX config's quote tokens: a pool that isn't v4
- * names its quote by symbol (`Pool.quote`). `funding` is how the call's state override gives the throwaway account S some:
+ * What the round trip buys with, from the chain's config (`tradeSetup`). `token` is the ERC-20 it buys with, USDC, which has
+ * `decimals` decimals (the check's own amounts are all in 6, and converted), and `symbol` its symbol among the DEX config's
+ * quote tokens: a pool that isn't v4 names its quote by symbol (`Pool.quote`). `funding` is how the call's state override
+ * gives the throwaway account S some:
  * - `native`: the token's balance IS the native balance (on Arc, the USDC ERC-20 at 0x3600 shows the native USDC balance in
  *   6 decimals), so S's native balance is set, in the native currency's `decimals`. A v4 pool against the native currency
  *   (`address`) trades the same asset, so it is traded too, in those decimals.
@@ -100,22 +101,26 @@ const NO_KEY: PoolKey = { currency0: NATIVE, currency1: NATIVE, fee: 0, tickSpac
  */
 export type TradeSetup = {
   token: Address;
+  decimals: number;
   symbol: string | null;
   funding: { kind: "native"; address: Address; decimals: number } | { kind: "slot"; slot: number };
 };
 
 /**
  * The trade setup the chain's config gives (`InspectInput.tradeQuote`, `nativeQuote` and `dex`), or null when no trade can be
- * simulated: there is no trade quote, or it is funded through the native balance (`balanceSlot: null`) and the native
- * currency isn't configured.
+ * simulated: there is no trade quote, or it is funded through the native balance (`balanceSlot: null`) and isn't the native
+ * quote's ERC-20 view (`nativeQuote.erc20View`), whose balances alone are the native ones.
  */
-export function tradeSetup(input: { tradeQuote: TradeQuote | null; nativeQuote: QuoteToken | null; dex: DexConfig | null }): TradeSetup | null {
+export function tradeSetup(input: { tradeQuote: TradeQuote | null; nativeQuote: NativeQuote | null; dex: DexConfig | null }): TradeSetup | null {
   const quote = input.tradeQuote;
   if (!quote) return null;
   const symbol = input.dex?.quoteTokens.find((q) => lower(q.address) === lower(quote.token))?.symbol ?? null;
-  if (quote.balanceSlot !== null) return { token: quote.token, symbol, funding: { kind: "slot", slot: quote.balanceSlot } };
+  const base = { token: quote.token, decimals: quote.decimals, symbol };
+  if (quote.balanceSlot !== null) return { ...base, funding: { kind: "slot", slot: quote.balanceSlot } };
   const native = input.nativeQuote;
-  return native ? { token: quote.token, symbol, funding: { kind: "native", address: native.address, decimals: native.decimals } } : null;
+  return native?.erc20View && lower(native.erc20View) === lower(quote.token)
+    ? { ...base, funding: { kind: "native", address: native.address, decimals: native.decimals } }
+    : null;
 }
 
 /**
@@ -305,8 +310,8 @@ export function roundTripFee(pool: Pool): bigint | null {
 
 /**
  * What the simulator said, in the units of the currency the pool trades for `spent` and `received` (`TradeAttempt.decimals`:
- * 6 for the USDC ERC-20, the native currency's own for a v4 pool against it, 18 for Arc's native USDC). `paidOut` is what the
- * pool paid out on the buy, in token units, next to `bought`, what arrived.
+ * the trade token's own, 6 for USDC; the native currency's for a v4 pool against it, 18 for Arc's native USDC). `paidOut`
+ * is what the pool paid out on the buy, in token units, next to `bought`, what arrived.
  */
 export type SimulatorResult = { status: number; spent: bigint; paidOut: bigint; bought: bigint; sold: bigint; received: bigint };
 
@@ -431,9 +436,12 @@ const fromSixDecimals = (units: bigint, decimals: number): bigint =>
  * `maxAmount` is in 6 decimals.
  * - `native`: one balance, two views. S's native balance is `maxAmount` in the native currency's decimals plus the prepaid
  *   gas: on Arc, `maxAmount` USDC in the ERC-20's 6 decimals and in native's 18 alike. The call pays the node's gas price.
- * - `slot`: S's native balance only pays for the gas, with room for twice what the node's price prepays; its token balance
- *   is written into the `balanceOf` mapping at keccak256(abi.encode(S, slot)). The call pays the node's price and a quarter,
- *   so a node that holds it against the block's base fee (EIP-1559) doesn't refuse the call as underpriced.
+ * - `slot`: S's native balance only pays for the gas, with room for twice what the node's price prepays; its token balance,
+ *   `maxAmount` in the token's own decimals, is written into the `balanceOf` mapping at keccak256(abi.encode(S, slot)). That
+ *   is where Solidity keeps a mapping's entry; Vyper hashes the slot and the key the other way round, so a Vyper token needs
+ *   another formula. The call pays the node's price and a quarter, so a node that holds it against the block's base fee
+ *   (EIP-1559) doesn't refuse the call as underpriced. No chain in the registry funds this way yet: this path is only tested
+ *   against a fake chain, and a chain that names a slot needs a live check that `balanceOf(S)` reads it under the override.
  */
 function funding(setup: TradeSetup, simulator: Address, maxAmount: bigint, gasPrice: bigint): { gasPrice: bigint; simulator: StateOverride; token: StateOverride[] } {
   const code = tradeSimulatorRuntime;
@@ -444,7 +452,7 @@ function funding(setup: TradeSetup, simulator: Address, maxAmount: bigint, gasPr
   return {
     gasPrice: (gasPrice * 5n) / 4n,
     simulator: { address: simulator, code, balance: TRADE_GAS * gasPrice * 2n },
-    token: [{ address: setup.token, stateDiff: [{ slot, value: numberToHex(maxAmount, { size: 32 }) }] }],
+    token: [{ address: setup.token, stateDiff: [{ slot, value: numberToHex(fromSixDecimals(maxAmount, setup.decimals), { size: 32 }) }] }],
   };
 }
 
@@ -459,8 +467,8 @@ async function roundTrip(reader: ChainReader, token: Address, setup: TradeSetup,
   const limit = unitBuyLimit(pool.depth);
   const maxAmount = pool.version === "v2" || limit < amount ? amount : limit;
   const usdc = usdcOf(pool, token, setup)!;
-  // A v4 pool against the native currency is paid in the native currency's decimals; everything else in the token's 6.
-  const decimals = setup.funding.kind === "native" && lower(usdc) === lower(setup.funding.address) ? setup.funding.decimals : 6;
+  // A v4 pool against the native currency is paid in the native currency's decimals; everything else in the token's own.
+  const decimals = setup.funding.kind === "native" && lower(usdc) === lower(setup.funding.address) ? setup.funding.decimals : setup.decimals;
   const { simulator, router } = simulatorAddresses();
   const trade = {
     kind: KIND[pool.version],

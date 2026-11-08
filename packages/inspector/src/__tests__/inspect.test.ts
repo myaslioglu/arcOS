@@ -207,6 +207,33 @@ describe("inspect", () => {
     expect(find(r, "lp-lock")).toMatchObject({ status: "pass", fixAppId: null });
   });
 
+  it("reads lp-lock as unknown, never a fail, when the chain's lock contracts aren't vetted and LP isn't burned", async () => {
+    const reads = {
+      [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
+      [`${V3}.getPool(${TOKEN},${USDC},3000)`]: ZERO,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
+      [`${PAIR}.totalSupply()`]: 100n,
+      [`${PAIR}.balanceOf(${ZERO})`]: 0n,
+      [`${PAIR}.balanceOf(${DEAD})`]: 10n,
+    };
+    const unvetted = (burned: bigint) =>
+      inspect({
+        ...arcFields("testnet"), lockersVetted: false,
+        address: TOKEN, network: "testnet", reader: reader({ code: { [TOKEN]: PLAIN }, reads: { ...reads, [`${PAIR}.balanceOf(${DEAD})`]: burned } }),
+        explorer: explorer(), dex, knownLockers: [], explorerBase: "https://explorer.test",
+      });
+    expect(find(await unvetted(10n), "lp-lock")).toMatchObject({
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: "90% of the v2 LP supply isn't burned or in a known lock contract, and the lock contracts on Arc Testnet aren't recognized yet, so whether it can be withdrawn can't be told.",
+      fixAppId: null,
+    });
+    // Burned is burned wherever lock contracts are known or not.
+    expect(find(await unvetted(96n), "lp-lock")).toMatchObject({ status: "pass", title: "Liquidity is burned or locked" });
+    // Arc's are vetted: the same pair fails there, as it always has.
+    expect(find(await run({ code: { [TOKEN]: PLAIN }, reads }, explorer(), dex), "lp-lock")).toMatchObject({ status: "fail", title: "Liquidity isn't locked" });
+  });
+
   it("fails lp-lock with a Vault fix when v2 LP sits in wallets", async () => {
     const reads = {
       [`${V2}.getPair(${TOKEN},${USDC})`]: PAIR,
@@ -421,7 +448,7 @@ describe("inspect", () => {
     expect(JSON.stringify(r)).not.toContain("rpc.internal.example.com");
     expect(find(r, "proxy")).toMatchObject({ status: "unknown", detail: "This check couldn't run — the network didn't answer." });
     // The log names the check and the error's name, never its message (see the next test).
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proxy"), "Error");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proxy"), "Error", expect.stringMatching(/^\s+at /));
     expect(spy.mock.calls.flat().map(String).join(" ")).not.toContain("rpc.internal.example.com");
     spy.mockRestore();
   });
@@ -435,7 +462,7 @@ describe("inspect", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await run({ code: { [TOKEN]: PLAIN }, storageError: wrapped });
     expect(find(r, "proxy").status).toBe("unknown");
-    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "CallExecutionError", 401]]);
+    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "CallExecutionError", 401, expect.stringMatching(/^\s+at /)]]);
     expect(JSON.stringify(spy.mock.calls)).not.toContain("SECRETKEY123");
     expect(JSON.stringify(r)).not.toContain("SECRETKEY123");
 
@@ -443,10 +470,39 @@ describe("inspect", () => {
     spy.mockClear();
     const rpc = Object.assign(new Error(`upstream ${KEYED}`), { code: -32603 });
     await run({ code: { [TOKEN]: PLAIN }, storageError: Object.assign(new Error(KEYED, { cause: rpc }), { name: "RpcRequestError" }) });
-    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "RpcRequestError", -32603]]);
+    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "RpcRequestError", -32603, expect.stringMatching(/^\s+at /)]]);
     spy.mockClear();
     await run({ code: { [TOKEN]: PLAIN }, storageError: KEYED as unknown as Error });
     expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "unknown"]]);
+    spy.mockRestore();
+  });
+
+  it("logs where a failed check's error was thrown: its stack's code locations, never a line of its message", async () => {
+    // A message over several lines, one of them shaped like a stack frame and holding a keyed URL.
+    const KEYED = "https://eth-mainnet.example.com/v2/SECRETKEY123";
+    function brokenStorageRead(): Error {
+      return new TypeError(`Cannot read properties of undefined\n    at ${KEYED}\nURL: ${KEYED}`);
+    }
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await run({ code: { [TOKEN]: PLAIN }, storageError: brokenStorageRead() });
+    expect(spy.mock.calls).toHaveLength(1);
+    const [label, name, frames] = spy.mock.calls[0]! as [string, string, string];
+    expect([label, name]).toEqual(['inspector: check "proxy" failed', "TypeError"]);
+    const lines = frames.split("\n");
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.length).toBeLessThanOrEqual(12);
+    for (const line of lines) expect(line).toMatch(/^\s+at \S/);
+    expect(lines[0]).toContain("brokenStorageRead");
+    expect(frames).toContain("inspect.test.ts");
+    expect(JSON.stringify(spy.mock.calls)).not.toContain("SECRETKEY123");
+    expect(JSON.stringify(spy.mock.calls)).not.toContain("Cannot read properties");
+
+    // A stack that doesn't hold the message (one set by hand, or by code that rewrote it) can't be told apart from it, so no
+    // line of it is logged.
+    spy.mockClear();
+    const rewritten = Object.assign(new Error("short"), { stack: `Error: a longer text\n    at ${KEYED}\n    at brokenStorageRead (inspect.test.ts:1:1)` });
+    await run({ code: { [TOKEN]: PLAIN }, storageError: rewritten });
+    expect(spy.mock.calls).toEqual([['inspector: check "proxy" failed', "Error"]]);
     spy.mockRestore();
   });
 

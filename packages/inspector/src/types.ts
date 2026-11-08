@@ -1,5 +1,5 @@
 import type { Abi } from "viem";
-import type { Address, DexConfig, InspectChainKey, NetworkId, PrevrandaoCopy, QuoteToken, TradeQuote } from "@arcos/chain";
+import type { Address, DexConfig, InspectChainKey, NativeQuote, NetworkId, PrevrandaoCopy, TradeQuote } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import type { ExplorerSource } from "./explorer";
 
@@ -180,23 +180,25 @@ export type InspectInput = {
    * templates, whose source is published with the factory's verified source. */
   arcosTokenFactory?: Address | null;
   /**
-   * Uniswap v4's native currency (`address(0)`) as a quote currency, with its symbol and decimals: on Arc, USDC with 18
-   * decimals. null: v4 pools against the native currency aren't looked for.
+   * Uniswap v4's native currency (`address(0)`) as a quote currency, with its symbol and decimals and the ERC-20 that shows
+   * the same balances (`erc20View`): on Arc, USDC with 18 decimals, viewed by the USDC ERC-20 at 0x3600. null: v4 pools
+   * against the native currency aren't looked for.
    */
-  nativeQuote: QuoteToken | null;
+  nativeQuote: NativeQuote | null;
   /**
    * What the trade check buys with, and how the simulation funds the throwaway account with it: on Arc, the USDC ERC-20 at
-   * 0x3600, whose balance is the native balance (`balanceSlot: null`). null: no trade is simulated.
+   * 0x3600 (6 decimals), the native quote's `erc20View`, funded through the native balance (`balanceSlot: null`). null: no
+   * trade is simulated.
    */
   tradeQuote: TradeQuote | null;
   /**
-   * `knownLockers` is a vetted list of the chain's lock contracts, so LP held anywhere else can be called unlocked. Arc's
-   * is. The lp-lock check doesn't read this yet: it treats the list as vetted, which only Arc's is so far.
+   * `knownLockers` is a vetted list of the chain's lock contracts, so LP held anywhere else can be called unlocked (Arc's
+   * is). Where it isn't, lp-lock never fails: LP that isn't burned is unknown.
    */
   lockersVetted: boolean;
   /**
    * The kinds of pool on the chain that discovery can't see, by name. Arc has none. The liquidity checks don't read this
-   * yet: they treat discovery as complete, which only Arc's is so far.
+   * yet: they treat discovery as complete, so no registry entry may name any until they do (inspect-chains.test.ts).
    */
   unscanned: string[];
   /** The prevrandao check's warning on this chain. */

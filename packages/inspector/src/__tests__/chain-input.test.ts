@@ -12,7 +12,8 @@ describe("chainInput", () => {
       expect(input.arcosTokenFactory, network).toBe(ARCOS[network]!.tokenFactory);
       expect(input.chain, network).toEqual({ key: "arc", name: CHAINS[network].name, chainId: CHAINS[network].id });
       expect(input.nativeQuote, network).toMatchObject({ address: "0x0000000000000000000000000000000000000000", symbol: "USDC", decimals: 18 });
-      expect(input.tradeQuote, network).toEqual({ token: USDC, balanceSlot: null });
+      expect(input.tradeQuote, network).toEqual({ token: USDC, decimals: 6, balanceSlot: null });
+      expect(input.nativeQuote?.erc20View, network).toBe(USDC);
       expect(input.lockersVetted, network).toBe(true);
       expect(input.unscanned, network).toEqual([]);
       expect(input.prevrandao.warnTitle, network).toBe("Uses PREVRANDAO, which is always 0 on Arc");

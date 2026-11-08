@@ -1,5 +1,6 @@
 import type { Chain } from "viem";
 import { ARCOS, DEX, KNOWN_LOCKERS, USDC, type Address, type DexConfig } from "./addresses";
+import { USDC_DECIMALS } from "./amounts";
 import { CHAINS, type NetworkId } from "./chains";
 
 /**
@@ -20,12 +21,19 @@ export type QuoteUsd = "stable" | { feed: Address; maxAgeS: number };
 export type QuoteToken = { address: Address; symbol: string; decimals: number; usd: QuoteUsd };
 
 /**
- * What the trade check buys the token with, and how the simulation's state override gives the throwaway account S some of
- * it. `balanceSlot` is the storage slot of the token's `balanceOf` mapping, which the override writes S's balance into.
- * `null` means the token's balance IS the native balance (Arc's USDC at 0x3600 is a view of it), so the override sets
- * S's native balance instead.
+ * Uniswap v4's native currency (`address(0)`) as a quote currency. `erc20View` is the ERC-20 whose balances ARE the native
+ * balances, when the chain has one (Arc's USDC at 0x3600, which shows them in 6 decimals): the same asset, so inspecting it
+ * leaves the native currency out as a quote too, and a trade quote on it is funded through the native balance.
  */
-export type TradeQuote = { token: Address; balanceSlot: number | null };
+export type NativeQuote = QuoteToken & { erc20View: Address | null };
+
+/**
+ * What the trade check buys the token with (an ERC-20 with `decimals` decimals), and how the simulation's state override
+ * gives the throwaway account S some of it. `balanceSlot` is the storage slot of the token's `balanceOf` mapping, which the
+ * override writes S's balance into. `null` means the token's balance IS the native balance, so the override sets S's
+ * native balance instead: the token must then be the native quote's `erc20View` (Arc's USDC), or no trade is simulated.
+ */
+export type TradeQuote = { token: Address; decimals: number; balanceSlot: number | null };
 
 /** One way a node answers an eth_call that ran out of its own gas: a JSON-RPC error code and what its message starts with. */
 export type OutOfGasShape = { code: number; text: RegExp };
@@ -48,7 +56,7 @@ export type InspectChain = {
   /** The pools Inspector reads (see `DexConfig`); null when it reads none here. */
   dex: DexConfig | null;
   /** Uniswap v4's native currency, `address(0)`, as a quote currency; null when v4 pools against it aren't read. */
-  nativeQuote: QuoteToken | null;
+  nativeQuote: NativeQuote | null;
   /** null: no trade is simulated on this chain. */
   tradeQuote: TradeQuote | null;
   /** Lock contracts whose holdings of a v2 LP token count as locked. */
@@ -98,8 +106,8 @@ function arc(network: NetworkId): InspectChain {
     explorer: { url: explorer?.url ?? "", publicApiUrl: explorer?.apiUrl ?? null },
     otherExplorer: null,
     dex: DEX[network],
-    nativeQuote: { address: NATIVE_CURRENCY, symbol: viem.nativeCurrency.symbol, decimals: viem.nativeCurrency.decimals, usd: "stable" },
-    tradeQuote: { token: USDC, balanceSlot: null },
+    nativeQuote: { address: NATIVE_CURRENCY, symbol: viem.nativeCurrency.symbol, decimals: viem.nativeCurrency.decimals, usd: "stable", erc20View: USDC },
+    tradeQuote: { token: USDC, decimals: USDC_DECIMALS, balanceSlot: null },
     knownLockers: KNOWN_LOCKERS[network],
     lockersVetted: true,
     unscanned: [],

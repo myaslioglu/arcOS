@@ -1,5 +1,5 @@
 import { BaseError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
-import { arcInspectChain, type OutOfGasShape } from "@arcos/chain";
+import type { OutOfGasShape } from "@arcos/chain";
 import { isOutOfGas, isRevert, revertPayload } from "./rpc-errors";
 import { CallReverted, type ChainReader } from "./types";
 
@@ -28,10 +28,10 @@ const mapCappedReadError =
   };
 
 /**
- * The engine's reader over a viem client. `chain.outOfGas` is how the chain's nodes say a call ran out of the gas it set
- * (`InspectChain.outOfGas`); an inspection passes its chain's. Without it, Arc's: the site's other readers are all on Arc.
+ * The engine's reader over a viem client for `chain`: `chain.outOfGas` is how that chain's nodes say a call ran out of the gas
+ * it set (`InspectChain.outOfGas`). There is no default, so a reader can't silently take another chain's answers for its own.
  */
-export function viemReader(client: PublicClient, chain: { outOfGas: readonly OutOfGasShape[] } = arcInspectChain("mainnet")): ChainReader {
+export function viemReader(client: PublicClient, chain: { outOfGas: readonly OutOfGasShape[] }): ChainReader {
   const capped = mapCappedReadError(chain.outOfGas);
   return {
     getCode: async (address) => {

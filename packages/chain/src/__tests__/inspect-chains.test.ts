@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getAddress, isAddress } from "viem";
 import { ARCOS, DEX, KNOWN_LOCKERS, USDC, type Address } from "../addresses";
+import { USDC_DECIMALS } from "../amounts";
 import { checkArcosAddresses } from "../addressSanity";
 import { CHAINS, explorerUrl, type NetworkId } from "../chains";
 import { INSPECT_CHAINS, arcInspectChain, chainExplorerUrl, inspectChain, type InspectChain } from "../inspect-chains";
@@ -19,7 +20,7 @@ const addressesOf = (c: InspectChain): Address[] => [
         ...(c.dex.aero ? [c.dex.aero.clFactory, c.dex.aero.positionManager] : []),
       ]
     : []),
-  ...(c.nativeQuote ? [c.nativeQuote.address] : []),
+  ...(c.nativeQuote ? [c.nativeQuote.address, ...(c.nativeQuote.erc20View ? [c.nativeQuote.erc20View] : [])] : []),
   ...(c.tradeQuote ? [c.tradeQuote.token] : []),
   ...c.knownLockers,
   ...(c.arcosTokenFactory ? [c.arcosTokenFactory] : []),
@@ -44,7 +45,7 @@ describe("the Inspector's chain registry", () => {
     for (const [n, c] of all) {
       for (const a of addressesOf(c)) expect(isAddress(a, { strict: false }), `${n} ${c.key} ${a}`).toBe(true);
       // The DEX config, the lockers and ARCOS are addresses.ts's (and checked there); the quotes are the registry's own.
-      for (const a of [c.nativeQuote?.address, c.tradeQuote?.token].filter((x): x is Address => x !== undefined)) {
+      for (const a of [c.nativeQuote?.address, c.nativeQuote?.erc20View, c.tradeQuote?.token].filter((x): x is Address => typeof x === "string")) {
         expect(getAddress(a), `${n} ${c.key}`).toBe(a);
       }
     }
@@ -71,12 +72,10 @@ describe("the Inspector's chain registry", () => {
   it("gives Arc what the engine used to assume: native USDC with 18 decimals, and USDC at 0x3600 funded by the native balance", () => {
     for (const n of NETWORKS) {
       const arc = arcInspectChain(n);
-      expect(arc.nativeQuote, n).toEqual({ address: "0x0000000000000000000000000000000000000000", symbol: "USDC", decimals: 18, usd: "stable" });
+      expect(arc.nativeQuote, n).toEqual({ address: "0x0000000000000000000000000000000000000000", symbol: "USDC", decimals: 18, usd: "stable", erc20View: USDC });
       expect(arc.nativeQuote, n).toMatchObject({ symbol: CHAINS[n].nativeCurrency.symbol, decimals: CHAINS[n].nativeCurrency.decimals });
-      expect(arc.tradeQuote, n).toEqual({ token: USDC, balanceSlot: null });
-      expect(arc.tradeQuote?.token).toBe("0x3600000000000000000000000000000000000000");
-      // The trade quote is one of the DEX config's quote tokens, so pools against it are found.
-      expect(arc.dex?.quoteTokens.find((q) => q.address === arc.tradeQuote?.token)?.symbol, n).toBe("USDC");
+      expect(arc.tradeQuote, n).toEqual({ token: USDC, decimals: USDC_DECIMALS, balanceSlot: null });
+      expect(arc.tradeQuote).toMatchObject({ token: "0x3600000000000000000000000000000000000000", decimals: 6 });
       expect(arc.lockersVetted, n).toBe(true);
       expect(arc.unscanned, n).toEqual([]);
       expect(arc.slug, n).toBe("arc");
@@ -93,6 +92,21 @@ describe("the Inspector's chain registry", () => {
     }
   });
 
+  it("trades, where it trades, against one of the chain's DEX quote tokens, funded through the native balance only by its ERC-20 view", () => {
+    for (const [n, c] of all) {
+      if (!c.tradeQuote) continue;
+      // Pools against the trade quote are found, and named by its symbol, only if it is one of the DEX config's quotes.
+      expect(c.dex?.quoteTokens.some((q) => q.address === c.tradeQuote!.token), `${n} ${c.key}`).toBe(true);
+      if (c.tradeQuote.balanceSlot === null) expect(c.nativeQuote?.erc20View, `${n} ${c.key}`).toBe(c.tradeQuote.token);
+    }
+  });
+
+  it("names no pool kind as unscanned until a check reads `unscanned`", () => {
+    // The liquidity, lp-lock and trade checks treat discovery as complete: "no pool" and "thin" would be claims about pools
+    // nobody looked for. A chain may list what it can't see only once they read the list (InspectInput.unscanned).
+    for (const [n, c] of all) expect(c.unscanned, `${n} ${c.key}`).toEqual([]);
+  });
+
   it("knows Arc's out-of-gas answer, -32003 \"out of gas…\", and nothing else", () => {
     for (const n of NETWORKS) {
       const shapes = arcInspectChain(n).outOfGas;
@@ -102,8 +116,13 @@ describe("the Inspector's chain registry", () => {
       expect(matches(-32003, "revert: OutOfFunds"), n).toBe(false);
       expect(matches(-32000, "out of gas"), n).toBe(false);
       expect(matches(-32000, "intrinsic gas too low"), n).toBe(false);
-      // Not a global regex: test() keeps no state between calls.
-      for (const s of shapes) expect(s.text.global, n).toBe(false);
+    }
+  });
+
+  it("gives every chain out-of-gas patterns that keep no state: neither global nor sticky", () => {
+    // A global or sticky RegExp's test() moves its lastIndex, so the same answer could match once and not the next time.
+    for (const [n, c] of all) {
+      for (const s of c.outOfGas) expect([s.text.global, s.text.sticky], `${n} ${c.key} ${s.text}`).toEqual([false, false]);
     }
   });
 
