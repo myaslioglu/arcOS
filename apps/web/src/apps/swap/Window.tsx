@@ -11,6 +11,8 @@ import { ConnectGate } from "@/components/ConnectGate";
 import { trackEvent } from "@/lib/analytics";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, SWAP_TOKENS, SWAP_TOKEN_DECIMALS, adapterFor, feePercentLabel, feeRecipient } from "@/lib/appkit";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
+import { notifyBalanceChanged } from "@/lib/balance-refresh";
+import { displayAmount } from "@/lib/display-amount";
 import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
 import { useArcTokenBalance } from "@/lib/useArcTokenBalance";
 import { useWaitedTooLong } from "@/lib/wallet-wait";
@@ -101,6 +103,8 @@ function Form() {
       // GENERIC_TRANSACTION_ERROR does elsewhere: a swap whose promise rejected AFTER it was actually
       // broadcast (a lost wallet response, a timeout) must not read as "nothing happened".
       session.fail(classifySwapFailure(err), runId);
+    } finally {
+      notifyBalanceChanged();
     }
   };
 
@@ -202,15 +206,15 @@ function Form() {
           {estimateError && <p className="text-accent-3-text">{estimateError}</p>}
           {estimateQuery.data && (
             <>
-              <p>
-                Minimum received: {estimateQuery.data.stopLimit.amount} {estimateQuery.data.stopLimit.token}
+              <p title={`${estimateQuery.data.stopLimit.amount} ${estimateQuery.data.stopLimit.token}`}>
+                Minimum received: {displayAmount(estimateQuery.data.stopLimit.amount)} {estimateQuery.data.stopLimit.token}
               </p>
               {estimateQuery.data.fees?.map((fee, i) => {
                 const isPlatformFee = fee.type === "developer";
                 const label = isPlatformFee ? PLATFORM_FEE_LABEL : (FEE_LABEL[fee.type] ?? fee.type);
-                const amountText = fee.amount === null ? "unknown" : `${fee.amount} ${fee.token}`;
+                const amountText = fee.amount === null ? "unknown" : `${displayAmount(fee.amount)} ${fee.token}`;
                 return (
-                  <p key={i}>
+                  <p key={i} title={fee.amount === null ? undefined : `${fee.amount} ${fee.token}`}>
                     {label}: {amountText}
                   </p>
                 );

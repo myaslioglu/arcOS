@@ -12,6 +12,8 @@ import { trackEvent } from "@/lib/analytics";
 import { amountIssue, normalizedAmount } from "@/lib/amount";
 import { ARC_CHAIN_NAME, SWAP_FEE_BPS, adapterFor, bridgeFee, feePercentLabel, feeRecipient } from "@/lib/appkit";
 import { ARC_GAS_RESERVE_UNITS, overBalanceIssue } from "@/lib/balance";
+import { notifyBalanceChanged } from "@/lib/balance-refresh";
+import { displayAmount } from "@/lib/display-amount";
 import { bridgeChainInfo, bridgeChainOptions, chainLabel, unsupportedBridgeChains, type ChainId } from "./chains";
 import {
   FINISH_ALREADY_DONE,
@@ -135,7 +137,7 @@ function Form() {
   // Shown to the user — "…" rather than "0" until there's a real amount to price: a fee of 0 reads
   // as "this bridge is free", not "nothing has been typed yet" (quoteTotal's own version of this bug
   // is fixed in apps/drop/useDrop.ts; this is Bridge's).
-  const feeText = normalized ? `${fee} USDC` : "…";
+  const feeText = normalized ? `${displayAmount(fee)} USDC` : "…";
 
   /** Runs `run()` through the shared one-at-a-time session guard, from the initial submit or from a
    * Retry — both a fresh `kit.bridge()` call and `kit.retryBridge()` land here so they share exactly
@@ -175,6 +177,7 @@ function Form() {
       session.fail(classifyBridgeFailure(err, explorerCheckNote(chainLabel(bridgeSource)), failureSource(bridgeSource)));
     } finally {
       kit.off("bridge.burn", onBurn);
+      notifyBalanceChanged();
     }
   };
 
@@ -243,6 +246,8 @@ function Form() {
       notify("Transfer finished", "ok");
     } catch (err) {
       finishSession.fail(describeFinishFailure(err, destinationSource(destination ?? dest)));
+    } finally {
+      notifyBalanceChanged();
     }
   };
 
@@ -338,7 +343,7 @@ function Form() {
         />
 
         {recipient && (
-          <p className="mt-3 text-xs text-muted">
+          <p className="mt-3 text-xs text-muted" title={normalized ? `${fee} USDC` : undefined}>
             Fee {feeText} ({feePercentLabel(SWAP_FEE_BPS)}) · added on top
           </p>
         )}

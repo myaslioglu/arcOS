@@ -7,6 +7,7 @@ import { erc20Abi, parseEventLogs, type PublicClient } from "viem";
 import { ARCOS, FEE_KEYS, activeChain, activeNetwork, feeControllerAbi, multisendAbi, unitsToNative } from "@arcos/chain";
 import { describeContractError, UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
+import { notifyBalanceChanged } from "@/lib/balance-refresh";
 import { wagmiConfig } from "@/providers/wagmi";
 import { dropAssetDecimals, dropAssetTokenAddress, type DropAsset } from "./asset";
 import { dropBatchFee, dropTotalFee, feeChangeMessage, type DropFeeBasis } from "./dropFee";
@@ -229,6 +230,7 @@ export function useDrop() {
         };
 
         const result = await runDrop(rows, BATCH, { sendBatch });
+        notifyBalanceChanged();
         session.finish(result, formatDropList(result.remaining, token, decimals));
         return result;
       } catch (err) {
@@ -246,6 +248,7 @@ export function useDrop() {
           message: describeContractError(err),
         };
         session.finish(result, formatDropList(rows, token, decimals));
+        notifyBalanceChanged();
         throw err;
       }
     },

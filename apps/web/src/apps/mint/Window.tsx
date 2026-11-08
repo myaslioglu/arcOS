@@ -9,6 +9,8 @@ import { ConnectGate } from "@/components/ConnectGate";
 import { UserFacingError } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import { trackEvent } from "@/lib/analytics";
+import { notifyBalanceChanged } from "@/lib/balance-refresh";
+import { displayWei } from "@/lib/display-amount";
 import { classifyMintFailure, session } from "./session";
 import { amountEcho, validateMint, type MintForm } from "./validate";
 
@@ -132,6 +134,8 @@ function Form() {
       const outcome = classifyMintFailure(hash !== undefined, err);
       if (outcome.unconfirmed) session.unconfirmed(outcome.message, hash!);
       else session.fail(outcome.message, hash);
+    } finally {
+      notifyBalanceChanged();
     }
   };
 
@@ -239,8 +243,13 @@ function Form() {
       {sessionActive && (
         <p className="text-xs text-muted">{`Minting ${mintSession.symbol}… you can close this window — the mint continues.`}</p>
       )}
-      <button type="submit" disabled={sessionActive} className="rounded-md border border-border-2 px-3 py-2">
-        {sessionActive ? "Waiting for your wallet…" : `Create token · ${fee.data !== undefined ? formatUsdc(fee.data) : "…"} USDC`}
+      <button
+        type="submit"
+        disabled={sessionActive}
+        title={fee.data !== undefined ? `Fee ${formatUsdc(fee.data)} USDC` : undefined}
+        className="rounded-md border border-border-2 px-3 py-2"
+      >
+        {sessionActive ? "Waiting for your wallet…" : `Create token · ${fee.data !== undefined ? displayWei(fee.data) : "…"} USDC`}
       </button>
       {fee.isError && (
         <p className="text-xs text-accent-3-text">

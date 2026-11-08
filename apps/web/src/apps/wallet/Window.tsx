@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { useConnection, useBalance, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
+import { displayWei } from "@/lib/display-amount";
 import { useArcNetwork } from "@/lib/network";
 import { connectorLabel, isWalletConnect, visibleConnectors } from "@/providers/wagmi";
 import { ConnectError, SwitchError } from "./WalletErrors";
@@ -81,7 +82,7 @@ export default function WalletWindow() {
         <dt className="text-muted">Network</dt>
         <dd>{wrongNetwork ? "Another network" : chain.name}</dd>
         <dt className="text-muted">Balance</dt>
-        <dd>{balance ? `${formatUsdc(balance.value)} USDC` : "—"}</dd>
+        <dd title={balance ? `${formatUsdc(balance.value)} USDC` : undefined}>{balance ? `${displayWei(balance.value)} USDC` : "—"}</dd>
       </dl>
       <div className="mt-5 flex gap-2">
         {wrongNetwork && (

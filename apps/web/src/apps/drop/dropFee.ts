@@ -1,4 +1,5 @@
 import { formatUsdc } from "@arcos/chain";
+import { displayWei } from "@/lib/display-amount";
 
 /** The two raw fee inputs a quote (or a batch's re-read) was computed from — DROP_PER_RECIPIENT and
  * DROP_MIN, both native wei. Declared here (not in useDrop.ts) so `feeChangeMessage` below doesn't
@@ -50,7 +51,7 @@ export function feeChangeMessage(previous: DropFeeBasis, fresh: DropFeeBasis): s
  */
 export function dropFeeText(quote: { total: bigint; count: number } | "error" | null, rowCount: number, batches: number): string {
   if (quote && quote !== "error" && quote.count === rowCount && rowCount > 0) {
-    return `Fee ${formatUsdc(quote.total)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`;
+    return `Fee ${displayWei(quote.total)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`;
   }
   return rowCount > 0 ? "Reading the fee…" : "";
 }

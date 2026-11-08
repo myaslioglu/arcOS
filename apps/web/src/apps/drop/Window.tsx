@@ -10,6 +10,7 @@ import { ConnectGate } from "@/components/ConnectGate";
 import { describeContractError } from "@/lib/contract-error";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
+import { displayAmount } from "@/lib/display-amount";
 import { resolveDropAsset } from "./asset";
 import { canSend } from "./canSend";
 import { failedRowsText } from "./clipboard";
@@ -47,6 +48,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     return snap.status === "done" ? snap.remainingText : "";
   });
   const [busy, setBusy] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [fetchedQuote, setFetchedQuote] = useState<DropQuote | "error" | null>(null);
 
   const { over, props: dropProps } = useDropTarget(drop.acceptsDrop, (item) => open("drop", dropParams(item)));
@@ -144,6 +146,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     [deferredText, decimals],
   );
   const totalDisplay = decimals === null ? "" : asset.kind === "token" ? formatUnits(total, asset.decimals) : formatUsdc(unitsToNative(total));
+  const totalShort = displayAmount(totalDisplay);
   const batches = Math.ceil(rows.length / BATCH) || 0;
   // null when no row is ambiguous (mirrors hasAmbiguousIssue, used for canSend below); otherwise the
   // banner text itself, naming the ambiguous rows' own line numbers (Rm2).
@@ -182,6 +185,7 @@ function Form({ params }: Pick<AppProps, "params">) {
   const readFile = (file: File | undefined) => {
     if (sessionActive || !file) return;
     if (file.size > MAX_FILE_BYTES) return notify("That file is over 2 MB.", "warn");
+    setFileName(file.name);
     void file.text().then(setText);
   };
 
@@ -367,10 +371,19 @@ function Form({ params }: Pick<AppProps, "params">) {
           onDragOver={(e) => e.preventDefault()}
           aria-label="Recipients"
         />
-        <label className="mt-2 flex items-center gap-2 text-xs text-muted">
-          Choose CSV
-          <input type="file" accept=".csv,text/csv,text/plain" className="text-xs" disabled={sessionActive} onChange={onFileInput} />
-        </label>
+        <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted">
+          {/* The real file input stays in the DOM (visually hidden, still focusable) so the keyboard and screen readers
+              get the native control; the label is the button people see. */}
+          <label
+            className={`inline-flex min-h-8 shrink-0 cursor-pointer items-center rounded-md border border-border-2 px-3 py-1 text-fg focus-within:outline focus-within:outline-1 focus-within:outline-offset-1 focus-within:outline-accent pointer-coarse:min-h-9 ${sessionActive ? "cursor-not-allowed opacity-50" : "hover:bg-surface-2"}`}
+          >
+            Choose CSV
+            <input type="file" accept=".csv,text/csv,text/plain" className="sr-only" disabled={sessionActive} onChange={onFileInput} />
+          </label>
+          <span className="min-w-0 truncate" title={fileName ?? undefined} aria-live="polite">
+            {fileName ?? "No file chosen"}
+          </span>
+        </div>
 
         {sessionActive ? (
           <>
@@ -383,8 +396,8 @@ function Form({ params }: Pick<AppProps, "params">) {
           <p className="mt-3 text-muted">{tokenCandidate ? "Reading the token…" : "Enter the token's address first."}</p>
         ) : (
           <>
-            <p className="mt-3">
-              {rows.length} recipients{issues.length > 0 ? ` · ${issues.length} excluded` : ""} · total {totalDisplay} {symbol}
+            <p className="mt-3" title={`Total ${totalDisplay} ${symbol}`}>
+              {rows.length} recipients{issues.length > 0 ? ` · ${issues.length} excluded` : ""} · total {totalShort} {symbol}
             </p>
             {ambiguousBanner && <p className="mt-2 text-accent-3-text">{ambiguousBanner}</p>}
             <IssuesList issues={issues} />
@@ -396,7 +409,11 @@ function Form({ params }: Pick<AppProps, "params">) {
                 </button>
               </p>
             ) : (
-              feeText && <p className="mt-3 text-xs text-muted">{feeText}</p>
+              feeText && (
+                <p className="mt-3 text-xs text-muted" title={quote ? `Fee ${formatUsdc(quote.total)} USDC` : undefined}>
+                  {feeText}
+                </p>
+              )
             )}
           </>
         )}
