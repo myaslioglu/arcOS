@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPublicClient } from "wagmi/actions";
 import { encodeErrorResult, encodeFunctionResult, multicall3Abi, parseAbi, type PublicClient } from "viem";
-import { CHAINS } from "@arcos/chain";
+import { CHAINS, arcInspectChain } from "@arcos/chain";
 import { CallReverted, viemReader } from "@arcos/inspector";
 import { WALLETCONNECT_METADATA, connectorLabel, isWalletConnect, visibleConnectors, wagmiConfig, walletConnectMetadata } from "../wagmi";
 
@@ -284,7 +284,7 @@ describe("wagmiConfig's clients and a token's OffchainLookup revert (CCIP-Read)"
       return reply({ error: { code: 3, message: "execution reverted", data: OFFCHAIN_LOOKUP } });
     });
     const client = getPublicClient(wagmiConfig, { chainId: CHAINS.mainnet.id }) as unknown as PublicClient;
-    await expect(viemReader(client).read(TOKEN, parseAbi(["function owner() view returns (address)"]), "owner")).rejects.toBeInstanceOf(CallReverted);
+    await expect(viemReader(client, arcInspectChain("mainnet")).read(TOKEN, parseAbi(["function owner() view returns (address)"]), "owner")).rejects.toBeInstanceOf(CallReverted);
     expect(fetched.filter((u) => u.startsWith(GATEWAY))).toEqual([]);
   });
 });

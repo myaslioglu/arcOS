@@ -1,4 +1,5 @@
 export * from "./bytecode";
+export * from "./chain-input";
 export * from "./privileges";
 export * from "./explorer";
 export * from "./types";

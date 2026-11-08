@@ -1,12 +1,13 @@
 import type { PublicClient } from "viem";
-import { ARCOS, CHAINS, DEX, KNOWN_LOCKERS, type NetworkId } from "@arcos/chain";
+import { arcInspectChain, type NetworkId } from "@arcos/chain";
 import {
   blockscoutSource,
+  chainInput,
   endpointHealth,
   explorerFetch,
   inspect,
   inspectionClient,
-  outOfGasIsNodeAnswer,
+  outOfGasIsNodeAnswerFor,
   proExplorerApi,
   viemReader,
   withDeadline,
@@ -76,16 +77,17 @@ export function spacedTurns(gapMs = 250, now: () => number = Date.now, sleep = (
 export const INSPECTION_MS = 15_000;
 
 /**
- * The inspector the indexer runs, with what the site's server gives its own (apps/web/src/lib/inspect-input.ts): the
- * network's RPC URLs in order with cooldowns, CCIP-Read off, and an out-of-gas answer read as the node's; Blockscout's
- * PRO API with the key, or no explorer without one (Arc mainnet's public explorer refuses servers). Explorer calls are
- * counted against the day's budget, and the inspection is cut off after 15 s.
+ * The inspector the indexer runs, with what the site's server gives its own (apps/web/src/lib/inspect-input.ts): Arc on
+ * the network, from its registry entry (`arcInspectChain`); the network's RPC URLs in order with cooldowns, CCIP-Read off,
+ * and an out-of-gas answer read as the node's, as Arc's nodes give one; Blockscout's PRO API with the key, or no explorer
+ * without one (Arc mainnet's public explorer refuses servers). Explorer calls are counted against the day's budget, and
+ * the inspection is cut off after 15 s.
  */
 export function liveInspector(options: { network: NetworkId; apiKey?: string; client?: PublicClient; fetchFn?: typeof fetch }): InspectToken {
   const { network } = options;
-  const chain = CHAINS[network];
-  const client = options.client ?? inspectionClient(chain, endpointHealth(), outOfGasIsNodeAnswer);
-  const api = proExplorerApi(chain.id, options.apiKey);
+  const chain = arcInspectChain(network);
+  const client = options.client ?? inspectionClient(chain.viem, endpointHealth(), outOfGasIsNodeAnswerFor(chain));
+  const api = proExplorerApi(chain.chainId, options.apiKey);
   const turn = spacedTurns();
   // One record for the instance: a refusal in one run holds the next run's requests too.
   const refusals: Refusals = { until: 0 };
@@ -98,12 +100,9 @@ export function liveInspector(options: { network: NetworkId; apiKey?: string; cl
       inspect({
         address,
         network,
-        reader: viemReader(client),
+        reader: viemReader(client, chain),
         explorer,
-        dex: DEX[network],
-        knownLockers: KNOWN_LOCKERS[network],
-        explorerBase: chain.blockExplorers?.default.url ?? "",
-        arcosTokenFactory: ARCOS[network]?.tokenFactory ?? null,
+        ...chainInput(chain),
         extraPools,
         // The trade check fits its round trips inside the same deadline.
         deadlineAt: Date.now() + INSPECTION_MS,

@@ -114,6 +114,8 @@ export function fakeReport(address: Address, passes: number, liquid: boolean, ov
   return {
     address,
     network: "mainnet",
+    chain: "arc",
+    chainId: 5042,
     token: { name: "Inspected", symbol: "INS", decimals: 18, totalSupply: "1000" },
     findings,
     passed: pass,

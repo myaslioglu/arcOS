@@ -21,6 +21,8 @@ const ADDRESS = "0x1111111111111111111111111111111111111111";
 const report = (degraded: boolean): Report => ({
   address: ADDRESS,
   network: "mainnet",
+  chain: "arc",
+  chainId: 5042,
   token: { name: "Duke", symbol: "DUKE", decimals: 18, totalSupply: "1" },
   findings: [],
   passed: 0,

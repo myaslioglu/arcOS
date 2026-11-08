@@ -1,7 +1,7 @@
 import "server-only";
 import type { PublicClient } from "viem";
-import { activeChain } from "@arcos/chain";
-import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer } from "@arcos/inspector";
+import { activeChain, activeNetwork, arcInspectChain } from "@arcos/chain";
+import { arcOutOfGasIsNodeAnswer, endpointHealth, inspectionClient, outOfGasIsNodeAnswerFor } from "@arcos/inspector";
 import { processGlobal } from "./process-global";
 import { perSecond } from "./rate-limit";
 
@@ -12,14 +12,16 @@ import { perSecond } from "./rate-limit";
  * deploy. `/api/approvals` and sign-in read Arc through their own clients instead — `approvalsRpcClient()` and
  * `authRpcClient()`, below — each with its own cooldown record, so neither can put this one's endpoints on cooldown.
  *
- * It opts in to `outOfGasIsNodeAnswer`: Inspector's v4 quotes each run with a gas limit of their own, and a pool anyone can
- * create can make one run out of it. That is the node's answer about one call, the same on every endpoint, so it must not
- * fail over to, and cool, every endpoint these routes share.
+ * It reads an out-of-gas answer as the node's, the way Arc's nodes give one (`outOfGasIsNodeAnswerFor` with Arc's registry
+ * entry): Inspector's v4 quotes each run with a gas limit of their own, and a pool anyone can create can make one run out
+ * of it. That is the node's answer about one call, the same on every endpoint, so it must not fail over to, and cool,
+ * every endpoint these routes share.
  */
 export function serverRpcClient(): PublicClient {
-  return processGlobal("server.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("inspect.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
-  );
+  return processGlobal("server.rpcClient", () => {
+    const arc = arcInspectChain(activeNetwork());
+    return inspectionClient(arc.viem, processGlobal("inspect.rpcHealth", endpointHealth), outOfGasIsNodeAnswerFor(arc));
+  });
 }
 
 /**
@@ -38,37 +40,38 @@ export function explorerPacer(): () => Promise<void> {
  * resilient aggregate3 splitting): that must not put the URLs the Inspector, /badge, /t and /api/pulse share on
  * cooldown, so Revoke's failures cool only Revoke's own client.
  *
- * It also opts in to `outOfGasIsNodeAnswer`: a poisoned multicall target can make an eth_call run out of gas
- * mid-execution, which the shared classifier doesn't read as the node's answer (see rpc-transport.ts in @arcos/inspector), so without
- * this every such failure would fail over to, and cool, every endpoint on one attempt instead of costing one.
+ * It also opts in to Arc's out-of-gas rule (`arcOutOfGasIsNodeAnswer`): a poisoned multicall target can make an eth_call
+ * run out of gas mid-execution, which the shared classifier doesn't read as the node's answer (see rpc-transport.ts in
+ * @arcos/inspector), so without this every such failure would fail over to, and cool, every endpoint on one attempt
+ * instead of costing one.
  */
 export function approvalsRpcClient(): PublicClient {
   return processGlobal("approvals.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("approvals.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
+    inspectionClient(activeChain(), processGlobal("approvals.rpcHealth", endpointHealth), arcOutOfGasIsNodeAnswer),
   );
 }
 
 /**
  * Sign-in's own RPC client, one per process, built like approvalsRpcClient(): the same URL list, order and per-attempt
- * timeout, CCIP-Read off, over its own endpoint-health record, and with `outOfGasIsNodeAnswer`. POST /api/auth/verify
+ * timeout, CCIP-Read off, over its own endpoint-health record, and with `arcOutOfGasIsNodeAnswer`. POST /api/auth/verify
  * is open to anyone, and a smart-wallet signature makes the server run an eth_call the request chose; an ERC-6492
  * deploy call can burn all its gas. Out of gas is then the node's answer, costing one attempt at one endpoint, and any
  * real endpoint failure cools only this record, never the one the Inspector, /api/pulse, /badge and /t share.
  */
 export function authRpcClient(): PublicClient {
   return processGlobal("auth.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("auth.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
+    inspectionClient(activeChain(), processGlobal("auth.rpcHealth", endpointHealth), arcOutOfGasIsNodeAnswer),
   );
 }
 
 /**
  * Watchdog's own RPC client, one per process, built like authRpcClient(): the same URL list, order and per-attempt
- * timeout, CCIP-Read off, over its own endpoint-health record, and with `outOfGasIsNodeAnswer`. POST /api/watches runs
+ * timeout, CCIP-Read off, over its own endpoint-health record, and with `arcOutOfGasIsNodeAnswer`. POST /api/watches runs
  * one eth_getCode at an address the signed-in wallet chose (lib/watch-deps.ts caps it at 5 s), so an endpoint failing
  * there cools only this record, never the one the Inspector, /api/pulse, /badge and /t share, nor sign-in's.
  */
 export function watchRpcClient(): PublicClient {
   return processGlobal("watch.rpcClient", () =>
-    inspectionClient(activeChain(), processGlobal("watch.rpcHealth", endpointHealth), outOfGasIsNodeAnswer),
+    inspectionClient(activeChain(), processGlobal("watch.rpcHealth", endpointHealth), arcOutOfGasIsNodeAnswer),
   );
 }

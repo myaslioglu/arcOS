@@ -5,9 +5,9 @@
 import * as logger from "firebase-functions/logger";
 import { defineSecret } from "firebase-functions/params";
 import { onSchedule } from "firebase-functions/scheduler";
-import { CHAINS } from "@arcos/chain";
+import { arcInspectChain } from "@arcos/chain";
 import { arcosDb } from "@arcos/data/server";
-import { endpointHealth, inspectionClient, outOfGasIsNodeAnswer, viemReader, type ChainReader } from "@arcos/inspector";
+import { arcOutOfGasIsNodeAnswer, endpointHealth, inspectionClient, viemReader, type ChainReader } from "@arcos/inspector";
 import { liveInspector } from "./indexer/inspect";
 import { rpcLogChain } from "./indexer/rpc";
 import { runIndexer, runLogFields } from "./indexer/run";
@@ -31,7 +31,8 @@ let telegram: TelegramSender | null | undefined;
 
 export const arcosIndexer = onSchedule({ ...INDEXER_OPTIONS, secrets: [blockscoutApiKey, telegramBotToken] }, async () => {
   inspector ??= liveInspector({ network: INDEXER_NETWORK, apiKey: blockscoutApiKey.value() });
-  watchReader ??= viemReader(inspectionClient(CHAINS[INDEXER_NETWORK], endpointHealth(), outOfGasIsNodeAnswer));
+  const arc = arcInspectChain(INDEXER_NETWORK);
+  watchReader ??= viemReader(inspectionClient(arc.viem, endpointHealth(), arcOutOfGasIsNodeAnswer), arc);
   if (telegram === undefined) {
     const token = telegramBotToken.value().trim();
     telegram = BOT_TOKEN_FORMAT.test(token) ? telegramSender({ token }) : null;

@@ -4,7 +4,7 @@
  * eth_getStorageAt, eth_blockNumber, eth_gasPrice); no transaction, no key.
  */
 import { createPublicClient, http } from "viem";
-import { CHAINS } from "@arcos/chain";
+import { CHAINS, arcInspectChain } from "@arcos/chain";
 import { viemReader } from "../src/reader";
 import type { ChainReader } from "../src/types";
 
@@ -35,7 +35,7 @@ export async function paced<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-const inner = viemReader(client);
+const inner = viemReader(client, arcInspectChain("mainnet"));
 export const reader: ChainReader = {
   getCode: (a) => paced(() => inner.getCode(a)),
   getStorageAt: (a, slot, blockNumber) => paced(() => inner.getStorageAt(a, slot, blockNumber)),

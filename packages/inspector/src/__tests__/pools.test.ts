@@ -7,6 +7,7 @@ import type { ExtraPool, Finding, InspectInput, PoolScan, Report } from "../type
 import { NATIVE, QUOTE_CONCURRENCY, QUOTE_GAS, sqrtRatioAtTick, standardV4Keys, v4PoolId, v4PoolKey } from "../v4";
 import { EMPTY_INNER_REASON, NOT_ENOUGH_LIQUIDITY, NOT_ENOUGH_LIQUIDITY_OTHER_POOL, NOT_ENOUGH_LIQUIDITY_POOL, POOL_NOT_INITIALIZED } from "./fixtures/quoter-reverts";
 import { fakeChain, readKey, v2PairReads, type FakeChain, type FakePool, type FakeReader } from "./fixtures/chain-fake";
+import { arcFields } from "./fixtures/arc";
 
 const TOKEN = "0x1111111111111111111111111111111111111111"; // sorts below USDC and EURC
 const HIGH = "0x9999999999999999999999999999999999999999"; // sorts above USDC, below EURC
@@ -38,6 +39,7 @@ const uniswapAll: DexConfig = { quoteTokens: [USD], v2Factory: V2, v3Factory: V3
 const mainnetLike: DexConfig = { quoteTokens: [USD, EUR], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4, aero: AERODROME };
 
 const inputFor = (reader: FakeReader, dex: DexConfig, address: `0x${string}` = TOKEN, extraPools?: ExtraPool[]): InspectInput => ({
+  ...arcFields("mainnet"),
   address, network: "mainnet", reader, explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.test", extraPools,
 });
 
@@ -302,6 +304,7 @@ describe("Uniswap v4 discovery", () => {
 
 const run = (f: FakeChain, dex: DexConfig | null, token: `0x${string}` = TOKEN, explorer: ExplorerSource | null = null, extraPools?: ExtraPool[]): Promise<Report> =>
   inspect({
+    ...arcFields("mainnet"),
     address: token, network: "mainnet", reader: fakeChain({ code: { [token]: PLAIN }, ...f }), explorer, dex, knownLockers: [],
     explorerBase: "https://explorer.test", now: () => new Date("2026-09-29T00:00:00Z"), extraPools,
   });
@@ -389,6 +392,7 @@ describe("onPools: the pool lookup, handed to the caller", () => {
   const key = v4PoolKey(TOKEN, USDC, 500, 10);
   const withHook = (onPools: InspectInput["onPools"]) =>
     inspect({
+      ...arcFields("mainnet"),
       address: TOKEN, network: "mainnet", reader: fakeChain({ code: { [TOKEN]: PLAIN }, v4: listed([key, at1251()]) }), explorer: null,
       dex: v4Only, knownLockers: [], explorerBase: "https://explorer.test", now: () => new Date("2026-09-29T00:00:00Z"), onPools,
     });
@@ -405,6 +409,7 @@ describe("onPools: the pool lookup, handed to the caller", () => {
   it("gets null when the lookup failed, and a hook that throws changes nothing in the report", async () => {
     const seen: (PoolScan | null)[] = [];
     const failing = await inspect({
+      ...arcFields("mainnet"),
       address: TOKEN, network: "mainnet", reader: fakeChain({ code: { [TOKEN]: PLAIN }, multicallError: new Error("ETIMEDOUT") }), explorer: null,
       dex: v4Only, knownLockers: [], explorerBase: "https://explorer.test", onPools: (scan) => seen.push(scan),
     });
@@ -651,6 +656,7 @@ describe("the liquidity finding when a v4 pool's liquidity is undecided", () => 
   const extra: ExtraPool[] = [{ version: "v4", key: delta }];
   const runWith = (f: FakeChain, dex: DexConfig, extraPools?: ExtraPool[]) =>
     inspect({
+      ...arcFields("mainnet"),
       address: TOKEN, network: "mainnet", reader: fakeChain({ code: { [TOKEN]: PLAIN }, ...f }), explorer: null, dex, knownLockers: [], explorerBase: "https://explorer.test",
       extraPools,
     });

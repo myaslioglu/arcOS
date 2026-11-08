@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { encodeAbiParameters, keccak256, pad, toHex } from "viem";
 import { AERODROME, EURC as EURC_TOKEN, UNISWAP_V4, USDC, tradeSimulatorRuntime, type DexConfig } from "@arcos/chain";
 import { checkTrade } from "../checks";
 import { inspect } from "../inspect";
@@ -6,6 +7,7 @@ import { DEFAULT_TRADE_MS, TRADE_GAS, isOrdinaryAddress, randomAddress, simulato
 import type { InspectInput, Pool, PoolScan } from "../types";
 import { NATIVE, v4PoolId, v4PoolKey } from "../v4";
 import { fakeChain, v2PairReads, type FakeChain, type FakeReader, type FakeSimulation, type SimResult } from "./fixtures/chain-fake";
+import { arcFields } from "./fixtures/arc";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const PAIR = "0x4444444444444444444444444444444444444444";
@@ -19,6 +21,7 @@ const DYNAMIC_FEE = 0x800000;
 
 const dex: DexConfig = { quoteTokens: [{ address: USDC, symbol: "USDC" }, { address: EURC, symbol: "EURC" }], v2Factory: V2, v4: UNISWAP_V4, aero: AERODROME };
 const input = (reader: FakeReader, d: DexConfig | null = dex): InspectInput => ({
+  ...arcFields("mainnet"),
   address: TOKEN, network: "mainnet", reader, explorer: null, dex: d, knownLockers: [], explorerBase: "https://explorer.test",
 });
 const scanOf = (...pools: Pool[]): PoolScan => ({ pools, factoriesAnswered: true, silent: [] });
@@ -756,5 +759,98 @@ describe("trade simulation in a report", () => {
     expect((await run({ returns: "0x" })).degraded).toBe(false);
     expect((await run({ fails: Object.assign(new Error("invalid params"), { code: -32602 }) })).degraded).toBe(false);
     expect((await run({ fails: new Error("ETIMEDOUT") })).degraded).toBe(true);
+  });
+});
+
+// How S is given USDC is the chain's (`InspectInput.tradeQuote`). Arc's USDC ERC-20 is a view of the native balance, so S
+// gets a native balance and nothing else (the tests above). A chain whose USDC keeps balances in a storage mapping gets
+// S's balance written there instead, with a native balance for the gas alone.
+describe("trade simulation: funding from the chain's config", () => {
+  /** The same pools, on a chain whose USDC (same address here) keeps its balances in the mapping at slot 9. */
+  const slotFunded = (reader: FakeReader, decimals = 6): InspectInput => ({ ...input(reader), tradeQuote: { token: USDC, decimals, balanceSlot: 9 } });
+  const balanceSlot = (account: string) => keccak256(encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [account as `0x${string}`, 9n]));
+
+  it("on Arc, funds S's native balance alone: no account's storage is written, and the call pays the node's gas price", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    await checkTrade(input(chain), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    const { call, overrides } = chain.simulations[0]!;
+    expect(overrides).toHaveLength(2);
+    expect(overrides.some((o) => "stateDiff" in o)).toBe(false);
+    expect(call.gasPrice).toBe(20_000_000_000n);
+  });
+
+  it("elsewhere, writes S's USDC into its balance slot, funds gas alone natively, and pays the node's price and a quarter", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const f = await checkTrade(slotFunded(chain), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    expect(f.status).toBe("pass");
+    const { call, overrides, trade } = chain.simulations[0]!;
+    const S = call.from;
+    expect(call.gasPrice).toBe(25_000_000_000n);
+    expect(trade).toMatchObject({ kind: 0, usdc: USDC, amount: TEN, maxAmount: TEN });
+    expect(overrides).toEqual([
+      { address: S, code: tradeSimulatorRuntime, balance: TRADE_GAS * 20_000_000_000n * 2n },
+      { address: trade.router, code: tradeSimulatorRuntime },
+      { address: USDC, stateDiff: [{ slot: balanceSlot(S), value: pad(toHex(TEN)) }] },
+    ]);
+  });
+
+  it("elsewhere, writes the most the buy may be raised to, and pays a v4 pool against the USDC ERC-20 in its 6 decimals", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    await checkTrade(slotFunded(chain), scanOf(v4Pool(20_000n * USDC_UNITS, USDC, 3000, 60)));
+    const { call, overrides, trade } = chain.simulations[0]!;
+    // 2% of the pool's 20,000 USDC, 400 USDC: what a buy of whole raw units may be raised to.
+    expect(trade).toMatchObject({ kind: 2, usdc: USDC, amount: TEN, maxAmount: 400n * USDC_UNITS });
+    expect(overrides[2]).toEqual({ address: USDC, stateDiff: [{ slot: balanceSlot(call.from), value: pad(toHex(400n * USDC_UNITS)) }] });
+  });
+
+  it("elsewhere, never trades a v4 pool against the native currency, which the override doesn't fund", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const f = await checkTrade(slotFunded(chain), scanOf(v4Pool(20_000n * USDC_UNITS, NATIVE, 3000, 60)));
+    expect(chain.simulations).toHaveLength(0);
+    expect(f).toMatchObject({ status: "unknown", detail: "No USDC pool was found to trade against." });
+  });
+
+  it("is unknown, and simulates nothing, on a chain with no trade quote", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const f = await checkTrade({ ...input(chain), tradeQuote: null }, scanOf(v2Pool(50_000n * USDC_UNITS)));
+    expect(chain.simulations).toHaveLength(0);
+    expect(f).toMatchObject({ status: "unknown", title: "Trades aren't simulated on this network", detail: "No currency to trade with is configured here." });
+  });
+
+  it("elsewhere, writes and reads amounts in the trade token's own decimals", async () => {
+    // An 18-decimal trade token: 10 of it in, 9.94 back.
+    const chain = fakeChain({ simulation: roundTrip(TEN * 10n ** 12n, 9_940_000n * 10n ** 12n) });
+    const f = await checkTrade(slotFunded(chain, 18), scanOf(v2Pool(50_000n * USDC_UNITS)));
+    const { call, overrides, trade } = chain.simulations[0]!;
+    expect(trade).toMatchObject({ amount: TEN * 10n ** 12n, maxAmount: TEN * 10n ** 12n });
+    expect(overrides[2]).toEqual({ address: USDC, stateDiff: [{ slot: balanceSlot(call.from), value: pad(toHex(TEN * 10n ** 12n)) }] });
+    expect(f).toMatchObject({ status: "pass" });
+    expect(f.detail).toMatch(/^Bought with 10 USDC on Uniswap v2 and sold straight back for 9\.94 USDC/);
+  });
+
+  it("is unknown, and simulates nothing, when the trade quote is the native balance and no native currency is configured", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const f = await checkTrade({ ...input(chain), nativeQuote: null }, scanOf(v2Pool(50_000n * USDC_UNITS)));
+    expect(chain.simulations).toHaveLength(0);
+    expect(f).toMatchObject({ status: "unknown", title: "Trades aren't simulated on this network" });
+  });
+
+  it("is unknown, and simulates nothing, when the trade quote is funded natively but isn't the native currency's ERC-20 view", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const arc = input(chain);
+    for (const nativeQuote of [{ ...arc.nativeQuote!, erc20View: null }, { ...arc.nativeQuote!, erc20View: EURC }]) {
+      const f = await checkTrade({ ...arc, nativeQuote }, scanOf(v2Pool(50_000n * USDC_UNITS)));
+      expect(f).toMatchObject({ status: "unknown", title: "Trades aren't simulated on this network" });
+    }
+    expect(chain.simulations).toHaveLength(0);
+  });
+
+  it("trades only pools against the trade quote, by its symbol in the DEX config", async () => {
+    const chain = fakeChain({ simulation: roundTrip(TEN, 9_940_000n) });
+    const eurOnly: Pool = { address: EURC_POOL, version: "v2", quote: "EURC", depth: 90_000n * USDC_UNITS, liquid: true };
+    const f = await checkTrade({ ...input(chain), tradeQuote: { token: EURC, decimals: 6, balanceSlot: 9 } }, scanOf(eurOnly, v2Pool(50_000n * USDC_UNITS)));
+    expect(chain.simulations.map((s) => s.trade.pool)).toEqual([EURC_POOL]);
+    expect(chain.simulations[0]!.trade.usdc).toBe(EURC);
+    expect(f.detail).toMatch(/Uniswap v2 0x4444…4444 \(USDC\) \(liquid\) wasn't traded against/);
   });
 });
