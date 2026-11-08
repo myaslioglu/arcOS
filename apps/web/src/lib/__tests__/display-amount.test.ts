@@ -49,9 +49,35 @@ describe("displayUnits and displayWei", () => {
   });
   it("formats native wei as USDC", () => {
     expect(displayWei(2_496_490_622_000_000_000_000n)).toBe("2,496.49");
-    expect(displayWei(3_725_534_907_829_057n)).toBe("0.003725");
+    expect(displayWei(3_725_534_907_829_057n)).toBe("0.003726");
     expect(displayWei(1_000_000_000_000n)).toBe(DUST_FLOOR);
     expect(displayWei(5n)).toBe(DUST_FLOOR);
     expect(displayWei(0n)).toBe("0");
+  });
+});
+
+describe("rounding modes", () => {
+  it("rounds down for what the user receives", () => {
+    expect(displayAmount("222.885292", { mode: "down" })).toBe("222.88");
+    expect(displayAmount("999.999", { mode: "down" })).toBe("999.99");
+    expect(displayAmount("0.99996", { mode: "down" })).toBe("0.9999");
+    expect(displayAmount("0.003725534907", { mode: "down" })).toBe("0.003725");
+    expect(displayAmount("5", { mode: "down" })).toBe("5");
+  });
+  it("rounds up for what the user pays", () => {
+    expect(displayAmount("1.234", { mode: "up" })).toBe("1.24");
+    expect(displayAmount("0.99996", { mode: "up" })).toBe("1");
+    expect(displayAmount("999.991", { mode: "up" })).toBe("1,000");
+    expect(displayAmount("0.003725534907", { mode: "up" })).toBe("0.003726");
+    expect(displayAmount("1.5", { mode: "up" })).toBe("1.5");
+  });
+  it("keeps the dust floor in every mode", () => {
+    for (const mode of ["down", "up", "half"] as const) expect(displayAmount("0.00001", { mode })).toBe(DUST_FLOOR);
+  });
+  it("passes the mode through units and wei", () => {
+    expect(displayUnits(222_885_292n, 6, "down")).toBe("222.88");
+    expect(displayUnits(222_885_292n, 6, "up")).toBe("222.89");
+    expect(displayWei(1_234_000_000_000_000_000n, "up")).toBe("1.24");
+    expect(displayWei(1_234_000_000_000_000_000n, "down")).toBe("1.23");
   });
 });

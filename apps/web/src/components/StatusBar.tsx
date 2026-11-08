@@ -44,7 +44,7 @@ export function StatusBar() {
         {address ? (
           <span className="min-w-0 truncate">
             {shortAddress(address)}
-            {balance ? ` · ${displayWei(balance.value)} USDC` : ""}
+            {balance ? ` · ${displayWei(balance.value, "down")} USDC` : ""}
           </span>
         ) : (
           <span className="min-w-0 truncate">Connect wallet</span>

@@ -207,12 +207,12 @@ function Form() {
           {estimateQuery.data && (
             <>
               <p title={`${estimateQuery.data.stopLimit.amount} ${estimateQuery.data.stopLimit.token}`}>
-                Minimum received: {displayAmount(estimateQuery.data.stopLimit.amount)} {estimateQuery.data.stopLimit.token}
+                Minimum received: {displayAmount(estimateQuery.data.stopLimit.amount, { mode: "down" })} {estimateQuery.data.stopLimit.token}
               </p>
               {estimateQuery.data.fees?.map((fee, i) => {
                 const isPlatformFee = fee.type === "developer";
                 const label = isPlatformFee ? PLATFORM_FEE_LABEL : (FEE_LABEL[fee.type] ?? fee.type);
-                const amountText = fee.amount === null ? "unknown" : `${displayAmount(fee.amount)} ${fee.token}`;
+                const amountText = fee.amount === null ? "unknown" : `${displayAmount(fee.amount, { mode: "up" })} ${fee.token}`;
                 return (
                   <p key={i} title={fee.amount === null ? undefined : `${fee.amount} ${fee.token}`}>
                     {label}: {amountText}

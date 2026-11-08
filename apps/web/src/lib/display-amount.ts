@@ -1,4 +1,3 @@
-import { formatUsdc } from "@arcos/chain";
 import { formatTokenAmount } from "./amount";
 
 /**
@@ -11,9 +10,15 @@ import { formatTokenAmount } from "./amount";
  *    ("2496.490622" -> "2,496.49", "12.5" -> "12.5");
  *  - below 1: 4 significant digits ("0.003725534907" -> "0.003726");
  *  - below 0.0001 but not zero: "< 0.0001", so a fee never reads as free and a balance never as empty.
+ *
+ * Rounding never flatters: pass `"down"` for what the user receives or is guaranteed (balances, minimum received) so
+ * it is never overstated, `"up"` for what they pay (fees, totals) so it is never understated. The default, `"half"`,
+ * is for neutral text. "999.999" is "999.99" down, "1,000" up and half; "1.234" is "1.24" up.
  * Text that isn't a plain non-negative decimal ("unknown", "?") comes back unchanged.
  */
 export const DUST_FLOOR = "< 0.0001";
+
+export type RoundingMode = "down" | "up" | "half";
 
 const PLAIN_DECIMAL = /^(\d+)(?:\.(\d+))?$/;
 
@@ -21,12 +26,12 @@ function group(whole: string): string {
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
-/** `n / 10^scale` rounded half up to `places` decimals, as a trimmed decimal string without separators. */
-function roundTo(n: bigint, scale: number, places: number): string {
+/** `n / 10^scale` rounded to `places` decimals in `mode`, as a trimmed decimal string without separators. */
+function roundTo(n: bigint, scale: number, places: number, mode: RoundingMode): string {
   let value = n;
   if (scale > places) {
     const drop = 10n ** BigInt(scale - places);
-    value = (n + drop / 2n) / drop;
+    value = mode === "down" ? n / drop : mode === "up" ? (n + drop - 1n) / drop : (n + drop / 2n) / drop;
   } else if (scale < places) {
     value = n * 10n ** BigInt(places - scale);
   }
@@ -36,7 +41,7 @@ function roundTo(n: bigint, scale: number, places: number): string {
   return frac ? `${whole}.${frac}` : whole;
 }
 
-export function displayAmount(text: string, { separators = true }: { separators?: boolean } = {}): string {
+export function displayAmount(text: string, { separators = true, mode = "half" }: { separators?: boolean; mode?: RoundingMode } = {}): string {
   const m = PLAIN_DECIMAL.exec(text.trim());
   if (!m) return text;
   const frac = m[2] ?? "";
@@ -46,12 +51,12 @@ export function displayAmount(text: string, { separators = true }: { separators?
   const one = 10n ** BigInt(scale);
   let out: string;
   if (n >= one) {
-    out = roundTo(n, scale, 2);
+    out = roundTo(n, scale, 2, mode);
   } else {
     if (n * 10_000n < one) return DUST_FLOOR;
     // Position of the first non-zero decimal (1-based), then keep 4 significant digits from there.
     const firstNonZero = scale - n.toString().length + 1;
-    out = roundTo(n, scale, firstNonZero + 3);
+    out = roundTo(n, scale, firstNonZero + 3, mode);
   }
   if (!separators) return out;
   const [whole, rest] = out.split(".");
@@ -59,12 +64,11 @@ export function displayAmount(text: string, { separators = true }: { separators?
 }
 
 /** Integer token units at `decimals` places (Mint, Drop token rows, ERC-20 balances). */
-export function displayUnits(units: bigint, decimals: number): string {
-  return displayAmount(formatTokenAmount(units, decimals));
+export function displayUnits(units: bigint, decimals: number, mode: RoundingMode = "half"): string {
+  return displayAmount(formatTokenAmount(units, decimals), { mode });
 }
 
-/** Native wei of Arc's 18-decimal USDC (balances, Drop's fee quote, Mint's fee). */
-export function displayWei(wei: bigint): string {
-  // formatUsdc floors to 6 places; a nonzero amount below that must still read as dust, not 0.
-  return wei > 0n && formatUsdc(wei) === "0" ? DUST_FLOOR : displayAmount(formatUsdc(wei));
+/** Native wei of Arc's 18-decimal USDC (balances, Drop's fee quote, Mint's fee), rounded from the exact wei. */
+export function displayWei(wei: bigint, mode: RoundingMode = "half"): string {
+  return displayAmount(formatTokenAmount(wei, 18), { mode });
 }

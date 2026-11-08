@@ -137,7 +137,7 @@ function Form() {
   // Shown to the user — "…" rather than "0" until there's a real amount to price: a fee of 0 reads
   // as "this bridge is free", not "nothing has been typed yet" (quoteTotal's own version of this bug
   // is fixed in apps/drop/useDrop.ts; this is Bridge's).
-  const feeText = normalized ? `${displayAmount(fee)} USDC` : "…";
+  const feeText = normalized ? `${displayAmount(fee, { mode: "up" })} USDC` : "…";
 
   /** Runs `run()` through the shared one-at-a-time session guard, from the initial submit or from a
    * Retry — both a fresh `kit.bridge()` call and `kit.retryBridge()` land here so they share exactly

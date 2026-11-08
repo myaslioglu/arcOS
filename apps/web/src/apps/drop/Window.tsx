@@ -146,7 +146,7 @@ function Form({ params }: Pick<AppProps, "params">) {
     [deferredText, decimals],
   );
   const totalDisplay = decimals === null ? "" : asset.kind === "token" ? formatUnits(total, asset.decimals) : formatUsdc(unitsToNative(total));
-  const totalShort = displayAmount(totalDisplay);
+  const totalShort = displayAmount(totalDisplay, { mode: "up" });
   const batches = Math.ceil(rows.length / BATCH) || 0;
   // null when no row is ambiguous (mirrors hasAmbiguousIssue, used for canSend below); otherwise the
   // banner text itself, naming the ambiguous rows' own line numbers (Rm2).

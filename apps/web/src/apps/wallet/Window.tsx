@@ -82,7 +82,7 @@ export default function WalletWindow() {
         <dt className="text-muted">Network</dt>
         <dd>{wrongNetwork ? "Another network" : chain.name}</dd>
         <dt className="text-muted">Balance</dt>
-        <dd title={balance ? `${formatUsdc(balance.value)} USDC` : undefined}>{balance ? `${displayWei(balance.value)} USDC` : "—"}</dd>
+        <dd title={balance ? `${formatUsdc(balance.value)} USDC` : undefined}>{balance ? `${displayWei(balance.value, "down")} USDC` : "—"}</dd>
       </dl>
       <div className="mt-5 flex gap-2">
         {wrongNetwork && (

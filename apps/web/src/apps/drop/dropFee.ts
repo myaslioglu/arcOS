@@ -51,7 +51,7 @@ export function feeChangeMessage(previous: DropFeeBasis, fresh: DropFeeBasis): s
  */
 export function dropFeeText(quote: { total: bigint; count: number } | "error" | null, rowCount: number, batches: number): string {
   if (quote && quote !== "error" && quote.count === rowCount && rowCount > 0) {
-    return `Fee ${displayWei(quote.total)} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`;
+    return `Fee ${displayWei(quote.total, "up")} USDC · charged per recipient, including transfers that fail · ${batches} transaction(s)`;
   }
   return rowCount > 0 ? "Reading the fee…" : "";
 }

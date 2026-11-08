@@ -249,7 +249,7 @@ function Form() {
         title={fee.data !== undefined ? `Fee ${formatUsdc(fee.data)} USDC` : undefined}
         className="rounded-md border border-border-2 px-3 py-2"
       >
-        {sessionActive ? "Waiting for your wallet…" : `Create token · ${fee.data !== undefined ? displayWei(fee.data) : "…"} USDC`}
+        {sessionActive ? "Waiting for your wallet…" : `Create token · ${fee.data !== undefined ? displayWei(fee.data, "up") : "…"} USDC`}
       </button>
       {fee.isError && (
         <p className="text-xs text-accent-3-text">
