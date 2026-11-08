@@ -30,7 +30,7 @@ const ITEMS: DeskItem[] = [
   {
     id: "readme",
     label: "readme.txt",
-    blurb: "What 4rc.OS is",
+    blurb: "What ArcOS is",
     art: "file",
     ext: "TXT",
     icon,
@@ -86,7 +86,7 @@ describe("TouchHomeView", () => {
       "Trust: 2 items",
       "Create: 1 item",
       "Trade: 1 item",
-      "readme.txt: What 4rc.OS is",
+      "readme.txt: What ArcOS is",
       "GitHub: The source code (opens in a new tab)",
     ]);
     expect(grid).not.toContain("os-desk-cell--loose");

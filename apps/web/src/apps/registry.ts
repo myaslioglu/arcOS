@@ -18,16 +18,16 @@ import { SOON } from "./soon";
 /** The live apps, in desktop order. Every app in the product is listed here or in SOON, and nowhere else. */
 export const LIVE: AppManifest[] = [finder, inspector, watchdog, mint, drop, swap, bridge, radar, meme, wallet, about, revoke, terminal];
 
-/** Which of 4rc.OS's own contracts in @arcos/chain's `ARCOS` an app acts through. */
+/** Which of ArcOS's own contracts in @arcos/chain's `ARCOS` an app acts through. */
 export type ContractKey = "vaultFactory" | "vestingFactory" | "proPass";
 
 /**
- * The apps that hold or move users' assets through a 4rc.OS contract, and the contract each needs (D6 of the R1/R2
+ * The apps that hold or move users' assets through an ArcOS contract, and the contract each needs (D6 of the R1/R2
  * design). Such an app is live only on a network where `ARCOS` names that contract. Elsewhere its grey stand-in in SOON
  * shows instead, so each of these needs one. Every other app is listed on both networks.
  *
  * No custodial contract gets a mainnet address before the audit gates, so the live apps appear on the testnet site
- * first, one by one as their contracts are set, and on 4rc.OS only when mainnet's are. Watchdog Pro joins with
+ * first, one by one as their contracts are set, and on ArcOS only when mainnet's are. Watchdog Pro joins with
  * `proPass` when it ships.
  */
 export const NEEDS_CONTRACT: Readonly<Record<string, ContractKey>> = {

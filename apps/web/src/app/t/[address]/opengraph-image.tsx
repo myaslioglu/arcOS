@@ -9,7 +9,7 @@ import { FAILED_INSPECTION_CACHE_CONTROL, reportCacheControl } from "@/lib/repor
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
-export const alt = "4rc.OS token report";
+export const alt = "ArcOS token report";
 // Rendered on every request, like the badge: a card drawn from a degraded report mustn't be kept for 5 minutes by
 // Next's own cache. How long a CDN may keep it is the cache-control header below, the same as the badge's.
 export const dynamic = "force-dynamic";

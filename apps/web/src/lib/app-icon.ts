@@ -1,5 +1,5 @@
 /**
- * 4rc.OS's icon, in the desktop's tile language: its dark surface as a rounded tile and a bold "4"
+ * ArcOS's icon, in the desktop's tile language: its dark surface as a rounded tile and a bold "4"
  * in the cyan accent. One drawing on a 32-unit grid serves the favicon (app/icon.ts), its PNG twin
  * (app/icon1.tsx) and the Apple touch icon (app/apple-icon.tsx). Browsers and home screens show it
  * outside the page, so it has one look and doesn't follow the theme.

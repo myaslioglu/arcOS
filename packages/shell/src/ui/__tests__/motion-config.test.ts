@@ -21,7 +21,7 @@ vi.mock("../Toasts", async () => ({ Toasts: await framerUser("toasts") }));
 
 describe("DesktopShell's motion setting", () => {
   it('sets framer-motion to follow the device ("user") for the windows, the launcher and the toasts', () => {
-    const html = renderToStaticMarkup(createElement(DesktopShell, { apps: [], brand: "4rc.OS" }));
+    const html = renderToStaticMarkup(createElement(DesktopShell, { apps: [], brand: "ArcOS" }));
     const seen = [...html.matchAll(/<i data-framer-user="([^"]+)" data-reduced-motion="([^"]+)"><\/i>/g)].map(
       ([, user, setting]) => [user, setting],
     );

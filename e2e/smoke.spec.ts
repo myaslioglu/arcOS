@@ -105,10 +105,10 @@ test.describe("the mainnet build", () => {
     expect(response?.status()).toBe(200);
     expect(response?.headers()["x-robots-tag"]).toBeUndefined();
     await hydrated(page);
-    await expect(page).toHaveTitle("4rc.OS");
+    await expect(page).toHaveTitle("ArcOS");
     await expect(page.locator(".os-network-badge")).toHaveCount(0);
     await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
-    await expect(page.getByRole("heading", { level: 1, name: "4rc.OS", exact: true })).toBeAttached();
+    await expect(page.getByRole("heading", { level: 1, name: "ArcOS", exact: true })).toBeAttached();
   });
 });
 
@@ -124,12 +124,12 @@ test.describe("server-built routes", () => {
     test("/t/<USDC> renders the proof page", async ({ page }) => {
       const response = await page.goto(`/t/${USDC}`);
       expect(response?.status()).toBe(200);
-      await expect(page.getByText("4rc.OS · proof page")).toBeVisible();
+      await expect(page.getByText("ArcOS · proof page")).toBeVisible();
       // The report's heading (the token's name), or the degraded view's message when the chain couldn't be read.
       const report = page.getByRole("heading", { level: 1 });
       const degraded = page.getByText(/Couldn't read the chain for this token|busy reading other tokens/);
       await expect(report.or(degraded)).toBeVisible();
-      await expect(page.getByRole("link", { name: "Open in 4rc.OS" })).toHaveAttribute(
+      await expect(page.getByRole("link", { name: "Open in ArcOS" })).toHaveAttribute(
         "href",
         `/#app:inspector?token=${USDC}`,
       );

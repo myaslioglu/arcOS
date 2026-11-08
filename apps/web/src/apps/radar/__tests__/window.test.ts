@@ -180,7 +180,7 @@ describe("Radar", () => {
     expect(html).toContain("Unnamed token");
     expect(html).toContain("Not checked yet");
     expect(html).toContain("No pool yet");
-    expect(html).toContain(">4rc.OS</span>");
+    expect(html).toContain(">ArcOS</span>");
     expect(html).toContain('aria-label="Inspect 0x470f…b099"');
     expect(html).not.toContain("data-drag");
     expect(html).not.toContain("Launched through");

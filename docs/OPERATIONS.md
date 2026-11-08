@@ -35,7 +35,7 @@ in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s coold
 2. Takes the `finalized` block as its head. On Arc, `finalized` is `latest` or one block behind, so nothing it reads
    can be reorganised away.
 3. Reads the new blocks in windows of at most 10,000 blocks (the RPC's cap), with one `eth_getLogs` per window over
-   five contracts: the 4rc.OS TokenFactory (`TokenCreated`), the Uniswap v2 factory (`PairCreated`), the Uniswap v3
+   five contracts: the ArcOS TokenFactory (`TokenCreated`), the Uniswap v2 factory (`PairCreated`), the Uniswap v3
    factory (`PoolCreated`), the Uniswap v4 PoolManager (`Initialize`) and the Aerodrome Slipstream factory
    (`PoolCreated`). Calls go at least 400 ms apart, and a rate-limit answer (-32005) is retried with a back-off. A
    window the node refuses as too wide or too full is halved. At most 10 windows a run, none started after 40 seconds,

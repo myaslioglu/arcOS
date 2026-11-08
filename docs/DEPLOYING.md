@@ -2,10 +2,10 @@
 
 How a change reaches https://4rcos.com and the testnet site, https://testnet.4rcos.com. A deploy runs from GitHub
 Actions, signs in to Google Cloud without a key file, and starts as soon as the checks and both bundles pass, so
-merging into `main` is the deploy decision. Both sites come from the same commit in the same run: 4rc.OS from the App
+merging into `main` is the deploy decision. Both sites come from the same commit in the same run: ArcOS from the App
 Hosting backend `arcos`, the testnet site from the backend `arcos-testnet` (see [The testnet site](#the-testnet-site)).
 The testnet site takes part only once the repository variable `ARCOS_TESTNET_READY` is `true`; until then every deploy
-is of 4rc.OS alone.
+is of ArcOS alone.
 
 1. **A pull request runs CI** ([ci.yml](../.github/workflows/ci.yml)): typecheck, lint, the tests (those of the deploy
    scripts, and a check of the deploy workflow's rules, included), the web build, the ABI drift check and `npm audit`.
@@ -47,10 +47,10 @@ is of 4rc.OS alone.
      locked with an integrity hash, install scripts off) and runs `firebase deploy --only apphosting:arcos` with it. The
      CLI uploads the source, App Hosting builds it and rolls it out, and the CLI waits until the rollout has finished;
    - then, only once that has succeeded, reads the environment name of `arcos-testnet` (it must be `testnet`, or App
-     Hosting would build it from `apphosting.yaml` alone, as a copy of 4rc.OS) and runs
+     Hosting would build it from `apphosting.yaml` alone, as a copy of ArcOS) and runs
      `firebase deploy --only apphosting:arcos-testnet` the same way.
 
-   A separate `smoke` job, with no credentials, then calls 4rc.OS (`scripts/smoke.mjs`) whenever its deploy succeeded,
+   A separate `smoke` job, with no credentials, then calls ArcOS (`scripts/smoke.mjs`) whenever its deploy succeeded,
    even if the testnet deploy after it failed: `/` answers 200, `/api/pulse` answers 200 with 1,024 ratios, and
    `/api/approvals` answers 200 with at least one row. It retries for
    about two minutes, since a fresh rollout can take a moment. A failed smoke check means the new version is already
@@ -60,7 +60,7 @@ is of 4rc.OS alone.
 5. **Which sites, and what a failure stops.** A push to `main` deploys both. A manual run (Actions, Deploy, Run workflow)
    can pick `targets`: `both` (the default), `mainnet` or `testnet`; it builds, scans and deploys only those. The
    testnet site is gated by the repository variable `ARCOS_TESTNET_READY`:
-   - While it is not exactly `true` (unset included), a push builds, scans and deploys 4rc.OS alone; the testnet bundle
+   - While it is not exactly `true` (unset included), a push builds, scans and deploys ArcOS alone; the testnet bundle
      isn't built, and the run shows a notice saying so. A manual run with `targets: both` or `testnet` fails at once in
      `plan`, before anything is built or deployed, and says to run again with `targets: mainnet`. It fails rather than
      quietly dropping the testnet site, so a manual run never deploys less than it was asked to.
@@ -73,13 +73,13 @@ is of 4rc.OS alone.
    permission, on purpose. The owner deploys both by hand with `firebase deploy --only firestore:arcos`, as in the
    Firestore foundation's steps ([OPERATIONS.md](OPERATIONS.md#deploying)).
 
-   The order keeps the testnet site from breaking 4rc.OS:
+   The order keeps the testnet site from breaking ArcOS:
    - A bundle that fails to build, either one, stops the run before the deploy job, and nothing is deployed. To ship
-     4rc.OS while the testnet build is broken, run the workflow with `targets: mainnet`.
-   - 4rc.OS deploys first. If its deploy fails, the testnet deploy doesn't start.
-   - If the testnet deploy fails (or its environment name check does), 4rc.OS is already live and its smoke checks still
+     ArcOS while the testnet build is broken, run the workflow with `targets: mainnet`.
+   - ArcOS deploys first. If its deploy fails, the testnet deploy doesn't start.
+   - If the testnet deploy fails (or its environment name check does), ArcOS is already live and its smoke checks still
      run; the run is marked failed for the testnet site only. Fix it and start a new manual run with
-     `targets: testnet`; "Re-run failed jobs" would re-run the whole deploy job, 4rc.OS included. The first time a
+     `targets: testnet`; "Re-run failed jobs" would re-run the whole deploy job, ArcOS included. The first time a
      testnet deploy fails, check that the smoke job still ran: it reads an output of the deploy job, which GitHub is
      expected to publish from a failed job too.
    The testnet site has no smoke job: `scripts/smoke.mjs` reads mainnet data. After a testnet deploy, open
@@ -203,10 +203,10 @@ missing fails. From a machine signed in as the owner (`gcloud auth login`, `fire
 ## The testnet site
 
 https://testnet.4rcos.com is the same code built for Arc Testnet, on a backend of its own, `arcos-testnet`. It is where
-an app that needs one of 4rc.OS's own contracts (Vault and Vesting, later Pro) goes live first: the app registry
+an app that needs one of ArcOS's own contracts (Vault and Vesting, later Pro) goes live first: the app registry
 (`apps/web/src/apps/registry.ts`) lists such an app live only on a network where `ARCOS` in `@arcos/chain` names its
 contract, and its grey "work in progress" window elsewhere. No such contract has a mainnet address before the audit
-gates, so 4rc.OS never lists one early. The site shows a "Testnet" badge beside the brand and tells search engines to
+gates, so ArcOS never lists one early. The site shows a "Testnet" badge beside the brand and tells search engines to
 leave it out: `robots` metadata and an `X-Robots-Tag: noindex, nofollow` header on every answer. It has no robots.txt
 rule, since a crawler kept out by one never reads the noindex. A mainnet build has none of these.
 
@@ -243,7 +243,7 @@ merges the files the same way for the workflow's testnet bundle, and fails if `a
 
 ### Owner steps
 
-Once. Until the last step sets the repository variable `ARCOS_TESTNET_READY` to `true`, the workflow deploys 4rc.OS
+Once. Until the last step sets the repository variable `ARCOS_TESTNET_READY` to `true`, the workflow deploys ArcOS
 alone and never touches `arcos-testnet`, so these steps can be done at any pace. Set the variable only after the backend
 exists with the environment name `testnet` (steps 2 and 3): from then on every deploy of `main` deploys the testnet site
 too, and fails at its environment name check if that name is wrong. Run them from a machine signed in as the owner
@@ -259,7 +259,7 @@ export TESTNET_SA="arcos-testnet-web@${PROJECT_ID}.iam.gserviceaccount.com"
 
    ```sh
    gcloud iam service-accounts create arcos-testnet-web --project="$PROJECT_ID" \
-     --display-name="4rc.OS testnet site (App Hosting arcos-testnet)"
+     --display-name="ArcOS testnet site (App Hosting arcos-testnet)"
    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
      --member="serviceAccount:${TESTNET_SA}" --role=roles/firebaseapphosting.computeRunner --condition=None
    ```
