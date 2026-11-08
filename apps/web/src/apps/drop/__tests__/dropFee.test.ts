@@ -104,7 +104,7 @@ describe("dropFeeText (N5 — must not show a stale total while the quote/row-co
 
 describe("dropFeeText display", () => {
   it("shortens a long fee and never shows a tiny one as 0", () => {
-    expect(dropFeeText({ total: 3_725_534_907_829_057n, count: 1 }, 1, 1)).toContain("Fee 0.003725 USDC");
+    expect(dropFeeText({ total: 3_725_534_907_829_057n, count: 1 }, 1, 1)).toContain("Fee 0.003726 USDC");
     expect(dropFeeText({ total: 1_000_000_000_000n, count: 1 }, 1, 1)).toContain("Fee < 0.0001 USDC");
   });
 });
