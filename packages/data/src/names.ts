@@ -14,7 +14,7 @@ export function isNetwork(value: unknown): value is NetworkId {
   return typeof value === "string" && Object.hasOwn(NETWORK_FLAGS, value);
 }
 
-/** Collection ids: the SQL tables of R1 Task 1 as design 1.6 maps them, plus linkCodes and radarFeed. */
+/** Collection ids: the SQL tables of R1 Task 1 as design 1.6 maps them, plus linkCodes, radarFeed, and Stats' stats and statsDays. */
 export const COLLECTIONS = {
   indexer: "indexer",
   tokens: "tokens",
@@ -28,6 +28,8 @@ export const COLLECTIONS = {
   nonces: "nonces",
   linkCodes: "linkCodes",
   radarFeed: "radarFeed",
+  stats: "stats",
+  statsDays: "statsDays",
 } as const;
 export type CollectionKey = keyof typeof COLLECTIONS;
 export type CollectionName = (typeof COLLECTIONS)[CollectionKey];

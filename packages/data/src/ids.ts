@@ -68,3 +68,14 @@ export function radarFeedId(network: NetworkId, filter: RadarFeedFilter): string
   }
   return `${assertNetwork(network)}:${filter}`;
 }
+
+const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** stats/{network}: the running totals of the usage counter, one doc per network. */
+export const statsId = (network: NetworkId): string => assertNetwork(network);
+
+/** statsDays/{network}:{yyyy-mm}: the day buckets of one UTC month. */
+export function statsDaysId(network: NetworkId, month: string): string {
+  if (typeof month !== "string" || !YEAR_MONTH.test(month)) throw new DataError("stats-month", "Not a month: expected YYYY-MM");
+  return `${assertNetwork(network)}:${month}`;
+}

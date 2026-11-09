@@ -78,6 +78,8 @@ export type IndexerDoc = {
   watch?: boolean;
   /** Telegram sends only. The owner edits it; missing reads as true. */
   telegram?: boolean;
+  /** The usage counter's step (Stats): its on-chain windows and its server counts. The owner edits it; missing reads as true. */
+  stats?: boolean;
   /** The watchState doc id the Watchdog step last attempted, so a run carries on where the last one stopped. Missing reads as null. */
   watchCursor?: string | null;
 };
@@ -272,4 +274,64 @@ export type RadarFeedDoc = {
   /** Not indexed (see firestore/arcos.indexes.json). */
   rows: RadarRow[];
   updatedAt: TimestampLike;
+};
+
+/** The counts the usage counter keeps. `A` is the amount type: `Amount` in the stored doc, `bigint` while folding. */
+export type StatsTotals<A> = {
+  tokensCreated: number;
+  /** TokenCreated by the template the flags name: neither, mintable only, burnable only, both. */
+  byTemplate: { standard: number; mintable: number; burnable: number; mintableBurnable: number };
+  /** One Drop event is one batch transaction. */
+  drops: number;
+  dropsNative: number;
+  dropsToken: number;
+  /** Rows, not wallets: one wallet can be a row in many drops. */
+  rowsSubmitted: number;
+  rowsDelivered: number;
+  rowsFailed: number;
+  /** Fees paid, in native USDC (18 decimals), rebuilt from the FeeController's timeline. Stored, not served. */
+  feesMint: A;
+  feesDrop: A;
+};
+
+/** The FeeController values Stats prices Mint and Drop with, as of `StatsDoc.block`; null until their `KeyAdded` is read. */
+export type StatsFees<A> = { mintFlat: A | null; dropPerRecipient: A | null; dropMin: A | null };
+
+/**
+ * stats/{network}: what the indexer's Stats step has counted on chain up to `block`, and what it last counted in its own
+ * data. No address is stored: the wallets left out of the on-chain counts are a constant in the indexer's code.
+ */
+export type StatsDoc = {
+  network: NetworkId;
+  /** The last block whose logs are folded into the totals. Moves forward only, in the transaction that folds them. */
+  block: number;
+  /** The block counting began at (the FeeController's deployment). */
+  fromBlock: number;
+  /** The finalized head the last window was read against; `head - block` is how far behind counting is. */
+  head: number;
+  fees: StatsFees<Amount>;
+  totals: StatsTotals<Amount>;
+  /** What the left-out wallets did, counted apart: they are in no total above. */
+  excluded: { tokensCreated: number; drops: number };
+  /** Counts of the site's own data, refreshed every 10 minutes; null until the first. */
+  server: {
+    users: number;
+    telegramLinked: number;
+    watches: number;
+    watchedTokens: number;
+    tokensIndexed: number;
+    tokensInspected: number;
+    since: { users: TimestampLike | null; telegram?: TimestampLike | null; watches: TimestampLike | null; tokens: TimestampLike | null };
+    countedAt: TimestampLike;
+  } | null;
+  /** When counting began: the time of `fromBlock`, a date at midnight UTC. */
+  onchainSince: TimestampLike;
+  updatedAt: TimestampLike;
+};
+
+/** statsDays/{network}:{yyyy-mm}: per UTC day counts, keyed YYYY-MM-DD. Written by increments in the same transaction as the totals. */
+export type StatsDaysDoc = {
+  network: NetworkId;
+  month: string;
+  days: Record<string, { tokensCreated: number; drops: number; rowsDelivered: number }>;
 };

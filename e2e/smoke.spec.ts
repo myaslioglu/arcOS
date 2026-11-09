@@ -59,6 +59,24 @@ test.describe("desktop", () => {
     await expect(radar.getByText("evidence, never a score", { exact: false })).toBeVisible();
   });
 
+  // The e2e build is mainnet without K_SERVICE, so /api/stats answers 503 and the window shows its first-load error. The
+  // System folder lists Stats beside About and the rest, with no "Soon" tag, and the window says what it can't read.
+  test("the System folder's Stats tile opens Stats, which says when the counts can't be read", async ({ page }) => {
+    await page.goto("/");
+    await hydrated(page);
+
+    await page.getByRole("group", { name: "Desktop" }).getByRole("button", { name: /^System: / }).click();
+    const system = page.getByRole("dialog", { name: "System" });
+    const tile = system.getByRole("button", { name: "Stats", exact: true });
+    await expect(tile).toBeEnabled();
+    await expect(tile.locator(".os-soon")).toHaveCount(0);
+    await tile.click();
+    const stats = page.getByRole("dialog", { name: "Stats" });
+    await expect(stats).toBeVisible();
+    await expect(stats.getByText("The usage counts can't be read right now.", { exact: false })).toBeVisible();
+    await expect(stats.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
   test("Cmd/Ctrl+K opens the launcher, and picking an app opens its window", async ({ page }) => {
     await page.goto("/");
     await hydrated(page);

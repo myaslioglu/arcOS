@@ -22,6 +22,7 @@ Automated analysis, not investment advice.
 | Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
 | Revoke | Lists a wallet's live token approvals and revokes one with a transaction the wallet confirms | Live |
 | Radar | Lists new tokens as the index records them, each with Inspector's checks | Live |
+| Stats | How much ArcOS is used: tokens created, Drop transactions and recipients on Arc mainnet, each with how to check it on the explorer | Live |
 | Watchdog | Alerts when a token you hold changes | Live |
 | Vault | Lock liquidity and team tokens | Coming soon |
 | Vesting | Release tokens on a schedule | Coming soon |
@@ -92,8 +93,8 @@ the suite's types; `npm run lint` covers it too.
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
   proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
   (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts),
-  `/api/pools/<token>` (a token's indexed pools), `/api/radar` (Radar's first page of a filter) and
-  `/api/csp-report` (content security policy violation reports).
+  `/api/pools/<token>` (a token's indexed pools), `/api/radar` (Radar's first page of a filter),
+  `/api/stats` (the usage counts, public, mainnet only) and `/api/csp-report` (content security policy violation reports).
 - `packages/shell` — the desktop itself: windows, dock, folders and trays, launcher, drag and
   drop. `src/core` is pure TypeScript (no React beyond type imports), `src/ui` holds the React
   components and `src/styles` the CSS. No wagmi or viem imports.
@@ -106,7 +107,7 @@ the suite's types; `npm run lint` covers it too.
   types, id helpers and converters (the pure entry, `@arcos/data`, which never imports
   firebase-admin), and `arcosDb()` (the server-only entry, `@arcos/data/server`).
 - `functions` — the scheduled functions (codebase `arcos`): `arcosIndexer` records new USDC and
-  EURC pools and their tokens, inspects them and keeps Radar's first pages. Bundled with esbuild
+  EURC pools and their tokens, inspects them, keeps Radar's first pages and counts usage for Stats. Bundled with esbuild
   into `functions/deploy`.
 - `packages/contracts` — the three Solidity contracts and their Foundry tests, scripts and
   deployment guide.
@@ -355,6 +356,33 @@ command) so its maker can see what is used. The page sends each one's name and a
 writes one line to the host's logs. There are no cookies and no third-party script, and the line holds no address, IP
 address or user agent and nothing typed past a command's name. It says how often something happens, not who did it. The
 details are in [SECURITY.md](./SECURITY.md#event-counts).
+
+## How Stats counts
+
+The Stats window (System folder) and `GET /api/stats` show how much ArcOS is used on Arc mainnet. The same JSON is public,
+with CORS open to any origin; the window reads it every 60 seconds. Testnet is not counted, and the testnet site's
+`/api/stats` answers 404.
+
+Each number says what it counts, the date it counts from, and where it comes from:
+
+| Number | Source | How to check it |
+| --- | --- | --- |
+| Tokens created with Mint, split by template (standard, mintable, burnable, both) | On chain | Count the `TokenCreated` events of the [TokenFactory](https://explorer.arc.io/address/0xa68edD822048C00dC816d93005B72F8a50234a24?tab=logs) |
+| Drop transactions (USDC and tokens) | On chain | Count the `Drop` events of both Multisends: the [current one](https://explorer.arc.io/address/0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e?tab=logs) and the [previous one](https://explorer.arc.io/address/0x03ddE90Fde3983CEEE600dbc9b76f6D73512af47?tab=logs) |
+| Recipients delivered, rows that failed | On chain | Add up `recipients` minus `failedCount`, and `failedCount`, over the same events |
+| Wallets signed in, wallets with Telegram alerts, token watches, tokens Radar indexed and inspected | Recorded by ArcOS | Counted from ArcOS's own data every 10 minutes; nobody else can recount these |
+
+- On-chain counts start at block 22,742,796 (2026-09-25, the block that deployed the FeeController), and the answer says
+  which block it is as of. The indexer reads each block range once: a count never goes up twice for one event.
+- The counts leave out the ArcOS project wallet's own transactions, so the explorer's totals can be a little higher.
+- Drop counts rows, not unique wallets: one wallet can be a row in many drops. Nothing counts unique visitors or
+  connected wallets, and no count is per address.
+- "Recorded by ArcOS" counts start when ArcOS's index began (about 2026-10-01), and the window shows each number's date.
+- The counts are automated, and refreshed about every minute. Right after the counter starts, or if it falls behind, the
+  on-chain numbers are lower than the real totals until it has read the chain; the window says so.
+- The JSON is `{ version, network, asOf: { block, at, behind }, counts: [{ id, label, value, since, source, parts?, verify? }], notes }`.
+  `source` is `onchain` or `server`; `verify` names the contracts, the event signature and an explorer link to each
+  contract's logs.
 
 ## Security
 

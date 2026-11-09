@@ -472,7 +472,7 @@ R1's VaultFactory, VestingFactory and ProPass are not deployed yet (see "R1" abo
 The mainnet Multisend was deployed again on 2026-10-30, against the same FeeController and with the same ABI and fee
 keys. The previous version's `sendNative` copied each recipient's return data into memory; the new one makes the
 native call without an output area (PR #42). The previous contract stays on chain, and Revoke still names it ("ArcOS
-Multisend (old)", `PREVIOUS_MULTISENDS` in `apps/web/src/lib/approvals.ts`), so an allowance an earlier Drop left with
+Multisend (old)", `PREVIOUS_MULTISENDS` in `packages/chain/src/usage.ts`, re-exported by `apps/web/src/lib/approvals.ts`), so an allowance an earlier Drop left with
 it can be found and revoked. The testnet Multisend was not deployed again: it is still the previous version.
 
 The testnet `TokenFactory` predates the current name rule (it checks each byte only for ASCII control characters, so malformed UTF-8 and bidi, line-break and invisible characters still pass there); the

@@ -7,5 +7,6 @@ export * from "./errors";
 export * from "./ids";
 export * from "./names";
 export * from "./pools";
+export * from "./stats";
 export * from "./timestamps";
 export * from "./watch";
