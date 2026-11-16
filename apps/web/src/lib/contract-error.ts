@@ -58,7 +58,7 @@ const asBigInt = (v: unknown): bigint => {
  * EIP-1193 code 4001 a wallet can send before viem wraps it. Mirrors the equivalent check already in
  * apps/drop/runDrop.ts and lib/network.ts — kept local here too so this module has no dependency on
  * any single app. */
-function isUserRejection(err: unknown): boolean {
+export function isUserRejection(err: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = err;
   while (current !== null && typeof current === "object" && !seen.has(current)) {
@@ -166,8 +166,21 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
   ZeroAmount: () => "An amount in this batch is zero.",
   ReentrancyGuardReentrantCall: () => "That action is already in progress.",
 
-  // --- VaultFactory (R1). The Vault app maps the rest of its errors, and its vaults' (apps/vault/errors.ts, passed
-  // to describeContractError as `extra`): some share a name with an error above but mean something else there.
+  // --- VestingFactory (R1). Its other errors (NotAToken, WrongFee, FeeTransferFailed, ZeroFeeController) are mapped above;
+  // OpenZeppelin's OwnableInvalidOwner (a zero beneficiary) is too. ZeroAmount is Multisend's sentence, which also fits. ---
+  BadSchedule: () =>
+    "That schedule isn't allowed. It must run for 1 second to 10 years, the cliff can't be longer than it runs, and it can start at most 10 years from now.",
+  AmountTooLarge: () => "That amount is too large for one schedule.",
+  // The token refused to move the amount (a balance or allowance too low, or a token that restricts transfers).
+  SafeERC20FailedOperation: () => "The token refused the transfer. Check your balance of it, and that the token allows the transfer.",
+  // ArcVesting's own errors. A window that only creates and releases schedules doesn't meet them in normal use.
+  // OpenZeppelin's SafeCast guard in the vesting arithmetic: not reachable inside the factory's limits.
+  SafeCastOverflowedUintDowncast: () => "A number in that schedule is too large.",
+  InvalidCliffDuration: () => "The cliff can't be longer than the schedule.",
+  NativeValueNotSupported: () => "A vesting contract takes tokens, not USDC sent as plain value. Use its token.",
+
+  // --- VaultFactory (R1). The Vault app passes its own sentences for the rest of its errors, and its vaults', as
+  // `overrides` (apps/vault/errors.ts): some share a name with an error here but mean something else there.
   // RenounceDisabled is declared on VaultFactory and ArcVesting too, with the same meaning, so the FeeController
   // sentence above serves all three. ---
   HookedPool: () => "This position is in a Uniswap v4 pool with hooks, which can't be locked.",
@@ -183,15 +196,15 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
  * 2. A wallet that took the page for an embedded frame, whatever code it sent (`EMBEDDED_FRAME_MESSAGE`,
  *    lib/wallet-frame.ts): trying again can't help, a reload can.
  * 3. A wallet-level user rejection ("You cancelled the request in your wallet.").
- * 4. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above, or to the
- *    caller's own sentence for it in `extra`, which is read first (an app whose contracts reuse an error name
- *    with another meaning, as the Vault's do, passes its own map).
+ * 4. A decoded revert, mapped to the caller's own sentence for it in `overrides` when there is one (a sentence, or
+ *    a function of the error's arguments: an app whose contracts reuse an error name with another meaning, as
+ *    Vesting's and Vault's do, passes its own), else to its sentence above. Only own entries count.
  * 5. A balance too low for the value plus gas (`INSUFFICIENT_FUNDS_ERROR`).
  * 6. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
-export function describeContractError(err: unknown, extra: Readonly<Record<string, ErrorFormatter>> = {}): string {
+export function describeContractError(err: unknown, overrides: Readonly<Record<string, string | ErrorFormatter>> = {}): string {
   if (err instanceof UserFacingError) return err.message;
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
@@ -200,7 +213,9 @@ export function describeContractError(err: unknown, extra: Readonly<Record<strin
   if (revert) {
     // Own entries only: a name like "constructor" must not find what every object inherits.
     const name = revert.errorName;
-    const format = Object.hasOwn(extra, name) ? extra[name] : Object.hasOwn(CONTRACT_ERRORS, name) ? CONTRACT_ERRORS[name] : undefined;
+    const own = Object.hasOwn(overrides, name) ? overrides[name] : Object.hasOwn(CONTRACT_ERRORS, name) ? CONTRACT_ERRORS[name] : undefined;
+    if (typeof own === "string") return own;
+    const format = own;
     if (format) {
       try {
         return format(revert.args);

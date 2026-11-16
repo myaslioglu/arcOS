@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContractFunctionExecutionError, UserRejectedRequestError } from "viem";
-import { arcVestingAbi, feeControllerAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi } from "@arcos/chain";
+import { arcVestingAbi, feeControllerAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi, vestingFactoryAbi } from "@arcos/chain";
 import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
 import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
 
@@ -23,6 +23,9 @@ describe("describeContractError — ABI completeness", () => {
     ...errorNamesOf(feeControllerAbi),
     ...errorNamesOf(tokenFactoryAbi),
     ...errorNamesOf(multisendAbi),
+    // The Vesting window creates schedules and releases them: every error of the factory and of the wallet it can show.
+    ...errorNamesOf(vestingFactoryAbi),
+    ...errorNamesOf(arcVestingAbi),
   ]);
 
   it("covers every custom error declared across the three generated ABIs", () => {
@@ -92,6 +95,11 @@ describe("describeContractError", () => {
 
   it("maps Multisend's BadLists — the brief's 'TooManyRecipients' name doesn't exist in the ABI; BadLists is what the contract actually reverts with, and covers the 400 cap", () => {
     expect(describeContractError(revertError("BadLists"))).toMatch(/400/);
+  });
+
+  it("explains the VestingFactory's BadSchedule and AmountTooLarge", () => {
+    expect(describeContractError(revertError("BadSchedule"))).toMatch(/1 second to 10 years/);
+    expect(describeContractError(revertError("AmountTooLarge"))).toBe("That amount is too large for one schedule.");
   });
 
   it("finds the revert nested arbitrarily deep in an error's cause chain", () => {
@@ -333,26 +341,37 @@ describe("describeContractError — a wallet that takes the page for an embedded
   });
 });
 
-// An app whose contracts reuse an error name with its own meaning (Vault's ZeroAmount) passes its own sentences.
-describe("describeContractError — an app's own sentences (`extra`)", () => {
-  const extra = { ZeroAmount: () => "Nothing would reach the vault.", OnlyHere: () => "Only this app's error." };
+// An app whose contracts reuse an error name with its own meaning (Vault's ZeroAmount, Vesting's) passes its own
+// sentences: plain sentences, or functions of the error's arguments.
+describe("describeContractError — an app's own sentences (`overrides`)", () => {
+  const overrides = {
+    ZeroAmount: () => "Nothing would reach the vault.",
+    OnlyHere: "Only this app's error.",
+    Dated: (a: readonly unknown[]) => `Locked until ${String(a[0])}.`,
+    Broken: (a: readonly unknown[]) => (a[0] as { x: string }).x,
+  };
 
-  it("reads `extra` before the shared map, and the shared map for the rest", () => {
-    expect(describeContractError(revertError("ZeroAmount"), extra)).toBe("Nothing would reach the vault.");
-    expect(describeContractError(revertError("OnlyHere"), extra)).toBe("Only this app's error.");
-    expect(describeContractError(revertError("BadName"), extra)).toMatch(/^Name must be/);
+  it("reads `overrides` before the shared map, a sentence as it is and a function with the error's arguments", () => {
+    expect(describeContractError(revertError("ZeroAmount"), overrides)).toBe("Nothing would reach the vault.");
+    expect(describeContractError(revertError("OnlyHere"), overrides)).toBe("Only this app's error.");
+    expect(describeContractError(revertError("Dated", [7n]), overrides)).toBe("Locked until 7.");
+    expect(describeContractError(revertError("BadName"), overrides)).toMatch(/^Name must be/);
     expect(describeContractError(revertError("ZeroAmount"))).toBe("An amount in this batch is zero.");
+  });
+
+  it("falls back to the generic sentence when an override's function throws", () => {
+    expect(describeContractError(revertError("Broken", [null]), overrides)).toBe(GENERIC_TRANSACTION_ERROR);
   });
 
   it("takes only either map's own entries, never one an object inherits", () => {
     for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"]) {
-      expect(describeContractError(revertError(name), extra), name).toBe(GENERIC_TRANSACTION_ERROR);
+      expect(describeContractError(revertError(name), overrides), name).toBe(GENERIC_TRANSACTION_ERROR);
       expect(describeContractError(revertError(name)), name).toBe(GENERIC_TRANSACTION_ERROR);
     }
   });
 
   it("still answers a cancellation and a UserFacingError first", () => {
-    expect(describeContractError({ code: 4001 }, extra)).toBe("You cancelled the request in your wallet.");
-    expect(describeContractError(new UserFacingError("A sentence this app wrote."), extra)).toBe("A sentence this app wrote.");
+    expect(describeContractError({ code: 4001 }, overrides)).toBe("You cancelled the request in your wallet.");
+    expect(describeContractError(new UserFacingError("A sentence this app wrote."), overrides)).toBe("A sentence this app wrote.");
   });
 });

@@ -13,6 +13,7 @@ import { stats } from "./stats/manifest";
 import { swap } from "./swap/manifest";
 import { terminal } from "./terminal/manifest";
 import { vault } from "./vault/manifest";
+import { vesting } from "./vesting/manifest";
 import { wallet } from "./wallet/manifest";
 import { watchdog } from "./watchdog/manifest";
 import { SOON } from "./soon";
@@ -21,7 +22,7 @@ import { SOON } from "./soon";
  * The live apps, in desktop order. Every app in the product is listed here or in SOON, and nowhere else; an app gated
  * on a contract (NEEDS_CONTRACT) is in both, and `appsFor` lists one of the two per network.
  */
-export const LIVE: AppManifest[] = [finder, inspector, watchdog, vault, mint, drop, swap, bridge, radar, meme, wallet, about, stats, revoke, terminal];
+export const LIVE: AppManifest[] = [finder, inspector, watchdog, vault, mint, drop, swap, bridge, radar, meme, wallet, about, stats, revoke, terminal, vesting];
 
 /** Which of ArcOS's own contracts in @arcos/chain's `ARCOS` an app acts through. */
 export type ContractKey = "vaultFactory" | "vestingFactory" | "proPass";

@@ -135,6 +135,7 @@ describe("every paid write goes through withChain (every source file, every writ
       reason: "handed to revoke/flow.ts as deps.writeContractAsync, whose one call this scan checks for withChain",
     },
     { file: "apps/web/src/apps/drop/useDrop.ts", receiver: "(bare)", member: "mutateAsync", kind: "reference", count: 1, reason: "send's useCallback dependency list" },
+    { file: "apps/web/src/apps/vesting/useCreate.ts", receiver: "(bare)", member: "mutateAsync", kind: "reference", count: 2, reason: "the useCallback dependency lists of the bulk run and of release; every call in the file is wrapped in withChain" },
     {
       file: "apps/web/src/apps/vault/hooks.ts",
       receiver: "writeContract",
