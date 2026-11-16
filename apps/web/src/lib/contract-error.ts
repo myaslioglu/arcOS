@@ -117,7 +117,8 @@ function isInsufficientFunds(err: unknown): boolean {
   return false;
 }
 
-type ErrorFormatter = (args: readonly unknown[]) => string;
+/** One custom error's sentence, from the error's decoded arguments. */
+export type ErrorFormatter = (args: readonly unknown[]) => string;
 
 /**
  * One entry per `type: "error"` item across the three generated ABIs
@@ -165,8 +166,10 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
   ZeroAmount: () => "An amount in this batch is zero.",
   ReentrancyGuardReentrantCall: () => "That action is already in progress.",
 
-  // --- VaultFactory (R1). Its other errors are mapped when the Vault app ships; RenounceDisabled is declared on
-  // VaultFactory and ArcVesting too, with the same meaning, so the FeeController sentence above serves all three. ---
+  // --- VaultFactory (R1). The Vault app maps the rest of its errors, and its vaults' (apps/vault/errors.ts, passed
+  // to describeContractError as `extra`): some share a name with an error above but mean something else there.
+  // RenounceDisabled is declared on VaultFactory and ArcVesting too, with the same meaning, so the FeeController
+  // sentence above serves all three. ---
   HookedPool: () => "This position is in a Uniswap v4 pool with hooks, which can't be locked.",
 
   // --- Shared between TokenFactory and Multisend (declared identically in both ABIs) ---
@@ -180,20 +183,24 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
  * 2. A wallet that took the page for an embedded frame, whatever code it sent (`EMBEDDED_FRAME_MESSAGE`,
  *    lib/wallet-frame.ts): trying again can't help, a reload can.
  * 3. A wallet-level user rejection ("You cancelled the request in your wallet.").
- * 4. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
+ * 4. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above, or to the
+ *    caller's own sentence for it in `extra`, which is read first (an app whose contracts reuse an error name
+ *    with another meaning, as the Vault's do, passes its own map).
  * 5. A balance too low for the value plus gas (`INSUFFICIENT_FUNDS_ERROR`).
  * 6. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
-export function describeContractError(err: unknown): string {
+export function describeContractError(err: unknown, extra: Readonly<Record<string, ErrorFormatter>> = {}): string {
   if (err instanceof UserFacingError) return err.message;
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
 
   const revert = findDecodedRevert(err);
   if (revert) {
-    const format = CONTRACT_ERRORS[revert.errorName];
+    // Own entries only: a name like "constructor" must not find what every object inherits.
+    const name = revert.errorName;
+    const format = Object.hasOwn(extra, name) ? extra[name] : Object.hasOwn(CONTRACT_ERRORS, name) ? CONTRACT_ERRORS[name] : undefined;
     if (format) {
       try {
         return format(revert.args);

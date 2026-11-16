@@ -332,3 +332,27 @@ describe("describeContractError — a wallet that takes the page for an embedded
     expect(describeContractError(err)).toBe("You cancelled the request in your wallet.");
   });
 });
+
+// An app whose contracts reuse an error name with its own meaning (Vault's ZeroAmount) passes its own sentences.
+describe("describeContractError — an app's own sentences (`extra`)", () => {
+  const extra = { ZeroAmount: () => "Nothing would reach the vault.", OnlyHere: () => "Only this app's error." };
+
+  it("reads `extra` before the shared map, and the shared map for the rest", () => {
+    expect(describeContractError(revertError("ZeroAmount"), extra)).toBe("Nothing would reach the vault.");
+    expect(describeContractError(revertError("OnlyHere"), extra)).toBe("Only this app's error.");
+    expect(describeContractError(revertError("BadName"), extra)).toMatch(/^Name must be/);
+    expect(describeContractError(revertError("ZeroAmount"))).toBe("An amount in this batch is zero.");
+  });
+
+  it("takes only either map's own entries, never one an object inherits", () => {
+    for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"]) {
+      expect(describeContractError(revertError(name), extra), name).toBe(GENERIC_TRANSACTION_ERROR);
+      expect(describeContractError(revertError(name)), name).toBe(GENERIC_TRANSACTION_ERROR);
+    }
+  });
+
+  it("still answers a cancellation and a UserFacingError first", () => {
+    expect(describeContractError({ code: 4001 }, extra)).toBe("You cancelled the request in your wallet.");
+    expect(describeContractError(new UserFacingError("A sentence this app wrote."), extra)).toBe("A sentence this app wrote.");
+  });
+});

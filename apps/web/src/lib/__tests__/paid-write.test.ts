@@ -135,6 +135,14 @@ describe("every paid write goes through withChain (every source file, every writ
       reason: "handed to revoke/flow.ts as deps.writeContractAsync, whose one call this scan checks for withChain",
     },
     { file: "apps/web/src/apps/drop/useDrop.ts", receiver: "(bare)", member: "mutateAsync", kind: "reference", count: 1, reason: "send's useCallback dependency list" },
+    {
+      file: "apps/web/src/apps/vault/hooks.ts",
+      receiver: "writeContract",
+      member: "mutateAsync",
+      kind: "reference",
+      count: 1,
+      reason: "handed to vault/flow.ts as deps.writeContractAsync, whose calls this scan checks for withChain",
+    },
   ];
 
   /** Where `index` falls inside a `const|let|var { ... } =` pattern: a name bound there is checked where it's used. */
