@@ -8,6 +8,7 @@
     "test:fork": "FOUNDRY_PROFILE=fork node scripts/forge.mjs test -vv",
     "fmt": "node scripts/forge.mjs fmt --check",
     "sizes": "node scripts/forge.mjs build --sizes",
+    "vectors": "FOUNDRY_PROFILE=vectors WRITE_VESTING_VECTORS=true node scripts/forge.mjs test",
     "abis": "node scripts/forge.mjs build && node scripts/export-abis.mjs"
   },
   "devDependencies": {

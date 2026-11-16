@@ -193,6 +193,8 @@ export function spenderLabel(spender: string, network: NetworkId): string | null
   if (UNIVERSAL_ROUTERS[network].some((r) => r.toLowerCase() === s)) return "Uniswap Universal Router";
   const multisend = ARCOS[network]?.multisend;
   if (multisend && s === multisend.toLowerCase()) return "ArcOS Multisend";
+  const vesting = ARCOS[network]?.vestingFactory;
+  if (vesting && s === vesting.toLowerCase()) return "ArcOS Vesting";
   if (PREVIOUS_MULTISENDS[network].some((m) => m.toLowerCase() === s)) return "ArcOS Multisend (old)";
   if (s === SWAP_ADAPTER[network].toLowerCase()) return "Circle swap adapter";
   return null;

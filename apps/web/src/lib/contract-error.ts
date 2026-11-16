@@ -58,7 +58,7 @@ const asBigInt = (v: unknown): bigint => {
  * EIP-1193 code 4001 a wallet can send before viem wraps it. Mirrors the equivalent check already in
  * apps/drop/runDrop.ts and lib/network.ts — kept local here too so this module has no dependency on
  * any single app. */
-function isUserRejection(err: unknown): boolean {
+export function isUserRejection(err: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = err;
   while (current !== null && typeof current === "object" && !seen.has(current)) {
@@ -165,6 +165,19 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
   ZeroAmount: () => "An amount in this batch is zero.",
   ReentrancyGuardReentrantCall: () => "That action is already in progress.",
 
+  // --- VestingFactory (R1). Its other errors (NotAToken, WrongFee, FeeTransferFailed, ZeroFeeController) are mapped above;
+  // OpenZeppelin's OwnableInvalidOwner (a zero beneficiary) is too. ZeroAmount is Multisend's sentence, which also fits. ---
+  BadSchedule: () =>
+    "That schedule isn't allowed. It must run for 1 second to 10 years, the cliff can't be longer than it runs, and it can start at most 10 years from now.",
+  AmountTooLarge: () => "That amount is too large for one schedule.",
+  // The token refused to move the amount (a balance or allowance too low, or a token that restricts transfers).
+  SafeERC20FailedOperation: () => "The token refused the transfer. Check your balance of it, and that the token allows the transfer.",
+  // ArcVesting's own errors. A window that only creates and releases schedules doesn't meet them in normal use.
+  // OpenZeppelin's SafeCast guard in the vesting arithmetic: not reachable inside the factory's limits.
+  SafeCastOverflowedUintDowncast: () => "A number in that schedule is too large.",
+  InvalidCliffDuration: () => "The cliff can't be longer than the schedule.",
+  NativeValueNotSupported: () => "A vesting contract takes tokens, not USDC sent as plain value. Use its token.",
+
   // --- VaultFactory (R1). Its other errors are mapped when the Vault app ships; RenounceDisabled is declared on
   // VaultFactory and ArcVesting too, with the same meaning, so the FeeController sentence above serves all three. ---
   HookedPool: () => "This position is in a Uniswap v4 pool with hooks, which can't be locked.",
@@ -186,12 +199,13 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
-export function describeContractError(err: unknown): string {
+export function describeContractError(err: unknown, overrides: Readonly<Record<string, string>> = {}): string {
   if (err instanceof UserFacingError) return err.message;
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
 
   const revert = findDecodedRevert(err);
+  if (revert && Object.hasOwn(overrides, revert.errorName)) return overrides[revert.errorName];
   if (revert) {
     const format = CONTRACT_ERRORS[revert.errorName];
     if (format) {

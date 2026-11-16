@@ -137,10 +137,47 @@ describe("the registry, gated per network (D6)", () => {
     }
   });
 
-  it("lists the same apps on both networks today, since no network has a gated contract yet", () => {
-    expect(ids(appsFor("mainnet"))).toEqual(ids([...LIVE, ...SOON]));
-    expect(ids(appsFor("testnet"))).toEqual(ids([...LIVE, ...SOON]));
-    expect(ids(APPS)).toEqual(ids([...LIVE, ...SOON]));
+  it("lists the same apps on both networks today, with the grey Vesting stand-in in place of the live one", () => {
+    // Vesting's live manifest is in LIVE but gated: it shows only where ARCOS names a vestingFactory, and until then its
+    // grey stand-in (the same id, in the same folder of the desktop) is listed instead, so the site is unchanged.
+    const expected = ids([...LIVE.filter((m) => m.id !== "vesting"), ...SOON]);
+    expect(ids(appsFor("mainnet"))).toEqual(expected);
+    expect(ids(appsFor("testnet"))).toEqual(expected);
+    expect(ids(APPS)).toEqual(expected);
+  });
+
+  describe("Vesting", () => {
+    const FACTORY = "0x1111111111111111111111111111111111111111";
+    const live = () => LIVE.find((m) => m.id === "vesting");
+
+    it("has a live manifest, and keeps its grey stand-in", () => {
+      expect(live()).toMatchObject({ name: "Vesting", blurb: "Release tokens on a schedule", category: "trust", release: "r2", requiresWallet: true, acceptsDrop: ["token"] });
+      expect(live()?.comingSoon).toBeFalsy();
+      expect(SOON.find((m) => m.id === "vesting")?.comingSoon).toBe(true);
+      expect(NEEDS_CONTRACT.vesting).toBe("vestingFactory");
+    });
+
+    it("shows the grey stand-in on both networks while no VestingFactory address is set", () => {
+      for (const network of ["mainnet", "testnet"] as const) {
+        const apps = appsFor(network).filter((m) => m.id === "vesting");
+        expect(apps, network).toHaveLength(1);
+        expect(apps[0].comingSoon, network).toBe(true);
+      }
+      expect(ARCOS.mainnet?.vestingFactory ?? null).toBeNull();
+      expect(ARCOS.testnet?.vestingFactory ?? null).toBeNull();
+    });
+
+    it("shows the live app, and not the stand-in, where the factory has an address", () => {
+      const apps = appsFor("testnet", { contracts: { vestingFactory: FACTORY } }).filter((m) => m.id === "vesting");
+      expect(apps).toEqual([live()]);
+    });
+
+    it("keeps it grey where the address is missing, zero or malformed", () => {
+      for (const vestingFactory of [null, undefined, "0x0000000000000000000000000000000000000000", "0x12", 7]) {
+        const apps = appsFor("testnet", { contracts: { vestingFactory } }).filter((m) => m.id === "vesting");
+        expect(apps.map((m) => m.comingSoon), String(vestingFactory)).toEqual([true]);
+      }
+    });
   });
 
   it("lists a gated app live where its contract has an address, in place of its grey stand-in", () => {
