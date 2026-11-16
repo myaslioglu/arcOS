@@ -258,8 +258,21 @@ describe("abis", () => {
       "OwedNotCollected",
       "PositionNotReceived",
       "HookedPool",
+      "FeeAboveMax",
     ]) {
       expect(errors).toContain(name);
+    }
+    expect(inputNames(findItem(vaultFactoryAbi, "error", "FeeAboveMax"))).toEqual(["key", "current", "max"]);
+  });
+
+  // The owner's decision of 2026-11-16: each lock names the most it accepts for ArcOS's share, last, as `maxFeeBps`.
+  it("vaultFactoryAbi's lock functions take the caller's maximum share last", () => {
+    expect(inputNames(findItem(vaultFactoryAbi, "function", "lockToken"))).toEqual(["token", "amount", "unlockAt", "owner_", "maxFeeBps"]);
+    expect(inputNames(findItem(vaultFactoryAbi, "function", "lockPosition"))).toEqual(["manager", "tokenId", "unlockAt", "owner_", "maxFeeBps"]);
+    for (const name of ["lockToken", "lockPosition"]) {
+      const item = findItem(vaultFactoryAbi, "function", name) as { inputs: readonly { type: string }[] } | undefined;
+      expect(item?.inputs.at(-1)?.type, name).toBe("uint256");
+      expect(stateMutability(vaultFactoryAbi, name), name).toBe("payable");
     }
   });
 
@@ -384,6 +397,7 @@ describe("vesting and ProPass abis", () => {
         "createVesting",
         "feeController",
         "isVesting",
+        "tokenOf",
         "vestingsForToken",
         "vestingsForTokenLength",
         "vestingsForTokenSlice",
@@ -404,6 +418,16 @@ describe("vesting and ProPass abis", () => {
       "duration",
       "cliff",
     ]);
+  });
+
+  // The owner's decision of 2026-11-16: the factory records each wallet's token, which the wallet itself doesn't keep.
+  it("vestingFactoryAbi's tokenOf takes a wallet and answers its token, a view", () => {
+    const item = findItem(vestingFactoryAbi, "function", "tokenOf") as
+      | { inputs: readonly { name: string; type: string }[]; outputs: readonly { type: string }[]; stateMutability: string }
+      | undefined;
+    expect(item?.inputs.map((i) => [i.name, i.type])).toEqual([["vesting", "address"]]);
+    expect(item?.outputs.map((o) => o.type)).toEqual(["address"]);
+    expect(item?.stateMutability).toBe("view");
   });
 
   it("vestingFactoryAbi's VestingCreated event carries what Inspector reads, and the errors the Vesting app decodes", () => {

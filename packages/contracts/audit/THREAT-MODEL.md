@@ -19,12 +19,12 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
 |---|---|---|
 | **Lock owner** (`LockVault.owner`, `PositionVault.owner`) | `extend` (only later, in the future, at most 3650 days out); `withdraw(to)` at or after `unlockAt`; on a position, `collect` fees at any time; start and cancel a two-step ownership transfer | shorten a lock; move principal before `unlockAt`; change the fee share or recipient copied into a position vault |
 | **Pending owner** | `acceptOwnership` | anything else |
-| **Lock creator** (the caller of `lockToken` / `lockPosition`) | pay the flat fee; lock their own tokens or their own position NFT for any `owner_`, any `unlockAt` in the window | lock a token or NFT they don't hold or haven't approved; the NFT is always taken from `msg.sender` |
+| **Lock creator** (the caller of `lockToken` / `lockPosition`) | pay the flat fee; lock their own tokens or their own position NFT for any `owner_`, any `unlockAt` in the window; name the highest share they accept (`maxFeeBps`, Q10) | lock a token or NFT they don't hold or haven't approved; the NFT is always taken from `msg.sender`; be charged a share above their `maxFeeBps` |
 | **Vesting creator** (the caller of `createVesting`) | fund a schedule for any beneficiary, token, start (up to 3650 days out, or in the past), duration and cliff | take anything back: a schedule can't be cancelled |
 | **Beneficiary** (`ArcVesting.owner()`) | receive releases; transfer the wallet in one step (so sell it, unvested tokens included) | change the schedule; release more than has vested; renounce ownership (disabled, V2) |
-| **Anyone** | call `release(token)` on any wallet (the tokens go to its owner); create locks and schedules for anyone, and so pad the registries; send tokens to a vault or wallet; clone the public implementations; pay `ProPass` for any account; apply a fee increase whose delay has passed (`FeeController.applyPending`); add liquidity to a locked v3 position (Q22) | move value out of a vault or a wallet to anyone but its owner |
+| **Anyone** | call `release(token)` on any wallet (the tokens go to its owner); create locks and schedules for anyone, and so pad the registries; send tokens to a vault or wallet; clone the public implementations; pay `ProPass` for any account; apply a fee increase whose delay has passed (`FeeController.applyPending`), which a lock that accepted less then refuses (Q10); add liquidity to a locked v3 position (Q22) | move value out of a vault or a wallet to anyone but its owner |
 | **Fee recipient** (`FeeController.recipient()`) | receive the flat fees, the LP fee and the position share | reach a vault. A recipient that reverts blocks new locks, schedules and subscriptions (Q9, V11); in a position vault it is skipped instead (Q9) |
-| **FeeController owner** | add a key; lower a fee at once; raise a fee up to its cap after 48 hours; change the recipient | exceed a cap; renounce ownership (disabled); change a fee already charged, or the share and recipient already copied into a position vault |
+| **FeeController owner** | add a key; lower a fee at once; raise a fee up to its cap after 48 hours; change the recipient | exceed a cap; renounce ownership (disabled); change a fee already charged, or the share and recipient already copied into a position vault; charge a lock a share above its caller's `maxFeeBps` (Q10) |
 | **VaultFactory owner** | allow or disallow a position manager and set its kind, for new position locks only (`setManager`); transfer ownership in two steps | touch an existing vault, lock or fee; renounce ownership (disabled, Q7) |
 | **Allow-listed position manager** (Uniswap v3 `NonfungiblePositionManager`, v4 `PositionManager`) | report a position's currencies, liquidity and owed amounts; transfer the NFT; pay out fees on `collect` | nothing more is granted, but a hostile manager could lie about all of that (Q8, Q24) |
 | **Token issuers** (a locked token, a vested token, a pool currency) | freeze, blocklist, confiscate, pause, tax transfers, rebase, lie about balances; make a token look like a v2 pair (Q18); refuse the fee recipient (Q19); raise its own transfer gas (Q28); re-enter on transfer | reach other tokens' locks |
@@ -40,8 +40,9 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
 3. **Vesting tokens** in `ArcVesting` wallets.
 4. **Fees in transit**: the native flat fees and `ProPass` payments, the LP fee in the locked token, the position
    share in the pool's currencies. None rests in a contract.
-5. **Proof data** other software trusts: `isVault`, `isVesting`, the registries, the events, each vault's `owner()`,
-   `unlockAt`, `lockedAmount()` and `liquidity()`, and `ProPass.paidUntil`. Inspector shows a token's lock from them.
+5. **Proof data** other software trusts: `isVault`, `isVesting`, `tokenOf` (N2), the registries, the events, each
+   vault's `owner()`, `unlockAt`, `lockedAmount()` and `liquidity()`, and `ProPass.paidUntil`. Inspector shows a
+   token's lock from them.
 6. **Control**: FeeController ownership (fee levels, the recipient) and VaultFactory ownership (the allow-list).
 
 ## Trust assumptions
@@ -56,7 +57,8 @@ paid as native USDC, and are forwarded in the same call. Nothing in scope holds 
   was hookless when locked stays hookless. An NFT's owner alone can decrease, burn, transfer or approve it. The
   fork suite checks these on the live deployments.
 - **The FeeController owner is honest within its caps.** It can raise fees only to the caps and only after 48
-  hours, can set a fee to zero (T5), and chooses the recipient. It is meant to be a Safe before mainnet.
+  hours, can set a fee to zero (T5), and chooses the recipient. It is meant to be a Safe before mainnet. A raise never
+  reaches a lock whose caller accepted less: the flat fee is sent exactly, and each lock names its `maxFeeBps` (Q10).
 - **The fee recipient is a plain account.** A position vault gives the recipient 100,000 gas per payment; a
   recipient that needs more is skipped (Q20).
 - **Arc's USDC keeps its two views in step**, and the chain supports TSTORE/TLOAD (checked).
@@ -131,7 +133,8 @@ The attack classes, and what this design does to each:
 
 These questions come from the implementers' and reviewers' notes, merged where they overlap. Each ID is the note's
 own number, kept for traceability: Q1 to Q32 for the vault contracts, V1 to V14 and T1 to T5 for vesting and
-ProPass, D0 for a vesting design deviation, and N1 for one added while writing this package.
+ProPass, D0 for a vesting design deviation, N1 for one added while writing this package, and N2 for the owner's
+decision of 2026-11-16 (`tokenOf`).
 
 Status:
 - **Owner decision, open**: a product choice not yet made, so the current behaviour may change before the freeze.
@@ -164,7 +167,7 @@ schedule ends.
 `getReserves()` returns 96. Any ERC-20 author can answer the same way, and then everyone who locks that token pays the
 LP fee (at most 1%). A real v2-fork pair whose `getReserves()` returns another length escapes the fee. The three
 static calls copy whole return data, so a hostile token can make only its own lock expensive.
-- Status: by design; NatSpec at `VaultFactory.sol` lines 284-288.
+- Status: by design; NatSpec at `VaultFactory.sol` lines 306-310.
 - Why: it harms that token's lockers only, not the factory or other tokens.
 
 ### B. Registries and proofs
@@ -186,7 +189,25 @@ guards cover state-changing entry points, not views.
 
 **T3. `release(fakeToken)` on a real wallet emits `ERC20Released`** for a token the schedule never held.
 - Status: by design.
-- Why: indexers key on `VestingCreated` and `isVesting`, and read `released(token)` only for the schedule's token.
+- Why: indexers key on `VestingCreated` and `isVesting`, and read `released(token)` only for the schedule's token,
+  which `tokenOf(wallet)` names on chain (N2).
+
+**N2. `tokenOf` is the record of each wallet's token.** A wallet doesn't store its token. Before this change an app
+found it by bisecting `eth_getCode` over history for the wallet's creation block and reading `VestingCreated` there:
+about 29 RPC calls per wallet, and only on a node that keeps old state.
+- Status: decided (the owner's decision of 2026-11-16).
+- Now: `VestingFactory.tokenOf(vesting)` is written once by `createVesting`, with the registries and before the
+  tokens move (checks-effects-interactions), and never changes: not by an ownership transfer, a later deposit, a
+  release or a fee change. It is the zero address for anything the factory did not create (a token always has code,
+  so never zero for a wallet it did), which makes it non-zero exactly where `isVesting` is true. The Vesting app reads
+  it with each list's other reads, in one multicall.
+- What it does not say: how much was funded (`VestingCreated.amount`), or that the wallet still holds that token
+  (`balanceOf` does). Tokens of another kind sent to the wallet later are not on record, though `release(token)`
+  pays them out on the same schedule.
+- Tests: `vesting/VestingFactory.t.sol` `test_tokenOf_namesEachSchedulesToken`,
+  `test_tokenOf_isZeroForAnythingTheFactoryDidNotCreate`, `test_tokenOf_isUnaffectedByTransfersOtherTokensAndFeeChanges`,
+  `testFuzz_tokenOf_isZeroUnlessTheFactoryMadeIt`; `vesting/VestingInvariants.t.sol`
+  `invariant_tokenOfNamesEachWalletsToken`.
 
 **V7. Tokens already at a wallet's predicted address** before creation belong to the beneficiary but are not counted
 in `VestingCreated.amount`. The same holds for a pre-funded vault address.
@@ -234,10 +255,28 @@ key is never skipped, since it accepts value).
 - Status: by design. It is the price of "a later fee change never touches an existing lock".
 - Question: do you see a safer shape that keeps that promise?
 
-**Q10. The LP fee has no caller-side maximum**, while the flat fee must be sent exactly.
-- Status: decided, no change.
-- Why: it is bounded by its 100 bps cap and the 48-hour notice on increases. A `maxFeeBps` argument would change the
-  ABI.
+**Q10. A fee raise applied between the caller's read and the lock.** The flat fee is sent exactly (`WrongFee`), but
+the two percentages were read at execution: a raise that had served its 48-hour notice, applied by anyone
+(`applyPending`) after the user's last read and before the lock was mined, applied silently. Up to the 100 bps cap
+on an LP lock, and up to the 500 bps cap copied into a position vault for life.
+- Status: fixed (the owner's decision of 2026-11-16).
+- Now: `lockToken` and `lockPosition` take a last argument, `uint256 maxFeeBps`, the highest share the caller
+  accepts. `FeeAboveMax(bytes32 key, uint256 current, uint256 max)` reverts the lock when the share that applies to it
+  is above that: `LOCK_LP_BPS` for a token shaped like a v2 pair, `LOCK_FEE_SHARE_BPS` for a position. A share equal
+  to it is accepted, and the share charged or copied is always the one in force, never the maximum. For any other
+  token no share is taken and `maxFeeBps` is not checked (any value passes); the Vault app passes 0 there, so a token
+  that answers as a pair by the time the lock runs is refused, not charged. A share above 10,000 is still refused as
+  `FeeOutOfRange` first, whatever the maximum. The check sits where the share is read (`VaultFactory.sol` lines 129-130
+  and 169-170, `_bpsAtMost` at lines 260-264), and the revert undoes the whole lock.
+- Tests: `vault/VaultFees.t.sol` `test_maxFeeBps_*` and `testFuzz_maxFeeBps_refusesExactlyWhenTheShareIsAboveIt`;
+  `vault/PositionFactory.t.sol` `test_lockPosition_refusesAShareAboveTheCallersMax_andLeavesNothing`,
+  `test_lockPosition_aRaiseAppliedAfterTheCallerRead_refusesTheLock`,
+  `testFuzz_lockPosition_refusesExactlyWhenTheShareIsAboveTheMax`; the invariants
+  `invariant_noLockPaysAShareAboveItsCallersMax` and `invariant_noVaultKeepsAShareAboveItsLockersMax`; on the
+  deployed managers, `fork/PositionVault.fork.t.sol`
+  `test_lockPosition_refusesAShareAboveTheCallersMax_thenLocksAtTheNewShare`.
+- Question: a caller who passes `type(uint256).max` opts out of the protection. Should the factory refuse a maximum
+  above the key's cap, or is that the caller's choice?
 
 **T5. A zero fee** (`PRO_MONTHLY`, `VEST_FLAT`, `LOCK_FLAT`) lets anyone extend Pro time or pad registries for
 free.
@@ -257,7 +296,7 @@ the vault asks it. `setManager` can flip an allowed manager's `kind`, for new lo
 works) or take fees through return deltas.
 - Status: fixed (decided 2026-10-02: reject hooked pools at the lock).
 - Now: `lockPosition` reverts `HookedPool` when a v4 position's PoolKey has a non-zero `hooks` address, checked after
-  the NFT arrives, with the principal checks (`VaultFactory.sol` lines 163 and 266-270). A pool's hooks are part of
+  the NFT arrives, with the principal checks (`VaultFactory.sol` lines 178 and 288-292). A pool's hooks are part of
   its PoolKey and never change. v3 positions are unaffected.
 - Tests: `vault/PositionFactory.t.sol` `test_lockPosition_v4_refusesAPoolWithHooks_andLeavesNothing` (ERC-20 and
   native pools) and `testFuzz_lockPosition_v4_refusesEveryHookAddress`; on the deployed PoolManager,
@@ -281,7 +320,7 @@ v3 position whose principal had been decreased into `tokensOwed` (released at th
 - Status: fixed.
 - Now: `lockPosition` reverts `NoLiquidity` for zero liquidity, `OwedNotCollected` when a v3 position has anything
   owed, and `PositionNotReceived` when the manager's `ownerOf` isn't the vault after the transfer.
-  The checks are `VaultFactory.sol` lines 252-264. `PositionVault.liquidity()` exposes the live liquidity
+  The checks are `VaultFactory.sol` lines 274-286. `PositionVault.liquidity()` exposes the live liquidity
   (`PositionVault.sol` lines 116-119). Unit and fork tests
   cover each case.
 
@@ -426,5 +465,6 @@ then deploys. It runs every check before its first transaction:
    the recipient turn it against the other?
 3. The v4 encoding in `_collectV4`, against Arc's deployed PositionManager.
 4. `ArcVesting` on Arc's two-view USDC.
-5. The decisions above: the two still open (Q20, V9), and those made on 2026-10-02 (Q9, Q28, D0, the Q21 fix and
-   the `renounceOwnership` fix under Q7 and V2). What you would choose, and why.
+5. The decisions above: the two still open (Q20, V9), those made on 2026-10-02 (Q9, Q28, D0, the Q21 fix and the
+   `renounceOwnership` fix under Q7 and V2), and those of 2026-11-16 (`maxFeeBps` under Q10, `tokenOf` under N2).
+   What you would choose, and why.

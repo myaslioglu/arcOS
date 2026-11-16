@@ -16,9 +16,9 @@ Kinds of test:
 
 | Suite | Runs x depth | Invariants |
 |---|---|---:|
-| `vault/VaultInvariants.t.sol` (LockVault, VaultFactory ERC-20 locks) | 1000 x 64 | 7 |
-| `vault/PositionInvariants.t.sol` (PositionVault, VaultFactory position locks, v3, v4 and v4-native mock pools) | 1000 x 64 | 6 |
-| `vesting/VestingInvariants.t.sol` (ArcVesting, VestingFactory, a plain and a 1%-taxed token) | 500 x 64 | 6 |
+| `vault/VaultInvariants.t.sol` (LockVault, VaultFactory ERC-20 locks) | 1000 x 64 | 8 |
+| `vault/PositionInvariants.t.sol` (PositionVault, VaultFactory position locks, v3, v4 and v4-native mock pools) | 1000 x 64 | 7 |
+| `vesting/VestingInvariants.t.sol` (ArcVesting, VestingFactory, a plain and a 1%-taxed token) | 500 x 64 | 7 |
 
 The implementers also mutation-tested these suites (their counts, not re-run for this package):
 - vault ERC-20 locks: all 13 invariant-only mutants killed;
@@ -28,6 +28,11 @@ The implementers also mutation-tested these suites (their counts, not re-run for
   mutants, all killed by the unit suites. The hook check removed, applied to v3 instead of v4 or to both, inverted,
   testing another PoolKey field, or testing only the permission bits; each `renounceOwnership` override restored to
   OpenZeppelin's or stripped of `onlyOwner`.
+- the 2026-11-16 changes (`tokenOf`, `maxFeeBps`), run for that update: 10 hand-made mutants, all killed by the unit,
+  fuzz and scripted-handler tests, without the invariant campaigns. `tokenOf` never written, or written with the
+  beneficiary; the maximum never checked, checked with `>=`, skipped in `lockToken` or in `lockPosition`, or checked
+  for a plain ERC-20 too; `FeeAboveMax`'s arguments swapped, or naming another key; the maximum copied into the vault
+  instead of the share in force.
 
 ## The listed invariants
 
@@ -105,7 +110,9 @@ suite doesn't check it.
 ### 5. Fees never exceed their caps
 
 A fee is never above its cap. Every call charges exactly the current `feeOf`: the flat fee sent exactly, the LP fee
-rounded down. A bps value above 10,000 is refused, never truncated. A fee change never reaches an existing lock.
+rounded down. A bps value above 10,000 is refused, never truncated. A fee change never reaches an existing lock. And
+since the owner's decision of 2026-11-16, no lock takes a share above the most its caller accepted (`maxFeeBps`): a
+raise applied between the caller's read and the lock reverts it with `FeeAboveMax` (THREAT-MODEL Q10).
 
 | Part | Test | Kind |
 |---|---|---|
@@ -114,6 +121,7 @@ rounded down. A bps value above 10,000 is refused, never truncated. A fee change
 | A bps value above 10,000 is refused | `vault/VaultFees.t.sol` `test_lpFee_bpsAboveTenThousand_reverts_butTeamTokensAreUnaffected`; `vault/VaultFactory.t.sol` `test_lockPosition_rejectsAFeeShareAboveTenThousandBps`; `vault/PositionVault.t.sol` `test_initialize_rejectsAFeeShareAboveTenThousandBps` | unit |
 | A later change never touches an existing lock | `vault/VaultFees.t.sol` `test_laterFeeChange_neverTouchesAnExistingLock`; `vault/PositionVault.t.sol` `test_collect_usesTheShareAndRecipientCopiedAtCreation`; the position handler's `changeShare`, after which new locks copy the new share and old ones keep theirs | unit, invariant |
 | The deployed caps are the stated ones | `DeployR1.t.sol` (each key's fee and cap) | unit |
+| No lock takes a share above its caller's `maxFeeBps`: refused exactly when the share that applies is above it (the LP share for a v2-pair lock, the share of collected fees for a position), with nothing left behind; otherwise the share in force, never the maximum | `vault/VaultInvariants.t.sol` `invariant_noLockPaysAShareAboveItsCallersMax`; `vault/PositionInvariants.t.sol` `invariant_noVaultKeepsAShareAboveItsLockersMax` (both handlers lock now and then accepting less than the share in force, and check the refusal); `vault/VaultFees.t.sol` `testFuzz_maxFeeBps_refusesExactlyWhenTheShareIsAboveIt`, the `test_maxFeeBps_*` tests (above it, at it and above, a raise applied after the caller read the share, a plain ERC-20, 0 for a token that is a pair after all); `vault/PositionFactory.t.sol` `testFuzz_lockPosition_refusesExactlyWhenTheShareIsAboveTheMax`, `test_lockPosition_refusesAShareAboveTheCallersMax_andLeavesNothing`, `test_lockPosition_atOrAboveTheShare_locks_andTheVaultKeepsTheShareInForce`, `test_lockPosition_aRaiseAppliedAfterTheCallerRead_refusesTheLock`; `fork/PositionVault.fork.t.sol` `test_lockPosition_refusesAShareAboveTheCallersMax_thenLocksAtTheNewShare` | invariant, fuzz, unit, fork |
 
 **Gap:** no single campaign combines the two halves. The handlers only ever set fees within their caps, and the
 refusal above a cap is tested on `FeeController` alone. Together the parts cover the property, since every in-scope
@@ -131,12 +139,13 @@ contract reads fees only through `feeOf`.
 | `invariant_unlockAtNeverDecreases` | `unlockAt` never goes down |
 | `invariant_userFundsAreConserved_andTheFactoryHoldsNothing` | Paid = locked + LP fees; the factory holds no token and no native value |
 | `invariant_registriesMatchTheLedger` | Every vault is registered once where it was made; registry lengths match; no position entries |
-| `invariant_noUnexpectedOutcome` | Every lock, extend, withdraw, ownership step, donation and fee change did what the handler predicted: right owner, token, time, flat fee forwarded, LP fee the floor |
+| `invariant_noLockPaysAShareAboveItsCallersMax` | Every LP fee taken is at most floor(amount * maxFeeBps / 10,000) of its lock's caller, and a pair lock whose share in force was above that maximum was refused with `FeeAboveMax` and left nothing behind |
+| `invariant_noUnexpectedOutcome` | Every lock, extend, withdraw, ownership step, donation and fee change did what the handler predicted: right owner, token, time, flat fee forwarded, LP fee the floor, a lock above its caller's maximum refused with exactly `FeeAboveMax(LOCK_LP_BPS, current, max)` |
 
 ### `vault/PositionInvariants.t.sol` (PositionVault and VaultFactory position locks)
 
 The handler drives:
-- locks on three pool kinds;
+- locks on three pool kinds, now and then accepting less than the share in force (`maxFeeBps`);
 - fee accrual, `collect`, `extend`, `withdraw`, and both ownership steps;
 - a fee recipient that turns hostile (reverts, burns gas, returns a megabyte) and recovers;
 - share changes, time passing, and direct attacks on the managers.
@@ -148,6 +157,7 @@ The handler drives:
 | `invariant_unlockAtNeverDecreases` | `unlockAt` never goes down |
 | `invariant_theRecipientGetsExactlyItsShares` | The recipient's native receipts equal the flat fees plus the predicted shares; no vault keeps native value |
 | `invariant_everyVaultIsRegisteredUnderBothCurrencies` | Every vault is in `positionVaultsForToken` under both currencies (`address(0)` for native) and `isVault` |
+| `invariant_noVaultKeepsAShareAboveItsLockersMax` | Each vault's `feeShareBps()` is the share in force at its lock and at most its locker's `maxFeeBps`; a lock above it was refused with `FeeAboveMax`, its NFT stayed with the locker, and nothing was registered or paid |
 | `invariant_noUnexpectedOutcome` | Every action matched its prediction. This includes the exact owner and platform amounts per currency, the skip when the recipient fails, refusals for non-owners and early withdraws, and every attack on a manager failing |
 
 ### `vesting/VestingInvariants.t.sol` (ArcVesting and VestingFactory)
@@ -159,7 +169,8 @@ The handler drives:
 | `invariant_nothingMoreThanFunded` | Nothing releases or vests beyond what was funded; owners received exactly what was released |
 | `invariant_factoryAndWalletsHoldNoValue_andTheFactoryHoldsNoTokens` | No native value in the factory or any wallet; `releasable()` (native) is zero; every fee was forwarded |
 | `invariant_registriesMatchTheLedger` | Registry lengths match; every wallet is `isVesting` |
-| `invariant_noUnexpectedOutcome` | Every action matched its prediction. Vested amounts never decreased; invalid creations reverted and left nothing behind; native releases were refused |
+| `invariant_tokenOfNamesEachWalletsToken` | `tokenOf` names the token each wallet was created and funded with, whatever followed (ownership transfers, donations, releases, fee changes), and is zero for every address the factory did not create (the actors, the factory, the tokens, the fee contracts, the next wallet's address), exactly where `isVesting` is false |
+| `invariant_noUnexpectedOutcome` | Every action matched its prediction. Vested amounts never decreased; a new wallet's `tokenOf` was its token at once; invalid creations reverted and left nothing behind, no `tokenOf` either; native releases were refused |
 
 ## Fuzz properties
 
@@ -179,6 +190,9 @@ The handler drives:
 | `vault/PositionFuzz.t.sol` `testFuzz_nonOwnerNeverReceivesValue_ownerNeverGetsThePositionEarly` | As named |
 | `vault/PositionFuzz.t.sol` `testFuzz_extend_onlyLengthens` | As named |
 | `vault/PositionFactory.t.sol` `testFuzz_lockPosition_v4_refusesEveryHookAddress` | Any non-zero hooks address is refused; the same position without hooks locks |
+| `vault/VaultFees.t.sol` `testFuzz_maxFeeBps_refusesExactlyWhenTheShareIsAboveIt` | For any LP share and any maximum: refused exactly when the share is above the maximum; otherwise the fee is the floored share in force, never above the floored maximum |
+| `vault/PositionFactory.t.sol` `testFuzz_lockPosition_refusesExactlyWhenTheShareIsAboveTheMax` | For any share within the cap and any maximum: refused exactly when the share is above it; otherwise the vault keeps the share in force |
+| `vesting/VestingFactory.t.sol` `testFuzz_tokenOf_isZeroUnlessTheFactoryMadeIt` | `tokenOf` is zero for any address but a wallet the factory made |
 | `vesting/VestingFuzz.t.sol` `testFuzz_curveMatchesTheReference` | The vesting curve equals a `mulDiv` reference, rounding down |
 | `vesting/VestingFuzz.t.sol` `testFuzz_vestedIsMonotonicInTime` | Vested never decreases over time |
 | `vesting/VestingFuzz.t.sol` `testFuzz_releasesFollowTheSchedule` | At random moments, releases equal the reference curve, the beneficiary holds exactly what was released, and nothing appears or vanishes |
@@ -201,6 +215,11 @@ The handler drives:
 - **Re-entry.** `vault/VaultFactory.t.sol` `test_lockToken_isNonReentrant_forAHostileToken`,
   `test_lockToken_isNonReentrant_forAReenteringFeeRecipient`; `vault/PositionVault.t.sol`
   `test_collect_isNotReentrant`, `test_withdraw_isNotReentrant`.
+- **Each schedule's token is on record** (`tokenOf`, the owner's decision of 2026-11-16; THREAT-MODEL N2):
+  `vesting/VestingFactory.t.sol` `test_tokenOf_namesEachSchedulesToken` (two tokens for one beneficiary, a taxed
+  token), `test_tokenOf_isZeroForAnythingTheFactoryDidNotCreate` (a lookalike `ArcVesting` deployed without the
+  factory included), `test_tokenOf_isUnaffectedByTransfersOtherTokensAndFeeChanges`; every refused creation leaves it
+  unset (`_assertNothingLeftBehind`).
 - **The vesting native path is closed** (USDC's two views): `vesting/ArcVesting.t.sol`
   `test_usdcsTwoViews_cannotBeReleasedTwice`, `test_nativeRelease_isClosed_andNothingNativeIsReleasable`,
   `test_nativeValueIsRefused`.

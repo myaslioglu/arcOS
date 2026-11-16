@@ -123,7 +123,7 @@ contract MockReenteringToken is ERC20 {
     function _update(address from, address to, uint256 value) internal override {
         super._update(from, to, value);
         if (address(factory) != address(0) && from != address(0) && to != address(0) && seen.length == 0) {
-            try factory.lockToken(IERC20(address(this)), 1, uint64(block.timestamp + 1 days), address(this)) {}
+            try factory.lockToken(IERC20(address(this)), 1, uint64(block.timestamp + 1 days), address(this), 0) {}
             catch (bytes memory reason) {
                 seen = reason;
             }
@@ -152,7 +152,7 @@ contract MockReenteringRecipient {
 
     receive() external payable {
         received += msg.value;
-        try factory.lockToken{value: msg.value}(token, 1, uint64(block.timestamp + 1 days), address(this)) {}
+        try factory.lockToken{value: msg.value}(token, 1, uint64(block.timestamp + 1 days), address(this), 0) {}
         catch (bytes memory reason) {
             seen = reason;
         }

@@ -128,6 +128,25 @@ export const vestingFactoryAbi = [
   },
   {
     "type": "function",
+    "name": "tokenOf",
+    "inputs": [
+      {
+        "name": "vesting",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "vestingsForToken",
     "inputs": [
       {

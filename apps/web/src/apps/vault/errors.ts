@@ -1,6 +1,7 @@
-import { formatUsdc, lockVaultAbi, positionVaultAbi, vaultFactoryAbi } from "@arcos/chain";
+import { FEE_KEYS, formatUsdc, lockVaultAbi, positionVaultAbi, vaultFactoryAbi } from "@arcos/chain";
 import { describeContractError, type ErrorFormatter } from "@/lib/contract-error";
 import { POSITION_ISSUE } from "@/lib/positions";
+import { bpsText } from "./fees";
 import { formatWhen } from "./lockForm";
 
 /**
@@ -16,6 +17,27 @@ const asBigInt = (v: unknown): bigint => {
 };
 
 const NOT_CREATED = "The vault couldn't be created, so nothing was locked. Try again.";
+const NOTHING_TAKEN = "Nothing was locked and no fee was taken. Check it and lock again.";
+
+/**
+ * FeeAboveMax(key, current, max): ArcOS's share rose above the most this lock accepted (the share the form showed, sent
+ * as `maxFeeBps`), after the form read it: in the simulation, or just before the lock was mined. Which share, and to
+ * what. A maximum of 0 on the LP share is a token the form didn't take for a v2 pair that answered as one when the lock
+ * ran.
+ */
+function feeAboveMax(a: readonly unknown[]): string {
+  const key = typeof a[0] === "string" ? a[0].toLowerCase() : null;
+  const current = asBigInt(a[1]);
+  const max = asBigInt(a[2]);
+  if (key === FEE_KEYS.LOCK_LP_BPS.toLowerCase()) {
+    if (max === 0n) return `This token turned out to be a Uniswap v2 LP token, which pays ArcOS a share of ${bpsText(current)} that this lock didn't accept. ${NOTHING_TAKEN}`;
+    return `ArcOS's share of an LP token lock rose to ${bpsText(current)}, above the ${bpsText(max)} this lock accepted. ${NOTHING_TAKEN}`;
+  }
+  if (key === FEE_KEYS.LOCK_FEE_SHARE_BPS.toLowerCase()) {
+    return `ArcOS's share of collected fees rose to ${bpsText(current)}, above the ${bpsText(max)} this lock accepted. ${NOTHING_TAKEN}`;
+  }
+  return `ArcOS's share rose above what this lock accepted. ${NOTHING_TAKEN}`;
+}
 /** Also said before signing, for a manager the factory doesn't allow. */
 export const MANAGER_NOT_ALLOWED = "Vault doesn't take positions from this manager.";
 const SET_UP = "This vault was already set up.";
@@ -24,6 +46,7 @@ export const VAULT_ERRORS: Readonly<Record<string, ErrorFormatter>> = {
   // --- VaultFactory ---
   FailedDeployment: () => NOT_CREATED,
   InsufficientBalance: () => NOT_CREATED,
+  FeeAboveMax: feeAboveMax,
   FeeOutOfRange: () => "One of the lock fees is set out of range, so locks are paused. Try again later.",
   FeeTransferFailed: () => "The fee couldn't be sent to ArcOS's fee recipient, so nothing was locked. Try again later.",
   HookedPool: () => POSITION_ISSUE.hooked,

@@ -173,6 +173,7 @@ contract VestingHandler is Test {
             }
             if (w.cliff() != uint256(p.start) + p.cliff) _flag("a new wallet has the wrong cliff");
             if (!factory.isVesting(made)) _flag("a new wallet is not registered");
+            if (factory.tokenOf(made) != address(token)) _flag("tokenOf does not name the new wallet's token");
             feesPaid += p.fee;
             createdFor[p.beneficiary] += 1;
             createdForToken[p.tokenIdx] += 1;
@@ -203,6 +204,7 @@ contract VestingHandler is Test {
         else beneficiary = address(0);
         if (kind == 0 && fee > 0 && seed % 2 == 0) value = fee - 1;
         uint256 nonce = vm.getNonce(address(factory));
+        address predicted = vm.computeCreateAddress(address(factory), nonce);
         uint256 recipientBefore = feeRecipient.balance;
         uint256 creatorBefore = plain.balanceOf(creator);
         vm.prank(creator);
@@ -210,6 +212,7 @@ contract VestingHandler is Test {
             _flag("an invalid creation succeeded");
         } catch {
             if (vm.getNonce(address(factory)) != nonce) _flag("a failed creation deployed something");
+            if (factory.tokenOf(predicted) != address(0)) _flag("a failed creation set a token");
             if (feeRecipient.balance != recipientBefore) _flag("a failed creation paid a fee");
             if (plain.balanceOf(creator) != creatorBefore) _flag("a failed creation moved tokens");
             ++succeeded[this.createInvalid.selector];
@@ -448,6 +451,36 @@ contract VestingInvariantsTest is Test {
         }
     }
 
+    /// `tokenOf` names the token each wallet was created and funded with, whatever has happened since (ownership
+    /// transfers, donations, releases, fee changes), and is zero for every address the factory did not create: the
+    /// actors, the factory, the tokens, the fee contracts and the next wallet's address. It is non-zero exactly where
+    /// `isVesting` is true.
+    function invariant_tokenOfNamesEachWalletsToken() public view {
+        uint256 n = handler.walletCount();
+        for (uint256 i; i < n; ++i) {
+            VestingHandler.WalletInfo memory w = handler.info(i);
+            assertEq(
+                factory.tokenOf(address(w.wallet)), address(handler.tokenAt(w.tokenIdx)), "tokenOf != funded token"
+            );
+        }
+        address[] memory others = new address[](handler.actorCount() + 7);
+        for (uint256 a; a < handler.actorCount(); ++a) {
+            others[a] = handler.actorAt(a);
+        }
+        uint256 k = handler.actorCount();
+        others[k++] = address(0);
+        others[k++] = address(factory);
+        others[k++] = address(plain);
+        others[k++] = address(taxed);
+        others[k++] = address(fees);
+        others[k++] = feeRecipient;
+        others[k++] = vm.computeCreateAddress(address(factory), vm.getNonce(address(factory)));
+        for (uint256 j; j < others.length; ++j) {
+            assertEq(factory.tokenOf(others[j]), address(0), "tokenOf is set for an address not made here");
+            assertFalse(factory.isVesting(others[j]));
+        }
+    }
+
     function invariant_noUnexpectedOutcome() public view {
         assertFalse(handler.unexpectedOutcome(), handler.reason());
         assertFalse(handler.vestedDecreased(), "vested decreased");
@@ -485,7 +518,10 @@ contract VestingInvariantsTest is Test {
         invariant_nothingMoreThanFunded();
         invariant_factoryAndWalletsHoldNoValue_andTheFactoryHoldsNoTokens();
         invariant_registriesMatchTheLedger();
+        invariant_tokenOfNamesEachWalletsToken();
         invariant_noUnexpectedOutcome();
+        assertEq(factory.tokenOf(address(handler.info(0).wallet)), address(plain), "after a transfer and a donation");
+        assertEq(factory.tokenOf(address(handler.info(1).wallet)), address(taxed));
         VestingHandler.WalletInfo memory w = handler.info(0);
         assertEq(w.wallet.released(address(plain)), w.funded, "the plain schedule ended and was released in full");
     }

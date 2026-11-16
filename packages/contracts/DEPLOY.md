@@ -222,10 +222,10 @@ http://127.0.0.1:9545, one transaction per page load, never reload before the re
 commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
 
 1. **Testnet USDC for the project wallet.** https://faucet.circle.com → Arc Testnet → USDC, sent to `$PROJECT`. The
-   deployment needs about 0.4 USDC of gas (8.3 million gas at about 48 gwei in the dry run). The T1 check in step 7
-   pays `VEST_FLAT` (20 USDC, which comes back, since the project wallet is the fee recipient) plus 1 USDC, so hold at
-   least 25 USDC before step 7. The faucet sends 20 USDC per request and one request every 2 hours, so that takes two
-   requests, 2 hours apart.
+   deployment needs about 0.25 USDC of gas (8.5 million gas at about 30 gwei in the dry run of 2026-11-16; the gas
+   price moves, so hold a little more). The T1 check in step 7 pays `VEST_FLAT` (20 USDC, which comes back, since the
+   project wallet is the fee recipient) plus 1 USDC, so hold at least 25 USDC before step 7. The faucet sends 20 USDC
+   per request and one request every 2 hours, so that takes two requests, 2 hours apart.
 
 2. **The personal wallet hands over the FeeController, once.** Signed by the personal wallet (the one that owns it
    today):
@@ -254,9 +254,11 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
        export ARCOS_FEE_CONTROLLER=$FEES ARCOS_V4_POSITION_MANAGER=$V4_PM
        npx forge script script/DeployR1.s.sol --rpc-url arc_testnet --sender $PROJECT
 
-   It must print the same `== Logs ==` as below and end with `SIMULATION COMPLETE`. The dry run's plan,
-   `broadcast/DeployR1.s.sol/5042002/dry-run/run-latest.json`, holds nine transactions: five `addKey`, three contract
-   creations (VaultFactory, VestingFactory, ProPass) and `setManager`. Then deploy, with a keystore key:
+   It must print the same `== Logs ==` as below and end with `SIMULATION COMPLETE`, after an estimate of about
+   8.5 million gas (`Estimated total gas used for script: 8498102` in the dry run of 2026-11-16, on a fork of Arc
+   Testnet with steps 2 to 4 done). The dry run's plan, `broadcast/DeployR1.s.sol/5042002/dry-run/run-latest.json`,
+   holds nine transactions: five `addKey`, three contract creations (VaultFactory, VestingFactory, ProPass) and
+   `setManager`. Then deploy, with a keystore key:
 
        npx forge script script/DeployR1.s.sol --rpc-url arc_testnet --broadcast --slow \
          --account <project-keystore> --sender $PROJECT
@@ -416,9 +418,11 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
          $U $PROJECT 1000000 $START 3600 0 --value 20ether --account <project-keystore>
 
    Take the wallet's address from the `VestingCreated` event in the receipt (or the simulation's output), then check
-   it. `isVesting` prints `true` and the balance `1000000`:
+   it. `isVesting` prints `true`, `tokenOf` prints `$U` (the token the factory recorded for the wallet, which the
+   Vesting app reads) and the balance `1000000`:
 
        npx cast call $VESTINGS "isVesting(address)(bool)" <wallet>
+       npx cast call $VESTINGS "tokenOf(address)(address)" <wallet>
        npx cast call $U "balanceOf(address)(uint256)" <wallet>
 
    After the hour, release it; the wallet's balance then prints `0`:

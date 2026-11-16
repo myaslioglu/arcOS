@@ -226,7 +226,7 @@ contract PositionVaultForkTest is Test {
         vm.startPrank(alice);
         if (manager == address(V3)) V3.approve(address(factory), id);
         else V4.approve(address(factory), id);
-        vault = PositionVault(payable(factory.lockPosition{value: FLAT}(manager, id, unlockAt, alice)));
+        vault = PositionVault(payable(factory.lockPosition{value: FLAT}(manager, id, unlockAt, alice, SHARE_BPS)));
         vm.stopPrank();
     }
 
@@ -334,11 +334,11 @@ contract PositionVaultForkTest is Test {
         uint256 id = _mintV3();
         vm.prank(alice);
         vm.expectRevert(bytes(V3_NOT_APPROVED));
-        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice);
+        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice, SHARE_BPS);
         id = _mintV4(erc20Key);
         vm.prank(alice);
         vm.expectRevert(bytes("NOT_AUTHORIZED"));
-        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
+        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice, SHARE_BPS);
     }
 
     /// `liquidity()` reads the live liquidity from the real managers, and every lock made in setUp holds some.
@@ -360,7 +360,7 @@ contract PositionVaultForkTest is Test {
         assertEq(V4.getPositionLiquidity(id), 0);
         V4.approve(address(factory), id);
         vm.expectRevert(VaultFactory.NoLiquidity.selector);
-        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
+        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice, SHARE_BPS);
         vm.stopPrank();
         assertEq(V4.ownerOf(id), alice);
     }
@@ -381,7 +381,7 @@ contract PositionVaultForkTest is Test {
         vm.startPrank(alice);
         V4.approve(address(factory), id);
         vm.expectRevert(VaultFactory.HookedPool.selector);
-        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice);
+        factory.lockPosition{value: FLAT}(address(V4), id, unlockAt, alice, SHARE_BPS);
         vm.stopPrank();
         assertEq(V4.ownerOf(id), alice);
         assertEq(factory.vaultsOfLength(alice), 4); // the four locks made in setUp, nothing more
@@ -396,12 +396,12 @@ contract PositionVaultForkTest is Test {
         V3.decreaseLiquidity(IArcV3PositionManager.DecreaseLiquidityParams(id, liquidity / 2, 0, 0, block.timestamp));
         V3.approve(address(factory), id);
         vm.expectRevert(VaultFactory.OwedNotCollected.selector);
-        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice);
+        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice, SHARE_BPS);
         assertEq(V3.ownerOf(id), alice);
 
         V3.collect(IV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
         PositionVault vault =
-            PositionVault(payable(factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice)));
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice, SHARE_BPS)));
         vm.stopPrank();
         assertEq(V3.ownerOf(id), address(vault));
         assertEq(vault.liquidity(), liquidity - liquidity / 2);
@@ -416,8 +416,45 @@ contract PositionVaultForkTest is Test {
         V3.collect(IV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
         V3.approve(address(factory), id);
         vm.expectRevert(VaultFactory.NoLiquidity.selector);
-        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice);
+        factory.lockPosition{value: FLAT}(address(V3), id, unlockAt, alice, SHARE_BPS);
         vm.stopPrank();
+    }
+
+    /// The owner's decision of 2026-11-16, on the real managers: a share raised above the caller's `maxFeeBps` (the
+    /// raise applied by a stranger once its 48 hours have passed, after the caller read the share) refuses the lock
+    /// before the position moves. At the new share, the same positions lock, and the vaults made before keep theirs.
+    function test_lockPosition_refusesAShareAboveTheCallersMax_thenLocksAtTheNewShare() public {
+        bytes32 key = keccak256("LOCK_FEE_SHARE_BPS");
+        vm.prank(feeOwner);
+        fees.setFee(key, 500);
+        vm.warp(block.timestamp + fees.DELAY());
+        vm.prank(stranger);
+        fees.applyPending(key);
+        uint256 v3New = _mintV3();
+        uint256 v4New = _mintV4(erc20Key);
+
+        vm.startPrank(alice);
+        V3.approve(address(factory), v3New);
+        V4.approve(address(factory), v4New);
+        vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, key, 500, SHARE_BPS));
+        factory.lockPosition{value: FLAT}(address(V3), v3New, unlockAt, alice, SHARE_BPS);
+        vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, key, 500, SHARE_BPS));
+        factory.lockPosition{value: FLAT}(address(V4), v4New, unlockAt, alice, SHARE_BPS);
+        assertEq(V3.ownerOf(v3New), alice);
+        assertEq(V4.ownerOf(v4New), alice);
+        assertEq(factory.vaultsOfLength(alice), 4); // the four locks made in setUp, nothing more
+
+        PositionVault a =
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(V3), v3New, unlockAt, alice, 500)));
+        PositionVault b =
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(V4), v4New, unlockAt, alice, 500)));
+        vm.stopPrank();
+        assertEq(V3.ownerOf(v3New), address(a));
+        assertEq(V4.ownerOf(v4New), address(b));
+        assertEq(a.feeShareBps(), 500);
+        assertEq(b.feeShareBps(), 500);
+        assertEq(v3Vault.feeShareBps(), SHARE_BPS);
+        assertEq(v4Vault.feeShareBps(), SHARE_BPS);
     }
 
     // ---------------------------------------------------------------------
@@ -645,7 +682,7 @@ contract PositionVaultForkTest is Test {
     }
 
     function _lockData(address manager, uint256 id) internal view returns (bytes memory) {
-        return abi.encodeCall(VaultFactory.lockPosition, (manager, id, unlockAt, alice));
+        return abi.encodeCall(VaultFactory.lockPosition, (manager, id, unlockAt, alice, SHARE_BPS));
     }
 
     function test_gas_lockPosition_v3() public {

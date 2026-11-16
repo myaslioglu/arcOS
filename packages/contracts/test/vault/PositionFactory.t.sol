@@ -31,7 +31,7 @@ contract PositionFactoryTest is PositionTestBase {
         vm.expectEmit(true, true, true, true, address(factory));
         emit VaultFactory.PositionLocked(bob, address(v3), id, predicted, at);
         vm.prank(alice);
-        address vault = factory.lockPosition{value: FLAT}(address(v3), id, at, bob);
+        address vault = factory.lockPosition{value: FLAT}(address(v3), id, at, bob, SHARE_BPS);
 
         assertEq(vault, predicted);
         assertEq(v3.ownerOf(id), vault, "the NFT moved in the same call");
@@ -96,7 +96,7 @@ contract PositionFactoryTest is PositionTestBase {
         uint64 at = uint64(block.timestamp + 30 days);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721InsufficientApproval.selector, address(factory), id));
-        factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        factory.lockPosition{value: FLAT}(address(v3), id, at, alice, SHARE_BPS);
         _assertNothingLeftBehind(s, alice, address(tokenA));
         assertEq(factory.positionVaultsForTokenLength(address(tokenA)), 0);
         assertEq(v3.ownerOf(id), alice);
@@ -108,13 +108,13 @@ contract PositionFactoryTest is PositionTestBase {
         uint64 at = uint64(block.timestamp + 3650 days);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721IncorrectOwner.selector, alice, id, bob));
-        factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        factory.lockPosition{value: FLAT}(address(v3), id, at, alice, SHARE_BPS);
         assertEq(v3.ownerOf(id), bob);
 
         uint256 id4 = _mintV4(bob, NATIVE, address(tokenB));
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721IncorrectOwner.selector, alice, id4, bob));
-        factory.lockPosition{value: FLAT}(address(v4), id4, at, alice);
+        factory.lockPosition{value: FLAT}(address(v4), id4, at, alice, SHARE_BPS);
         assertEq(v4.ownerOf(id4), bob);
     }
 
@@ -122,10 +122,10 @@ contract PositionFactoryTest is PositionTestBase {
         uint64 at = uint64(block.timestamp + 30 days);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, 999));
-        factory.lockPosition{value: FLAT}(address(v3), 999, at, alice);
+        factory.lockPosition{value: FLAT}(address(v3), 999, at, alice, SHARE_BPS);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, 999));
-        factory.lockPosition{value: FLAT}(address(v4), 999, at, alice);
+        factory.lockPosition{value: FLAT}(address(v4), 999, at, alice, SHARE_BPS);
     }
 
     function test_lockPosition_checksTheFlatFee_andTheUnlockTime() public {
@@ -133,13 +133,109 @@ contract PositionFactoryTest is PositionTestBase {
         uint64 at = uint64(block.timestamp + 30 days);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(VaultFactory.WrongFee.selector, FLAT, FLAT - 1));
-        factory.lockPosition{value: FLAT - 1}(address(v3), id, at, alice);
+        factory.lockPosition{value: FLAT - 1}(address(v3), id, at, alice, SHARE_BPS);
         vm.prank(alice);
         vm.expectRevert(PositionVault.BadUnlockTime.selector);
-        factory.lockPosition{value: FLAT}(address(v3), id, uint64(block.timestamp), alice);
+        factory.lockPosition{value: FLAT}(address(v3), id, uint64(block.timestamp), alice, SHARE_BPS);
         vm.prank(alice);
         vm.expectRevert(PositionVault.ZeroAddress.selector);
-        factory.lockPosition{value: FLAT}(address(v3), id, at, address(0));
+        factory.lockPosition{value: FLAT}(address(v3), id, at, address(0), SHARE_BPS);
+    }
+
+    // ---------------------------------------------------------------------
+    // The most the caller accepts for the share a vault keeps for life: `maxFeeBps` (the owner's decision of
+    // 2026-11-16)
+    // ---------------------------------------------------------------------
+
+    /// A share in force above the caller's maximum refuses the lock on either manager, and nothing is left behind:
+    /// the NFT stays with its owner, no vault is registered, no fee is kept.
+    function test_lockPosition_refusesAShareAboveTheCallersMax_andLeavesNothing() public {
+        uint256[2] memory ids = [_mintV3(alice), _mintV4(alice, address(tokenA), address(tokenB))];
+        address[2] memory managers = [address(v3), address(v4)];
+        uint64 at = uint64(block.timestamp + 30 days);
+        for (uint256 i; i < 2; ++i) {
+            Snap memory snap = _snap(alice, address(tokenA));
+            uint256 recipientBefore = feeRecipient.balance;
+            uint256 aliceBefore = alice.balance;
+            vm.prank(alice);
+            vm.expectRevert(
+                abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_SHARE, SHARE_BPS, SHARE_BPS - 1)
+            );
+            factory.lockPosition{value: FLAT}(managers[i], ids[i], at, alice, SHARE_BPS - 1);
+            assertEq(i == 0 ? v3.ownerOf(ids[i]) : v4.ownerOf(ids[i]), alice);
+            assertEq(factory.positionVaultsForTokenLength(address(tokenA)), 0);
+            assertEq(factory.positionVaultsForTokenLength(address(tokenB)), 0);
+            assertEq(feeRecipient.balance, recipientBefore);
+            assertEq(alice.balance, aliceBefore);
+            _assertNothingLeftBehind(snap, alice, address(tokenA));
+        }
+    }
+
+    /// At the maximum, or under any higher one, the vault keeps the share in force, never the maximum.
+    function test_lockPosition_atOrAboveTheShare_locks_andTheVaultKeepsTheShareInForce() public {
+        uint256[3] memory maxes = [SHARE_BPS, SHARE_BPS_CAP, type(uint256).max];
+        for (uint256 i; i < maxes.length; ++i) {
+            uint256 id = _mintV3(alice);
+            uint64 at = uint64(block.timestamp + 30 days);
+            vm.prank(alice);
+            PositionVault vault =
+                PositionVault(payable(factory.lockPosition{value: FLAT}(address(v3), id, at, alice, maxes[i])));
+            assertEq(vault.feeShareBps(), SHARE_BPS);
+            assertEq(v3.ownerOf(id), address(vault));
+        }
+    }
+
+    /// The race the maximum closes, for a share a vault keeps for life: the caller reads 2%; a raise to 5% is applied
+    /// by a stranger once its 48 hours have passed; the lock is refused instead of copying 5% into the vault. Read
+    /// again, 5% is accepted, and an older vault keeps its 2%.
+    function test_lockPosition_aRaiseAppliedAfterTheCallerRead_refusesTheLock() public {
+        (PositionVault older,) = _lockedV4(NATIVE, address(tokenB));
+        uint256 shown = fees.feeOf(KEY_SHARE);
+        vm.prank(feeOwner);
+        fees.setFee(KEY_SHARE, SHARE_BPS_CAP);
+        vm.warp(block.timestamp + fees.DELAY());
+        vm.prank(stranger);
+        fees.applyPending(KEY_SHARE);
+        uint256 id = _mintV4(alice, NATIVE, address(tokenB));
+        uint64 at = uint64(block.timestamp + 30 days);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_SHARE, SHARE_BPS_CAP, shown));
+        factory.lockPosition{value: FLAT}(address(v4), id, at, alice, shown);
+        assertEq(v4.ownerOf(id), alice);
+
+        vm.prank(alice);
+        PositionVault vault =
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(v4), id, at, alice, SHARE_BPS_CAP)));
+        assertEq(vault.feeShareBps(), SHARE_BPS_CAP);
+        assertEq(older.feeShareBps(), shown, "an existing vault keeps its share");
+    }
+
+    /// For any share within the cap and any maximum: refused exactly when the share in force is above the maximum;
+    /// otherwise the vault keeps the share in force, which is at most the maximum.
+    function testFuzz_lockPosition_refusesExactlyWhenTheShareIsAboveTheMax(uint256 shareSeed, uint256 maxSeed) public {
+        uint256 share = bound(shareSeed, 0, SHARE_BPS_CAP);
+        uint256 maxFeeBps = maxSeed % 4 == 0 ? maxSeed : bound(maxSeed, 0, SHARE_BPS_CAP);
+        vm.prank(feeOwner);
+        fees.setFee(KEY_SHARE, share);
+        if (fees.feeOf(KEY_SHARE) != share) {
+            vm.warp(block.timestamp + fees.DELAY());
+            fees.applyPending(KEY_SHARE);
+        }
+        uint256 id = _mintV3(alice);
+        uint64 at = uint64(block.timestamp + 30 days);
+
+        vm.prank(alice);
+        if (share > maxFeeBps) {
+            vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_SHARE, share, maxFeeBps));
+            factory.lockPosition{value: FLAT}(address(v3), id, at, alice, maxFeeBps);
+            assertEq(v3.ownerOf(id), alice);
+        } else {
+            PositionVault vault =
+                PositionVault(payable(factory.lockPosition{value: FLAT}(address(v3), id, at, alice, maxFeeBps)));
+            assertEq(vault.feeShareBps(), share);
+            assertLe(vault.feeShareBps(), maxFeeBps);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -156,9 +252,9 @@ contract PositionFactoryTest is PositionTestBase {
         v3.approve(address(factory), id3);
         v4.approve(address(factory), id4);
         vm.expectRevert(VaultFactory.NoLiquidity.selector);
-        factory.lockPosition{value: FLAT}(address(v3), id3, at, alice);
+        factory.lockPosition{value: FLAT}(address(v3), id3, at, alice, SHARE_BPS);
         vm.expectRevert(VaultFactory.NoLiquidity.selector);
-        factory.lockPosition{value: FLAT}(address(v4), id4, at, alice);
+        factory.lockPosition{value: FLAT}(address(v4), id4, at, alice, SHARE_BPS);
         vm.stopPrank();
         assertEq(v3.ownerOf(id3), alice);
         assertEq(v4.ownerOf(id4), alice);
@@ -174,11 +270,12 @@ contract PositionFactoryTest is PositionTestBase {
         vm.startPrank(alice);
         v3.decreaseLiquidity(MockV3PositionManager.DecreaseLiquidityParams(id, LIQUIDITY / 2, 0, 0, block.timestamp));
         vm.expectRevert(VaultFactory.OwedNotCollected.selector);
-        factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        factory.lockPosition{value: FLAT}(address(v3), id, at, alice, SHARE_BPS);
         assertEq(v3.ownerOf(id), alice);
 
         v3.collect(MockV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
-        PositionVault vault = PositionVault(payable(factory.lockPosition{value: FLAT}(address(v3), id, at, alice)));
+        PositionVault vault =
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(v3), id, at, alice, SHARE_BPS)));
         vm.stopPrank();
         assertEq(v3.ownerOf(id), address(vault));
         assertEq(vault.liquidity(), LIQUIDITY - LIQUIDITY / 2);
@@ -193,7 +290,7 @@ contract PositionFactoryTest is PositionTestBase {
             v3.accrue(id, side == 0 ? 1 : 0, side == 1 ? 1 : 0);
             vm.prank(alice);
             vm.expectRevert(VaultFactory.OwedNotCollected.selector);
-            factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+            factory.lockPosition{value: FLAT}(address(v3), id, at, alice, SHARE_BPS);
         }
     }
 
@@ -205,7 +302,7 @@ contract PositionFactoryTest is PositionTestBase {
         v3.decreaseLiquidity(MockV3PositionManager.DecreaseLiquidityParams(id, LIQUIDITY, 0, 0, block.timestamp));
         v3.collect(MockV3PositionManager.CollectParams(id, alice, type(uint128).max, type(uint128).max));
         vm.expectRevert(VaultFactory.NoLiquidity.selector);
-        factory.lockPosition{value: FLAT}(address(v3), id, at, alice);
+        factory.lockPosition{value: FLAT}(address(v3), id, at, alice, SHARE_BPS);
         vm.stopPrank();
     }
 
@@ -220,7 +317,7 @@ contract PositionFactoryTest is PositionTestBase {
         vm.startPrank(alice);
         buggy.approve(address(factory), id);
         vm.expectRevert(VaultFactory.PositionNotReceived.selector);
-        factory.lockPosition{value: FLAT}(address(buggy), id, at, alice);
+        factory.lockPosition{value: FLAT}(address(buggy), id, at, alice, SHARE_BPS);
         vm.stopPrank();
         assertEq(buggy.ownerOf(id), alice);
         assertEq(factory.vaultsOfLength(alice), 0);
@@ -243,7 +340,7 @@ contract PositionFactoryTest is PositionTestBase {
             Snap memory snap = _snap(alice, currency0);
             vm.prank(alice);
             vm.expectRevert(VaultFactory.HookedPool.selector);
-            factory.lockPosition{value: FLAT}(address(v4), id, uint64(block.timestamp + 30 days), alice);
+            factory.lockPosition{value: FLAT}(address(v4), id, uint64(block.timestamp + 30 days), alice, SHARE_BPS);
             assertEq(v4.ownerOf(id), alice);
             assertEq(factory.vaultsOfLength(alice), 0);
             assertEq(factory.positionVaultsForTokenLength(currency0), 0);
@@ -262,11 +359,12 @@ contract PositionFactoryTest is PositionTestBase {
         v4.setHooks(id, hooks);
         vm.prank(alice);
         vm.expectRevert(VaultFactory.HookedPool.selector);
-        factory.lockPosition{value: FLAT}(address(v4), id, at, alice);
+        factory.lockPosition{value: FLAT}(address(v4), id, at, alice, SHARE_BPS);
 
         v4.setHooks(id, address(0));
         vm.prank(alice);
-        PositionVault vault = PositionVault(payable(factory.lockPosition{value: FLAT}(address(v4), id, at, alice)));
+        PositionVault vault =
+            PositionVault(payable(factory.lockPosition{value: FLAT}(address(v4), id, at, alice, SHARE_BPS)));
         assertEq(v4.ownerOf(id), address(vault));
     }
 

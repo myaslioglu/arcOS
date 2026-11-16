@@ -11,4 +11,8 @@ export const AUDIT_NOTE = "These contracts have not been audited yet. They run o
 export const YOURS_NOTE =
   "Lists the schedules made for your address. Anyone can start a release, but the tokens always go to the wallet's owner.";
 
+/** Under "Open a vesting contract by address": what may be opened. Its token comes from ArcOS's record of the contract. */
+export const ADD_BY_ADDRESS_NOTE =
+  "For a vesting contract that was handed to you. ArcOS must have created it, and you must own it now. Its token is the one ArcOS recorded when the contract was made.";
+
 export const NOT_DEPLOYED = "Vesting isn't deployed on this network yet.";

@@ -34,17 +34,17 @@ export function asPending(answer: unknown): PendingFee | null {
 /**
  * The form's warning for a raise scheduled on a fee this lock pays, null when there is none. `which` names the fee:
  * the flat fee, the LP share or the share of collected fees; `now` is the chain's time. Once `effectiveAt` has passed,
- * anyone can apply the raise at any moment, before this lock is mined too.
+ * anyone can apply the raise at any moment, before this lock is mined too. The lock then fails rather than pay it: the
+ * flat fee is sent exactly, and the lock accepts at most the share the form showed (flow.ts's maxFeeBps).
  */
 export function raiseLine(which: "flat" | "lp" | "share", pending: PendingFee | null, current: bigint, now: number): string | null {
   if (!pending || pending.value <= current) return null;
   const due = pending.effectiveAt <= now;
   const when = due ? "at any moment: the raise is due, and anyone can apply it" : `from ${formatWhen(pending.effectiveAt)}`;
-  if (which === "flat") {
-    return `The lock fee can rise to ${displayWei(pending.value, "up")} USDC ${when}.${due ? " If it rises before this lock is mined, the lock fails and only gas is spent." : ""}`;
-  }
-  if (which === "lp") return `ArcOS's share of an LP token lock can rise to ${bpsText(pending.value)} ${when}.`;
-  return `ArcOS's share of collected fees can rise to ${bpsText(pending.value)} ${when}. A vault keeps the share it was made with.`;
+  const fails = due ? " If it rises before this lock is mined, the lock fails and only gas is spent." : "";
+  if (which === "flat") return `The lock fee can rise to ${displayWei(pending.value, "up")} USDC ${when}.${fails}`;
+  if (which === "lp") return `ArcOS's share of an LP token lock can rise to ${bpsText(pending.value)} ${when}.${fails}`;
+  return `ArcOS's share of collected fees can rise to ${bpsText(pending.value)} ${when}.${fails} A vault keeps the share it was made with.`;
 }
 
 /** The three calls VaultFactory._isV2Pair makes, by selector. */

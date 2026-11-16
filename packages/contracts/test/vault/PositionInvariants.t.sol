@@ -18,7 +18,8 @@ import {
 /// Drives random sequences of position locks, fee accrual, collect, extend, withdraw, ownership transfer, time passing,
 /// a fee recipient that turns hostile and recovers, and direct attacks on the managers, by random actors. Three kinds of
 /// pool are used: v3 (hostile token A / token B), v4 (A / B) and v4 native (native / A). Token A misbehaves towards
-/// the fee recipient whenever the recipient is hostile.
+/// the fee recipient whenever the recipient is hostile. Each lock names the most it accepts for the share of collected
+/// fees (`maxFeeBps`), now and then less than the share in force: such a lock must be refused, and leave nothing.
 ///
 /// `fail_on_revert` is on, so every call into the contracts under test is caught here, and each action predicts its
 /// outcome (who may call, when, and exactly who is paid what) and sets a flag that never clears when the real outcome
@@ -50,6 +51,7 @@ contract PositionHandler is Test {
         bool withdrawn;
         uint64 withdrawnAt; // the time of the withdraw
         uint64 unlockAtThen; // the unlock time when it happened
+        uint256 maxFeeBps; // the most the locker accepted
     }
 
     Info[] internal infos;
@@ -61,10 +63,12 @@ contract PositionHandler is Test {
     uint256 public platformA;
     uint256 public platformB;
     uint256 public skips;
+    uint256 public refusedAboveMax; // locks refused because the share in force was above the caller's maximum
     mapping(bytes4 selector => uint256) public succeeded;
 
     // Sticky flags.
     bool public unexpectedOutcome;
+    bool public shareAboveMax; // a lock went through while the share in force was above its caller's maximum
     string public reason;
 
     constructor(
@@ -143,9 +147,12 @@ contract PositionHandler is Test {
         uint64 unlockAt;
         uint256 flat;
         uint16 share;
+        uint256 maxFeeBps; // the most the caller accepts
     }
 
-    function lock(uint256 actorSeed, uint256 poolSeed, uint256 ownerSeed, uint256 durationSeed) external {
+    function lock(uint256 actorSeed, uint256 poolSeed, uint256 ownerSeed, uint256 durationSeed, uint256 maxSeed)
+        external
+    {
         // A recipient that refuses the flat fee blocks new locks (part 1's Q9). The factory forwards all gas with the
         // flat fee, so a gas-burning recipient would burn the whole test's gas: only the reverting one is tried.
         if (hostile && recipient.mode() != MockSwitchableReceiver.Mode.Revert) return;
@@ -164,19 +171,35 @@ contract PositionHandler is Test {
         p.unlockAt = (block.timestamp + duration).toUint64();
         p.flat = fees.feeOf(KEY_FLAT);
         p.share = fees.feeOf(KEY_SHARE).toUint16();
+        // Usually the share in force or more; one lock in four names at most the share in force, so below it whenever
+        // that share is above zero, as a caller who read the share before a raise was applied would.
+        uint256 pick = maxSeed % 4;
+        p.maxFeeBps = pick == 0
+            ? bound(maxSeed / 4, 0, p.share)
+            : pick == 1 ? type(uint256).max : p.share + bound(maxSeed / 4, 0, 300);
         _lock(p);
     }
 
     function _lock(LockPlan memory p) internal {
-        bool shouldSucceed = !hostile;
+        // The flat fee goes out first, so a hostile recipient refuses the lock whatever the maximum.
+        bool refused = !hostile && p.share > p.maxFeeBps;
+        bool shouldSucceed = !hostile && !refused;
+        uint256 flatBefore = recipient.received();
+        uint256 vaultsBefore = factory.vaultsOfLength(p.owner);
         vm.prank(p.user);
-        try factory.lockPosition{value: p.flat}(p.manager, p.id, p.unlockAt, p.owner) returns (address vault) {
+        try factory.lockPosition{value: p.flat}(p.manager, p.id, p.unlockAt, p.owner, p.maxFeeBps) returns (
+            address vault
+        ) {
+            if (refused) {
+                shareAboveMax = true;
+                _flag("a vault kept a share above its locker's maximum");
+            }
             if (!shouldSucceed) {
                 _flag("a lock paid a hostile recipient");
                 return;
             }
             PositionVault v = PositionVault(payable(vault));
-            Info memory made = Info(vault, p.pool, p.id, p.share, p.unlockAt, false, 0, 0);
+            Info memory made = Info(vault, p.pool, p.id, p.share, p.unlockAt, false, 0, 0, p.maxFeeBps);
             if (ownerOfNft(made) != vault) _flag("the NFT did not move into the vault");
             if (v.owner() != p.owner || v.unlockAt() != p.unlockAt || v.feeShareBps() != p.share) {
                 _flag("a new vault is wrong");
@@ -184,8 +207,23 @@ contract PositionHandler is Test {
             flatFees += p.flat;
             infos.push(made);
             ++succeeded[this.lock.selector];
-        } catch {
-            if (shouldSucceed) _flag("lockPosition reverted for valid arguments");
+        } catch (bytes memory why) {
+            if (shouldSucceed) {
+                _flag("lockPosition reverted for valid arguments");
+            } else if (refused) {
+                bytes memory want =
+                    abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_SHARE, p.share, p.maxFeeBps);
+                if (keccak256(why) != keccak256(want)) {
+                    _flag("a lock above the caller's maximum failed for another reason");
+                } else if (
+                    ownerOfNft(Info(address(0), p.pool, p.id, 0, 0, false, 0, 0, 0)) != p.user
+                        || factory.vaultsOfLength(p.owner) != vaultsBefore || recipient.received() != flatBefore
+                ) {
+                    _flag("a refused lock left something behind");
+                } else {
+                    ++refusedAboveMax;
+                }
+            }
         }
     }
 
@@ -494,7 +532,7 @@ contract PositionHandler is Test {
 
 /// The audit's two facts for position locks, as invariants over the handler above: the principal (the liquidity and
 /// the NFT) of a locked position cannot leave before `unlockAt`, and nobody but the owner can collect or withdraw.
-/// 1000 runs of 64 calls per invariant (6 invariants: 384,000 handler calls, about 20 s on four cores).
+/// 1000 runs of 64 calls per invariant (7 invariants: 448,000 handler calls, about 20 s on four cores).
 /// forge-config: default.invariant.runs = 1000
 /// forge-config: default.invariant.depth = 64
 contract PositionInvariantsTest is Test {
@@ -584,6 +622,19 @@ contract PositionInvariantsTest is Test {
         return false;
     }
 
+    /// No vault keeps a share above the most its locker accepted (`maxFeeBps`): each vault's `feeShareBps()` is the
+    /// share in force at its lock and at most its locker's maximum, and every lock whose share in force was above that
+    /// maximum was refused with `FeeAboveMax` and left nothing behind (the handler checks that as it happens).
+    function invariant_noVaultKeepsAShareAboveItsLockersMax() public view {
+        assertFalse(handler.shareAboveMax(), "a vault kept a share above its locker's maximum");
+        for (uint256 k; k < handler.count(); ++k) {
+            PositionHandler.Info memory i = handler.info(k);
+            uint16 kept = PositionVault(payable(i.vault)).feeShareBps();
+            assertEq(kept, i.share, "a vault's share is not the one in force at its lock");
+            assertLe(kept, i.maxFeeBps, "a vault's share is above its locker's maximum");
+        }
+    }
+
     /// Every action predicted its own outcome, including exactly who is paid what by collect, and the prediction held.
     function invariant_noUnexpectedOutcome() public view {
         assertFalse(handler.unexpectedOutcome(), handler.reason());
@@ -591,9 +642,9 @@ contract PositionInvariantsTest is Test {
 
     /// A scripted run through every action, so an idle handler cannot pass the invariants vacuously.
     function test_handler_everyActionSucceedsOnAScriptedRun() public {
-        handler.lock(0, 0, 1, 2 * 10 days); // v3, for actor 1
-        handler.lock(1, 1, 2, 2 * 10 days); // v4 A/B, for actor 2
-        handler.lock(2, 2, 3, 2 * 10 days); // v4 native/A, for actor 3
+        handler.lock(0, 0, 1, 2 * 10 days, 2); // v3, for actor 1, at the share in force
+        handler.lock(1, 1, 2, 2 * 10 days, 2); // v4 A/B, for actor 2
+        handler.lock(2, 2, 3, 2 * 10 days, 2); // v4 native/A, for actor 3
         for (uint256 k; k < 3; ++k) {
             handler.accrue(k, 1e20, 1e19);
             handler.collect(k, 0, true);
@@ -618,13 +669,16 @@ contract PositionInvariantsTest is Test {
         handler.transferOwnership(1, 0, 0, true);
         handler.acceptOwnership(1, 0, true);
         handler.changeShare(500);
-        handler.lock(3, 0, 0, 2 * 10 days); // a new lock copies the new share
+        handler.lock(3, 0, 0, 2 * 10 days, 4 * 200); // accepting at most 2%: refused, nothing left behind
+        handler.lock(3, 0, 0, 2 * 10 days, 1); // accepting any share: a new lock copies the new share
         handler.warp(90 days);
         handler.withdraw(1, 0, 3, true);
         handler.withdraw(2, 0, 3, false); // a non-owner is refused
 
         assertFalse(handler.unexpectedOutcome(), handler.reason());
         assertEq(handler.info(3).share, 500);
+        assertEq(handler.info(0).maxFeeBps, 200, "the first lock accepted exactly the share in force");
+        assertEq(handler.refusedAboveMax(), 1, "a lock above its caller's maximum was refused");
         assertGt(handler.skips(), 0, "a skip was exercised");
         assertGt(handler.platformA(), 0);
         assertGt(handler.platformB(), 0);
@@ -643,5 +697,6 @@ contract PositionInvariantsTest is Test {
         invariant_liquidityNeverDecreases();
         invariant_theRecipientGetsExactlyItsShares();
         invariant_everyVaultIsRegisteredUnderBothCurrencies();
+        invariant_noVaultKeepsAShareAboveItsLockersMax();
     }
 }

@@ -87,8 +87,15 @@ contract VaultGasTest is VaultTestBase {
         assertLt(txGas, ceiling, string.concat("over its ceiling: ", name));
     }
 
-    function _lockData(IERC20 t, uint256 amount, address owner_) internal view returns (bytes memory) {
-        return abi.encodeCall(VaultFactory.lockToken, (t, amount, (block.timestamp + 30 days).toUint64(), owner_));
+    /// The call the Vault app makes: `maxFeeBps` is the LP share for a v2 pair and 0 for any other token.
+    function _lockData(IERC20 t, uint256 amount, address owner_, uint256 maxFeeBps)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return abi.encodeCall(
+            VaultFactory.lockToken, (t, amount, (block.timestamp + 30 days).toUint64(), owner_, maxFeeBps)
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -102,7 +109,7 @@ contract VaultGasTest is VaultTestBase {
             address(factory),
             alice,
             FLAT,
-            _lockData(IERC20(address(freshToken)), 100 ether, freshOwner),
+            _lockData(IERC20(address(freshToken)), 100 ether, freshOwner, 0),
             380_000
         );
     }
@@ -113,7 +120,7 @@ contract VaultGasTest is VaultTestBase {
             address(factory),
             bob,
             FLAT,
-            _lockData(token, 100 ether, bob),
+            _lockData(token, 100 ether, bob, 0),
             300_000
         );
     }
@@ -124,7 +131,7 @@ contract VaultGasTest is VaultTestBase {
             address(factory),
             alice,
             FLAT,
-            _lockData(IERC20(address(pair)), 10_000 ether, freshOwner),
+            _lockData(IERC20(address(pair)), 10_000 ether, freshOwner, LP_BPS),
             430_000
         );
     }
