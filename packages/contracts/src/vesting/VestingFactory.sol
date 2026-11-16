@@ -15,7 +15,8 @@ import {ArcVesting} from "./ArcVesting.sol";
 /// (`msg.value`, 18 decimals), like the other ARC.os contracts; it is read at creation, and nothing is ever charged
 /// on a release. The registries are discovery hints, not proofs: anyone can create a schedule for any beneficiary
 /// and token by paying the fee, and a wallet's ownership can move after creation. Read them in pages (`...Length`
-/// and `...Slice`) and ask each wallet for its own `owner()`. `isVesting` is the authoritative "made here" check.
+/// and `...Slice`) and ask each wallet for its own `owner()`. `isVesting` is the authoritative "made here" check. A
+/// wallet does not record its token; `tokenOf` does.
 contract VestingFactory is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -27,6 +28,11 @@ contract VestingFactory is ReentrancyGuardTransient {
 
     IFeeController public immutable feeController;
     mapping(address vesting => bool) public isVesting;
+    /// @notice The token a wallet made here was created and funded with, written once by `createVesting` and never
+    /// changed. The zero address for any address this factory did not create (a token always has code, so it is never
+    /// zero for one it did). It does not follow the wallet's ownership, and other tokens sent to the wallet later don't
+    /// change it.
+    mapping(address vesting => address token) public tokenOf;
     mapping(address token => address[]) private _vestingsForToken;
     mapping(address beneficiary => address[]) private _vestingsOf;
 
@@ -65,7 +71,8 @@ contract VestingFactory is ReentrancyGuardTransient {
     /// wallet received (its balance after the transfer minus before it), so a token that takes a cut on transfer, or
     /// rebases and rounds down, is recorded as it landed; a token that delivers nothing reverts `ZeroAmount`. Tokens
     /// already at the new address are the beneficiary's but are not counted as funding. A zero beneficiary reverts
-    /// with OpenZeppelin's `OwnableInvalidOwner`.
+    /// with OpenZeppelin's `OwnableInvalidOwner`. `tokenOf(vesting)` is set to `token` along with the registries,
+    /// before the tokens move.
     function createVesting(
         IERC20 token,
         address beneficiary,
@@ -87,6 +94,7 @@ contract VestingFactory is ReentrancyGuardTransient {
 
         vesting = address(new ArcVesting(beneficiary, start, duration, cliff));
         isVesting[vesting] = true;
+        tokenOf[vesting] = address(token);
         _vestingsForToken[address(token)].push(vesting);
         _vestingsOf[beneficiary].push(vesting);
 

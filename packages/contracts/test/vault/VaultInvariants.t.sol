@@ -11,7 +11,9 @@ import {VaultTestBase} from "./VaultTestBase.sol";
 import {MockToken, MockV2Pair} from "./mocks/VaultMocks.sol";
 
 /// Drives random sequences of lock, extend, withdraw, ownership transfer, donation, time passing and fee changes by
-/// random actors, and keeps an exact ledger of what every vault must hold.
+/// random actors, and keeps an exact ledger of what every vault must hold. Each lock names the most it accepts for the
+/// LP share (`maxFeeBps`), now and then less than the share in force, as a caller who read the fee before a raise was
+/// applied would: such a lock of the pair must be refused, and leave nothing behind.
 ///
 /// `fail_on_revert` is on (foundry.toml), so the handler catches every call into the contracts under test; a revert
 /// that reaches the fuzzer is a bug in the handler itself. Every action predicts its own outcome from the vault's live
@@ -43,6 +45,9 @@ contract VaultHandler is Test {
         uint256 tokenIndex; // position in factory.vaultsForToken(token)
         uint256 expected; // exactly what the vault must hold
         uint64 lastUnlockAt;
+        uint256 amount; // what the locker sent in
+        uint256 fee; // the LP fee the recipient received
+        uint256 maxFeeBps; // the most the locker accepted
     }
 
     VaultInfo[] internal infos;
@@ -55,6 +60,7 @@ contract VaultHandler is Test {
     uint256[2] public withdrawn; // tokens the owners took out
     uint256[2] public createdForToken;
     mapping(address owner => uint256) public createdFor;
+    uint256 public refusedAboveMax; // pair locks refused because the share in force was above the caller's maximum
 
     // How often each action really ran and succeeded, so the suite can show it is not vacuous.
     mapping(bytes4 selector => uint256) public succeeded;
@@ -64,6 +70,7 @@ contract VaultHandler is Test {
     bool public nonOwnerMovedTokens;
     bool public unlockAtDecreased;
     bool public tokensLeftAfterWithdraw;
+    bool public shareAboveMax; // a lock went through while the share in force was above its caller's maximum
     string public reason;
 
     constructor(
@@ -118,6 +125,12 @@ contract VaultHandler is Test {
         return i == 0 ? plain : lp;
     }
 
+    /// The most a lock of `amount` may pay at a maximum of `maxBps`: floor(amount * maxBps / 10_000), with a maximum
+    /// above 100% read as 100% (a share is never above it).
+    function maxFee(uint256 amount, uint256 maxBps) external pure returns (uint256) {
+        return _floorBps(amount, maxBps > 10_000 ? 10_000 : maxBps);
+    }
+
     // ---------------------------------------------------------------------
     // Actions
     // ---------------------------------------------------------------------
@@ -130,12 +143,20 @@ contract VaultHandler is Test {
         uint256 amount;
         uint64 unlockAt;
         uint256 flat;
+        uint256 lpBps; // the LP share in force
+        uint256 maxFeeBps; // the most the caller accepts
+        bool refused; // a pair, and the share in force is above the caller's maximum
         uint256 expectedFee;
     }
 
-    function lock(uint256 actorSeed, uint256 tokenSeed, uint256 ownerSeed, uint256 amountSeed, uint256 durationSeed)
-        external
-    {
+    function lock(
+        uint256 actorSeed,
+        uint256 tokenSeed,
+        uint256 ownerSeed,
+        uint256 amountSeed,
+        uint256 durationSeed,
+        uint256 maxSeed
+    ) external {
         LockPlan memory plan;
         plan.user = _actor(actorSeed);
         plan.tokenIdx = tokenSeed % 2 == 0 ? 0 : 1;
@@ -149,7 +170,16 @@ contract VaultHandler is Test {
         plan.unlockAt = (block.timestamp + duration).toUint64();
         plan.owner = _actor(ownerSeed);
         plan.flat = fees.feeOf(KEY_FLAT);
-        plan.expectedFee = plan.tokenIdx == 1 ? _floorBps(plan.amount, fees.feeOf(KEY_LP)) : 0;
+        plan.lpBps = fees.feeOf(KEY_LP);
+        // Usually the share in force or more (the app passes the share it showed; some callers accept any); one lock in
+        // four names at most the share in force, so below it whenever that share is above zero. A plain token pays no
+        // share and is never refused for it.
+        uint256 pick = maxSeed % 4;
+        plan.maxFeeBps = pick == 0
+            ? bound(maxSeed / 4, 0, plan.lpBps)
+            : pick == 1 ? type(uint256).max : plan.lpBps + bound(maxSeed / 4, 0, 100);
+        plan.refused = plan.tokenIdx == 1 && plan.lpBps > plan.maxFeeBps;
+        plan.expectedFee = plan.tokenIdx == 1 ? _floorBps(plan.amount, plan.lpBps) : 0;
         _lock(plan);
     }
 
@@ -160,8 +190,16 @@ contract VaultHandler is Test {
         uint256 ownerIndex = factory.vaultsOfLength(plan.owner);
         uint256 tokenIndex = factory.vaultsForTokenLength(address(token));
 
+        uint256 userTokens = token.balanceOf(plan.user);
+
         vm.prank(plan.user);
-        try factory.lockToken{value: plan.flat}(token, plan.amount, plan.unlockAt, plan.owner) returns (address vault) {
+        try factory.lockToken{value: plan.flat}(token, plan.amount, plan.unlockAt, plan.owner, plan.maxFeeBps) returns (
+            address vault
+        ) {
+            if (plan.refused) {
+                shareAboveMax = true;
+                _flag("a lock paid an LP share above its caller's maximum");
+            }
             uint256 got = token.balanceOf(vault);
             if (got != plan.amount - plan.expectedFee) _flag("a new vault does not hold amount minus the floor fee");
             if (token.balanceOf(feeRecipient) - recipientTokens != plan.expectedFee) {
@@ -180,10 +218,41 @@ contract VaultHandler is Test {
             feesTaken[plan.tokenIdx] += plan.expectedFee;
             createdFor[plan.owner] += 1;
             createdForToken[plan.tokenIdx] += 1;
-            infos.push(VaultInfo(vault, plan.owner, plan.tokenIdx, ownerIndex, tokenIndex, got, plan.unlockAt));
+            infos.push(
+                VaultInfo(
+                    vault,
+                    plan.owner,
+                    plan.tokenIdx,
+                    ownerIndex,
+                    tokenIndex,
+                    got,
+                    plan.unlockAt,
+                    plan.amount,
+                    token.balanceOf(feeRecipient) - recipientTokens,
+                    plan.maxFeeBps
+                )
+            );
             ++succeeded[this.lock.selector];
-        } catch {
-            _flag("lockToken reverted for valid arguments");
+        } catch (bytes memory why) {
+            if (!plan.refused) {
+                _flag("lockToken reverted for valid arguments");
+            } else if (
+                keccak256(why)
+                    != keccak256(
+                        abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_LP, plan.lpBps, plan.maxFeeBps)
+                    )
+            ) {
+                _flag("a lock above the caller's maximum failed for another reason");
+            } else if (
+                factory.vaultsOfLength(plan.owner) != ownerIndex
+                    || factory.vaultsForTokenLength(address(token)) != tokenIndex
+                    || token.balanceOf(plan.user) != userTokens || token.balanceOf(feeRecipient) != recipientTokens
+                    || feeRecipient.balance != recipientNative
+            ) {
+                _flag("a refused lock left something behind");
+            } else {
+                ++refusedAboveMax;
+            }
         }
     }
 
@@ -418,7 +487,7 @@ contract VaultHandler is Test {
     }
 }
 
-/// 1000 runs of 64 calls per invariant (7 invariants: 448,000 handler calls, about 80 s on four cores). Depth stays low
+/// 1000 runs of 64 calls per invariant (8 invariants: 512,000 handler calls, about 80 s on four cores). Depth stays low
 /// because every run starts from nothing and a lock's whole life fits in a few dozen calls, while more runs means more
 /// different starting sequences.
 /// forge-config: default.invariant.runs = 1000
@@ -520,6 +589,18 @@ contract VaultInvariantsTest is VaultTestBase {
         assertEq(factory.positionVaultsForTokenLength(address(token)), 0, "this suite makes no position locks");
     }
 
+    /// No lock pays an LP share above the most its caller accepted (`maxFeeBps`): every LP fee taken is at most
+    /// floor(amount * maxFeeBps / 10_000), and every pair lock whose share in force was above its caller's maximum was
+    /// refused with `FeeAboveMax` and left nothing behind (the handler checks that as it happens).
+    function invariant_noLockPaysAShareAboveItsCallersMax() public view {
+        assertFalse(handler.shareAboveMax(), "a lock paid a share above its caller's maximum");
+        uint256 n = handler.vaultCount();
+        for (uint256 i; i < n; ++i) {
+            VaultHandler.VaultInfo memory vi = handler.info(i);
+            assertLe(vi.fee, handler.maxFee(vi.amount, vi.maxFeeBps), "an LP fee above the caller's maximum");
+        }
+    }
+
     /// Every action predicted its own outcome (who may call, when, what state results), and the prediction held.
     function invariant_noUnexpectedOutcome() public view {
         assertFalse(handler.unexpectedOutcome(), handler.reason());
@@ -532,13 +613,14 @@ contract VaultInvariantsTest is VaultTestBase {
     /// A scripted run through every action. If a handler action stopped succeeding (a bad bound, a wrong
     /// prediction) the invariants above would still pass on an idle handler, so this pins that each one really runs.
     function test_handler_everyActionSucceedsOnAScriptedRun() public {
-        handler.lock(0, 0, 1, 1e24, 100 days); // actor 0 locks the plain token for actor 1
-        handler.lock(2, 1, 3, 5e21, 200 days); // actor 2 locks LP tokens for actor 3 (pays the LP fee)
+        handler.lock(0, 0, 1, 1e24, 100 days, 0); // actor 0 locks the plain token for actor 1, accepting no share
+        handler.lock(2, 1, 3, 5e21, 200 days, 2); // actor 2 locks LP tokens for actor 3, at the share in force
         handler.donate(0, 2, 1e20);
         handler.extend(0, 0, block.timestamp + 150 days, true);
         handler.transferOwnership(0, 0, 2, true); // the owner nominates actor 2
         handler.acceptOwnership(0, 0, true); // and actor 2 accepts
         handler.changeFee(1, 100, true); // the LP fee goes to its cap of 100 bps, after the delay
+        handler.lock(2, 1, 3, 5e21, 200 days, 4 * 50); // accepting at most 50 bps: refused, nothing left behind
         handler.warp(30 days);
         vm.warp(block.timestamp + 400 days); // past both unlock times (the handler's own warp stops at 90 days)
         handler.withdraw(0, 0, 1, true);
@@ -557,6 +639,8 @@ contract VaultInvariantsTest is VaultTestBase {
             assertEq(vi.expected, 0, "a vault was withdrawn and is empty");
         }
         assertEq(handler.succeeded(VaultHandler.lock.selector), 2);
+        assertEq(handler.refusedAboveMax(), 1, "a lock above its caller's maximum was refused");
+        assertEq(handler.info(1).maxFeeBps, 50, "the LP lock accepted exactly the share in force");
         assertEq(handler.succeeded(VaultHandler.extend.selector), 1);
         assertEq(handler.succeeded(VaultHandler.transferOwnership.selector), 1);
         assertEq(handler.succeeded(VaultHandler.acceptOwnership.selector), 1);

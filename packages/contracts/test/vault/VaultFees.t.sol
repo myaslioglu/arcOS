@@ -15,8 +15,9 @@ import {
     MockV2Pair
 } from "./mocks/VaultMocks.sol";
 
-/// Fees: the flat fee in native value, the percentage on v2 LP tokens (rounding pinned), fee changes that never
-/// reach an existing lock, and what happens when a fee transfer fails, as it does for a blocklisted address on Arc.
+/// Fees: the flat fee in native value, the percentage on v2 LP tokens (rounding pinned), the most a caller accepts for
+/// that percentage (`maxFeeBps`), fee changes that never reach an existing lock, and what happens when a fee transfer
+/// fails, as it does for a blocklisted address on Arc.
 contract VaultFeesTest is VaultTestBase {
     using SafeCast for uint256;
 
@@ -56,7 +57,7 @@ contract VaultFeesTest is VaultTestBase {
         (VaultFactory f, MockV2Pair p) = _privateLp(bps, amount, user);
         uint64 at = (block.timestamp + 1 days).toUint64();
         vm.prank(user);
-        address vault = f.lockToken{value: FLAT}(IERC20(address(p)), amount, at, user);
+        address vault = f.lockToken{value: FLAT}(IERC20(address(p)), amount, at, user, bps);
         return (p.balanceOf(feeRecipient), p.balanceOf(vault));
     }
 
@@ -86,7 +87,7 @@ contract VaultFeesTest is VaultTestBase {
         uint256 before = feeRecipient.balance;
         uint64 at = (block.timestamp + 1 days).toUint64();
         vm.prank(alice);
-        factory.lockToken(token, 1 ether, at, alice); // no value at all
+        factory.lockToken(token, 1 ether, at, alice, 0); // no value at all
         assertEq(feeRecipient.balance, before);
         assertEq(factory.vaultsOfLength(alice), 1);
 
@@ -96,7 +97,7 @@ contract VaultFeesTest is VaultTestBase {
         fees.setRecipient(payable(address(blocked)));
         vm.prank(alice);
         vm.expectRevert(VaultFactory.FeeTransferFailed.selector);
-        factory.lockToken(token, 1 ether, at, alice);
+        factory.lockToken(token, 1 ether, at, alice, 0);
     }
 
     // ---------------------------------------------------------------------
@@ -120,7 +121,7 @@ contract VaultFeesTest is VaultTestBase {
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultFactory.TokenLocked(bob, address(pair), s.predicted, 9_950 ether, 50 ether, at);
         vm.prank(alice);
-        address vault = factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, bob);
+        address vault = factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, bob, LP_BPS);
 
         assertEq(factory.vaultsForToken(address(pair))[0], vault);
         assertEq(factory.vaultsForTokenLength(pair.token0()), 0); // keyed by the locked token, not by its currencies
@@ -185,13 +186,140 @@ contract VaultFeesTest is VaultTestBase {
         token.approve(address(f), type(uint256).max);
         uint64 at = (block.timestamp + 30 days).toUint64();
 
+        // Out of range is refused even for a caller who accepts any share.
         vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeOutOfRange.selector, KEY_LP, 10_001));
-        f.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice);
+        f.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, type(uint256).max);
 
         // The percentage is never read for a token that is not an LP token.
-        f.lockToken{value: FLAT}(token, 10_000 ether, at, alice);
+        f.lockToken{value: FLAT}(token, 10_000 ether, at, alice, 0);
         vm.stopPrank();
         assertEq(f.vaultsOfLength(alice), 1);
+    }
+
+    // ---------------------------------------------------------------------
+    // The most the caller accepts for the LP share: `maxFeeBps` (the owner's decision of 2026-11-16)
+    // ---------------------------------------------------------------------
+
+    /// An LP lock whose share in force is above the caller's maximum is refused, and leaves nothing behind: no vault,
+    /// no registry entry, no fee in either currency.
+    function test_maxFeeBps_anLpShareAboveIt_reverts_andLeavesNothing() public {
+        Snap memory s = _snap(alice, address(pair));
+        uint256 aliceLp = pair.balanceOf(alice);
+        uint256 aliceNative = alice.balance;
+        uint256 recipientNative = feeRecipient.balance;
+        uint64 at = (block.timestamp + 30 days).toUint64();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_LP, LP_BPS, LP_BPS - 1));
+        factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, LP_BPS - 1);
+
+        _assertNothingLeftBehind(s, alice, address(pair));
+        assertEq(pair.balanceOf(alice), aliceLp);
+        assertEq(pair.balanceOf(feeRecipient), 0);
+        assertEq(alice.balance, aliceNative);
+        assertEq(feeRecipient.balance, recipientNative, "the flat fee, paid inside the call, was rolled back");
+    }
+
+    /// At the maximum, or under any higher one, the lock goes through and pays the share in force, never the maximum.
+    function test_maxFeeBps_atOrAboveTheShare_locks_andPaysTheShareInForce() public {
+        uint256[3] memory maxes = [LP_BPS, LP_BPS + 1, type(uint256).max];
+        for (uint256 i; i < maxes.length; ++i) {
+            uint256 recipientBefore = pair.balanceOf(feeRecipient);
+            uint64 at = (block.timestamp + 30 days).toUint64();
+            vm.prank(alice);
+            address vault = factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, maxes[i]);
+            assertEq(pair.balanceOf(feeRecipient) - recipientBefore, 50 ether, "0.5%, the share in force");
+            assertEq(pair.balanceOf(vault), 9_950 ether);
+        }
+    }
+
+    /// The race the maximum closes: the caller reads 0.5%; a raise to 1%, scheduled 48 hours before, is applied by a
+    /// stranger before the lock runs; the lock is refused instead of paying 1%. Read again, 1% is accepted.
+    function test_maxFeeBps_aRaiseAppliedAfterTheCallerRead_refusesTheLock() public {
+        uint256 shown = fees.feeOf(KEY_LP);
+        vm.prank(feeOwner);
+        fees.setFee(KEY_LP, LP_BPS_CAP);
+        vm.warp(block.timestamp + fees.DELAY());
+        assertEq(fees.feeOf(KEY_LP), shown, "a raise waits until someone applies it");
+        vm.prank(stranger);
+        fees.applyPending(KEY_LP);
+        uint64 at = (block.timestamp + 30 days).toUint64();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_LP, LP_BPS_CAP, shown));
+        factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, shown);
+        assertEq(factory.vaultsOfLength(alice), 0);
+
+        vm.prank(alice);
+        address vault = factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, LP_BPS_CAP);
+        assertEq(pair.balanceOf(vault), 9_900 ether);
+        assertEq(pair.balanceOf(feeRecipient), 100 ether);
+    }
+
+    /// A token that isn't shaped like a v2 pair pays no share, so `maxFeeBps` is not checked: 0, 1 and the largest
+    /// value all lock, before and after a raise of the LP share, and only the flat fee is taken.
+    function test_maxFeeBps_aPlainToken_isNotChecked() public {
+        uint256[3] memory maxes = [uint256(0), 1, type(uint256).max];
+        for (uint256 round; round < 2; ++round) {
+            if (round == 1) {
+                vm.prank(feeOwner);
+                fees.setFee(KEY_LP, LP_BPS_CAP);
+                vm.warp(block.timestamp + fees.DELAY());
+                fees.applyPending(KEY_LP);
+            }
+            for (uint256 i; i < maxes.length; ++i) {
+                uint64 at = (block.timestamp + 30 days).toUint64();
+                vm.prank(alice);
+                address vault = factory.lockToken{value: FLAT}(token, 1_000 ether, at, alice, maxes[i]);
+                assertEq(token.balanceOf(vault), 1_000 ether);
+            }
+        }
+        assertEq(token.balanceOf(feeRecipient), 0);
+        assertEq(factory.vaultsOfLength(alice), 6);
+    }
+
+    /// 0 is what a caller passes for a token it judged not to be a pair: a token that answers as one when the lock runs
+    /// is refused rather than charged. Against a share of 0, a maximum of 0 locks: equal is accepted.
+    function test_maxFeeBps_zero_refusesATokenThatIsAPairAfterAll_unlessItsShareIsZero() public {
+        uint64 at = (block.timestamp + 30 days).toUint64();
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_LP, LP_BPS, 0));
+        factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, 0);
+
+        vm.prank(feeOwner);
+        fees.setFee(KEY_LP, 0); // a cut applies at once
+        vm.prank(alice);
+        address vault = factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, 0);
+        assertEq(pair.balanceOf(vault), 10_000 ether);
+        assertEq(pair.balanceOf(feeRecipient), 0);
+    }
+
+    /// For any share and any maximum: refused exactly when the share in force is above the maximum. Otherwise the fee
+    /// is the share in force, floored, and never above the floored maximum.
+    function testFuzz_maxFeeBps_refusesExactlyWhenTheShareIsAboveIt(uint256 bpsSeed, uint256 maxSeed, uint256 amount)
+        public
+    {
+        uint256 bps = bound(bpsSeed, 0, 9_999);
+        uint256 maxFeeBps = maxSeed % 4 == 0 ? maxSeed : bound(maxSeed, 0, 10_000);
+        amount = bound(amount, 1, type(uint256).max);
+        address user = makeAddr("fuzzUser");
+        (VaultFactory f, MockV2Pair p) = _privateLp(bps, amount, user);
+        uint64 at = (block.timestamp + 1 days).toUint64();
+
+        if (bps > maxFeeBps) {
+            vm.prank(user);
+            vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeAboveMax.selector, KEY_LP, bps, maxFeeBps));
+            f.lockToken{value: FLAT}(IERC20(address(p)), amount, at, user, maxFeeBps);
+            assertEq(f.vaultsOfLength(user), 0);
+            assertEq(p.balanceOf(user), amount);
+        } else {
+            vm.prank(user);
+            address vault = f.lockToken{value: FLAT}(IERC20(address(p)), amount, at, user, maxFeeBps);
+            uint256 fee = p.balanceOf(feeRecipient);
+            assertEq(fee, _floorBps(amount, bps));
+            assertLe(fee, _floorBps(amount, maxFeeBps > 10_000 ? 10_000 : maxFeeBps));
+            assertEq(fee + p.balanceOf(vault), amount);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -246,16 +374,16 @@ contract VaultFeesTest is VaultTestBase {
         uint64 at = (block.timestamp + 30 days).toUint64();
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(VaultFactory.WrongFee.selector, FLAT, 100 ether));
-        factory.lockToken{value: 100 ether}(token, 1 ether, at, alice);
+        factory.lockToken{value: 100 ether}(token, 1 ether, at, alice, 0);
 
         vm.warp(block.timestamp + 48 hours);
         fees.applyPending(KEY_FLAT);
         at = (block.timestamp + 30 days).toUint64();
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(VaultFactory.WrongFee.selector, 100 ether, FLAT));
-        factory.lockToken{value: FLAT}(token, 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(token, 1 ether, at, alice, 0);
         vm.prank(alice);
-        factory.lockToken{value: 100 ether}(token, 1 ether, at, alice);
+        factory.lockToken{value: 100 ether}(token, 1 ether, at, alice, 0);
         assertEq(factory.vaultsOfLength(alice), 2);
     }
 
@@ -265,7 +393,7 @@ contract VaultFeesTest is VaultTestBase {
         uint256 before = feeRecipient.balance;
         uint64 at = (block.timestamp + 30 days).toUint64();
         vm.prank(alice);
-        factory.lockToken{value: 10 ether}(token, 1 ether, at, alice);
+        factory.lockToken{value: 10 ether}(token, 1 ether, at, alice, 0);
         assertEq(feeRecipient.balance, before + 10 ether);
     }
 
@@ -304,7 +432,7 @@ contract VaultFeesTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(VaultFactory.FeeTransferFailed.selector);
-        factory.lockToken{value: FLAT}(token, 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(token, 1 ether, at, alice, 0);
 
         _assertNothingLeftBehind(s, alice, address(token));
         assertEq(token.balanceOf(alice), aliceTokens);
@@ -330,7 +458,7 @@ contract VaultFeesTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert("blocked");
-        factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, LP_BPS);
 
         _assertNothingLeftBehind(s, alice, address(pair));
         assertEq(pair.balanceOf(alice), aliceLp);
@@ -352,7 +480,7 @@ contract VaultFeesTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert("blocked");
-        factory.lockToken{value: FLAT}(IERC20(address(blk)), 10 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(address(blk)), 10 ether, at, alice, 0);
 
         _assertNothingLeftBehind(s, alice, address(blk));
         assertEq(blk.balanceOf(alice), 100 ether);

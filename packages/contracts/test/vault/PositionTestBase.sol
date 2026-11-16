@@ -51,9 +51,10 @@ abstract contract PositionTestBase is VaultTestBase {
         returns (PositionVault)
     {
         uint256 flat = fees.feeOf(KEY_FLAT);
+        uint256 maxFeeBps = fees.feeOf(KEY_SHARE); // the share the controller holds now, as a caller would read it
         uint64 at = (block.timestamp + duration).toUint64();
         vm.prank(user);
-        return PositionVault(payable(factory.lockPosition{value: flat}(manager, id, at, owner_)));
+        return PositionVault(payable(factory.lockPosition{value: flat}(manager, id, at, owner_, maxFeeBps)));
     }
 
     /// Alice mints and locks a v3 position for herself, for 30 days.

@@ -56,6 +56,7 @@ contract VestingFactoryTest is VestingTestBase {
         assertEq(factory.vestingsForTokenLength(t), s.forToken, "vestingsForToken grew");
         assertEq(vm.getNonce(address(factory)), s.nonce, "the factory's nonce moved");
         assertFalse(factory.isVesting(s.predicted), "the would-be wallet is registered");
+        assertEq(factory.tokenOf(s.predicted), address(0), "the would-be wallet has a token");
         assertEq(s.predicted.code.length, 0, "the would-be wallet has code");
         assertEq(IERC20(t).balanceOf(alice), s.aliceTokens, "the creator's tokens moved");
         assertEq(feeRecipient.balance, s.recipientNative, "a fee was paid");
@@ -114,6 +115,7 @@ contract VestingFactoryTest is VestingTestBase {
         assertEq(address(factory).balance, 0, "the factory holds no value");
         assertEq(address(w).balance, 0, "the wallet holds no value");
         assertTrue(factory.isVesting(address(w)));
+        assertEq(factory.tokenOf(address(w)), address(token), "tokenOf names the wallet's token");
     }
 
     /// One wallet per schedule: the same arguments twice make two wallets, each with its own tokens.
@@ -409,6 +411,80 @@ contract VestingFactoryTest is VestingTestBase {
         _checkSlice(factory.vestingsForTokenSlice(address(token), 4, type(uint256).max), made, 4, 1);
         _checkSlice(factory.vestingsForTokenSlice(address(token), 9, 1), made, 0, 0);
         _checkSlice(factory.vestingsForTokenSlice(stranger, 0, 1), made, 0, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // tokenOf: the token each wallet was made for (the owner's decision of 2026-11-16)
+    // ---------------------------------------------------------------------
+
+    /// Each wallet's token, whoever its beneficiary: two tokens for one beneficiary, one token for two, and a token
+    /// that takes a cut on transfer.
+    function test_tokenOf_namesEachSchedulesToken() public {
+        MockToken other = new MockToken();
+        _fundAndApprove(alice, other);
+        MockFeeOnTransferToken taxed = new MockFeeOnTransferToken(100);
+        taxed.mint(alice, AMOUNT);
+        vm.prank(alice);
+        taxed.approve(address(factory), type(uint256).max);
+
+        ArcVesting a = _createStandard(AMOUNT);
+        ArcVesting b = _create(alice, IERC20(address(other)), bob, AMOUNT, uint64(block.timestamp), 10 days, 0);
+        ArcVesting c = _create(alice, token, carol, AMOUNT, uint64(block.timestamp), 10 days, 0);
+        ArcVesting d = _create(alice, IERC20(address(taxed)), carol, AMOUNT, uint64(block.timestamp), 10 days, 0);
+
+        assertEq(factory.tokenOf(address(a)), address(token));
+        assertEq(factory.tokenOf(address(b)), address(other));
+        assertEq(factory.tokenOf(address(c)), address(token));
+        assertEq(factory.tokenOf(address(d)), address(taxed));
+    }
+
+    /// Zero for every address the factory did not create: no address, an account, the factory, the token, the fee
+    /// controller, the address the next wallet will have, and a lookalike `ArcVesting` deployed without the factory.
+    function test_tokenOf_isZeroForAnythingTheFactoryDidNotCreate() public {
+        ArcVesting made = _createStandard(AMOUNT);
+        ArcVesting lookalike = new ArcVesting(bob, uint64(block.timestamp), 365 days, 90 days);
+        address[7] memory others = [
+            address(0),
+            alice,
+            address(factory),
+            address(token),
+            address(fees),
+            vm.computeCreateAddress(address(factory), vm.getNonce(address(factory))),
+            address(lookalike)
+        ];
+        for (uint256 i; i < others.length; ++i) {
+            assertEq(factory.tokenOf(others[i]), address(0));
+            assertFalse(factory.isVesting(others[i]));
+        }
+        assertEq(factory.tokenOf(address(made)), address(token));
+        assertTrue(factory.isVesting(address(made)));
+    }
+
+    /// Written once at creation: a transfer of the wallet, another token sent to it and released, and a fee change
+    /// leave it as it was.
+    function test_tokenOf_isUnaffectedByTransfersOtherTokensAndFeeChanges() public {
+        ArcVesting w = _createStandard(AMOUNT);
+        vm.prank(bob);
+        w.transferOwnership(carol);
+        MockToken other = new MockToken();
+        other.mint(address(w), 5 ether);
+        vm.warp(w.end());
+        w.release(address(other));
+        w.release(address(token));
+        vm.prank(feeOwner);
+        fees.setFee(KEY_VEST, 0);
+        assertEq(w.owner(), carol);
+        assertEq(other.balanceOf(carol), 5 ether, "the other token was released to the new owner");
+        assertEq(factory.tokenOf(address(w)), address(token));
+        assertEq(factory.vestingsOf(bob)[0], address(w));
+    }
+
+    /// For any address: a token exactly where the factory made a wallet.
+    function testFuzz_tokenOf_isZeroUnlessTheFactoryMadeIt(address any) public {
+        ArcVesting made = _createStandard(AMOUNT);
+        vm.assume(any != address(made));
+        assertEq(factory.tokenOf(any), address(0));
+        assertEq(factory.isVesting(any), false);
     }
 
     function _checkSlice(address[] memory got, address[] memory all, uint256 from, uint256 count) internal pure {

@@ -58,11 +58,11 @@ contract VaultFuzzTest is VaultTestBase {
         bool valid = unlockAt > nowTs && unlockAt <= nowTs + MAX_DURATION;
         vm.prank(alice);
         if (valid) {
-            address vault = factory.lockToken{value: FLAT}(token, 1 ether, unlockAt, alice);
+            address vault = factory.lockToken{value: FLAT}(token, 1 ether, unlockAt, alice, 0);
             assertEq(LockVault(vault).unlockAt(), unlockAt);
         } else {
             vm.expectRevert(LockVault.BadUnlockTime.selector);
-            factory.lockToken{value: FLAT}(token, 1 ether, unlockAt, alice);
+            factory.lockToken{value: FLAT}(token, 1 ether, unlockAt, alice, 0);
             assertEq(factory.vaultsOfLength(alice), 0);
         }
     }

@@ -81,15 +81,17 @@ abstract contract VaultTestBase is Test {
         vm.stopPrank();
     }
 
-    /// `user` locks `amount` of `token_` for `duration` seconds, for `owner_`, paying the flat fee.
+    /// `user` locks `amount` of `token_` for `duration` seconds, for `owner_`, paying the flat fee and accepting the LP
+    /// share the controller holds now (what a v2 pair pays; any other token takes no share and ignores it).
     function _lock(address user, IERC20 token_, uint256 amount, uint256 duration, address owner_)
         internal
         returns (LockVault)
     {
         uint256 flat = fees.feeOf(KEY_FLAT); // read before the prank: a call in between would consume it
+        uint256 maxFeeBps = fees.feeOf(KEY_LP);
         uint64 at = (block.timestamp + duration).toUint64();
         vm.prank(user);
-        return LockVault(factory.lockToken{value: flat}(token_, amount, at, owner_));
+        return LockVault(factory.lockToken{value: flat}(token_, amount, at, owner_, maxFeeBps));
     }
 
     function _snap(address owner_, address token_) internal view returns (Snap memory s) {

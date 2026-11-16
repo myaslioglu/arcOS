@@ -49,7 +49,7 @@ contract VaultTokensTest is VaultTestBase {
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultFactory.TokenLocked(alice, address(taxed), s.predicted, 900 ether, 0, at); // 900 arrived, not 1,000
         vm.prank(alice);
-        address vault = factory.lockToken{value: FLAT}(IERC20(address(taxed)), 1_000 ether, at, alice);
+        address vault = factory.lockToken{value: FLAT}(IERC20(address(taxed)), 1_000 ether, at, alice, 0);
 
         assertEq(taxed.balanceOf(vault), 900 ether);
         assertEq(LockVault(vault).lockedAmount(), 900 ether);
@@ -80,7 +80,7 @@ contract VaultTokensTest is VaultTestBase {
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultFactory.TokenLocked(alice, address(taxedPair), s.predicted, 8_955 ether, 50 ether, at);
         vm.prank(alice);
-        address vault = factory.lockToken{value: FLAT}(IERC20(address(taxedPair)), 10_000 ether, at, alice);
+        address vault = factory.lockToken{value: FLAT}(IERC20(address(taxedPair)), 10_000 ether, at, alice, LP_BPS);
 
         assertEq(taxedPair.balanceOf(feeRecipient), 45 ether); // what the recipient received
         assertEq(taxedPair.balanceOf(vault), 8_955 ether);
@@ -133,7 +133,7 @@ contract VaultTokensTest is VaultTestBase {
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultFactory.TokenLocked(alice, address(rt), s.predicted, 1_000, 0, at);
         vm.prank(alice);
-        address vault = factory.lockToken{value: FLAT}(IERC20(address(rt)), 1_001, at, alice);
+        address vault = factory.lockToken{value: FLAT}(IERC20(address(rt)), 1_001, at, alice, 0);
 
         assertEq(rt.balanceOf(vault), 1_000);
         assertEq(LockVault(vault).lockedAmount(), 1_000);
@@ -150,7 +150,7 @@ contract VaultTokensTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(VaultFactory.ZeroAmount.selector);
-        factory.lockToken{value: FLAT}(IERC20(address(broken)), 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(address(broken)), 1 ether, at, alice, 0);
 
         _assertNothingLeftBehind(s, alice, address(broken));
     }
@@ -165,7 +165,7 @@ contract VaultTokensTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(VaultFactory.ZeroAmount.selector); // 100% fee leaves nothing to lock
-        f.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice);
+        f.lockToken{value: FLAT}(IERC20(address(pair)), 10_000 ether, at, alice, 10_000);
 
         assertEq(pair.balanceOf(alice), aliceLp);
         assertEq(f.vaultsOfLength(alice), 0);
@@ -178,7 +178,7 @@ contract VaultTokensTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(); // no answer to balanceOf: fail closed
-        factory.lockToken{value: FLAT}(IERC20(address(blind)), 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(address(blind)), 1 ether, at, alice, 0);
 
         _assertNothingLeftBehind(s, alice, address(blind));
     }
@@ -210,7 +210,7 @@ contract VaultTokensTest is VaultTestBase {
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(liar)));
-        factory.lockToken{value: FLAT}(IERC20(address(liar)), 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(address(liar)), 1 ether, at, alice, 0);
 
         _assertNothingLeftBehind(s, alice, address(liar));
     }
@@ -229,7 +229,7 @@ contract VaultTokensTest is VaultTestBase {
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultFactory.TokenLocked(alice, address(token), s.predicted, 100 ether, 0, at);
         vm.prank(alice);
-        address vault = factory.lockToken{value: FLAT}(token, 100 ether, at, alice);
+        address vault = factory.lockToken{value: FLAT}(token, 100 ether, at, alice, 0);
 
         assertEq(vault, s.predicted);
         assertEq(LockVault(vault).lockedAmount(), 107 ether);

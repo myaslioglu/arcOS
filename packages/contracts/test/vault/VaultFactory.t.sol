@@ -139,7 +139,7 @@ contract VaultFactoryTest is VaultTestBase {
         vm.expectEmit(true, true, false, true, address(factory));
         emit VaultFactory.TokenLocked(bob, address(token), s.predicted, 100 ether, 0, at);
         vm.prank(alice);
-        address vault = factory.lockToken{value: FLAT}(token, 100 ether, at, bob);
+        address vault = factory.lockToken{value: FLAT}(token, 100 ether, at, bob, 0);
         assertEq(vault, s.predicted);
     }
 
@@ -150,7 +150,7 @@ contract VaultFactoryTest is VaultTestBase {
         for (uint256 i; i < sent.length; ++i) {
             vm.prank(alice);
             vm.expectRevert(abi.encodeWithSelector(VaultFactory.WrongFee.selector, FLAT, sent[i]));
-            factory.lockToken{value: sent[i]}(token, 1 ether, at, alice);
+            factory.lockToken{value: sent[i]}(token, 1 ether, at, alice, 0);
         }
         _assertNothingLeftBehind(s, alice, address(token));
         assertEq(token.balanceOf(alice), START_BALANCE);
@@ -161,15 +161,15 @@ contract VaultFactoryTest is VaultTestBase {
         uint64 nowTs = uint64(block.timestamp);
         vm.startPrank(alice);
         vm.expectRevert(VaultFactory.ZeroAmount.selector);
-        factory.lockToken{value: FLAT}(token, 0, nowTs + 1 days, alice);
+        factory.lockToken{value: FLAT}(token, 0, nowTs + 1 days, alice, 0);
         vm.expectRevert(LockVault.ZeroAddress.selector);
-        factory.lockToken{value: FLAT}(token, 1 ether, nowTs + 1 days, address(0));
+        factory.lockToken{value: FLAT}(token, 1 ether, nowTs + 1 days, address(0), 0);
         vm.expectRevert(LockVault.BadUnlockTime.selector);
-        factory.lockToken{value: FLAT}(token, 1 ether, nowTs, alice);
+        factory.lockToken{value: FLAT}(token, 1 ether, nowTs, alice, 0);
         vm.expectRevert(LockVault.BadUnlockTime.selector);
-        factory.lockToken{value: FLAT}(token, 1 ether, 0, alice);
+        factory.lockToken{value: FLAT}(token, 1 ether, 0, alice, 0);
         vm.expectRevert(LockVault.BadUnlockTime.selector);
-        factory.lockToken{value: FLAT}(token, 1 ether, nowTs + 3650 days + 1, alice);
+        factory.lockToken{value: FLAT}(token, 1 ether, nowTs + 3650 days + 1, alice, 0);
         vm.stopPrank();
         _assertNothingLeftBehind(s, alice, address(token));
     }
@@ -180,9 +180,9 @@ contract VaultFactoryTest is VaultTestBase {
         uint64 at = uint64(block.timestamp + 30 days);
         vm.startPrank(alice);
         vm.expectRevert(VaultFactory.NotAToken.selector);
-        factory.lockToken{value: FLAT}(IERC20(eoa), 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(eoa), 1 ether, at, alice, 0);
         vm.expectRevert(VaultFactory.NotAToken.selector);
-        factory.lockToken{value: FLAT}(IERC20(address(0)), 1 ether, at, alice);
+        factory.lockToken{value: FLAT}(IERC20(address(0)), 1 ether, at, alice, 0);
         vm.stopPrank();
         _assertNothingLeftBehind(s, alice, eoa);
     }
@@ -199,14 +199,14 @@ contract VaultFactoryTest is VaultTestBase {
         vm.expectRevert(
             abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(factory), 0, 1 ether)
         );
-        factory.lockToken{value: FLAT}(token, 1 ether, at, carol);
+        factory.lockToken{value: FLAT}(token, 1 ether, at, carol, 0);
 
         // With an allowance but no balance, it fails on carol's own balance.
         vm.prank(carol);
         token.approve(address(factory), type(uint256).max);
         vm.prank(carol);
         vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientBalance.selector, carol, 0, 1 ether));
-        factory.lockToken{value: FLAT}(token, 1 ether, at, carol);
+        factory.lockToken{value: FLAT}(token, 1 ether, at, carol, 0);
 
         assertEq(token.balanceOf(alice), aliceBalance);
         assertEq(token.allowance(alice, address(factory)), aliceAllowance);
@@ -256,7 +256,7 @@ contract VaultFactoryTest is VaultTestBase {
         uint64 at = uint64(block.timestamp + 1 days);
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(VaultFactory.WrongFee.selector, FLAT, 0));
-        factory.lockPosition(manager, 1, at, alice);
+        factory.lockPosition(manager, 1, at, alice, SHARE_BPS);
     }
 
     function test_lockPosition_rejectsAnUnlistedManager() public {
@@ -264,7 +264,7 @@ contract VaultFactoryTest is VaultTestBase {
         uint64 at = uint64(block.timestamp + 1 days);
         vm.prank(alice);
         vm.expectRevert(VaultFactory.ManagerNotAllowed.selector);
-        factory.lockPosition{value: FLAT}(manager, 1, at, alice);
+        factory.lockPosition{value: FLAT}(manager, 1, at, alice, SHARE_BPS);
     }
 
     function test_lockPosition_rejectsAFeeShareAboveTenThousandBps() public {
@@ -278,8 +278,9 @@ contract VaultFactoryTest is VaultTestBase {
             vm.prank(factoryOwner);
             f.setManager(manager, true, PositionVault.Kind.V3);
             vm.prank(alice);
+            // Out of range is refused even for a caller who accepts any share.
             vm.expectRevert(abi.encodeWithSelector(VaultFactory.FeeOutOfRange.selector, KEY_SHARE, bad[i]));
-            f.lockPosition{value: FLAT}(manager, 1, at, alice);
+            f.lockPosition{value: FLAT}(manager, 1, at, alice, type(uint256).max);
         }
     }
 
@@ -294,7 +295,7 @@ contract VaultFactoryTest is VaultTestBase {
         vm.startPrank(alice);
         v3.approve(address(f), id);
         // 10,000 passes the bound, and the vault keeps it.
-        PositionVault vault = PositionVault(payable(f.lockPosition{value: FLAT}(address(v3), id, at, alice)));
+        PositionVault vault = PositionVault(payable(f.lockPosition{value: FLAT}(address(v3), id, at, alice, 10_000)));
         vm.stopPrank();
         assertEq(vault.feeShareBps(), 10_000);
     }

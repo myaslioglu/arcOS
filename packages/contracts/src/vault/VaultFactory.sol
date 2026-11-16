@@ -18,10 +18,12 @@ import {PositionVault} from "./PositionVault.sol";
 /// the user to their vault; the factory never holds them. The owner can only allow-list position managers:
 /// it has no power over any vault, and it can't renounce ownership (that would freeze the allow-list for good).
 /// @dev Fees come from a FeeController and are paid as native value (`msg.value`, 18 decimals), like the other
-/// ARC.os contracts. The registries are discovery hints, not proofs. Anyone can lock any token for any owner by
-/// paying the flat fee, so a registry can be padded with entries nobody wants; read it in pages (`...Length` and
-/// `...Slice`) and ask each vault for its own state. `isVault` is the only authoritative "is this ours" check:
-/// anyone can clone the public implementation, and such a clone is not registered here.
+/// ARC.os contracts. The flat fee must be sent exactly, and each lock names the highest percentage it accepts
+/// (`maxFeeBps`), so a fee raise applied after the caller read the fees stops the lock instead of reaching it. The
+/// registries are discovery hints, not proofs. Anyone can lock any token for any owner by paying the flat fee, so a
+/// registry can be padded with entries nobody wants; read it in pages (`...Length` and `...Slice`) and ask each vault
+/// for its own state. `isVault` is the only authoritative "is this ours" check: anyone can clone the public
+/// implementation, and such a clone is not registered here.
 contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -59,6 +61,7 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     error ZeroAmount();
     error ZeroFeeController();
     error FeeOutOfRange(bytes32 key, uint256 value);
+    error FeeAboveMax(bytes32 key, uint256 current, uint256 max);
     error NotAToken();
     error NoLiquidity();
     error OwedNotCollected();
@@ -89,16 +92,23 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice Locks `amount` of `token` for `owner_` until `unlockAt`, in a new vault made for this lock alone. The
     /// caller pays the flat fee as native value and approves this factory for `amount`. Tokens go from the caller
     /// straight to the vault (an LP token's percentage fee, if any, straight to the fee recipient) and never rest in
-    /// the factory. The percentage fee applies to Uniswap-v2-style LP tokens only.
+    /// the factory. The percentage fee applies to Uniswap-v2-style LP tokens only. `maxFeeBps` is the highest
+    /// percentage, in basis points, the caller accepts: the lock reverts rather than charge more.
     /// @dev The LP fee is `floor(amount * LOCK_LP_BPS / 10_000)`: it rounds DOWN, so the platform never takes more
     /// than the stated share and the vault receives the remainder, `amount - fee`. Below `10_000 / LOCK_LP_BPS` LP
     /// tokens (200 at 50 bps) the fee is zero. `feeOf` is read once per call and only the flat fee and this fee
     /// are ever charged: nothing is charged at withdrawal, and a later fee change never reaches an existing vault.
+    /// For a token shaped like a v2 pair, a `LOCK_LP_BPS` above `maxFeeBps` reverts
+    /// `FeeAboveMax(LOCK_LP_BPS, current, maxFeeBps)`: a raise applied after the caller read the fee (anyone may call
+    /// `applyPending` once its 48 hours have passed) stops the lock instead of charging it, as a changed flat fee
+    /// does (`WrongFee`). For any other token no percentage is taken and `maxFeeBps` is not checked: every value
+    /// passes, 0 included. A caller that judged the token not to be a pair passes 0, so a token that answers as one
+    /// by the time the lock runs is refused, not charged.
     /// `TokenLocked.amount` is what the vault actually received (its balance after the transfer minus before it), so
     /// a token that takes a cut on transfer, or that rebases and rounds down, is recorded as it landed; `fee` is
     /// what was sent to the fee recipient, before any cut the token itself takes. A token that delivers nothing
     /// reverts `ZeroAmount`. The vault records no amount of its own: its live balance is the truth from then on.
-    function lockToken(IERC20 token, uint256 amount, uint64 unlockAt, address owner_)
+    function lockToken(IERC20 token, uint256 amount, uint64 unlockAt, address owner_, uint256 maxFeeBps)
         external
         payable
         nonReentrant
@@ -114,9 +124,10 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         _register(vault, owner_);
         _vaultsForToken[address(token)].push(vault);
 
-        // The percentage applies to LP tokens only; a team-token lock pays the flat fee alone. It rounds down (see
-        // above), by mulDiv so that no amount can overflow it.
-        uint256 fee = _isV2Pair(address(token)) ? Math.mulDiv(amount, _bps(LOCK_LP_BPS), BPS_DENOMINATOR) : 0;
+        // The percentage applies to LP tokens only, and never above the caller's maximum; a team-token lock pays the
+        // flat fee alone. It rounds down (see above), by mulDiv so that no amount can overflow it.
+        uint256 fee =
+            _isV2Pair(address(token)) ? Math.mulDiv(amount, _bpsAtMost(LOCK_LP_BPS, maxFeeBps), BPS_DENOMINATOR) : 0;
         if (fee != 0) token.safeTransferFrom(msg.sender, feeTo, fee);
         // Record what ARRIVED, not what was asked for: a token that takes a cut on transfer, or rounds down as a
         // rebasing token does, delivers less. Nothing arriving at all is refused.
@@ -130,9 +141,12 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice Locks a concentrated-liquidity position NFT from an allow-listed manager in a new vault. The caller pays
     /// the flat fee as native value and approves this factory for the NFT, which moves from the caller straight into
     /// the vault in this call. The platform's share of collected fees and its recipient are read now and copied into
-    /// the vault, so a later fee change never touches this lock. The vault is registered under `owner_` and under
-    /// both of its pool's currencies (`address(0)` for v4's native currency).
-    /// @dev The NFT is always taken from `msg.sender`: approving the factory lets nobody else lock one's position.
+    /// the vault, so a later fee change never touches this lock. `maxFeeBps` is the highest share, in basis points,
+    /// the caller accepts: the lock reverts rather than give the vault a larger one. The vault is registered under
+    /// `owner_` and under both of its pool's currencies (`address(0)` for v4's native currency).
+    /// @dev A `LOCK_FEE_SHARE_BPS` above `maxFeeBps` reverts `FeeAboveMax(LOCK_FEE_SHARE_BPS, current, maxFeeBps)`,
+    /// so a raise applied after the caller read the share never reaches a vault that would keep it for life.
+    /// The NFT is always taken from `msg.sender`: approving the factory lets nobody else lock one's position.
     /// Once the transfer returns, the vault must own the NFT (`PositionNotReceived`), and the position must hold
     /// principal: some liquidity (`NoLiquidity`), and on v3 nothing waiting in `tokensOwed` (`OwedNotCollected`),
     /// where a decrease leaves principal that the first collect would release as fees. Fees waiting there look the
@@ -140,7 +154,7 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
     /// runs on the zero-liquidity decrease every `collect` makes, where it could block collecting or take the fees
     /// through return deltas. A pool's hooks are part of its PoolKey and never change, so the check holds for the
     /// life of the lock.
-    function lockPosition(address manager, uint256 tokenId, uint64 unlockAt, address owner_)
+    function lockPosition(address manager, uint256 tokenId, uint64 unlockAt, address owner_, uint256 maxFeeBps)
         external
         payable
         nonReentrant
@@ -152,7 +166,8 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         if (!m.allowed) revert ManagerNotAllowed();
 
         vault = Clones.clone(positionVaultImpl);
-        PositionVault(payable(vault)).initialize(owner_, manager, tokenId, unlockAt, m.kind, _shareBps(), feeTo);
+        PositionVault(payable(vault))
+            .initialize(owner_, manager, tokenId, unlockAt, m.kind, _shareBps(maxFeeBps), feeTo);
         _register(vault, owner_);
         (address currency0, address currency1) = PositionVault(payable(vault)).currencies();
         _positionVaultsForToken[currency0].push(vault);
@@ -242,11 +257,18 @@ contract VaultFactory is Ownable2Step, ReentrancyGuardTransient {
         if (bps > BPS_DENOMINATOR) revert FeeOutOfRange(key, bps);
     }
 
-    /// @dev The platform's share of a position's collected fees, copied into the position vault when it is made.
-    function _shareBps() private view returns (uint16) {
-        // casting to 'uint16' is safe because _bps never returns more than BPS_DENOMINATOR (10,000)
+    /// @dev `_bps(key)`, refused when it is above `maxBps`, the highest share the caller accepts for this lock.
+    function _bpsAtMost(bytes32 key, uint256 maxBps) private view returns (uint256 bps) {
+        bps = _bps(key);
+        if (bps > maxBps) revert FeeAboveMax(key, bps, maxBps);
+    }
+
+    /// @dev The platform's share of a position's collected fees, copied into the position vault when it is made, and
+    /// never above the caller's `maxFeeBps`.
+    function _shareBps(uint256 maxFeeBps) private view returns (uint16) {
+        // casting to 'uint16' is safe because _bpsAtMost (by _bps) never returns more than BPS_DENOMINATOR (10,000)
         // forge-lint: disable-next-line(unsafe-typecast)
-        return uint16(_bps(LOCK_FEE_SHARE_BPS));
+        return uint16(_bpsAtMost(LOCK_FEE_SHARE_BPS, maxFeeBps));
     }
 
     /// @dev Refuses a position that holds no principal. See `lockPosition`.
