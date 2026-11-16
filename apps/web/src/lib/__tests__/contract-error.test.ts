@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContractFunctionExecutionError, UserRejectedRequestError } from "viem";
-import { arcVestingAbi, feeControllerAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi } from "@arcos/chain";
+import { arcVestingAbi, feeControllerAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi, vestingFactoryAbi } from "@arcos/chain";
 import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
 import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
 
@@ -23,6 +23,9 @@ describe("describeContractError — ABI completeness", () => {
     ...errorNamesOf(feeControllerAbi),
     ...errorNamesOf(tokenFactoryAbi),
     ...errorNamesOf(multisendAbi),
+    // The Vesting window creates schedules and releases them: every error of the factory and of the wallet it can show.
+    ...errorNamesOf(vestingFactoryAbi),
+    ...errorNamesOf(arcVestingAbi),
   ]);
 
   it("covers every custom error declared across the three generated ABIs", () => {
@@ -92,6 +95,11 @@ describe("describeContractError", () => {
 
   it("maps Multisend's BadLists — the brief's 'TooManyRecipients' name doesn't exist in the ABI; BadLists is what the contract actually reverts with, and covers the 400 cap", () => {
     expect(describeContractError(revertError("BadLists"))).toMatch(/400/);
+  });
+
+  it("explains the VestingFactory's BadSchedule and AmountTooLarge", () => {
+    expect(describeContractError(revertError("BadSchedule"))).toMatch(/1 second to 10 years/);
+    expect(describeContractError(revertError("AmountTooLarge"))).toBe("That amount is too large for one schedule.");
   });
 
   it("finds the revert nested arbitrarily deep in an error's cause chain", () => {
