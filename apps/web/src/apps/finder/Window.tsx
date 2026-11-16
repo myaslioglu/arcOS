@@ -10,6 +10,8 @@ import { blockscoutSource, cleanLabel } from "@arcos/inspector";
 import { dragSourceProps, useDesktop } from "@arcos/shell";
 import { ConnectGate } from "@/components/ConnectGate";
 import { shortAddress } from "@/lib/format";
+import { pairText, positionLabel, type Position } from "@/lib/positions";
+import { vaultFactoryOf } from "@/lib/vault-factory";
 import {
   FILES_PAGE,
   duplicateSymbols,
@@ -22,6 +24,7 @@ import {
   type TokenFile,
 } from "./tokens";
 import { tokenHue, tokenMonogram } from "./monogram";
+import { PositionFiles, positionKey } from "./Positions";
 
 /** Page size for `tokensOfSlice`: Finder only ever shows the creator's most recent tokens. */
 const CREATED_PAGE_SIZE = 100;
@@ -37,6 +40,9 @@ function Files() {
   const factory = ARCOS[network]?.tokenFactory;
   const apiUrl = chain.blockExplorers?.default.apiUrl;
   const [selected, setSelected] = useState<TokenFile | null>(null);
+  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
+  // Positions are listed only where a VaultFactory is set: its allow-list says which managers' positions Vault takes.
+  const vaultFactory = vaultFactoryOf(network);
   const [limit, setLimit] = useState(FILES_PAGE);
 
   // The shell doesn't expose window-active state to apps (DesktopApi is notify/open/close/
@@ -141,7 +147,10 @@ function Files() {
                       type="button"
                       className="os-icon w-full"
                       aria-pressed={selected?.address === f.address}
-                      onClick={() => setSelected(f)}
+                      onClick={() => {
+                        setSelected(f);
+                        setSelectedPosition(null);
+                      }}
                       onDoubleClick={() => open("inspector", { token: f.address })}
                       style={{ "--os-hue": hue.hue } as React.CSSProperties}
                       {...(f.decimals !== null
@@ -190,9 +199,41 @@ function Files() {
             )}
           </>
         )}
+        {vaultFactory && address && (
+          <PositionFiles
+            owner={address}
+            factory={vaultFactory}
+            selected={selectedPosition ? positionKey(selectedPosition) : null}
+            onSelect={(p) => {
+              setSelectedPosition(p);
+              setSelected(null);
+            }}
+          />
+        )}
       </div>
       <div className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs">
-        {selected ? (
+        {selectedPosition ? (
+          <>
+            <span className="min-w-0 flex-1 truncate">
+              {positionLabel(selectedPosition)} · {pairText(selectedPosition)}
+            </span>
+            <button
+              type="button"
+              className="rounded-md border border-border-2 px-2 py-1"
+              onClick={() => open("vault", { manager: selectedPosition.manager, tokenId: selectedPosition.tokenId })}
+            >
+              Lock in Vault
+            </button>
+            <a
+              className="text-accent-text"
+              href={explorerUrl("token", `${selectedPosition.manager}/instance/${selectedPosition.tokenId}`)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Explorer
+            </a>
+          </>
+        ) : selected ? (
           <>
             <span className="min-w-0 flex-1 truncate">
               {selected.symbol} · <span className="font-mono text-muted">{shortAddress(selected.address)}</span>
@@ -203,7 +244,11 @@ function Files() {
             <a className="text-accent-text" href={explorerUrl("token", selected.address)} target="_blank" rel="noreferrer">Explorer</a>
           </>
         ) : (
-          <span className="text-muted">Drag a token onto Inspector or Drop. Double-click to inspect.</span>
+          <span className="text-muted">
+            {vaultFactory
+              ? "Drag a token onto Inspector, Drop or Vault, or a position onto Vault. Double-click to inspect."
+              : "Drag a token onto Inspector or Drop. Double-click to inspect."}
+          </span>
         )}
       </div>
     </div>

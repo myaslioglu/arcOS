@@ -4,4 +4,5 @@ export * from "./addressSanity";
 export * from "./amounts";
 export * from "./chains";
 export * from "./inspect-chains";
+export * from "./positionManagers";
 export * from "./usage";
