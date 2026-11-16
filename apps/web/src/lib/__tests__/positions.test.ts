@@ -178,8 +178,8 @@ describe("loadPositions", () => {
   };
   const v3Answers = {
     [k(V3, "balanceOf", OWNER)]: 2n,
-    [k(V3, "tokenOfOwnerByIndex", OWNER, 0)]: 11n,
-    [k(V3, "tokenOfOwnerByIndex", OWNER, 1)]: 12n,
+    [k(V3, "tokenOfOwnerByIndex", OWNER, 1)]: 11n,
+    [k(V3, "tokenOfOwnerByIndex", OWNER, 0)]: 12n,
     [k(V3, "positions", 11)]: v3Position(TA, TB, 5n),
     [k(V3, "positions", 12)]: v3Position(TA, TB, 5n, 1n, 0n),
   };
@@ -222,8 +222,8 @@ describe("loadPositions", () => {
     ]);
     expect(answer.positions[1]).toMatchObject({ kind: "v3", currency0: TA, currency1: TB, symbol0: "VTA", symbol1: "VTB", fee: 3000, liquidity: 5n, hooks: null });
     expect(answer.notes).toEqual([
-      { manager: V3, name: "Uniswap v3", source: "enumerable", complete: true },
-      { manager: V4, name: "Uniswap v4", source: "explorer", complete: true },
+      { manager: V3, name: "Uniswap v3", source: "enumerable", complete: true, held: 2n },
+      { manager: V4, name: "Uniswap v4", source: "explorer", complete: true, held: 0n },
     ]);
     // A wallet with no v4 position asks neither the explorer nor the logs.
     expect(d.asked.some((key) => key.includes(".ownerof("))).toBe(false);
@@ -237,15 +237,56 @@ describe("loadPositions", () => {
     expect(positionIssue(hooked!)).toBe(POSITION_ISSUE.hooked);
     expect(native).toMatchObject({ currency0: ZERO, symbol0: "USDC", symbol1: "VTA", liquidity: 8n });
     expect(plain).toMatchObject({ kind: "v4", managerName: "Uniswap v4", hooks: null, owed: false });
-    expect(answer.notes[1]).toEqual({ manager: V4, name: "Uniswap v4", source: "explorer", complete: true });
+    expect(answer.notes[1]).toEqual({ manager: V4, name: "Uniswap v4", source: "explorer", complete: true, held: 3n });
   });
 
   it("falls back to the RPC's recent Transfer logs when the explorer is down, and says the list may be short", async () => {
     const getLogs: GetLogs = async () => [{ topics: [TRANSFER_TOPIC, pad(ZERO), pad(OWNER), pad("0x15" as Hex)] }];
     const answer = await loadPositions(deps({ [k(V3, "balanceOf", OWNER)]: 0n, ...v4Answers }, { fetchFn: explorer([], 503), getLogs }));
     expect(answer.positions.map((p) => p.tokenId)).toEqual(["21"]);
-    expect(answer.notes[1]).toEqual({ manager: V4, name: "Uniswap v4", source: "recent", complete: false });
+    expect(answer.notes[1]).toEqual({ manager: V4, name: "Uniswap v4", source: "recent", complete: false, held: 3n });
     expect(noteText(answer.notes[1]!)).toMatch(/explorer didn't answer.*type its id in Vault/);
+  });
+
+  it("gives up on an explorer that hangs after its deadline, and lists v3 and v4's recent positions meanwhile", async () => {
+    const hangs = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))));
+    const getLogs: GetLogs = async () => [{ topics: [TRANSFER_TOPIC, pad(ZERO), pad(OWNER), pad("0x15" as Hex)] }];
+    const answer = await loadPositions(deps({ ...v3Answers, ...v4Answers }, { fetchFn: hangs as unknown as typeof fetch, getLogs, explorerTimeoutMs: 20 }));
+    expect(answer.positions.map((p) => [p.managerName, p.tokenId])).toEqual([
+      ["Uniswap v3", "12"],
+      ["Uniswap v3", "11"],
+      ["Uniswap v4", "21"],
+    ]);
+    expect(answer.notes.map((n) => [n.source, n.complete])).toEqual([
+      ["enumerable", true],
+      ["recent", false],
+    ]);
+  });
+
+  it("stops asking the explorer once the query's own signal ends", async () => {
+    const stop = new AbortController();
+    const seen: AbortSignal[] = [];
+    const fetchFn = vi.fn((_url: string, init?: RequestInit) => {
+      seen.push(init!.signal!);
+      return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+    });
+    const pending = explorerIds(fetchFn as unknown as typeof fetch, "https://explorer.example/api/v2", V4, OWNER, { signal: stop.signal, timeoutMs: 60_000 });
+    stop.abort();
+    await expect(pending).rejects.toBeDefined();
+    expect(seen[0]?.aborted).toBe(true);
+  });
+
+  it("names a manager whose positions couldn't be read, and lists the others", async () => {
+    // v4's ownerOf batch throws (the RPC fails that one call); v3's reads are fine.
+    const base_ = chain({ ...base, ...v3Answers, ...v4Answers });
+    const read: Read = async (calls) => {
+      if (calls.some((c) => c.functionName === "ownerOf")) throw new Error("rpc hiccup");
+      return base_.read(calls);
+    };
+    const answer = await loadPositions({ ...deps({}), read, fetchFn: explorer(["21"]) });
+    expect(answer.positions.map((p) => p.tokenId)).toEqual(["12", "11"]);
+    expect(answer.notes[1]).toEqual({ manager: V4, name: "Uniswap v4", source: "failed", complete: false, held: 3n });
+    expect(noteText(answer.notes[1]!)).toBe("Uniswap v4: your positions couldn't be read. To lock one, type its id in Vault.");
   });
 
   it("merges the explorer and the logs, so a position the explorer hasn't indexed yet still shows", async () => {
@@ -255,12 +296,21 @@ describe("loadPositions", () => {
     expect(answer.notes[1]?.complete).toBe(true);
   });
 
-  it("caps an enumerable list at MAX_POSITIONS and says so", async () => {
-    const many: Record<string, Answer> = { [k(V3, "balanceOf", OWNER)]: BigInt(MAX_POSITIONS + 5), [k(V4, "balanceOf", OWNER)]: 0n };
-    for (let i = 0; i < MAX_POSITIONS; i++) many[k(V3, "tokenOfOwnerByIndex", OWNER, i)] = BigInt(1000 + i);
-    const answer = await loadPositions(deps(many));
-    expect(answer.notes[0]).toEqual({ manager: V3, name: "Uniswap v3", source: "enumerable", complete: false });
-    expect(noteText(answer.notes[0]!)).toBe(`Uniswap v3: showing the first ${MAX_POSITIONS} positions.`);
+  it("caps an enumerable list at MAX_POSITIONS, the latest ones (the end of the list), and says so", async () => {
+    const held = MAX_POSITIONS + 5;
+    const many: Record<string, Answer> = { [k(V3, "balanceOf", OWNER)]: BigInt(held), [k(V4, "balanceOf", OWNER)]: 0n };
+    for (let i = 0; i < held; i++) {
+      many[k(V3, "tokenOfOwnerByIndex", OWNER, i)] = BigInt(1000 + i);
+      many[k(V3, "positions", 1000 + i)] = v3Position(TA, TB, 5n);
+    }
+    const d = deps(many);
+    const answer = await loadPositions(d);
+    expect(d.asked).not.toContain(k(V3, "tokenOfOwnerByIndex", OWNER, 4));
+    expect(d.asked).toContain(k(V3, "tokenOfOwnerByIndex", OWNER, 5));
+    expect(answer.positions).toHaveLength(MAX_POSITIONS);
+    expect(answer.positions[0]?.tokenId).toBe(String(1000 + held - 1));
+    expect(answer.notes[0]).toEqual({ manager: V3, name: "Uniswap v3", source: "enumerable", complete: false, held: BigInt(held) });
+    expect(noteText(answer.notes[0]!)).toBe(`Uniswap v3: showing the latest ${MAX_POSITIONS} of your ${held} positions. To lock another, type its id in Vault.`);
   });
 
   it("asks nothing more when the factory allows no candidate, and throws when the factory can't be read", async () => {
@@ -273,8 +323,8 @@ describe("loadPositions", () => {
   });
 
   it("writes no note for a complete list", () => {
-    expect(noteText({ manager: V4, name: "Uniswap v4", source: "explorer", complete: true })).toBeNull();
-    expect(noteText({ manager: V4, name: "Uniswap v4", source: "explorer", complete: false })).toMatch(/may not be every position/);
+    expect(noteText({ manager: V4, name: "Uniswap v4", source: "explorer", complete: true, held: 2n })).toBeNull();
+    expect(noteText({ manager: V4, name: "Uniswap v4", source: "explorer", complete: false, held: 2n })).toMatch(/may not be every position/);
   });
 });
 

@@ -3,7 +3,7 @@ import type { ActionOutcome, LockOutcome, LockStep } from "../flow";
 import { isBusy, vaultSession } from "../session";
 
 const VAULT = "0x011916e14B8399feC0109f3402d283C71250C33C";
-const summary = { label: "1,000 VTB", unlockAt: 1_900_000_000, kind: "token" as const };
+const summary = { label: "1,000 VTB", approval: "1000 VTB", unlockAt: 1_900_000_000, kind: "token" as const, fee: 30n * 10n ** 18n, token: { symbol: "VTB", decimals: 18 } };
 
 /** A promise the test settles when it wants. */
 function later<T>() {
@@ -27,7 +27,8 @@ describe("the lock in flight", () => {
       return done.promise;
     });
     expect(run).not.toBeNull();
-    expect(vaultSession.getSnapshot().lock).toEqual({ status: "running", summary, step: "lock", sent: false });
+    // It starts on the checks: nothing is asked of the wallet until runLock names the first step.
+    expect(vaultSession.getSnapshot().lock).toEqual({ status: "running", summary, step: "check", sent: false });
     step("approve", false);
     expect(vaultSession.getSnapshot().lock).toMatchObject({ step: "approve", sent: false });
     step("approve", true);
@@ -45,7 +46,7 @@ describe("the lock in flight", () => {
     const first = vaultSession.startLock(summary, () => done.promise);
     expect(isBusy(vaultSession.getSnapshot())).toBe(true);
     expect(vaultSession.startLock(summary, async () => ({ result: "locked", vault: VAULT, hash: "0x02" }))).toBeNull();
-    expect(vaultSession.startAction(VAULT, "withdraw", async () => ({ result: "done", hash: "0x03", collected: [] }))).toBeNull();
+    expect(vaultSession.startAction(VAULT, { kind: "withdraw" }, async () => ({ result: "done", hash: "0x03", collected: [] }))).toBeNull();
     vaultSession.dismissLock(); // nothing to dismiss while it runs
     expect(vaultSession.getSnapshot().lock.status).toBe("running");
     done.resolve({ result: "failed", message: "x", approvalLeft: false });
@@ -65,7 +66,7 @@ describe("an action on a vault", () => {
   it("marks the vault while it runs and when the wallet has sent, then keeps the outcome on that vault", async () => {
     const done = later<ActionOutcome>();
     let sent!: () => void;
-    const run = vaultSession.startAction(VAULT, "collect", (onSent) => {
+    const run = vaultSession.startAction(VAULT, { kind: "collect" }, (onSent) => {
       sent = onSent;
       return done.promise;
     }, (o) => (o.result === "done" ? "Collected." : undefined));
@@ -75,14 +76,19 @@ describe("an action on a vault", () => {
     done.resolve({ result: "done", hash: "0x04", collected: [] });
     await run;
     expect(vaultSession.getSnapshot().action).toBeNull();
-    expect(vaultSession.getSnapshot().notes[VAULT.toLowerCase()]).toEqual({ kind: "collect", outcome: { result: "done", hash: "0x04", collected: [] }, detail: "Collected." });
+    expect(vaultSession.getSnapshot().notes[VAULT.toLowerCase()]).toEqual({ action: { kind: "collect" }, outcome: { result: "done", hash: "0x04", collected: [] }, detail: "Collected." });
+  });
+
+  it("keeps the action itself with its outcome, so an extend's note can name the new date", async () => {
+    await vaultSession.startAction(VAULT, { kind: "extend", unlockAt: 1_950_000_000 }, async () => ({ result: "done", hash: "0x07", collected: [] }));
+    expect(vaultSession.getSnapshot().notes[VAULT.toLowerCase()]?.action).toEqual({ kind: "extend", unlockAt: 1_950_000_000 });
   });
 
   it("clears a vault's last note when a new action starts on it, and on dismiss", async () => {
-    await vaultSession.startAction(VAULT, "extend", async () => ({ result: "failed", message: "no" }));
-    expect(vaultSession.getSnapshot().notes[VAULT.toLowerCase()]?.kind).toBe("extend");
+    await vaultSession.startAction(VAULT, { kind: "extend", unlockAt: 1_950_000_000 }, async () => ({ result: "failed", message: "no" }));
+    expect(vaultSession.getSnapshot().notes[VAULT.toLowerCase()]?.action.kind).toBe("extend");
     const done = later<ActionOutcome>();
-    const run = vaultSession.startAction(VAULT, "withdraw", () => done.promise);
+    const run = vaultSession.startAction(VAULT, { kind: "withdraw" }, () => done.promise);
     expect(vaultSession.getSnapshot().notes[VAULT.toLowerCase()]).toBeUndefined();
     done.resolve({ result: "done", hash: "0x05", collected: [] });
     await run;
@@ -93,7 +99,7 @@ describe("an action on a vault", () => {
   it("tells subscribers of every change", async () => {
     let heard = 0;
     const off = vaultSession.subscribe(() => (heard += 1));
-    await vaultSession.startAction(VAULT, "accept", async () => ({ result: "done", hash: "0x06", collected: [] }));
+    await vaultSession.startAction(VAULT, { kind: "accept" }, async () => ({ result: "done", hash: "0x06", collected: [] }));
     off();
     expect(heard).toBe(2);
   });

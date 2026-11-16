@@ -16,9 +16,11 @@ import { ok, readEach, type Read } from "@/lib/reads";
  * each vault's own `owner()` and `pendingOwner()` decide what the wallet may do with it:
  * - `vaultsOfSlice` over the wallet's registry entries, the newest LOCKS_PAGE per page asked for;
  * - vaults this browser remembers for the wallet (remembered.ts): one it accepted, opened by address or dropped;
- * - vaults whose transfer to the wallet started in the last RECENT_BLOCKS, from the RPC's OwnershipTransferStarted logs.
+ * - vaults whose transfer to the wallet started in the last RECENT_BLOCKS, from the RPC's OwnershipTransferStarted logs
+ *   (the latest MAX_FROM_LOGS contracts).
  * Any address from the last two must pass the factory's `isVault`, the only authoritative "is this ours" check (anyone
- * can clone the public implementations, and such a clone isn't registered).
+ * can clone the public implementations, and such a clone isn't registered). Only one the wallet gave is reported when
+ * it fails; the logs' are anyone's to write.
  */
 
 export const LOCKS_PAGE = 50;
@@ -153,11 +155,21 @@ export type LocksAnswer = {
   registered: number;
   /** How many of them this answer read. */
   readFromRegistry: number;
-  /** Addresses from `extra` that the factory says are not its vaults. */
+  /**
+   * Addresses from `extra`, the ones the wallet gave (opened by address, dropped, remembered), that the factory says
+   * are not its vaults. One from the logs that isn't a vault is left out without a word.
+   */
   notVaults: Address[];
 };
 
-/** The vaults whose transfer to `wallet` started over the last RECENT_BLOCKS (any contract's event: `isVault` decides). */
+/** At most this many contracts are taken from the recent logs, the latest ones: anyone can emit the event to a wallet. */
+export const MAX_FROM_LOGS = 20;
+
+/**
+ * The contracts whose ownership transfer to `wallet` started over the last RECENT_BLOCKS, the latest MAX_FROM_LOGS
+ * of them, latest first. OwnershipTransferStarted is OpenZeppelin's Ownable2Step event as much as the vaults': the
+ * factory, the FeeController and any contract at all can emit it, so `isVault` decides which are vaults.
+ */
 export async function recentIncoming(getLogs: GetLogs, latest: bigint, wallet: Address): Promise<Address[]> {
   const fromBlock = latest > RECENT_BLOCKS ? latest - RECENT_BLOCKS : 0n;
   const logs = (await getLogs({
@@ -166,7 +178,13 @@ export async function recentIncoming(getLogs: GetLogs, latest: bigint, wallet: A
     fromBlock,
     toBlock: latest,
   })) as readonly { address?: string; topics: readonly (Hex | null)[] }[];
-  return [...new Set(logs.flatMap((l) => (asAddress(l.address) ? [asAddress(l.address)!] : [])))];
+  const out: Address[] = [];
+  for (const log of [...logs].reverse()) {
+    const address = asAddress(log.address);
+    if (address && !out.some((a) => same(a, address))) out.push(address);
+    if (out.length >= MAX_FROM_LOGS) break;
+  }
+  return out;
 }
 
 const baseOf = (h: Base): Base => ({ vault: h.vault, owner: h.owner, pendingOwner: h.pendingOwner, unlockAt: h.unlockAt });
@@ -190,21 +208,33 @@ export async function loadLocks(deps: LocksDeps): Promise<LocksAnswer> {
     fromRegistry = list.flatMap((a) => (asAddress(a) ? [asAddress(a)!] : [])).reverse();
   }
 
-  let extra = [...deps.extra];
+  let fromLogs: Address[] = [];
   if (deps.getLogs && deps.getBlockNumber) {
     try {
-      extra = [...extra, ...(await recentIncoming(deps.getLogs, await deps.getBlockNumber(), wallet))];
+      fromLogs = await recentIncoming(deps.getLogs, await deps.getBlockNumber(), wallet);
     } catch {
       // The recent transfers are a convenience: the registry and the remembered vaults still answer.
     }
   }
   const known = new Set(fromRegistry.map((a) => a.toLowerCase()));
-  const extras = [...new Set(extra.map((a) => getAddress(a)))].filter((a) => !known.has(a.toLowerCase()));
+  const fresh = (list: readonly Address[]) => {
+    const out: Address[] = [];
+    for (const a of list) {
+      const address = getAddress(a);
+      if (!known.has(address.toLowerCase())) out.push(address);
+      known.add(address.toLowerCase());
+    }
+    return out;
+  };
+  // The wallet's own (opened, dropped, remembered) first, then the logs': each checked with the factory's isVault.
+  const supplied = fresh(deps.extra);
+  const logged = fresh(fromLogs);
+  const extras = [...supplied, ...logged];
   const checks = extras.length
     ? await read(extras.map((a) => ({ address: factory, abi: vaultFactoryAbi, functionName: "isVault", args: [a] })))
     : [];
   const verified = extras.filter((_, i) => ok(checks[i]) === true);
-  const notVaults = extras.filter((_, i) => checks[i]?.status === "success" && ok(checks[i]) === false);
+  const notVaults = supplied.filter((_, i) => checks[i]?.status === "success" && ok(checks[i]) === false);
   const vaults = [...fromRegistry, ...verified];
 
   // The vault's own state. `token()` answers on a LockVault only and `manager()` on a PositionVault only, so each
@@ -326,10 +356,12 @@ export async function loadLocks(deps: LocksDeps): Promise<LocksAnswer> {
       decimals0: currency0 ? (decimals.get(currency0.toLowerCase()) ?? null) : null,
       decimals1: currency1 ? (decimals.get(currency1.toLowerCase()) ?? null) : null,
       liquidity: typeof liquidity === "bigint" ? liquidity : null,
-      withdrawn: (() => {
+      // The position has left when its manager names another holder, or no holder at all: `ownerOf` reverts for a
+      // position burned after it was withdrawn. Without the id, nothing is known.
+      withdrawn: typeof tokenId === "bigint" && (holders[i]?.status === "failure" || (() => {
         const holder = asAddress(ok(holders[i]));
         return holder !== null && !same(holder, h.vault);
-      })(),
+      })()),
     });
   });
   const locks = vaults.flatMap((v) => byVault.get(v.toLowerCase()) ?? []);

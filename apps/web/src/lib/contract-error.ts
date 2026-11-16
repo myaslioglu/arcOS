@@ -117,6 +117,67 @@ function isInsufficientFunds(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Errors that show a write never left the wallet, by name (viem's and wagmi's error classes): the app or the wallet
+ * stopped it first. A wrong network, no account or no connection, a balance too low or fees the node turns down, or
+ * the wallet's own gas estimate reverting. Not viem's ContractFunctionRevertedError by its name alone: writeContract
+ * builds one from any -32603 "internal error" a wallet answers, a lost reply included (see `wasNotSent`).
+ */
+const NOT_SENT_NAMES = new Set([
+  // viem
+  "AccountNotFoundError",
+  "ChainMismatchError",
+  "ChainNotFoundError",
+  "ClientChainNotConfiguredError",
+  "InvalidChainIdError",
+  "InsufficientFundsError",
+  "ExecutionRevertedError",
+  "FeeCapTooHighError",
+  "FeeCapTooLowError",
+  "TipAboveFeeCapError",
+  "IntrinsicGasTooHighError",
+  "IntrinsicGasTooLowError",
+  // wagmi
+  "ChainNotConfiguredError",
+  "ConnectorAccountNotFoundError",
+  "ConnectorChainMismatchError",
+  "ConnectorNotConnectedError",
+  "ConnectorNotFoundError",
+  "ConnectorUnavailableReconnectingError",
+  "ProviderNotFoundError",
+  "SwitchChainNotSupportedError",
+]);
+
+/**
+ * EIP-1193 and JSON-RPC codes a wallet answers instead of sending: not authorized (4100), method not supported (4200),
+ * disconnected (4900, 4901), unknown chain (4902), invalid params (-32602). Not "transaction rejected" (-32003) as
+ * such: a node says it of a nonce already used too, which can be this very transaction sent once already. Arc's
+ * -32003 for a balance too low is matched by its words (isInsufficientFunds).
+ */
+const NOT_SENT_CODES = new Set([4100, 4200, 4900, 4901, 4902, -32602]);
+
+/**
+ * True when `err`, or anything in its `cause` chain, shows that nothing was sent: a refusal, one of the errors above,
+ * or a revert that carries the revert's own data (`raw`), which only an execution (the wallet's gas estimate) returns.
+ * Any other wallet error may have come after the transaction went out (a phone wallet's lost reply, say: viem turns a
+ * -32603 "Request timed out" into a ContractFunctionRevertedError with no data), so the caller reads the chain before
+ * it says anything about it, and never offers a blind retry.
+ */
+export function wasNotSent(err: unknown): boolean {
+  if (isUserRejection(err) || isEmbeddedFrameRefusal(err) || isInsufficientFunds(err)) return true;
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const e = current as { name?: unknown; code?: unknown; raw?: unknown; cause?: unknown };
+    if (typeof e.name === "string" && NOT_SENT_NAMES.has(e.name)) return true;
+    if (typeof e.code === "number" && NOT_SENT_CODES.has(e.code)) return true;
+    if (e.name === "ContractFunctionRevertedError" && typeof e.raw === "string" && e.raw.length > 2) return true;
+    current = e.cause;
+  }
+  return false;
+}
+
 /** One custom error's sentence, from the error's decoded arguments. */
 export type ErrorFormatter = (args: readonly unknown[]) => string;
 

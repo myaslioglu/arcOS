@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContractFunctionExecutionError, UserRejectedRequestError } from "viem";
 import { arcVestingAbi, feeControllerAbi, multisendAbi, tokenFactoryAbi, vaultFactoryAbi, vestingFactoryAbi } from "@arcos/chain";
-import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError } from "../contract-error";
+import { describeContractError, GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError, wasNotSent } from "../contract-error";
 import { EMBEDDED_FRAME_MESSAGE } from "../wallet-frame";
 
 type AbiErrorItem = { type: string; name?: string };
@@ -373,5 +373,57 @@ describe("describeContractError — an app's own sentences (`overrides`)", () =>
   it("still answers a cancellation and a UserFacingError first", () => {
     expect(describeContractError({ code: 4001 }, overrides)).toBe("You cancelled the request in your wallet.");
     expect(describeContractError(new UserFacingError("A sentence this app wrote."), overrides)).toBe("A sentence this app wrote.");
+  });
+});
+
+// A wallet error after a write was handed to the wallet: either nothing was sent (a plain failure, safe to retry) or
+// the transaction may have gone out (a lost reply), which a flow must look for on chain before saying anything.
+describe("wasNotSent", () => {
+  const wrapped = (inner: object) => ({ name: "TransactionExecutionError", cause: { name: "Wrapper", cause: inner } });
+
+  it("knows a refusal, a wrong network, no account or connection, a balance too low and the wallet's own revert", () => {
+    for (const name of [
+      "UserRejectedRequestError",
+      "ChainMismatchError",
+      "ConnectorChainMismatchError",
+      "ConnectorAccountNotFoundError",
+      "ConnectorNotConnectedError",
+      "AccountNotFoundError",
+      "InsufficientFundsError",
+      "ExecutionRevertedError",
+    ]) {
+      expect(wasNotSent(wrapped({ name })), name).toBe(true);
+    }
+    expect(wasNotSent({ code: 4001 })).toBe(true);
+    expect(wasNotSent(wrapped({ code: 4900 }))).toBe(true);
+    expect(wasNotSent(wrapped({ code: -32602 }))).toBe(true);
+    // Arc's own answer for a balance too low.
+    expect(wasNotSent(wrapped({ name: "TransactionRejectedRpcError", code: -32003, details: "revert: OutOfFunds" }))).toBe(true);
+    // The wallet's gas estimate reverted: the revert's own data came back.
+    expect(wasNotSent(wrapped({ name: "ContractFunctionRevertedError", raw: "0x5e2be5c1" }))).toBe(true);
+  });
+
+  it("leaves anything else open: it may have come after the transaction went out", () => {
+    expect(wasNotSent(new Error("Request expired"))).toBe(false);
+    expect(wasNotSent(wrapped({ name: "InternalRpcError", code: -32603 }))).toBe(false);
+    // What viem's writeContract makes of a wallet's -32603 "Request timed out": a revert with no data. Seen on the fork.
+    expect(
+      wasNotSent({
+        name: "ContractFunctionExecutionError",
+        cause: { name: "ContractFunctionRevertedError", reason: "An internal error was received.", cause: { name: "InternalRpcError", code: -32603 } },
+      }),
+    ).toBe(false);
+    expect(wasNotSent(wrapped({ name: "ContractFunctionRevertedError", raw: "0x" }))).toBe(false);
+    expect(wasNotSent(wrapped({ name: "TimeoutError" }))).toBe(false);
+    // A nonce already used can be this very transaction, sent once already.
+    expect(wasNotSent(wrapped({ name: "TransactionRejectedRpcError", code: -32003, details: "nonce too low" }))).toBe(false);
+    expect(wasNotSent(null)).toBe(false);
+    expect(wasNotSent("timeout")).toBe(false);
+  });
+
+  it("never loops on a cause chain that points back at itself", () => {
+    const a: { name: string; cause?: unknown } = { name: "Outer" };
+    a.cause = { name: "Inner", cause: a };
+    expect(wasNotSent(a)).toBe(false);
   });
 });

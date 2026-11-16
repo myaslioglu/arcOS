@@ -85,7 +85,7 @@ describe("Finder's Positions section", () => {
   });
 
   it("says when the list may be short, and how to lock one that isn't listed", async () => {
-    state.answer = { managers: [], positions: [position("1")], notes: [{ manager: V4, name: "Uniswap v4", source: "recent", complete: false }] };
+    state.answer = { managers: [], positions: [position("1")], notes: [{ manager: V4, name: "Uniswap v4", source: "recent", complete: false, held: 2n }] };
     await mount();
     expect(host.textContent).toContain("Uniswap v4: the explorer didn't answer, so only positions received in the last few minutes are listed. To lock another, type its id in Vault.");
   });

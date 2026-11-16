@@ -140,11 +140,16 @@ export function lockReserve(token: string, flatFee: bigint | undefined): bigint 
   return feeUnits + USDC_GAS_RESERVE;
 }
 
-/** "Feb 16, 2027, 2:30 PM", in the visitor's time zone unless one is given (tests pass "UTC"). */
-export function formatWhen(seconds: number, timeZone?: string): string {
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", ...(timeZone ? { timeZone } : {}) }).format(
-    new Date(seconds * 1000),
-  );
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * "16 Feb 2027, 14:30 UTC": a moment in UTC, so everyone who reads it, the owner and anyone checking the lock, sees the
+ * same one. The same form as Vesting's dates.
+ */
+export function formatWhen(seconds: number): string {
+  const d = new Date(seconds * 1000);
+  if (!Number.isFinite(d.getTime())) return "?";
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
 
 /** "in 92 days", "in 5 hours", "in 3 minutes", or "now": how long until `at`. */

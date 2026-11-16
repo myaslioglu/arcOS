@@ -60,8 +60,31 @@ export const VAULT_ERRORS: Readonly<Record<string, ErrorFormatter>> = {
   UnexpectedNft: () => "This vault only takes the position it was made for.",
 };
 
-/** One plain sentence for a failed Vault transaction: the vault's own sentence for its errors, else the shared ones. */
+/** Whether `err`, or anything in its `cause` chain, is one of the errors `names` (viem's and wagmi's class names). */
+function isNamed(err: unknown, names: readonly string[]): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const e = current as { name?: unknown; cause?: unknown };
+    if (typeof e.name === "string" && names.includes(e.name)) return true;
+    current = e.cause;
+  }
+  return false;
+}
+
+export const WRONG_NETWORK = "Your wallet is on a different network. Switch to Arc and try again.";
+export const NOT_CONNECTED = "Your wallet isn't connected. Connect it and try again.";
+
+/**
+ * One plain sentence for a failed Vault transaction: the wallet on another network or not connected (nothing was
+ * sent), then the vault's own sentence for its errors, else the shared ones.
+ */
 export function describeVaultError(err: unknown): string {
+  if (isNamed(err, ["ChainMismatchError", "ConnectorChainMismatchError"])) return WRONG_NETWORK;
+  if (isNamed(err, ["AccountNotFoundError", "ConnectorAccountNotFoundError", "ConnectorNotConnectedError", "ConnectorUnavailableReconnectingError"])) {
+    return NOT_CONNECTED;
+  }
   return describeContractError(err, VAULT_ERRORS);
 }
 

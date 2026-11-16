@@ -5,6 +5,7 @@ import type { GetLogs } from "@/lib/positions";
 import type { ContractRead, Read, ReadResult } from "@/lib/reads";
 import {
   LOCKS_PAGE,
+  MAX_FROM_LOGS,
   OWNERSHIP_TRANSFER_STARTED,
   groupLocks,
   isEmpty,
@@ -163,6 +164,33 @@ describe("loadLocks", () => {
     expect(getLogs.mock.calls[0]?.[0].address).toBeUndefined();
   });
 
+  it("drops a contract from the logs that isn't a vault without a word, and names only an address the wallet gave", async () => {
+    // OwnershipTransferStarted is Ownable2Step's event: the factory, the FeeController or anyone can emit it to the wallet.
+    const getLogs = vi.fn<GetLogs>(async () => [
+      { address: at(9), topics: [OWNERSHIP_TRANSFER_STARTED, pad(W2), pad(W1)] },
+      { address: FACTORY, topics: [OWNERSHIP_TRANSFER_STARTED, pad(W2), pad(W1)] },
+    ]);
+    const answers = {
+      [k(FACTORY, "vaultsOfLength", W1)]: 0n,
+      [k(FACTORY, "isVault", at(9))]: true,
+      [k(FACTORY, "isVault", FACTORY)]: false,
+      [k(FACTORY, "isVault", at(8))]: false,
+      ...tokenVault(at(9), W2, TA, 3n, { [k(at(9), "pendingOwner")]: W1 }),
+      ...symbols,
+    };
+    const answer = await loadLocks(deps(answers, { extra: [at(8)], getLogs, getBlockNumber: async () => 50_000n }));
+    expect(answer.locks.map((l) => l.vault)).toEqual([at(9)]);
+    expect(answer.notVaults).toEqual([at(8)]);
+  });
+
+  it("takes at most MAX_FROM_LOGS contracts from the logs, the latest", async () => {
+    const logs = Array.from({ length: MAX_FROM_LOGS + 5 }, (_, i) => ({ address: at(100 + i), topics: [OWNERSHIP_TRANSFER_STARTED, pad(W2), pad(W1)] }));
+    const found = await recentIncoming(async () => logs, 50_000n, W1);
+    expect(found).toHaveLength(MAX_FROM_LOGS);
+    expect(found[0]).toBe(at(100 + MAX_FROM_LOGS + 4));
+    expect(found).not.toContain(at(100));
+  });
+
   it("keeps the list when the recent logs can't be read", async () => {
     const answer = await loadLocks(deps({ [k(FACTORY, "vaultsOfLength", W1)]: 0n }, { getLogs: async () => Promise.reject(new Error("range")), getBlockNumber: async () => 1n }));
     expect(answer.locks).toEqual([]);
@@ -197,6 +225,18 @@ describe("loadLocks", () => {
     const locks = (await loadLocks(deps(answers))).locks;
     expect(locks.map((l) => isEmpty(l))).toEqual([true, true]);
     expect(groupLocks(locks, W1).empty).toHaveLength(2);
+  });
+
+  it("marks a position burned after it was withdrawn as withdrawn: ownerOf reverts for it", async () => {
+    const answers = {
+      [k(FACTORY, "vaultsOfLength", W1)]: 1n,
+      [k(FACTORY, "vaultsOfSlice", W1, 0, 1)]: [at(4)],
+      ...positionVault(at(4), W1, 1n, W1, { [k(V3, "ownerOf", 1n)]: new Error("Invalid token ID") }),
+      ...symbols,
+    };
+    const [burned] = (await loadLocks(deps(answers))).locks;
+    expect(burned).toMatchObject({ kind: "position", withdrawn: true });
+    expect(groupLocks([burned!], W1).empty).toHaveLength(1);
   });
 
   it("leaves out a vault whose state can't be read, and lets one hostile token cost its lock's symbol only", async () => {

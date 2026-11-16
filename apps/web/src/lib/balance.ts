@@ -1,5 +1,6 @@
 import { parseTokenAmount } from "@arcos/chain";
 import { formatTokenAmount } from "./amount";
+import { displayUnits } from "./display-amount";
 
 /**
  * USDC (in 6-decimal units) that "Max" leaves behind when the token being spent is Arc's own USDC, which is also the
@@ -39,9 +40,12 @@ export function maxAmountText(balanceUnits: bigint, decimals: number, options: M
   return max > 0n ? formatTokenAmount(max, decimals) : null;
 }
 
-/** "Balance: 12.5 USDC", the line shown under an amount box. */
-export function balanceLabel(balanceUnits: bigint, decimals: number, symbol: string): string {
-  return `Balance: ${formatTokenAmount(balanceUnits, decimals)} ${symbol}`;
+/**
+ * "Balance: 12.5 USDC", the line shown under an amount box: the exact balance, or with `rounded` the short display
+ * amount rounded down (lib/display-amount.ts), never more than is there. "Max" fills in the exact amount either way.
+ */
+export function balanceLabel(balanceUnits: bigint, decimals: number, symbol: string, { rounded = false }: { rounded?: boolean } = {}): string {
+  return `Balance: ${rounded ? displayUnits(balanceUnits, decimals, "down") : formatTokenAmount(balanceUnits, decimals)} ${symbol}`;
 }
 
 /**

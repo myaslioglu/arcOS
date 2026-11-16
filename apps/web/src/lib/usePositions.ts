@@ -25,10 +25,12 @@ export function usePositions(owner: Address | undefined, factory: Address | null
     enabled: !!owner && !!factory && !!client,
     retry: false,
     refetchInterval: REFETCH_MS,
-    queryFn: () =>
+    // react-query's signal ends the explorer's requests once no one needs the list; positions.ts adds a deadline.
+    queryFn: ({ signal }) =>
       loadPositions({
         ...clientReads(client!),
         apiUrl: chain.blockExplorers?.default.apiUrl,
+        signal,
         factory: factory!,
         owner: owner!,
         candidates: POSITION_MANAGERS[network],

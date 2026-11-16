@@ -9,7 +9,7 @@ import { shortAddress } from "@/lib/format";
 import { kindOf, readPosition, type AllowedManager, type Position } from "@/lib/positions";
 import { clientReads, ok } from "@/lib/reads";
 import { chainNow, type ClockSample } from "./clock";
-import type { LockFees } from "./fees";
+import { asPending, type LockFees } from "./fees";
 import type { FlowClient, FlowDeps } from "./flow";
 import { loadLocks, type LocksAnswer } from "./locks";
 import { aggregate3, readTokenInfo, type TokenInfo } from "./tokenInfo";
@@ -52,7 +52,10 @@ export function useChainClock(): { now: number; fromChain: boolean; at: (ms: num
   };
 }
 
-/** The three lock fees, from the factory's own FeeController. */
+/**
+ * The three lock fees, from the factory's own FeeController, with any raise it has scheduled for each (`pendingOf`).
+ * The lock itself reads the fees again before the wallet opens (flow.ts), so this read is what the form shows.
+ */
 export function useLockFees(factory: Address | null) {
   const chain = activeChain();
   const client = usePublicClient({ chainId: chain.id });
@@ -63,8 +66,12 @@ export function useLockFees(factory: Address | null) {
     queryFn: async () => {
       const feeController = (await client!.readContract({ address: factory!, abi: vaultFactoryAbi, functionName: "feeController" })) as Address;
       const fee = (key: Hex) => client!.readContract({ address: feeController, abi: feeControllerAbi, functionName: "feeOf", args: [key] }) as Promise<bigint>;
-      const [flat, lpBps, shareBps] = await Promise.all([fee(FEE_KEYS.LOCK_FLAT), fee(FEE_KEYS.LOCK_LP_BPS), fee(FEE_KEYS.LOCK_FEE_SHARE_BPS)]);
-      return { feeController, flat, lpBps, shareBps };
+      // A raise that can't be read is left unsaid rather than holding the form back: the lock checks the fees anyway.
+      const pending = (key: Hex) =>
+        client!.readContract({ address: feeController, abi: feeControllerAbi, functionName: "pendingOf", args: [key] }).then(asPending, () => null);
+      const keys = [FEE_KEYS.LOCK_FLAT, FEE_KEYS.LOCK_LP_BPS, FEE_KEYS.LOCK_FEE_SHARE_BPS] as const;
+      const [[flat, lpBps, shareBps], [pFlat, pLp, pShare]] = await Promise.all([Promise.all(keys.map(fee)), Promise.all(keys.map(pending))]);
+      return { feeController, flat: flat!, lpBps: lpBps!, shareBps: shareBps!, pending: { flat: pFlat ?? null, lpBps: pLp ?? null, shareBps: pShare ?? null } };
     },
   });
 }

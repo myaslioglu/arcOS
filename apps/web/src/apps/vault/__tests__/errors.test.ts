@@ -3,7 +3,7 @@ import { BaseError, ContractFunctionRevertedError, encodeErrorResult, type Abi }
 import { lockVaultAbi, positionVaultAbi, vaultFactoryAbi } from "@arcos/chain";
 import { GENERIC_TRANSACTION_ERROR, describeContractError } from "@/lib/contract-error";
 import { POSITION_ISSUE } from "@/lib/positions";
-import { LOCK_ABI, MANAGER_NOT_ALLOWED, VAULT_ERRORS, describeVaultError } from "../errors";
+import { LOCK_ABI, MANAGER_NOT_ALLOWED, NOT_CONNECTED, VAULT_ERRORS, WRONG_NETWORK, describeVaultError } from "../errors";
 
 type AbiErrorItem = { type: string; name?: string; inputs?: readonly { type: string }[] };
 const errorsOf = (abi: readonly AbiErrorItem[]) => abi.filter((i) => i.type === "error");
@@ -50,7 +50,15 @@ describe("describeVaultError: every error the VaultFactory and its vaults declar
     expect(describeVaultError(revert("WrongFee", [30n * 10n ** 18n, 1n]))).toBe(
       "The lock fee changed while you were signing. It is now 30 USDC. Check it and lock again.",
     );
-    expect(describeVaultError(revert("StillLocked", [1_802_584_639n]))).toMatch(/^This vault is locked until Feb 1[34], 2027, .+\.$/);
+    expect(describeVaultError(revert("StillLocked", [1_802_584_639n]))).toBe("This vault is locked until 14 Feb 2027, 05:57 UTC.");
+  });
+
+  it("says a wallet on another network, or not connected, in so many words: nothing was sent", () => {
+    expect(describeVaultError({ name: "TransactionExecutionError", cause: { name: "ChainMismatchError" } })).toBe(WRONG_NETWORK);
+    expect(describeVaultError({ name: "ConnectorChainMismatchError" })).toBe(WRONG_NETWORK);
+    for (const name of ["ConnectorNotConnectedError", "ConnectorAccountNotFoundError", "AccountNotFoundError"]) {
+      expect(describeVaultError({ name: "WriteContractError", cause: { name } }), name).toBe(NOT_CONNECTED);
+    }
   });
 
   it("falls back to the generic sentence for an argument of the wrong shape", () => {

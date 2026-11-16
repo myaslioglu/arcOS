@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getAddress, type Address } from "viem";
 import type { PositionLock } from "../locks";
-import { collectedText, noteText, transferIssue } from "../notes";
+import { collectedText, lockStepText, lockedText, noteText, transferIssue } from "../notes";
 
 const TA = getAddress("0xbff22091be481b41c8ca49862653aba216bac041");
 const TB = getAddress("0xf4f40da2d2b7f0a2c5d2d3e113ddfbeb3ffdca5e");
@@ -62,18 +62,47 @@ describe("noteText: what an action's row says once it is done", () => {
   const done = { result: "done" as const, hash: "0x01" as const, collected: [] };
 
   it("says each outcome plainly", () => {
-    expect(noteText("extend", done, position({ unlockAt: 1_900_000_000 }))).toMatch(/^Extended\. It now unlocks .+2030.*\.$/);
-    expect(noteText("withdraw", done, position())).toBe("Withdrawn. The position is back in your wallet.");
-    expect(noteText("withdraw", done, { ...position(), kind: "token" } as never)).toBe("Withdrawn to your wallet.");
-    expect(noteText("transfer", done, position())).toBe("Done. The new owner can now accept it in Vault.");
-    expect(noteText("accept", done, position())).toBe("You now own this vault.");
-    expect(noteText("collect", done, position())).toBe("There were no fees to collect.");
+    expect(noteText({ kind: "withdraw" }, done, position())).toBe("Withdrawn. The position is back in your wallet.");
+    expect(noteText({ kind: "withdraw" }, done, { ...position(), kind: "token" } as never)).toBe("Withdrawn to your wallet.");
+    expect(noteText({ kind: "transfer", to: TB }, done, position())).toBe("Done. 0xF4F4…Ca5E can now accept it in Vault.");
+    expect(noteText({ kind: "accept" }, done, position())).toBe("You now own this vault.");
+    expect(noteText({ kind: "collect" }, done, position())).toBe("There were no fees to collect.");
+  });
+
+  it("names the new unlock date an extend was sent with, not the one the list still shows", () => {
+    expect(noteText({ kind: "extend", unlockAt: 1_950_000_000 }, done, position({ unlockAt: 1_900_000_000 }))).toBe("Extended. It now unlocks 17 Oct 2031, 10:40 UTC.");
+  });
+
+  it("says a cancelled handover is a cancel, not a handover", () => {
+    expect(noteText({ kind: "cancel" }, done, position())).toBe("Handover cancelled. The vault stays yours.");
   });
 
   it("gives a failure's own sentence", () => {
-    expect(noteText("withdraw", { result: "failed", message: "You cancelled the request in your wallet." }, position())).toBe(
+    expect(noteText({ kind: "withdraw" }, { result: "failed", message: "You cancelled the request in your wallet." }, position())).toBe(
       "You cancelled the request in your wallet.",
     );
+  });
+});
+
+describe("a lock's progress and result", () => {
+  const token = { kind: "token" as const, label: "100 UNI-V2", approval: "100 UNI-V2", unlockAt: 1_900_000_000, fee: 30n * 10n ** 18n, token: { symbol: "UNI-V2", decimals: 18 } };
+  const position_ = { kind: "position" as const, label: "Uniswap v4 #7", approval: "Uniswap v4 #7", unlockAt: 1_900_000_000, fee: 30n * 10n ** 18n };
+
+  it("says what each step waits for, the approval for the whole amount the wallet asks for", () => {
+    expect(lockStepText(token, "check", false)).toBe("Checking the fee and the approval…");
+    expect(lockStepText(token, "approve", false)).toBe("Approve exactly 100 UNI-V2 for the vault factory in your wallet…");
+    expect(lockStepText(position_, "approve", false)).toBe("Approve Uniswap v4 #7 for the vault factory in your wallet…");
+    expect(lockStepText(token, "approve", true)).toBe("Waiting for the approval to confirm…");
+    expect(lockStepText(token, "lock", false)).toBe("Confirm the lock in your wallet. It sends the 30 USDC fee.");
+    expect(lockStepText(token, "lock", true)).toBe("Waiting for the lock to confirm…");
+    expect(lockStepText(token, "find", false)).toBe("Your wallet answered with an error. Looking for the lock on chain, for up to a minute…");
+  });
+
+  it("says what reached the vault, from the factory's event: an LP token less ArcOS's share", () => {
+    const locked = { result: "locked" as const, vault: VAULT, hash: "0x01" as const };
+    expect(lockedText(token, { ...locked, amount: 99_500_000_000_000_000_000n })).toBe("99.5 UNI-V2 is in its vault until 17 Mar 2030, 17:46 UTC.");
+    expect(lockedText(token, locked)).toBe("100 UNI-V2 is in its vault until 17 Mar 2030, 17:46 UTC.");
+    expect(lockedText(position_, locked)).toBe("Uniswap v4 #7 is in its vault until 17 Mar 2030, 17:46 UTC.");
   });
 });
 

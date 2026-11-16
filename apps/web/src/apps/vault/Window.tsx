@@ -25,7 +25,7 @@ const shown = new WeakSet<object>();
 const openedByWallet = new Map<string, Address[]>();
 
 /**
- * Vault: New lock (NewLock.tsx) and Your locks (LockList.tsx), in two tabs kept mounted so that a form half filled in
+ * Vault: New lock (NewLock.tsx) and Your locks (LockList.tsx), two sections kept mounted so that a form half filled in
  * survives a look at the other. A token or a position dropped on the window, or named by its params, opens New lock
  * with it; a lock opens Your locks with that vault listed. Everything is read on chain before anything is offered.
  */
@@ -77,13 +77,12 @@ function Vault({ factory, params }: { factory: Address; params: Record<string, s
   const { over, props: dropProps } = useDropTarget(manifest.acceptsDrop, (item) => show(targetFromDrop(item)));
   if (!address) return null;
 
-  const tabButton = (id: Tab, label: string) => (
+  // Two toggle buttons in a labelled group, as Vesting's sections are: each is a plain button in the tab order, and
+  // aria-pressed says which section shows.
+  const sectionButton = (id: Tab, label: string) => (
     <button
       type="button"
-      role="tab"
-      id={`vault-tab-${id}`}
-      aria-selected={tab === id}
-      aria-controls={`vault-panel-${id}`}
+      aria-pressed={tab === id}
       className={`min-h-8 rounded-md px-3 text-xs pointer-coarse:min-h-11 ${tab === id ? "bg-surface-2 font-medium" : "text-muted"}`}
       onClick={() => setTab(id)}
     >
@@ -93,17 +92,18 @@ function Vault({ factory, params }: { factory: Address; params: Record<string, s
 
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
-      <div role="tablist" aria-label="Vault" className="flex gap-1 border-b border-border px-3 py-2">
-        {tabButton("new", "New lock")}
-        {tabButton("locks", "Your locks")}
+      <div role="group" aria-label="Vault sections" className="flex gap-1 border-b border-border px-3 py-2">
+        {sectionButton("new", "New lock")}
+        {sectionButton("locks", "Your locks")}
       </div>
+      {/* Both stay mounted, so a half-filled form survives a look at the other section. */}
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        <div role="tabpanel" id="vault-panel-new" aria-labelledby="vault-tab-new" hidden={tab !== "new"}>
+        <section aria-label="New lock" hidden={tab !== "new"}>
           <NewLock factory={factory} wallet={address} prefill={prefill} onShowLocks={() => setTab("locks")} />
-        </div>
-        <div role="tabpanel" id="vault-panel-locks" aria-labelledby="vault-tab-locks" hidden={tab !== "locks"}>
+        </section>
+        <section aria-label="Your locks" hidden={tab !== "locks"}>
           <LockList factory={factory} wallet={address} opened={opened} onOpen={(vault) => show({ kind: "vault", vault })} />
-        </div>
+        </section>
       </div>
       <p className="border-t border-border px-4 py-2 text-xs text-accent-3-text">{UNAUDITED}</p>
     </div>

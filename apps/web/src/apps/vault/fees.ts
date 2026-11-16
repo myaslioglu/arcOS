@@ -1,6 +1,15 @@
 import type { Hex } from "viem";
 import { displayUnits, displayWei } from "@/lib/display-amount";
-import { lpSplit } from "./lockForm";
+import { formatWhen, lpSplit } from "./lockForm";
+
+/**
+ * A raise the FeeController has scheduled for a key (`pendingOf`): its new value, and the unix time from which anyone
+ * may apply it (`applyPending`). A cut applies at once, so only a raise ever waits.
+ */
+export type PendingFee = { value: bigint; effectiveAt: number };
+
+/** The three fees a lock can pay. */
+export type FeeAmounts = { flat: bigint; lpBps: bigint; shareBps: bigint };
 
 /**
  * What a lock costs, read from the chain: the VaultFactory's own FeeController (`feeController()`, immutable in the
@@ -9,8 +18,34 @@ import { lpSplit } from "./lockForm";
  * - `lpBps`: LOCK_LP_BPS, the share of a Uniswap v2 LP token lock that goes to ArcOS (lpSplit).
  * - `shareBps`: LOCK_FEE_SHARE_BPS, ArcOS's share of the trading fees a position vault collects, copied into the vault
  *   when it is made, so a later change never reaches an existing lock.
+ * - `pending`: a raise scheduled for each, null when none is (or it couldn't be read).
  */
-export type LockFees = { feeController: `0x${string}`; flat: bigint; lpBps: bigint; shareBps: bigint };
+export type LockFees = FeeAmounts & {
+  feeController: `0x${string}`;
+  pending: { flat: PendingFee | null; lpBps: PendingFee | null; shareBps: PendingFee | null };
+};
+
+/** `pendingOf`'s answer as a raise, or null when nothing is scheduled (an `effectiveAt` of 0). */
+export function asPending(answer: unknown): PendingFee | null {
+  if (!Array.isArray(answer) || typeof answer[0] !== "bigint" || typeof answer[1] !== "bigint" || answer[1] === 0n) return null;
+  return { value: answer[0], effectiveAt: Number(answer[1]) };
+}
+
+/**
+ * The form's warning for a raise scheduled on a fee this lock pays, null when there is none. `which` names the fee:
+ * the flat fee, the LP share or the share of collected fees; `now` is the chain's time. Once `effectiveAt` has passed,
+ * anyone can apply the raise at any moment, before this lock is mined too.
+ */
+export function raiseLine(which: "flat" | "lp" | "share", pending: PendingFee | null, current: bigint, now: number): string | null {
+  if (!pending || pending.value <= current) return null;
+  const due = pending.effectiveAt <= now;
+  const when = due ? "at any moment: the raise is due, and anyone can apply it" : `from ${formatWhen(pending.effectiveAt)}`;
+  if (which === "flat") {
+    return `The lock fee can rise to ${displayWei(pending.value, "up")} USDC ${when}.${due ? " If it rises before this lock is mined, the lock fails and only gas is spent." : ""}`;
+  }
+  if (which === "lp") return `ArcOS's share of an LP token lock can rise to ${bpsText(pending.value)} ${when}.`;
+  return `ArcOS's share of collected fees can rise to ${bpsText(pending.value)} ${when}. A vault keeps the share it was made with.`;
+}
 
 /** The three calls VaultFactory._isV2Pair makes, by selector. */
 export const V2_PAIR_CALLS = {

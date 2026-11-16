@@ -7,18 +7,34 @@ import type { ActionOutcome, LockOutcome, LockStep, VaultAction } from "./flow";
  * One wallet transaction at a time, page-wide: a lock or an action on one vault.
  */
 
-/** What a lock is of, for the progress and the result: "1,000 VTA" or "Uniswap v4 #328647", and until when. */
-export type LockSummary = { label: string; unlockAt: number; kind: "token" | "position" };
+/**
+ * What a lock is of, for the progress and the result:
+ * - `label`: what is locked, in a few words: "1,000 VTA" (the amount asked, rounded down) or "Uniswap v4 #328647";
+ * - `approval`: what the wallet is asked to approve, exactly as it asks: "1000.5 VTA" or "Uniswap v4 #328647";
+ * - `token`: a token's symbol and decimals, to say what reached the vault (the factory's TokenLocked amount);
+ * - `fee`: the flat fee the lock sends, as the form showed it.
+ */
+export type LockSummary = {
+  kind: "token" | "position";
+  label: string;
+  approval: string;
+  unlockAt: number;
+  fee: bigint;
+  token?: { symbol: string; decimals: number };
+};
+
+/** "check": the fees and the approval are being read, before the wallet is asked for anything. */
+export type LockRunStep = LockStep | "check";
 
 export type LockRun =
   | { status: "idle" }
-  | { status: "running"; summary: LockSummary; step: LockStep; sent: boolean }
+  | { status: "running"; summary: LockSummary; step: LockRunStep; sent: boolean }
   | { status: "done"; summary: LockSummary; outcome: LockOutcome };
 
 export type ActionKind = VaultAction["kind"];
 export type ActionRun = { vault: string; kind: ActionKind; sent: boolean };
 /** What the last action on a vault came to, shown on its row until dismissed or replaced. */
-export type ActionNote = { kind: ActionKind; outcome: ActionOutcome; detail?: string };
+export type ActionNote = { action: VaultAction; outcome: ActionOutcome; detail?: string };
 
 export type VaultSessionState = {
   lock: LockRun;
@@ -72,8 +88,9 @@ function startLock(
   summary: LockSummary,
   execute: (onStep: (step: LockStep, sent: boolean) => void) => Promise<LockOutcome>,
 ): Promise<LockOutcome> | null {
+  // It starts on "check": the wallet is asked for nothing until runLock says which step comes first.
   if (isBusy(state)) return null;
-  set({ ...state, lock: { status: "running", summary, step: "lock", sent: false } });
+  set({ ...state, lock: { status: "running", summary, step: "check", sent: false } });
   guard(true);
   const onStep = (step: LockStep, sent: boolean) => {
     if (state.lock.status === "running") set({ ...state, lock: { ...state.lock, step, sent } });
@@ -99,18 +116,19 @@ function dismissLock(): void {
 }
 
 /**
- * Runs one action on `vault` through `execute` (flow.ts's `runAction`, handed the "sent" callback) and keeps its
- * outcome on that vault's row. `detail` turns the outcome into the row's sentence. Refuses, returning null, while any
- * Vault transaction is under way.
+ * Runs `action` on `vault` through `execute` (flow.ts's `runAction`, handed the "sent" callback) and keeps its outcome
+ * on that vault's row, with the action itself (notes.ts says what it did). `detail` adds a sentence of its own from the
+ * outcome. Refuses, returning null, while any Vault transaction is under way.
  */
 function startAction(
   vault: string,
-  kind: ActionKind,
+  action: VaultAction,
   execute: (onSent: () => void) => Promise<ActionOutcome>,
   detail?: (outcome: ActionOutcome) => string | undefined,
 ): Promise<ActionOutcome> | null {
   if (isBusy(state)) return null;
   const key = vault.toLowerCase();
+  const kind = action.kind;
   set({ ...state, action: { vault: key, kind, sent: false }, notes: without(state.notes, key) });
   guard(true);
   return (async () => {
@@ -124,7 +142,7 @@ function startAction(
     } finally {
       guard(false);
     }
-    set({ ...state, action: null, notes: { ...state.notes, [key]: { kind, outcome, detail: detail?.(outcome) } } });
+    set({ ...state, action: null, notes: { ...state.notes, [key]: { action, outcome, detail: detail?.(outcome) } } });
     return outcome;
   })();
 }

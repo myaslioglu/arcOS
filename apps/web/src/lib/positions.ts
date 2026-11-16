@@ -13,13 +13,14 @@ export type { GetLogs };
  *
  * Where the ids come from, per manager:
  * - an ERC721Enumerable manager (Uniswap v3's, checked on chain with `supportsInterface(0x780e9d63)`) lists them
- *   itself: `balanceOf` and `tokenOfOwnerByIndex`. That is the whole list.
+ *   itself: `balanceOf` and `tokenOfOwnerByIndex`, read from the end, so a wallet with more than MAX_POSITIONS sees
+ *   its latest ones.
  * - any other (Uniswap v4's PositionManager is not enumerable) has no such view, so the ids come from the explorer's
  *   list of that collection's tokens the wallet holds (Blockscout's `/tokens/<manager>/instances?holder_address_hash=`),
  *   and from the RPC's Transfer logs to the wallet over the last RECENT_BLOCKS, for a position the explorer hasn't
  *   indexed yet. Each id is then checked with `ownerOf`, so neither source is trusted for who holds it. When the
- *   explorer doesn't answer, the list holds the recent ones only and says so; any position can still be typed into
- *   Vault by its id.
+ *   explorer doesn't answer within EXPLORER_TIMEOUT_MS, the list holds the recent ones only and says so; any position
+ *   can still be typed into Vault by its id.
  */
 
 /** ERC-165 id of ERC721Enumerable. */
@@ -28,6 +29,8 @@ export const ERC721_ENUMERABLE: Hex = "0x780e9d63";
 export const MAX_POSITIONS = 100;
 /** The explorer is asked for at most this many pages (it answers 50 tokens a page). */
 export const EXPLORER_PAGES = 2;
+/** How long the explorer may take over one manager's list, all its pages together, before the recent logs stand in. */
+export const EXPLORER_TIMEOUT_MS = 8_000;
 /**
  * The RPC's Transfer logs are read over this many blocks back from the latest: about 17 minutes on mainnet at Arc's
  * half-second blocks. One request: rpc.mainnet.arc.io answered a 5,000-block range and refused 10,000 ("requested
@@ -91,13 +94,15 @@ export type Position = {
 export type ManagerNote = {
   manager: Address;
   name: string;
-  source: "enumerable" | "explorer" | "recent";
+  /** "failed": the manager's positions couldn't be read; the other managers' are still listed. */
+  source: "enumerable" | "explorer" | "recent" | "failed";
   /** The list holds every position the wallet has there. */
   complete: boolean;
+  /** How many positions the manager says the wallet holds (`balanceOf`), null when it couldn't be read. */
+  held: bigint | null;
 };
 
 export type PositionsAnswer = { managers: AllowedManager[]; positions: Position[]; notes: ManagerNote[] };
-
 
 export type PositionsDeps = {
   read: Read;
@@ -106,11 +111,25 @@ export type PositionsDeps = {
   /** The explorer's v2 API (`blockExplorers.default.apiUrl`); left out, only the RPC is asked. */
   apiUrl?: string;
   fetchFn?: typeof fetch;
+  /** Ends the explorer's requests early: react-query's, once no one needs the list any more. */
+  signal?: AbortSignal;
+  /** EXPLORER_TIMEOUT_MS unless a test asks for less. */
+  explorerTimeoutMs?: number;
   factory: Address;
   owner: Address;
   /** The managers to ask the factory about (POSITION_MANAGERS[network]). */
   candidates: readonly PositionManagerInfo[];
 };
+
+/**
+ * A signal that ends after `ms`, or as soon as `signal` ends, whichever is first: the same pairing as packages/
+ * inspector's explorer-fetch.ts. A browser without `AbortSignal.any` keeps the deadline alone.
+ */
+export function withDeadline(ms: number, signal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(ms);
+  if (!signal) return deadline;
+  return typeof AbortSignal.any === "function" ? AbortSignal.any([signal, deadline]) : deadline;
+}
 
 /** The kind the factory gives a manager (`managers(address)` answers `(allowed, kind)`), or null for any other value. */
 export function kindOf(raw: unknown): PositionKind | null {
@@ -169,20 +188,23 @@ export async function allowedManagers(read: Read, factory: Address, candidates: 
 
 /**
  * The ids the explorer lists for `owner` in `manager`'s collection, at most EXPLORER_PAGES pages. `complete` is true
- * once the explorer said there is no further page. Throws when the explorer doesn't answer. An item whose owner the
- * explorer names as someone else is left out; `ownerOf` decides in the end either way.
+ * once the explorer said there is no further page. Throws when the explorer doesn't answer, within `timeoutMs` for all
+ * its pages together, or once `signal` ends. An item whose owner the explorer names as someone else is left out;
+ * `ownerOf` decides in the end either way.
  */
 export async function explorerIds(
   fetchFn: typeof fetch,
   apiUrl: string,
   manager: Address,
   owner: Address,
+  { signal, timeoutMs = EXPLORER_TIMEOUT_MS }: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<{ ids: bigint[]; complete: boolean }> {
   const base = `${apiUrl}/tokens/${manager}/instances?holder_address_hash=${owner}`;
+  const deadline = withDeadline(timeoutMs, signal);
   const ids: bigint[] = [];
   let url = base;
   for (let page = 0; page < EXPLORER_PAGES; page++) {
-    const res = await fetchFn(url, { headers: { accept: "application/json" } });
+    const res = await fetchFn(url, { headers: { accept: "application/json" }, signal: deadline });
     if (!res.ok) throw new Error(`The explorer answered ${res.status}.`);
     const body = (await res.json()) as { items?: unknown; next_page_params?: unknown };
     if (!Array.isArray(body.items)) throw new Error("The explorer answered without a list.");
@@ -299,7 +321,80 @@ export async function readPosition(read: Read, m: AllowedManager, tokenId: bigin
   return { ...p, symbol0: symbols.get(p.currency0.toLowerCase()) ?? "?", symbol1: symbols.get(p.currency1.toLowerCase()) ?? "?" };
 }
 
-/** Every allowed manager's positions for the owner, as described in the module comment. */
+type Found = Omit<Position, "symbol0" | "symbol1">;
+
+/**
+ * One manager's positions for the owner and its note. `held` is the manager's `balanceOf`; `latestBlock` reads the
+ * latest block once for every manager that needs the recent logs.
+ */
+async function managerPositions(
+  deps: PositionsDeps,
+  m: AllowedManager,
+  enumerable: boolean,
+  held: bigint | null,
+  latestBlock: () => Promise<bigint>,
+): Promise<{ note: ManagerNote; found: Found[] }> {
+  const { read, owner } = deps;
+  let ids: bigint[];
+  let note: ManagerNote;
+  if (enumerable && held !== null) {
+    // The last MAX_POSITIONS indices, newest first: an ERC721Enumerable list grows at its end, so those are the
+    // positions received last.
+    const count = held > BigInt(MAX_POSITIONS) ? MAX_POSITIONS : Number(held);
+    const results = count
+      ? await read(
+          Array.from({ length: count }, (_, k) => ({
+            address: m.address,
+            abi: POSITION_NFT_ABI,
+            functionName: "tokenOfOwnerByIndex",
+            args: [owner, held - 1n - BigInt(k)],
+          })),
+        )
+      : [];
+    ids = results.flatMap((r) => {
+      const id = ok(r);
+      return typeof id === "bigint" ? [id] : [];
+    });
+    note = { manager: m.address, name: m.name, source: "enumerable", complete: held <= BigInt(MAX_POSITIONS) && ids.length === count, held };
+  } else {
+    let fromExplorer: { ids: bigint[]; complete: boolean } | null = null;
+    if (held !== 0n && deps.apiUrl) {
+      try {
+        fromExplorer = await explorerIds(deps.fetchFn ?? fetch, deps.apiUrl, m.address, owner, { signal: deps.signal, timeoutMs: deps.explorerTimeoutMs });
+      } catch {
+        fromExplorer = null;
+      }
+    }
+    let recent: bigint[] = [];
+    if (held !== 0n) {
+      try {
+        recent = await recentIds(deps.getLogs, await latestBlock(), m.address, owner);
+      } catch {
+        recent = [];
+      }
+    }
+    const candidates = distinctDesc([...(fromExplorer?.ids ?? []), ...recent]).slice(0, MAX_POSITIONS);
+    const owners = candidates.length
+      ? await read(candidates.map((id) => ({ address: m.address, abi: POSITION_NFT_ABI, functionName: "ownerOf", args: [id] })))
+      : [];
+    ids = candidates.filter((_, k) => {
+      const who = asAddress(ok(owners[k]));
+      return who !== null && same(who, owner);
+    });
+    // The manager's own count (v4's PositionManager answers `balanceOf`) says whether every position was found: a
+    // lagging explorer, a failed one, or more than MAX_POSITIONS all leave the list short of it. Without a count,
+    // only the explorer's "no further page" makes it whole.
+    const complete = held !== null ? BigInt(ids.length) >= held : fromExplorer?.complete === true;
+    note = { manager: m.address, name: m.name, source: fromExplorer || held === 0n ? "explorer" : "recent", complete, held };
+  }
+  return { note, found: await details(read, m, distinctDesc(ids)) };
+}
+
+/**
+ * Every allowed manager's positions for the owner, as described in the module comment. The managers are read side by
+ * side: a slow explorer for one (v4's, bounded by its deadline) holds up none of the others (v3's), and a manager
+ * whose reads fail is named in its note while the others are still listed.
+ */
 export async function loadPositions(deps: PositionsDeps): Promise<PositionsAnswer> {
   const { read, owner } = deps;
   const managers = await allowedManagers(read, deps.factory, deps.candidates);
@@ -311,75 +406,38 @@ export async function loadPositions(deps: PositionsDeps): Promise<PositionsAnswe
       { address: m.address, abi: POSITION_NFT_ABI, functionName: "balanceOf", args: [owner] },
     ]),
   );
-  let latest: bigint | null = null;
-  const notes: ManagerNote[] = [];
-  const found: Omit<Position, "symbol0" | "symbol1">[] = [];
+  let latest: Promise<bigint> | null = null;
+  const latestBlock = () => (latest ??= deps.getBlockNumber());
 
-  for (const [i, m] of managers.entries()) {
-    const enumerable = ok(probes[i * 2]) === true;
-    const balance = ok(probes[i * 2 + 1]);
-    const held = typeof balance === "bigint" ? balance : null;
-    let ids: bigint[];
-    let note: ManagerNote;
-    if (enumerable && held !== null) {
-      const count = held > BigInt(MAX_POSITIONS) ? MAX_POSITIONS : Number(held);
-      const results = await read(
-        Array.from({ length: count }, (_, k) => ({ address: m.address, abi: POSITION_NFT_ABI, functionName: "tokenOfOwnerByIndex", args: [owner, BigInt(k)] })),
-      );
-      ids = results.flatMap((r) => {
-        const id = ok(r);
-        return typeof id === "bigint" ? [id] : [];
-      });
-      note = { manager: m.address, name: m.name, source: "enumerable", complete: held <= BigInt(MAX_POSITIONS) && ids.length === count };
-    } else {
-      let fromExplorer: { ids: bigint[]; complete: boolean } | null = null;
-      if (held !== 0n && deps.apiUrl) {
-        try {
-          fromExplorer = await explorerIds(deps.fetchFn ?? fetch, deps.apiUrl, m.address, owner);
-        } catch {
-          fromExplorer = null;
-        }
+  const lists = await Promise.all(
+    managers.map(async (m, i) => {
+      const balance = ok(probes[i * 2 + 1]);
+      const held = typeof balance === "bigint" ? balance : null;
+      try {
+        return await managerPositions(deps, m, ok(probes[i * 2]) === true, held, latestBlock);
+      } catch {
+        const note: ManagerNote = { manager: m.address, name: m.name, source: "failed", complete: false, held };
+        return { note, found: [] as Found[] };
       }
-      let recent: bigint[] = [];
-      if (held !== 0n) {
-        try {
-          latest ??= await deps.getBlockNumber();
-          recent = await recentIds(deps.getLogs, latest, m.address, owner);
-        } catch {
-          recent = [];
-        }
-      }
-      const candidates = distinctDesc([...(fromExplorer?.ids ?? []), ...recent]).slice(0, MAX_POSITIONS);
-      const owners = candidates.length
-        ? await read(candidates.map((id) => ({ address: m.address, abi: POSITION_NFT_ABI, functionName: "ownerOf", args: [id] })))
-        : [];
-      ids = candidates.filter((_, k) => {
-        const who = asAddress(ok(owners[k]));
-        return who !== null && same(who, owner);
-      });
-      // The manager's own count (v4's PositionManager answers `balanceOf`) says whether every position was found: a
-      // lagging explorer, a failed one, or more than MAX_POSITIONS all leave the list short of it. Without a count,
-      // only the explorer's "no further page" makes it whole.
-      const complete = held !== null ? BigInt(ids.length) >= held : fromExplorer?.complete === true;
-      note = { manager: m.address, name: m.name, source: fromExplorer || held === 0n ? "explorer" : "recent", complete };
-    }
-    notes.push(note);
-    found.push(...(await details(read, m, distinctDesc(ids))));
-  }
-
+    }),
+  );
+  const found = lists.flatMap((l) => l.found);
   const symbols = await currencySymbols(read, found.flatMap((p) => [p.currency0, p.currency1]));
   const positions = found.map((p) => ({
     ...p,
     symbol0: symbols.get(p.currency0.toLowerCase()) ?? "?",
     symbol1: symbols.get(p.currency1.toLowerCase()) ?? "?",
   }));
-  return { managers, positions, notes };
+  return { managers, positions, notes: lists.map((l) => l.note) };
 }
 
 /** What Finder says under a manager's positions when the list may not be all of them; null when it is. */
 export function noteText(note: ManagerNote): string | null {
   if (note.complete) return null;
-  if (note.source === "enumerable") return `${note.name}: showing the first ${MAX_POSITIONS} positions.`;
+  if (note.source === "failed") return `${note.name}: your positions couldn't be read. To lock one, type its id in Vault.`;
+  if (note.held !== null && note.held > BigInt(MAX_POSITIONS)) {
+    return `${note.name}: showing the latest ${MAX_POSITIONS} of your ${note.held} positions. To lock another, type its id in Vault.`;
+  }
   if (note.source === "recent") {
     return `${note.name}: the explorer didn't answer, so only positions received in the last few minutes are listed. To lock another, type its id in Vault.`;
   }

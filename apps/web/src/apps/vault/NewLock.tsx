@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBalance } from "wagmi";
 import { getAddress, isAddress, type Address } from "viem";
@@ -15,7 +15,7 @@ import { pairText, positionIssue, positionLabel, type Position } from "@/lib/pos
 import { POSITIONS_KEY, useAllowedManagers, usePositions } from "@/lib/usePositions";
 import { CUSTODY_POSITION, CUSTODY_TOKEN } from "./copy";
 import { MANAGER_NOT_ALLOWED } from "./errors";
-import { flatFeeLine, lpFeeLine, shareFeeLine } from "./fees";
+import { flatFeeLine, lpFeeLine, raiseLine, shareFeeLine } from "./fees";
 import { runLock, type LockPlan } from "./flow";
 import { LOCKS_KEY, TOKEN_KEY, useChainClock, useFlowDeps, useLockFees, usePositionInfo, useTokenInfo } from "./hooks";
 import {
@@ -25,14 +25,14 @@ import {
   dateBounds,
   formatWhen,
   lockReserve,
-  lpSplit,
   presetUnlock,
   unlockFromDate,
   untilText,
 } from "./lockForm";
+import { lockStepText, lockedText } from "./notes";
 import { isBusy, vaultSession, type LockSummary } from "./session";
 import type { Target } from "./target";
-import { BUTTON, INPUT, PICKED } from "./ui";
+import { BUTTON, DATE_INPUT, INPUT, PICKED, invalid } from "./ui";
 
 /** What a drop or the window's params put in the form; `seq` tells two drops of the same thing apart. */
 export type Prefill = { target: Exclude<Target, { kind: "vault" }>; seq: number };
@@ -63,6 +63,21 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
   const session = useSyncExternalStore(vaultSession.subscribe, vaultSession.getSnapshot, vaultSession.getSnapshot);
   const busy = isBusy(session);
   const lock = session.lock;
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
+  // The submit button unmounts when a lock starts, the progress when it ends, the result when it is dismissed: focus
+  // moves to what took their place (the status, or the form's first control) when it was in here or fell to the page,
+  // never away from another window. Only on a change: a window reopened mid-lock keeps the focus it was given.
+  const lastStatus = useRef(lock.status);
+  useEffect(() => {
+    if (lastStatus.current === lock.status) return;
+    lastStatus.current = lock.status;
+    const active = document.activeElement;
+    if (active && active !== document.body && !rootRef.current?.contains(active)) return;
+    if (lock.status === "idle") rootRef.current?.querySelector<HTMLElement>("form button, form input")?.focus();
+    else statusRef.current?.focus();
+  }, [lock.status]);
 
   const [mode, setMode] = useState<"token" | "position">("token");
   const [tokenText, setTokenText] = useState("");
@@ -138,10 +153,18 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
       if ("error" in info.data) return setError(info.data.error);
       const a = checkAmount(amountText, info.data.decimals, info.data.balance ?? undefined);
       if (!a.ok) return setError(a.error);
-      plan = { kind: "token", token, amount: a.units, unlockAt: check.unlockAt };
-      // An LP token's vault receives the amount less ArcOS's share: the result says what is in the vault.
-      const held = info.data.pair ? lpSplit(a.units, fees.data.lpBps).toVault : a.units;
-      summary = { kind: "token", label: `${displayUnits(held, info.data.decimals, "down")} ${info.data.symbol}`, unlockAt: check.unlockAt };
+      const { symbol, decimals } = info.data;
+      plan = { kind: "token", token, amount: a.units, unlockAt: check.unlockAt, pair: !!info.data.pair };
+      // The approval is for the whole amount, as the wallet shows it; what reaches the vault (less an LP token's share,
+      // or a token's own cut) comes from the factory's event once the lock is mined.
+      summary = {
+        kind: "token",
+        label: `${displayUnits(a.units, decimals, "down")} ${symbol}`,
+        approval: `${formatTokenAmount(a.units, decimals)} ${symbol}`,
+        unlockAt: check.unlockAt,
+        fee: fees.data.flat,
+        token: { symbol, decimals },
+      };
     } else {
       if (!manager || tokenId === null) return setError("Pick a position, or type its id.");
       const p = position.data;
@@ -152,11 +175,14 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
       const issue = positionIssue(p.position);
       if (issue) return setError(issue);
       plan = { kind: "position", manager, tokenId, unlockAt: check.unlockAt };
-      summary = { kind: "position", label: positionLabel(p.position), unlockAt: check.unlockAt };
+      const label = positionLabel(p.position);
+      summary = { kind: "position", label, approval: label, unlockAt: check.unlockAt, fee: fees.data.flat };
     }
     if (native.data && native.data.value < fees.data.flat) return setError(INSUFFICIENT_FUNDS_ERROR);
-    const fee = fees.data.flat;
-    const run = vaultSession.startLock(summary, (onStep) => runLock(plan, factory, fee, deps, onStep));
+    // The fees as the form shows them: runLock reads them again before each wallet step and stops if one this lock pays
+    // has changed.
+    const shown = { flat: fees.data.flat, lpBps: fees.data.lpBps, shareBps: fees.data.shareBps };
+    const run = vaultSession.startLock(summary, (onStep) => runLock(plan, factory, shown, deps, onStep));
     if (!run) return;
     void run.finally(() => {
       // Gas is spent whatever the outcome: every balance, list and allowance shown is read again.
@@ -165,45 +191,42 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
     });
   };
 
+  // What the visitor hears: one live region, always mounted, says each step and the outcome (a region mounted along
+  // with its text is often not read out).
+  let live = "";
+  let status: ReactNode = null;
   if (lock.status === "running") {
     const { summary, step, sent } = lock;
-    const text =
-      step === "approve"
-        ? sent
-          ? "Waiting for the approval to confirm…"
-          : `Approve ${summary.label} for the vault factory in your wallet…`
-        : sent
-          ? "Waiting for the lock to confirm…"
-          : `Confirm the lock in your wallet. It sends the ${fees.data ? displayWei(fees.data.flat, "up") : ""} USDC fee.`;
-    return (
-      <div className="grid gap-2" role="status" aria-live="polite">
-        <p className="font-medium">{`Locking ${summary.label} until ${formatWhen(summary.unlockAt)}`}</p>
+    const heading = `Locking ${summary.label} until ${formatWhen(summary.unlockAt)}`;
+    const text = lockStepText(summary, step, sent);
+    live = `${heading}. ${text}`;
+    status = (
+      <div className="grid gap-2 outline-none" ref={statusRef} tabIndex={-1}>
+        <p className="font-medium">{heading}</p>
         <p>{text}</p>
         <p className="text-xs text-muted">Keep this tab open until it finishes. You can close this window; the lock continues.</p>
       </div>
     );
-  }
-
-  if (lock.status === "done") {
+  } else if (lock.status === "done") {
     const { outcome, summary } = lock;
     if (outcome.result === "locked") {
-      return (
-        <div className="grid gap-3" role="status">
+      const text = lockedText(summary, outcome);
+      live = `Locked. ${text}`;
+      status = (
+        <div className="grid gap-3 outline-none" ref={statusRef} tabIndex={-1}>
           <p className="text-base font-medium">Locked</p>
-          <p>{`${summary.label} is in its vault until ${formatWhen(summary.unlockAt)}.`}</p>
+          <p>{text}</p>
           <p className="text-xs">
             {"Vault "}
             <a className="font-mono text-accent-text underline" href={explorerUrl("address", outcome.vault)} target="_blank" rel="noopener noreferrer">
               {outcome.vault}
             </a>
           </p>
-          {outcome.hash && (
-            <p className="text-xs">
-              <a className="text-accent-text underline" href={explorerUrl("tx", outcome.hash)} target="_blank" rel="noopener noreferrer">
-                View the transaction on the explorer
-              </a>
-            </p>
-          )}
+          <p className="text-xs">
+            <a className="text-accent-text underline" href={explorerUrl("tx", outcome.hash)} target="_blank" rel="noopener noreferrer">
+              View the transaction on the explorer
+            </a>
+          </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={BUTTON} onClick={onShowLocks}>
               See Your locks
@@ -214,39 +237,39 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
           </div>
         </div>
       );
-    }
-    return (
-      <div className="grid gap-3">
-        <p className="text-danger-text" role="alert">
-          {outcome.message}
-        </p>
-        {outcome.hash && (
-          <p className="text-xs">
-            <a className="text-accent-text underline" href={explorerUrl("tx", outcome.hash)} target="_blank" rel="noopener noreferrer">
-              View the transaction on the explorer
-            </a>
-          </p>
-        )}
-        {outcome.result === "failed" && outcome.approvalLeft && (
-          <p className="text-xs text-muted">
-            {"The approval you gave the vault factory is still set. "}
-            <button type="button" className="text-accent-text underline" onClick={() => open("revoke")}>
-              Revoke can remove it.
-            </button>
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {outcome.result === "unconfirmed" && (
-            <button type="button" className={BUTTON} onClick={onShowLocks}>
-              See Your locks
-            </button>
+    } else {
+      live = outcome.message;
+      status = (
+        <div className="grid gap-3 outline-none" ref={statusRef} tabIndex={-1}>
+          <p className="text-danger-text">{outcome.message}</p>
+          {outcome.hash && (
+            <p className="text-xs">
+              <a className="text-accent-text underline" href={explorerUrl("tx", outcome.hash)} target="_blank" rel="noopener noreferrer">
+                View the transaction on the explorer
+              </a>
+            </p>
           )}
-          <button type="button" className={BUTTON} onClick={() => vaultSession.dismissLock()}>
-            {outcome.result === "unconfirmed" ? "I checked. Start a new lock" : "Try again"}
-          </button>
+          {outcome.result === "failed" && outcome.approvalLeft && (
+            <p className="text-xs text-muted">
+              {"The approval you gave the vault factory is still set. "}
+              <button type="button" className="text-accent-text underline" onClick={() => open("revoke")}>
+                Revoke can remove it.
+              </button>
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {outcome.result === "unconfirmed" && (
+              <button type="button" className={BUTTON} onClick={onShowLocks}>
+                See Your locks
+              </button>
+            )}
+            <button type="button" className={BUTTON} onClick={() => vaultSession.dismissLock()}>
+              {outcome.result === "unconfirmed" ? "I checked. Start a new lock" : "Try again"}
+            </button>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
   }
 
   const fee = fees.data;
@@ -254,7 +277,44 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
   const positionShown = p && p !== "not-yours" ? p : null;
   const picked = (x: Position) => manager !== null && x.manager.toLowerCase() === manager.toLowerCase() && tokenId !== null && x.tokenId === tokenId.toString();
 
-  return (
+  // Each field's own message, which it points at when it is invalid.
+  const tokenError =
+    tokenText.trim() !== "" && !token
+      ? "That isn't an address."
+      : info.data && "error" in info.data
+        ? info.data.error
+        : token && info.isError
+          ? "Couldn't read this token. Try again."
+          : null;
+  const amountError = amount && !amount.ok ? amount.error : null;
+  const managerError =
+    effectiveSel === OTHER && otherManager.trim() !== "" && !manager
+      ? "That isn't an address."
+      : position.data && !position.data.manager
+        ? MANAGER_NOT_ALLOWED
+        : null;
+  const idError =
+    idText.trim() !== "" && tokenId === null
+      ? "A position id is a whole number."
+      : position.isError
+        ? "Couldn't read this position. Try again."
+        : position.data?.manager && position.data.position === null
+          ? "There is no position with that id."
+          : position.data?.position === "not-yours"
+            ? "This position belongs to another wallet."
+            : positionShown
+              ? positionIssue(positionShown)
+              : null;
+  // A raise scheduled on a fee this lock would pay: said before the wallet opens.
+  const raises = fee
+    ? [
+        raiseLine("flat", fee.pending.flat, fee.flat, now),
+        mode === "token" && tokenData?.pair ? raiseLine("lp", fee.pending.lpBps, fee.lpBps, now) : null,
+        mode === "position" ? raiseLine("share", fee.pending.shareBps, fee.shareBps, now) : null,
+      ].filter((t): t is string => t !== null)
+    : [];
+
+  const form = (
     <form onSubmit={submit} className="grid gap-4" noValidate>
       <div className="inline-flex w-fit rounded-md border border-border-2 p-0.5" role="group" aria-label="What to lock">
         {(["token", "position"] as const).map((m) => (
@@ -282,13 +342,16 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
               placeholder="0x…"
               spellCheck={false}
               autoComplete="off"
+              {...invalid(ids.token, tokenError)}
               onChange={(e) => set(setTokenText)(e.target.value)}
             />
           </label>
-          {tokenText.trim() !== "" && !token && <p className="text-xs text-danger-text">{"That isn't an address."}</p>}
+          {tokenError && (
+            <p className="text-xs text-danger-text" id={`${ids.token}-error`}>
+              {tokenError}
+            </p>
+          )}
           {token && info.isPending && <p className="text-xs text-muted">Reading the token…</p>}
-          {token && info.isError && <p className="text-xs text-danger-text">{"Couldn't read this token. Try again."}</p>}
-          {info.data && "error" in info.data && <p className="text-xs text-danger-text">{info.data.error}</p>}
           {tokenData && (
             <>
               <p className="text-xs">
@@ -306,7 +369,7 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
                     inputMode="decimal"
                     placeholder="0"
                     autoComplete="off"
-                    aria-invalid={amount !== null && !amount.ok}
+                    {...invalid(ids.amount, amountError)}
                     onChange={(e) => set(setAmountText)(e.target.value)}
                   />
                 </label>
@@ -316,10 +379,15 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
                     max={{ reserveUnits: lockReserve(tokenData.address, fee?.flat) }}
                     decimals={tokenData.decimals}
                     symbol={tokenData.symbol}
+                    rounded
                     onMax={(text) => set(setAmountText)(text)}
                   />
                 )}
-                {amount && !amount.ok && <p className="text-xs text-danger-text">{amount.error}</p>}
+                {amountError && (
+                  <p className="text-xs text-danger-text" id={`${ids.amount}-error`}>
+                    {amountError}
+                  </p>
+                )}
               </div>
             </>
           )}
@@ -345,6 +413,7 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
                 id={ids.manager}
                 className={`${INPUT} font-sans`}
                 value={effectiveSel}
+                {...(effectiveSel === OTHER ? {} : invalid(ids.manager, managerError))}
                 onChange={(e) => set(setManagerSel)(e.target.value)}
               >
                 {(allowed.data ?? []).map((m) => (
@@ -364,6 +433,7 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
                 inputMode="numeric"
                 placeholder="123456"
                 autoComplete="off"
+                {...invalid(ids.id, idError)}
                 onChange={(e) => set(setIdText)(e.target.value)}
               />
             </label>
@@ -378,23 +448,28 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
                 placeholder="0x…"
                 spellCheck={false}
                 autoComplete="off"
+                {...invalid(ids.other, managerError)}
                 onChange={(e) => set(setOtherManager)(e.target.value)}
               />
             </label>
           )}
-          {idText.trim() !== "" && tokenId === null && <p className="text-xs text-danger-text">A position id is a whole number.</p>}
+          {managerError && (
+            <p className="text-xs text-danger-text" id={`${effectiveSel === OTHER ? ids.other : ids.manager}-error`}>
+              {managerError}
+            </p>
+          )}
           {manager && tokenId !== null && position.isPending && <p className="text-xs text-muted">Reading the position…</p>}
-          {position.isError && <p className="text-xs text-danger-text">{"Couldn't read this position. Try again."}</p>}
-          {position.data && !position.data.manager && <p className="text-xs text-danger-text">{MANAGER_NOT_ALLOWED}</p>}
-          {position.data?.manager && position.data.position === null && <p className="text-xs text-danger-text">There is no position with that id.</p>}
-          {position.data?.position === "not-yours" && <p className="text-xs text-danger-text">This position belongs to another wallet.</p>}
           {positionShown && (
             <p className="text-xs">
               <span className="font-medium">{positionLabel(positionShown)}</span>
               {` · ${pairText(positionShown)}`}
             </p>
           )}
-          {positionShown && positionIssue(positionShown) && <p className="text-xs text-danger-text">{positionIssue(positionShown)}</p>}
+          {idError && (
+            <p className="text-xs text-danger-text" id={`${ids.id}-error`}>
+              {idError}
+            </p>
+          )}
         </div>
       )}
 
@@ -418,10 +493,11 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
           <input
             id={ids.date}
             type="date"
-            className="min-h-8 rounded-md border border-border-2 bg-surface px-2 text-xs pointer-coarse:min-h-11"
+            className={DATE_INPUT}
             min={bounds.min}
             max={bounds.max}
             value={when?.kind === "date" ? when.value : ""}
+            {...invalid(ids.date, when?.kind === "date" && !unlock.ok ? unlock.error : null)}
             onChange={(e) => set(setWhen)(e.target.value ? { kind: "date", value: e.target.value } : null)}
           />
         </div>
@@ -429,7 +505,9 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
           (unlock.ok ? (
             <p className="text-xs">{`Unlocks ${formatWhen(unlock.unlockAt)} (${untilText(unlock.unlockAt, now)}).`}</p>
           ) : (
-            <p className="text-xs text-danger-text">{unlock.error}</p>
+            <p className="text-xs text-danger-text" id={`${ids.date}-error`}>
+              {unlock.error}
+            </p>
           ))}
       </fieldset>
 
@@ -439,6 +517,11 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
           <p>{lpFeeLine(fee.lpBps, amount?.ok ? amount.units : null, tokenData.decimals, tokenData.symbol)}</p>
         )}
         {fee && mode === "position" && <p>{shareFeeLine(fee.shareBps)}</p>}
+        {raises.map((text) => (
+          <p key={text} className="text-accent-3-text">
+            {text}
+          </p>
+        ))}
         {fee && mode === "token" && tokenData?.allowance !== null && tokenData?.allowance !== undefined && amount?.ok && tokenData.allowance < amount.units && (
           <p className="text-muted">{`Your wallet asks twice: first to approve exactly ${formatTokenAmount(amount.units, tokenData.decimals)} ${tokenData.symbol}, then to lock.`}</p>
         )}
@@ -455,6 +538,15 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
         {busy ? "Another Vault transaction is under way…" : `Lock · ${fee ? displayWei(fee.flat, "up") : "…"} USDC`}
       </button>
     </form>
+  );
+
+  return (
+    <div ref={rootRef}>
+      <p className="sr-only" role="status" aria-live="polite">
+        {live}
+      </p>
+      {status ?? form}
+    </div>
   );
 }
 

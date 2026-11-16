@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, toFunctionSelector } from "viem";
-import { V2_PAIR_CALLS, bpsText, flatFeeLine, isV2PairShape, lpFeeLine, shareFeeLine } from "../fees";
+import { V2_PAIR_CALLS, asPending, bpsText, flatFeeLine, isV2PairShape, lpFeeLine, raiseLine, shareFeeLine } from "../fees";
 
 const word = encodeAbiParameters([{ type: "address" }], ["0x1111111111111111111111111111111111111111"]);
 const reserves = encodeAbiParameters([{ type: "uint112" }, { type: "uint112" }, { type: "uint32" }], [1n, 2n, 3]);
@@ -57,5 +57,42 @@ describe("the fee lines", () => {
 
   it("says a position's share comes out of collected fees only", () => {
     expect(shareFeeLine(200n)).toBe("ArcOS keeps 2% of the trading fees you collect from the vault. The position itself is not charged.");
+  });
+});
+
+describe("a raise the FeeController has scheduled", () => {
+  const NOW = 1_800_000_000;
+
+  it("reads pendingOf: nothing is scheduled while effectiveAt is 0", () => {
+    expect(asPending([100n, 1_800_172_800n])).toEqual({ value: 100n, effectiveAt: 1_800_172_800 });
+    expect(asPending([0n, 0n])).toBeNull();
+    expect(asPending(undefined)).toBeNull();
+    expect(asPending(["1", 2n])).toBeNull();
+  });
+
+  it("warns on the form before the raise is due, with the time anyone may apply it from", () => {
+    expect(raiseLine("lp", { value: 100n, effectiveAt: 1_802_584_639 }, 50n, NOW)).toBe(
+      "ArcOS's share of an LP token lock can rise to 1% from 14 Feb 2027, 05:57 UTC.",
+    );
+    expect(raiseLine("share", { value: 500n, effectiveAt: 1_802_584_639 }, 200n, NOW)).toBe(
+      "ArcOS's share of collected fees can rise to 5% from 14 Feb 2027, 05:57 UTC. A vault keeps the share it was made with.",
+    );
+    expect(raiseLine("flat", { value: 40n * 10n ** 18n, effectiveAt: 1_802_584_639 }, 30n * 10n ** 18n, NOW)).toBe(
+      "The lock fee can rise to 40 USDC from 14 Feb 2027, 05:57 UTC.",
+    );
+  });
+
+  it("says a raise that is due can land at any moment, before this lock is mined too", () => {
+    expect(raiseLine("lp", { value: 100n, effectiveAt: NOW }, 50n, NOW)).toBe(
+      "ArcOS's share of an LP token lock can rise to 1% at any moment: the raise is due, and anyone can apply it.",
+    );
+    expect(raiseLine("flat", { value: 40n * 10n ** 18n, effectiveAt: NOW - 1 }, 30n * 10n ** 18n, NOW)).toBe(
+      "The lock fee can rise to 40 USDC at any moment: the raise is due, and anyone can apply it. If it rises before this lock is mined, the lock fails and only gas is spent.",
+    );
+  });
+
+  it("says nothing without a raise", () => {
+    expect(raiseLine("lp", null, 50n, NOW)).toBeNull();
+    expect(raiseLine("lp", { value: 50n, effectiveAt: NOW + 1 }, 50n, NOW)).toBeNull();
   });
 });

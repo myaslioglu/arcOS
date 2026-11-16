@@ -30,6 +30,7 @@ const state = vi.hoisted(() => ({
   now: 0,
   opened: [] as Array<[string, Record<string, string> | undefined]>,
   dragged: [] as unknown[],
+  pending: { flat: null, lpBps: null, shareBps: null } as Record<string, unknown>,
 }));
 
 vi.mock("wagmi", () => ({
@@ -57,7 +58,11 @@ vi.mock("../hooks", () => ({
   LOCKS_KEY: "vault-locks",
   TOKEN_KEY: "vault-token",
   useChainClock: () => ({ now: state.now, fromChain: true, at: () => state.now }),
-  useLockFees: () => ({ data: { feeController: "0x72F853E9E202600c5017B5A060168603c3ed7368", flat: 30n * 10n ** 18n, lpBps: 50n, shareBps: 200n }, isError: false, refetch: async () => undefined }),
+  useLockFees: () => ({
+    data: { feeController: "0x72F853E9E202600c5017B5A060168603c3ed7368", flat: 30n * 10n ** 18n, lpBps: 50n, shareBps: 200n, pending: state.pending },
+    isError: false,
+    refetch: async () => undefined,
+  }),
   useFlowDeps: () => ({ fake: "deps" }),
   useTokenInfo: (token: string | null) => (token ? { isPending: false, isError: false, data: state.token } : { isPending: false, isError: false, data: undefined }),
   usePositionInfo: (manager: string | null) => (manager ? { isPending: false, isError: false, data: state.position } : { isPending: false, data: undefined }),
@@ -85,7 +90,9 @@ async function mount(params: Record<string, string> = {}) {
   root = createRoot(host);
   await act(async () => root.render(createElement(VaultWindow, { winId: "w-1", params })));
 }
-const panel = (name: "New lock" | "Your locks") => host.querySelector<HTMLElement>(`[role=tabpanel][aria-labelledby=vault-tab-${name === "New lock" ? "new" : "locks"}]`)!;
+const panel = (name: "New lock" | "Your locks") => host.querySelector<HTMLElement>(`section[aria-label="${name}"]`)!;
+/** The section the window shows: the pressed one of its two toggles. */
+const pressedSection = () => host.querySelector('[role=group][aria-label="Vault sections"] button[aria-pressed=true]')?.textContent;
 const buttons = (scope: ParentNode = host) => [...scope.querySelectorAll("button")];
 const button = (text: string | RegExp, scope: ParentNode = host) =>
   buttons(scope).find((b) => (typeof text === "string" ? b.textContent === text : text.test(b.textContent ?? "")))!;
@@ -144,6 +151,7 @@ beforeEach(() => {
   state.locksArgs = [];
   state.opened = [];
   state.dragged = [];
+  state.pending = { flat: null, lpBps: null, shareBps: null };
   runLock.mockClear();
   runAction.mockClear();
   vaultSession.forget();
@@ -157,7 +165,8 @@ afterEach(async () => {
 describe("the window", () => {
   it("opens on New lock, says the contracts aren't audited, and says what custody means", async () => {
     await mount();
-    expect(host.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("New lock");
+    expect(pressedSection()).toBe("New lock");
+    expect(panel("Your locks").hidden).toBe(true);
     expect(host.textContent).toContain("Not audited yet. These vault contracts run on testnet until their audit is done.");
     expect(panel("New lock").textContent).toContain("The tokens sit in a vault contract. Only the vault's owner can take them out, and only after the unlock date.");
   });
@@ -170,7 +179,7 @@ describe("the window", () => {
 
   it("opens Your locks with a vault from its params or a dropped lock, and reads that vault too", async () => {
     await mount({ vault: VAULT });
-    expect(host.querySelector("[role=tab][aria-selected=true]")?.textContent).toBe("Your locks");
+    expect(pressedSection()).toBe("Your locks");
     expect(state.locksArgs.at(-1)?.[2]).toEqual([VAULT]);
     await act(async () => state.drop!({ kind: "lock", address: P_VAULT }));
     expect(state.locksArgs.at(-1)?.[2]).toEqual([VAULT, P_VAULT]);
@@ -194,14 +203,56 @@ describe("New lock", () => {
     await settle();
     expect(runLock).toHaveBeenCalledTimes(1);
     expect(runLock.mock.calls[0]).toEqual([
-      { kind: "token", token: TOKEN, amount: 1_000_500_000_000_000_000_000n, unlockAt: NOW + 90 * DAY },
+      { kind: "token", token: TOKEN, amount: 1_000_500_000_000_000_000_000n, unlockAt: NOW + 90 * DAY, pair: false },
       FACTORY,
-      FEE,
+      { flat: FEE, lpBps: 50n, shareBps: 200n },
       { fake: "deps" },
       expect.any(Function),
     ]);
     expect(panel("New lock").textContent).toContain("Locked");
     expect(panel("New lock").textContent).toContain(`Vault ${VAULT}`);
+  });
+
+  it("says each step in one live region that is always there, and moves focus to the status when the form goes", async () => {
+    let finish!: (outcome: unknown) => void;
+    runLock.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    await mount({ token: TOKEN });
+    const live = panel("New lock").querySelector<HTMLElement>("[role=status][aria-live=polite]")!;
+    expect(live.textContent).toBe("");
+    await type(input("Amount"), "1000");
+    await click(button("30 days"));
+    await click(button(/^Lock · 30 USDC$/));
+    expect(panel("New lock").querySelector("[role=status][aria-live=polite]")).toBe(live);
+    expect(live.textContent).toMatch(/^Locking 1,000 VTB until .+ UTC\. Checking the fee and the approval…$/);
+    expect(document.activeElement?.textContent).toContain("Checking the fee and the approval…");
+    await act(async () => finish({ result: "locked", vault: VAULT, hash: "0x01", amount: 995n * 10n ** 18n }));
+    expect(live.textContent).toMatch(/^Locked\. 995 VTB is in its vault until .+ UTC\.$/);
+    expect(document.activeElement?.textContent).toContain("995 VTB is in its vault");
+    await click(button("Lock something else"));
+    expect(live.textContent).toBe("");
+    expect(document.activeElement?.tagName).toBe("BUTTON");
+  });
+
+  it("points an invalid field at its message", async () => {
+    await mount();
+    await type(input("Token address"), "0x12");
+    const field = input("Token address");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(field.getAttribute("aria-describedby")!)?.textContent).toBe("That isn't an address.");
+    await type(input("Token address"), TOKEN);
+    expect(input("Token address").hasAttribute("aria-invalid")).toBe(false);
+  });
+
+  it("warns before the wallet opens about a raise of a fee this lock pays", async () => {
+    state.pending = { flat: null, lpBps: { value: 100n, effectiveAt: NOW - 1 }, shareBps: { value: 500n, effectiveAt: NOW + 2 * DAY } };
+    state.position = {
+      manager: { address: MANAGER, name: "Uniswap v4", kind: "v4" },
+      position: { ...positionLock, managerName: "Uniswap v4", kind: "v4", tokenId: "7", fee: 3000, owed: false, hooks: null },
+    };
+    await mount({ manager: MANAGER, tokenId: "7" });
+    // A position pays the share of collected fees, not the LP share.
+    expect(panel("New lock").textContent).toContain("ArcOS's share of collected fees can rise to 5% from ");
+    expect(panel("New lock").textContent).not.toContain("LP token lock can rise");
   });
 
   it("says what is missing instead of locking: no date, no amount, more than the balance", async () => {
@@ -302,7 +353,20 @@ describe("Your locks", () => {
     expect(row.textContent).toContain("Handing to 0x7e57…0002: waiting for them to accept.");
     await click(button("Cancel the handover", row));
     await settle();
-    expect(runAction).toHaveBeenLastCalledWith(expect.objectContaining({ vault: VAULT }), { kind: "transfer", to: "0x0000000000000000000000000000000000000000" }, { fake: "deps" }, expect.any(Function));
+    expect(runAction).toHaveBeenLastCalledWith(expect.objectContaining({ vault: VAULT }), { kind: "cancel" }, { fake: "deps" }, expect.any(Function));
+    expect(rowOf("1,000 VTB").textContent).toContain("Handover cancelled. The vault stays yours.");
+  });
+
+  it("points the new owner's field at what is wrong with it", async () => {
+    state.locks = { locks: [tokenLock], registered: 1, readFromRegistry: 1, notVaults: [] };
+    await mount({ vault: VAULT });
+    const row = rowOf("1,000 VTB");
+    await click(button("Transfer", row));
+    await type(input("New owner", row), "0x0000000000000000000000000000000000000000");
+    await click(button("Start the handover", row));
+    const field = input("New owner", row);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(field.getAttribute("aria-describedby")!)?.textContent).toBe("The new owner can't be the zero address.");
   });
 
   it("offers Accept for a vault being handed to the wallet, and nothing for one it has no part in", async () => {

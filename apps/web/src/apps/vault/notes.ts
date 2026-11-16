@@ -1,25 +1,56 @@
 import { isAddress, zeroAddress } from "viem";
-import { displayUnits } from "@/lib/display-amount";
+import { displayUnits, displayWei } from "@/lib/display-amount";
 import { shortAddress } from "@/lib/format";
-import type { ActionOutcome, Collected } from "./flow";
+import type { ActionOutcome, Collected, LockOutcome, VaultAction } from "./flow";
 import { formatWhen } from "./lockForm";
 import type { Lock, PositionLock } from "./locks";
-import type { ActionKind } from "./session";
+import type { LockRunStep, LockSummary } from "./session";
 
-/** What Your locks says after an action, and what it checks before one. Pure. */
+/** What Vault says while a lock runs and once it is done, and what Your locks says after an action. Pure. */
 
-/** What a finished action says on its row. */
-export function noteText(kind: ActionKind, outcome: ActionOutcome, lock: Lock | undefined): string {
+/** What a running lock is waiting for, step by step. */
+export function lockStepText(summary: LockSummary, step: LockRunStep, sent: boolean): string {
+  switch (step) {
+    case "check":
+      return "Checking the fee and the approval…";
+    case "approve":
+      if (sent) return "Waiting for the approval to confirm…";
+      return summary.kind === "token"
+        ? `Approve exactly ${summary.approval} for the vault factory in your wallet…`
+        : `Approve ${summary.approval} for the vault factory in your wallet…`;
+    case "lock":
+      return sent ? "Waiting for the lock to confirm…" : `Confirm the lock in your wallet. It sends the ${displayWei(summary.fee, "up")} USDC fee.`;
+    case "find":
+      return "Your wallet answered with an error. Looking for the lock on chain, for up to a minute…";
+  }
+}
+
+/**
+ * What a finished lock holds: for a token, what reached the vault as the factory's event reports it (less an LP
+ * token's share, or a token's own cut on transfer), rounded down; for a position, the position.
+ */
+export function lockedText(summary: LockSummary, outcome: Extract<LockOutcome, { result: "locked" }>): string {
+  const what = summary.token && outcome.amount !== undefined ? `${displayUnits(outcome.amount, summary.token.decimals, "down")} ${summary.token.symbol}` : summary.label;
+  return `${what} is in its vault until ${formatWhen(summary.unlockAt)}.`;
+}
+
+/**
+ * What a finished action says on its row. An extend's new date is the one it was sent with, which the vault's event
+ * confirmed (flow.ts's actionHappened): the list may still show the old one until it is read again.
+ */
+export function noteText(action: VaultAction, outcome: ActionOutcome, lock: Lock | undefined): string {
   if (outcome.result !== "done") return outcome.message;
-  switch (kind) {
+  switch (action.kind) {
     case "extend":
-      return lock ? `Extended. It now unlocks ${formatWhen(lock.unlockAt)}.` : "Extended.";
+      return `Extended. It now unlocks ${formatWhen(action.unlockAt)}.`;
     case "collect":
       return collectedText(outcome.collected, lock?.kind === "position" ? lock : null);
     case "withdraw":
       return lock?.kind === "position" ? "Withdrawn. The position is back in your wallet." : "Withdrawn to your wallet.";
     case "transfer":
-      return "Done. The new owner can now accept it in Vault.";
+      return `Done. ${shortAddress(action.to)} can now accept it in Vault.`;
+    case "cancel":
+      return "Handover cancelled. The vault stays yours.";
     case "accept":
       return "You now own this vault.";
   }

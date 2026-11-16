@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { getAddress, isAddress, zeroAddress, type Address } from "viem";
+import { getAddress, isAddress, type Address } from "viem";
 import { activeNetwork, explorerUrl } from "@arcos/chain";
 import { dragSourceProps } from "@arcos/shell";
 import { notifyBalanceChanged } from "@/lib/balance-refresh";
@@ -18,7 +18,7 @@ import { groupLocks, isEmpty, isUnlocked, lockDragItem, lockTitle, proofTokens, 
 import { forgetVault, rememberVault, rememberedSnapshot, subscribeRemembered } from "./remembered";
 import { noteText, transferIssue } from "./notes";
 import { isBusy, vaultSession, type ActionKind, type ActionNote } from "./session";
-import { BUTTON, INPUT, LINK, PICKED } from "./ui";
+import { BUTTON, DATE_INPUT, INPUT, LINK, PICKED, invalid } from "./ui";
 
 
 const NONE: readonly Address[] = [];
@@ -60,7 +60,7 @@ export function LockList({ factory, wallet, opened, onOpen }: Props) {
 
   const act = (lock: Lock, action: VaultAction) => {
     if (!deps || busy) return;
-    const run = vaultSession.startAction(lock.vault, action.kind, (onSent) => runAction(lock, action, deps, onSent));
+    const run = vaultSession.startAction(lock.vault, action, (onSent) => runAction(lock, action, deps, onSent));
     if (!run) return;
     void run.then((outcome) => {
       if (outcome.result === "done" && action.kind === "accept") rememberVault(network, wallet, lock.vault);
@@ -123,7 +123,7 @@ export function LockList({ factory, wallet, opened, onOpen }: Props) {
           <ul className="grid gap-2">{rows(groups.incoming, "incoming")}</ul>
         </section>
       )}
-      <section className="grid gap-2" aria-label="Your locks">
+      <section className="grid gap-2" aria-label="Active locks">
         {groups && groups.owner.length > 0 ? (
           <ul className="grid gap-2">{rows(groups.owner, "owner")}</ul>
         ) : (
@@ -185,7 +185,7 @@ function OpenForm({ onOpen }: { onOpen: (vault: Address) => void }) {
           placeholder="0x…"
           spellCheck={false}
           autoComplete="off"
-          aria-invalid={bad}
+          {...invalid(id, bad ? "That isn't an address." : null)}
           onChange={(e) => {
             setText(e.target.value);
             setBad(false);
@@ -196,7 +196,7 @@ function OpenForm({ onOpen }: { onOpen: (vault: Address) => void }) {
         </button>
       </div>
       {bad && (
-        <p className="text-xs text-danger-text" role="alert">
+        <p className="text-xs text-danger-text" role="alert" id={`${id}-error`}>
           {"That isn't an address."}
         </p>
       )}
@@ -277,8 +277,8 @@ function LockRow({ lock, role, now, busy, running, note, onAct, nowAt }: RowProp
       {mine && lock.pendingOwner && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span>{`Handing to ${shortAddress(lock.pendingOwner)}: waiting for them to accept.`}</span>
-          <button type="button" className={BUTTON} disabled={busy} onClick={() => onAct({ kind: "transfer", to: zeroAddress })}>
-            {waiting("transfer") ?? "Cancel the handover"}
+          <button type="button" className={BUTTON} disabled={busy} onClick={() => onAct({ kind: "cancel" })}>
+            {waiting("cancel") ?? "Cancel the handover"}
           </button>
         </div>
       )}
@@ -338,7 +338,7 @@ function LockRow({ lock, role, now, busy, running, note, onAct, nowAt }: RowProp
 
       {note && (
         <p className={`text-xs ${note.outcome.result === "done" ? "text-accent-2-text" : "text-danger-text"}`} role={note.outcome.result === "done" ? "status" : "alert"}>
-          {noteText(note.kind, note.outcome, lock)}{" "}
+          {noteText(note.action, note.outcome, lock)}{" "}
           {note.outcome.hash && (
             <a className={LINK} href={explorerUrl("tx", note.outcome.hash)} target="_blank" rel="noopener noreferrer">
               View the transaction
@@ -405,17 +405,25 @@ function ExtendPanel({ lock, now, busy, onExtend, nowAt }: { lock: Lock; now: nu
             <input
               id={id}
               type="date"
-              className="min-h-8 rounded-md border border-border-2 bg-surface px-2 text-xs pointer-coarse:min-h-11"
+              className={DATE_INPUT}
               min={bounds.min}
               max={bounds.max}
               value={choice?.kind === "date" ? choice.value : ""}
+              {...invalid(id, choice?.kind === "date" && check && !check.ok ? check.error : null)}
               onChange={(e) => {
                 setChoice(e.target.value ? { kind: "date", value: e.target.value } : null);
                 setError(null);
               }}
             />
           </div>
-          {check && (check.ok ? <p className="text-xs">{`New unlock date: ${formatWhen(check.unlockAt)}.`}</p> : <p className="text-xs text-danger-text">{check.error}</p>)}
+          {check &&
+            (check.ok ? (
+              <p className="text-xs">{`New unlock date: ${formatWhen(check.unlockAt)}.`}</p>
+            ) : (
+              <p className="text-xs text-danger-text" id={`${id}-error`}>
+                {check.error}
+              </p>
+            ))}
           <p className="text-xs text-faint">A lock can only get longer. The new date must be later than the current one, and at most 10 years from now.</p>
           {error && (
             <p className="text-xs text-danger-text" role="alert">
@@ -466,6 +474,7 @@ function TransferPanel({ lock, busy, onTransfer }: { lock: Lock; busy: boolean; 
         placeholder="0x…"
         spellCheck={false}
         autoComplete="off"
+        {...invalid(id, error)}
         onChange={(e) => {
           setText(e.target.value);
           setError(null);
@@ -474,7 +483,7 @@ function TransferPanel({ lock, busy, onTransfer }: { lock: Lock; busy: boolean; 
       <p className="text-xs text-faint">{TRANSFER_NOTE}</p>
       <p className="break-all font-mono text-[11px] text-muted">{lock.vault}</p>
       {error && (
-        <p className="text-xs text-danger-text" role="alert">
+        <p className="text-xs text-danger-text" role="alert" id={`${id}-error`}>
           {error}
         </p>
       )}

@@ -203,8 +203,10 @@ describe("Max", () => {
 });
 
 describe("dates in words", () => {
-  it("formats an unlock time with its date and time", () => {
-    expect(formatWhen(1_802_584_639, "UTC")).toBe("Feb 14, 2027, 5:57 AM");
+  it("formats an unlock time in UTC, with the zone, as Vesting does", () => {
+    expect(formatWhen(1_802_584_639)).toBe("14 Feb 2027, 05:57 UTC");
+    expect(formatWhen(1_900_000_000)).toBe("17 Mar 2030, 17:46 UTC");
+    expect(formatWhen(Number.NaN)).toBe("?");
   });
 
   it("says how long until a time", () => {
