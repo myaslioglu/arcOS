@@ -117,7 +117,69 @@ function isInsufficientFunds(err: unknown): boolean {
   return false;
 }
 
-type ErrorFormatter = (args: readonly unknown[]) => string;
+/**
+ * Errors that show a write never left the wallet, by name (viem's and wagmi's error classes): the app or the wallet
+ * stopped it first. A wrong network, no account or no connection, a balance too low or fees the node turns down, or
+ * the wallet's own gas estimate reverting. Not viem's ContractFunctionRevertedError by its name alone: writeContract
+ * builds one from any -32603 "internal error" a wallet answers, a lost reply included (see `wasNotSent`).
+ */
+const NOT_SENT_NAMES = new Set([
+  // viem
+  "AccountNotFoundError",
+  "ChainMismatchError",
+  "ChainNotFoundError",
+  "ClientChainNotConfiguredError",
+  "InvalidChainIdError",
+  "InsufficientFundsError",
+  "ExecutionRevertedError",
+  "FeeCapTooHighError",
+  "FeeCapTooLowError",
+  "TipAboveFeeCapError",
+  "IntrinsicGasTooHighError",
+  "IntrinsicGasTooLowError",
+  // wagmi
+  "ChainNotConfiguredError",
+  "ConnectorAccountNotFoundError",
+  "ConnectorChainMismatchError",
+  "ConnectorNotConnectedError",
+  "ConnectorNotFoundError",
+  "ConnectorUnavailableReconnectingError",
+  "ProviderNotFoundError",
+  "SwitchChainNotSupportedError",
+]);
+
+/**
+ * EIP-1193 and JSON-RPC codes a wallet answers instead of sending: not authorized (4100), method not supported (4200),
+ * disconnected (4900, 4901), unknown chain (4902), invalid params (-32602). Not "transaction rejected" (-32003) as
+ * such: a node says it of a nonce already used too, which can be this very transaction sent once already. Arc's
+ * -32003 for a balance too low is matched by its words (isInsufficientFunds).
+ */
+const NOT_SENT_CODES = new Set([4100, 4200, 4900, 4901, 4902, -32602]);
+
+/**
+ * True when `err`, or anything in its `cause` chain, shows that nothing was sent: a refusal, one of the errors above,
+ * or a revert that carries the revert's own data (`raw`), which only an execution (the wallet's gas estimate) returns.
+ * Any other wallet error may have come after the transaction went out (a phone wallet's lost reply, say: viem turns a
+ * -32603 "Request timed out" into a ContractFunctionRevertedError with no data), so the caller reads the chain before
+ * it says anything about it, and never offers a blind retry.
+ */
+export function wasNotSent(err: unknown): boolean {
+  if (isUserRejection(err) || isEmbeddedFrameRefusal(err) || isInsufficientFunds(err)) return true;
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const e = current as { name?: unknown; code?: unknown; raw?: unknown; cause?: unknown };
+    if (typeof e.name === "string" && NOT_SENT_NAMES.has(e.name)) return true;
+    if (typeof e.code === "number" && NOT_SENT_CODES.has(e.code)) return true;
+    if (e.name === "ContractFunctionRevertedError" && typeof e.raw === "string" && e.raw.length > 2) return true;
+    current = e.cause;
+  }
+  return false;
+}
+
+/** One custom error's sentence, from the error's decoded arguments. */
+export type ErrorFormatter = (args: readonly unknown[]) => string;
 
 /**
  * One entry per `type: "error"` item across the three generated ABIs
@@ -178,8 +240,10 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
   InvalidCliffDuration: () => "The cliff can't be longer than the schedule.",
   NativeValueNotSupported: () => "A vesting contract takes tokens, not USDC sent as plain value. Use its token.",
 
-  // --- VaultFactory (R1). Its other errors are mapped when the Vault app ships; RenounceDisabled is declared on
-  // VaultFactory and ArcVesting too, with the same meaning, so the FeeController sentence above serves all three. ---
+  // --- VaultFactory (R1). The Vault app passes its own sentences for the rest of its errors, and its vaults', as
+  // `overrides` (apps/vault/errors.ts): some share a name with an error here but mean something else there.
+  // RenounceDisabled is declared on VaultFactory and ArcVesting too, with the same meaning, so the FeeController
+  // sentence above serves all three. ---
   HookedPool: () => "This position is in a Uniswap v4 pool with hooks, which can't be locked.",
 
   // --- Shared between TokenFactory and Multisend (declared identically in both ABIs) ---
@@ -193,21 +257,26 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
  * 2. A wallet that took the page for an embedded frame, whatever code it sent (`EMBEDDED_FRAME_MESSAGE`,
  *    lib/wallet-frame.ts): trying again can't help, a reload can.
  * 3. A wallet-level user rejection ("You cancelled the request in your wallet.").
- * 4. A decoded revert from FeeController, TokenFactory or Multisend, mapped to its sentence above.
+ * 4. A decoded revert, mapped to the caller's own sentence for it in `overrides` when there is one (a sentence, or
+ *    a function of the error's arguments: an app whose contracts reuse an error name with another meaning, as
+ *    Vesting's and Vault's do, passes its own), else to its sentence above. Only own entries count.
  * 5. A balance too low for the value plus gas (`INSUFFICIENT_FUNDS_ERROR`).
  * 6. `GENERIC_TRANSACTION_ERROR` for anything else — deliberately never the raw error text: it can
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
-export function describeContractError(err: unknown, overrides: Readonly<Record<string, string>> = {}): string {
+export function describeContractError(err: unknown, overrides: Readonly<Record<string, string | ErrorFormatter>> = {}): string {
   if (err instanceof UserFacingError) return err.message;
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
 
   const revert = findDecodedRevert(err);
-  if (revert && Object.hasOwn(overrides, revert.errorName)) return overrides[revert.errorName];
   if (revert) {
-    const format = CONTRACT_ERRORS[revert.errorName];
+    // Own entries only: a name like "constructor" must not find what every object inherits.
+    const name = revert.errorName;
+    const own = Object.hasOwn(overrides, name) ? overrides[name] : Object.hasOwn(CONTRACT_ERRORS, name) ? CONTRACT_ERRORS[name] : undefined;
+    if (typeof own === "string") return own;
+    const format = own;
     if (format) {
       try {
         return format(revert.args);

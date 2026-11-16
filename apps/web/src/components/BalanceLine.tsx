@@ -10,6 +10,8 @@ export type BalanceLineProps = {
   /** How "Max" is worked out: a reserve for gas, a fee added on top. */
   max?: MaxOptions;
   disabled?: boolean;
+  /** Shows the balance rounded down for the eye (lib/display-amount.ts) rather than exact; "Max" stays exact. */
+  rounded?: boolean;
   /** Receives the amount text "Max" puts in the box. */
   onMax: (text: string) => void;
 };
@@ -18,13 +20,13 @@ export type BalanceLineProps = {
  * "Balance: 12.5 USDC" under an amount box, with a "Max" button that fills in all of it that can be spent. Renders nothing
  * until a balance is known, so a disconnected wallet or a failed read shows no line rather than a wrong "0".
  */
-export function BalanceLine({ units, decimals, symbol, where, max, disabled, onMax }: BalanceLineProps) {
+export function BalanceLine({ units, decimals, symbol, where, max, disabled, rounded, onMax }: BalanceLineProps) {
   if (units === undefined) return null;
   const maxText = maxAmountText(units, decimals, max);
   return (
     <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
       <span>
-        {balanceLabel(units, decimals, symbol)}
+        {balanceLabel(units, decimals, symbol, { rounded })}
         {where ? ` on ${where}` : ""}
       </span>
       <button

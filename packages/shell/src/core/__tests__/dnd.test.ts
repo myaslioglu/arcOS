@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptedKind, decodeDragItem, dndMime, dropParams, encodeDragItem, type DragItem } from "../dnd";
+import { acceptedKind, decodeDragItem, dndMime, dragText, dropParams, encodeDragItem, type DragItem } from "../dnd";
 
 const token: DragItem = {
   kind: "token",
@@ -82,5 +82,65 @@ describe("approval drag items", () => {
     expect(acceptedKind([dndMime("approval")], ["approval"])).toBe("approval");
     expect(acceptedKind([dndMime("approval")], ["token"])).toBeNull();
     expect(dropParams(approval)).toEqual({ token: approval.token });
+  });
+});
+
+const position: DragItem = { kind: "lp-position", manager: "0x6049c9a0e26405C0985f9E3685C87d0aE917f82B", tokenId: "328647" };
+const lock: DragItem = { kind: "lock", address: "0x2aA12f98795E7A65072950AfbA9d1E023D398241" };
+
+describe("position drag items", () => {
+  it("round-trips a position, with the largest id a uint256 holds", () => {
+    const { mime, data } = encodeDragItem(position);
+    expect(mime).toBe("application/x-arcos-lp-position+json");
+    expect(decodeDragItem("lp-position", data)).toEqual(position);
+    const huge: DragItem = { ...position, tokenId: (2n ** 256n - 1n).toString() };
+    expect(decodeDragItem("lp-position", encodeDragItem(huge).data)).toEqual(huge);
+    expect(decodeDragItem("lp-position", JSON.stringify({ ...position, tokenId: "0" }))).toEqual({ ...position, tokenId: "0" });
+  });
+
+  it("keeps only the manager and the id", () => {
+    const extra = JSON.stringify({ ...position, symbol: "FAKE", liquidity: "1", unlockAt: 1 });
+    expect(decodeDragItem("lp-position", extra)).toEqual(position);
+  });
+
+  it("rejects a bad manager, a bad id, and a kind other than the one asked for", () => {
+    expect(decodeDragItem("lp-position", "not json")).toBeNull();
+    expect(decodeDragItem("lp-position", JSON.stringify(token))).toBeNull();
+    expect(decodeDragItem("token", JSON.stringify(position))).toBeNull();
+    expect(decodeDragItem("lp-position", JSON.stringify({ ...position, manager: "0x6049" }))).toBeNull();
+    expect(decodeDragItem("lp-position", JSON.stringify({ ...position, manager: 7 }))).toBeNull();
+    for (const tokenId of ["-1", "1.5", "0x10", "", "01", 7, null, (2n ** 256n).toString(), "1".repeat(79)]) {
+      expect(decodeDragItem("lp-position", JSON.stringify({ ...position, tokenId })), String(tokenId)).toBeNull();
+    }
+  });
+
+  it("opens a window with the manager and the id, and reads as <manager>#<id> outside the desktop", () => {
+    expect(dropParams(position)).toEqual({ manager: position.manager, tokenId: "328647" });
+    expect(dragText(position)).toBe("0x6049c9a0e26405C0985f9E3685C87d0aE917f82B#328647");
+    expect(acceptedKind([dndMime("lp-position")], ["token", "lp-position", "lock"])).toBe("lp-position");
+  });
+});
+
+describe("lock drag items", () => {
+  it("round-trips a lock and keeps only its address", () => {
+    const { mime, data } = encodeDragItem(lock);
+    expect(mime).toBe("application/x-arcos-lock+json");
+    expect(decodeDragItem("lock", data)).toEqual(lock);
+    expect(decodeDragItem("lock", JSON.stringify({ ...lock, amount: "999", owner: lock.address }))).toEqual(lock);
+  });
+
+  it("rejects junk, a bad address, and a kind other than the one asked for", () => {
+    expect(decodeDragItem("lock", "null")).toBeNull();
+    expect(decodeDragItem("lock", JSON.stringify({ kind: "lock" }))).toBeNull();
+    expect(decodeDragItem("lock", JSON.stringify({ ...lock, address: "0x2aA1" }))).toBeNull();
+    expect(decodeDragItem("lock", JSON.stringify({ ...lock, address: ["0x2aA12f98795E7A65072950AfbA9d1E023D398241"] }))).toBeNull();
+    expect(decodeDragItem("lock", JSON.stringify(token))).toBeNull();
+    expect(decodeDragItem("token", JSON.stringify(lock))).toBeNull();
+  });
+
+  it("opens a window with the vault, and reads as the vault's address outside the desktop", () => {
+    expect(dropParams(lock)).toEqual({ vault: lock.address });
+    expect(dragText(lock)).toBe(lock.address);
+    expect(acceptedKind([dndMime("lock")], ["token"])).toBeNull();
   });
 });

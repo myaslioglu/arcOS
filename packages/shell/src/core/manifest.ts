@@ -5,8 +5,9 @@ import type { DesktopWindow, WindowAction, WindowSize } from "./types";
 // Every kind here has a decoder in dnd.ts (decodeDragItem). Widen this together with DragItem and
 // its decoder, never alone — otherwise a manifest could declare a kind that highlights a drop target
 // and then silently swallows every drop on it. "approval" is Revoke's row; no manifest accepts it on
-// an icon today (Revoke's own trash area takes it).
-export type DropKind = "token" | "approval";
+// an icon today (Revoke's own trash area takes it). "lp-position" is a position NFT from Finder's
+// Positions section, and "lock" is one of Vault's locks; Vault accepts both.
+export type DropKind = "token" | "approval" | "lp-position" | "lock";
 export type AppCategory = "system" | "trust" | "create" | "trade";
 
 export const CATEGORY_ORDER: AppCategory[] = ["system", "trust", "create", "trade"];

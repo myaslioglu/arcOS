@@ -42,6 +42,12 @@ describe("balanceLabel", () => {
     expect(balanceLabel(4_835_553n, 6, "USDC")).toBe("Balance: 4.835553 USDC");
     expect(balanceLabel(0n, 8, "cirBTC")).toBe("Balance: 0 cirBTC");
   });
+
+  it("rounds down for the eye when asked, never showing more than there is", () => {
+    expect(balanceLabel(9_999_999_999_999_999_999n, 18, "UNI-V2", { rounded: true })).toBe("Balance: 9.99 UNI-V2");
+    expect(balanceLabel(9_999_999_999_999_999_999_999n, 18, "UNI-V2", { rounded: true })).toBe("Balance: 9,999.99 UNI-V2");
+    expect(balanceLabel(4_835_553n, 6, "USDC", { rounded: true })).toBe("Balance: 4.83 USDC");
+  });
 });
 
 describe("overBalanceIssue", () => {

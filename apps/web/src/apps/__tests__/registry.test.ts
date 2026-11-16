@@ -137,13 +137,12 @@ describe("the registry, gated per network (D6)", () => {
     }
   });
 
-  it("lists the same apps on both networks today, with the grey Vesting stand-in in place of the live one", () => {
-    // Vesting's live manifest is in LIVE but gated: it shows only where ARCOS names a vestingFactory, and until then its
-    // grey stand-in (the same id, in the same folder of the desktop) is listed instead, so the site is unchanged.
-    const expected = ids([...LIVE.filter((m) => m.id !== "vesting"), ...SOON]);
-    expect(ids(appsFor("mainnet"))).toEqual(expected);
-    expect(ids(appsFor("testnet"))).toEqual(expected);
-    expect(ids(APPS)).toEqual(expected);
+  it("lists the same apps on both networks today, since no network has a gated contract yet: each gated app grey", () => {
+    const ungated = LIVE.filter((m) => !Object.hasOwn(NEEDS_CONTRACT, m.id));
+    expect(ids(appsFor("mainnet"))).toEqual(ids([...ungated, ...SOON]));
+    expect(ids(appsFor("testnet"))).toEqual(ids([...ungated, ...SOON]));
+    expect(ids(APPS)).toEqual(ids([...ungated, ...SOON]));
+    for (const m of APPS) if (Object.hasOwn(NEEDS_CONTRACT, m.id)) expect(m.comingSoon, m.id).toBe(true);
   });
 
   describe("Vesting", () => {
@@ -181,7 +180,7 @@ describe("the registry, gated per network (D6)", () => {
   });
 
   it("lists a gated app live where its contract has an address, in place of its grey stand-in", () => {
-    const apps = appsFor("testnet", { live: [...LIVE, liveVault], contracts: { vaultFactory: ADDRESS } });
+    const apps = appsFor("testnet", { live: [...LIVE.filter((m) => m.id !== "vault"), liveVault], contracts: { vaultFactory: ADDRESS } });
     const vault = apps.filter((m) => m.id === "vault");
     expect(vault).toEqual([liveVault]);
     expect(ids(apps).filter((id) => id === "vesting")).toEqual(["vesting"]); // still grey: its factory isn't set
@@ -190,7 +189,7 @@ describe("the registry, gated per network (D6)", () => {
 
   it("keeps a gated app grey where its contract is null, missing, or not an address", () => {
     for (const contracts of [null, {}, { vaultFactory: null }, { vaultFactory: "0x1234" }, { vaultFactory: 42 }]) {
-      const apps = appsFor("mainnet", { live: [...LIVE, liveVault], contracts });
+      const apps = appsFor("mainnet", { contracts });
       expect(apps.filter((m) => m.id === "vault").map((m) => m.comingSoon), JSON.stringify(contracts)).toEqual([true]);
     }
   });
@@ -213,5 +212,48 @@ describe("the registry, gated per network (D6)", () => {
     for (const key of Object.values(NEEDS_CONTRACT)) expect(contractAddress(ARCOS.mainnet, key), key).toBeNull();
     expect(contractAddress(ARCOS.mainnet, "proPass")).toBeNull();
     for (const m of appsFor("mainnet")) if (m.id in NEEDS_CONTRACT) expect(m.comingSoon, m.id).toBe(true);
+  });
+});
+
+// Vault ships as a live app gated on the VaultFactory (D6): it is in LIVE, and its grey stand-in stays in SOON, so the
+// site shows the stand-in on every network until an address is set in ARCOS, and the live app from then on.
+describe("Vault, gated on the VaultFactory", () => {
+  const ADDRESS = "0x2222222222222222222222222222222222222222";
+  const live = LIVE.find((m) => m.id === "vault");
+  const grey = SOON.find((m) => m.id === "vault");
+
+  it("is a live app after Watchdog, in the Trust group, taking tokens, positions and locks on its icon", () => {
+    expect(live).toMatchObject({
+      name: "Vault",
+      blurb: "Lock liquidity and team tokens",
+      category: "trust",
+      release: "r2",
+      requiresWallet: true,
+      acceptsDrop: ["token", "lp-position", "lock"],
+      window: { w: 560, h: 640 },
+    });
+    expect(live?.comingSoon).toBeFalsy();
+    expect(live?.instanceKey).toBeUndefined();
+    expect(LIVE.indexOf(live!)).toBe(LIVE.findIndex((m) => m.id === "watchdog") + 1);
+    expect(NEEDS_CONTRACT.vault).toBe("vaultFactory");
+  });
+
+  it("keeps its grey stand-in, under the same name, blurb, icon and group", () => {
+    expect(grey?.comingSoon).toBe(true);
+    expect(grey).toMatchObject({ name: live?.name, blurb: live?.blurb, icon: live?.icon, category: live?.category });
+  });
+
+  it("is grey on both networks today, since neither names a VaultFactory", () => {
+    for (const network of ["mainnet", "testnet"] as const) {
+      expect(contractAddress(ARCOS[network], "vaultFactory"), network).toBeNull();
+      expect(appsFor(network).filter((m) => m.id === "vault"), network).toEqual([grey]);
+    }
+  });
+
+  it("is live, once, wherever a VaultFactory is set, and the stand-in is gone there", () => {
+    for (const network of ["mainnet", "testnet"] as const) {
+      const apps = appsFor(network, { contracts: { ...ARCOS[network], vaultFactory: ADDRESS } });
+      expect(apps.filter((m) => m.id === "vault"), network).toEqual([live]);
+    }
   });
 });

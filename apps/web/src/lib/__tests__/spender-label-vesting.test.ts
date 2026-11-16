@@ -15,7 +15,9 @@ describe("Revoke names the VestingFactory", () => {
     expect(spenderLabel(FACTORY.toUpperCase().replace("0X", "0x"), "testnet")).toBe("ArcOS Vesting");
     expect(spenderLabel(FACTORY, "mainnet")).toBeNull();
   });
-  it("leaves the vaultFactory to the Vault app", () => {
-    expect(spenderLabel(VAULT, "testnet")).toBeNull();
+  it("labels the network's vaultFactory too, only on that network", () => {
+    expect(spenderLabel(VAULT, "testnet")).toBe("ArcOS Vault");
+    expect(spenderLabel(VAULT.toUpperCase().replace("0X", "0x"), "testnet")).toBe("ArcOS Vault");
+    expect(spenderLabel(VAULT, "mainnet")).toBeNull();
   });
 });

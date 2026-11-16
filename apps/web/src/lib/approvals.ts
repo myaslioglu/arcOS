@@ -195,6 +195,9 @@ export function spenderLabel(spender: string, network: NetworkId): string | null
   if (multisend && s === multisend.toLowerCase()) return "ArcOS Multisend";
   const vesting = ARCOS[network]?.vestingFactory;
   if (vesting && s === vesting.toLowerCase()) return "ArcOS Vesting";
+  // Vault's lock approves the factory for the exact amount (or the one position); one a refused lock left is named.
+  const vault = ARCOS[network]?.vaultFactory;
+  if (vault && s === vault.toLowerCase()) return "ArcOS Vault";
   if (PREVIOUS_MULTISENDS[network].some((m) => m.toLowerCase() === s)) return "ArcOS Multisend (old)";
   if (s === SWAP_ADAPTER[network].toLowerCase()) return "Circle swap adapter";
   return null;
