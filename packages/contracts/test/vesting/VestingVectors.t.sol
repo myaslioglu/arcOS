@@ -9,7 +9,9 @@ import {VestingTestBase} from "./VestingTestBase.sol";
 /// The ArcOS Vesting window draws its curve with a TypeScript copy of this arithmetic (`schedulePreview`), and its
 /// tests check that copy against every case in the file, so the contract and the window are held to the same numbers.
 /// This test builds the file again from the real contract and fails if the committed one differs. After a change to
-/// the contract or to the grid, rewrite it with WRITE_VESTING_VECTORS=true and `npm run test` in packages/contracts.
+/// the contract or to the grid, rewrite it with `npm run vectors` in packages/contracts.
+/// Only that profile may write the file: in the default one the write is refused, so an exported
+/// WRITE_VESTING_VECTORS can never make this test pass without checking.
 contract VestingVectorsTest is VestingTestBase {
     string internal constant PATH = "test/vectors/vesting.json";
 

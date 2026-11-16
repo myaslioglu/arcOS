@@ -81,7 +81,8 @@ export function validateTerms({ start, duration, cliff, now }: TermsInput): Term
   else if (duration > MAX_DURATION) errors.duration = "The duration can be at most 10 years (3,650 days).";
   if (cliff === null) errors.cliff = CLIFF_ERROR;
   else if (duration !== null && duration >= 1n && cliff > duration) errors.cliff = "The cliff can't be longer than the duration.";
-  if (start > now + MAX_DURATION) errors.start = "The start can be at most 10 years from now.";
+  if (start < 0n) errors.start = "The start can't be before 1970.";
+  else if (start > now + MAX_DURATION) errors.start = "The start can be at most 10 years from now.";
   return errors;
 }
 
@@ -124,11 +125,12 @@ export function validateSchedule(input: ScheduleInput): ScheduleErrors {
 }
 
 /**
- * A plain-language note when the schedule has already begun: a start in the past is allowed, and what the line has
- * reached by now is released the moment the schedule is created (once the cliff has passed). Null otherwise.
+ * A plain-language note when the schedule starts in the past: that is allowed, and what the line has reached by now is
+ * released the moment the schedule is created (once the cliff has passed). Null when the start is now or ahead, which
+ * is every schedule that starts "when created".
  */
 export function startedNote(start: bigint, duration: bigint, cliff: bigint, now: bigint): string | null {
-  if (now < start) return null;
+  if (now <= start) return null;
   if (now >= start + duration) return "This schedule has already ended, so the whole amount can be released right away.";
   if (now >= start + cliff) return "This schedule has already started, so part of the amount can be released right away.";
   return "This schedule has already started. Nothing can be released until the cliff passes.";

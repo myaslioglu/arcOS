@@ -199,12 +199,13 @@ const CONTRACT_ERRORS: Record<string, ErrorFormatter> = {
  *    carry internal RPC detail or a URL (the same rule packages/inspector's checks follow for their
  *    own findings).
  */
-export function describeContractError(err: unknown): string {
+export function describeContractError(err: unknown, overrides: Readonly<Record<string, string>> = {}): string {
   if (err instanceof UserFacingError) return err.message;
   if (isEmbeddedFrameRefusal(err)) return EMBEDDED_FRAME_MESSAGE;
   if (isUserRejection(err)) return "You cancelled the request in your wallet.";
 
   const revert = findDecodedRevert(err);
+  if (revert && Object.hasOwn(overrides, revert.errorName)) return overrides[revert.errorName];
   if (revert) {
     const format = CONTRACT_ERRORS[revert.errorName];
     if (format) {

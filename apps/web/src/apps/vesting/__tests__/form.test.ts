@@ -48,6 +48,8 @@ describe("buildPlan, one beneficiary", () => {
     expect(buildPlan({ ...base, startMode: "date", startDate: "2020-01-01T00:00" }, 18, NOW).ok).toBe(true);
     expect(buildPlan({ ...base, startMode: "date", startDate: "2040-01-01T00:00" }, 18, NOW).errors.start).toMatch(/10 years/);
     expect(buildPlan({ ...base, startMode: "date", startDate: "" }, 18, NOW).errors.start).toMatch(/Choose when/);
+    // before 1970 would encode as a negative uint64: refused here, not after the approval
+    expect(buildPlan({ ...base, startMode: "date", startDate: "1960-01-01T00:00" }, 18, NOW).errors.start).toMatch(/before 1970/);
   });
 });
 

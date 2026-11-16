@@ -2,6 +2,7 @@ import { erc20Abi, getAddress, isAddress, type PublicClient } from "viem";
 import { arcVestingAbi, vestingFactoryAbi, type Address } from "@arcos/chain";
 import { cleanLabel } from "@arcos/inspector";
 import { shortAddress } from "@/lib/format";
+import { confirmToken, resolveTokens, type TokenCache } from "./tokenSource";
 
 /**
  * Reading a beneficiary's vesting wallets. `VestingFactory.vestingsOf(user)` lists the wallets made FOR the user, but a
@@ -54,46 +55,32 @@ export type AddedWallet = { wallet: Address; token: Address };
 
 type Reader = Pick<PublicClient, "multicall" | "readContract" | "getContractEvents" | "getBlock" | "getCode">;
 
-/** Remembers which token each wallet was made for. */
-export type TokenCache = { get(wallet: string): Address | undefined; set(wallet: string, token: Address): void };
-
-/**
- * The token a wallet was created for, or null when it can't be found: bisects `[from, to]` for the first block in which
- * `wallet` has code, then reads the factory's VestingCreated events (filtered to `beneficiary`) in that block alone.
- */
-export async function findToken(client: Reader, factory: Address, beneficiary: Address, wallet: Address, from: bigint, to: bigint): Promise<Address | null> {
-  try {
-    const hasCode = async (n: bigint) => {
-      const code = await client.getCode({ address: wallet, blockNumber: n });
-      return code !== undefined && code !== "0x";
-    };
-    if (!(await hasCode(to))) return null;
-    let lo = from;
-    let hi = to; // invariant: the wallet has code at `hi`
-    while (lo < hi) {
-      const mid = lo + (hi - lo) / 2n;
-      if (await hasCode(mid)) hi = mid;
-      else lo = mid + 1n;
-    }
-    const logs = await client.getContractEvents({ address: factory, abi: vestingFactoryAbi, eventName: "VestingCreated", args: { beneficiary }, fromBlock: hi, toBlock: hi });
-    return logs.find((l) => l.args.vesting !== undefined && lower(l.args.vesting) === lower(wallet))?.args.token ?? null;
-  } catch {
-    return null;
-  }
-}
+export type { TokenCache };
 
 const lower = (a: string) => a.toLowerCase();
 
-/** What `factory.isVesting(wallet)` and `wallet.owner()` say about a wallet a person wants to add, as a plain sentence or null if it's theirs. */
-export async function checkAdded(client: Pick<PublicClient, "readContract">, factory: Address, user: Address, wallet: string, token: string): Promise<string | null> {
+/**
+ * What `factory.isVesting(wallet)`, `wallet.owner()` and the token's own records say about a wallet a person wants to
+ * add, as a plain sentence, or null if it's theirs and the token is confirmed.
+ */
+export async function checkAdded(
+  client: Pick<PublicClient, "readContract" | "getBlock" | "getCode" | "getContractEvents">,
+  factory: Address,
+  user: Address,
+  wallet: string,
+  token: string,
+  fromBlock: bigint | null = null,
+): Promise<string | null> {
   if (!isAddress(wallet, { strict: false })) return "That isn't a vesting wallet address.";
   if (!isAddress(token, { strict: false })) return "That isn't a token address.";
+  const w = getAddress(wallet);
   try {
-    const made = await client.readContract({ address: factory, abi: vestingFactoryAbi, functionName: "isVesting", args: [getAddress(wallet)] });
+    const made = await client.readContract({ address: factory, abi: vestingFactoryAbi, functionName: "isVesting", args: [w] });
     if (!made) return "ArcOS didn't create that wallet.";
-    const owner = await client.readContract({ address: getAddress(wallet), abi: arcVestingAbi, functionName: "owner" });
+    const owner = await client.readContract({ address: w, abi: arcVestingAbi, functionName: "owner" });
     if (lower(owner) !== lower(user)) return "That wallet belongs to another address.";
-    return null;
+    const latest = (await client.getBlock({ blockTag: "latest" })).number;
+    return await confirmToken(client, factory, w, getAddress(token), latest, fromBlock);
   } catch {
     return "Couldn't read that wallet. Check the address and try again.";
   }
@@ -113,39 +100,11 @@ export async function loadVestings(
     madeCount === 0
       ? []
       : await client.readContract({ address: factory, abi: vestingFactoryAbi, functionName: "vestingsOfSlice", args: [user, BigInt(from), BigInt(madeCount - from)] });
-  // Newest first.
-  const made = [...slice].reverse();
-
-  // The token of each wallet. The wallet doesn't keep it, and Arc's RPC refuses an event query over more than 10,000
-  // blocks, so each wallet's creation block is found first (the first block with code at its address, by bisection),
-  // and the factory's VestingCreated event is read from that one block. A found token is remembered: it never changes.
-  const tokens = new Map<string, Address>();
-  let tokenLookupFailed = false;
-  const unknown: Address[] = [];
-  for (const w of made) {
-    const cached = cache?.get(w);
-    if (cached) tokens.set(lower(w), cached);
-    else unknown.push(w);
-  }
-  if (unknown.length > 0) {
-    const latest = block.number;
-    const results: (Address | null)[] = [];
-    for (let i = 0; i < unknown.length; i += 4) {
-      results.push(...(await Promise.all(unknown.slice(i, i + 4).map((w) => findToken(client, factory, user, w, fromBlock ?? 0n, latest)))));
-    }
-    unknown.forEach((w, i) => {
-      const token = results[i];
-      if (token) {
-        tokens.set(lower(w), token);
-        cache?.set(w, token);
-      } else tokenLookupFailed = true;
-    });
-  }
-  for (const a of added) tokens.set(lower(a.wallet), a.token);
 
   const wanted: { wallet: Address; source: "made" | "added" }[] = [];
   const seen = new Set<string>();
-  for (const w of made) {
+  for (const w of [...slice].reverse()) {
+    // Newest first.
     if (seen.has(lower(w))) continue;
     seen.add(lower(w));
     wanted.push({ wallet: w, source: "made" });
@@ -166,7 +125,7 @@ export async function loadVestings(
     ]),
   });
 
-  type Base = { wallet: Address; source: "made" | "added"; start: bigint; duration: bigint; cliff: bigint; token: Address | null };
+  type Base = { wallet: Address; source: "made" | "added"; start: bigint; duration: bigint; cliff: bigint };
   const transferred: Address[] = [];
   const owned: Base[] = [];
   wanted.forEach((w, i) => {
@@ -177,20 +136,33 @@ export async function loadVestings(
       return;
     }
     const s = start.result as bigint;
-    owned.push({ wallet: w.wallet, source: w.source, start: s, duration: duration.result as bigint, cliff: (cliffAt.result as bigint) - s, token: tokens.get(lower(w.wallet)) ?? null });
+    owned.push({ wallet: w.wallet, source: w.source, start: s, duration: duration.result as bigint, cliff: (cliffAt.result as bigint) - s });
   });
 
-  const withToken = owned.filter((o) => o.token !== null);
+  // Tokens are looked up for the wallets the user still owns, and only for those the person hasn't named.
+  const tokens = new Map<string, Address>();
+  for (const a of added) tokens.set(lower(a.wallet), a.token);
+  const lookup = await resolveTokens(client, {
+    factory,
+    wallets: owned.filter((o) => !tokens.has(lower(o.wallet))).map((o) => o.wallet),
+    fromBlock,
+    latest: block.number,
+    cache,
+  });
+  for (const [k, v] of lookup.tokens) tokens.set(k, v);
+  const tokenLookupFailed = lookup.failedAny;
+  const withToken = owned.filter((o) => tokens.has(lower(o.wallet))).map((o) => ({ ...o, token: tokens.get(lower(o.wallet))! }));
+
   const amounts = await client.multicall({
     allowFailure: true,
     contracts: withToken.flatMap(({ wallet, token }) => [
-      { address: token!, abi: erc20Abi, functionName: "balanceOf", args: [wallet] } as const,
-      { address: wallet, abi: arcVestingAbi, functionName: "released", args: [token!] } as const,
-      { address: wallet, abi: arcVestingAbi, functionName: "vestedAmount", args: [token!, now] } as const,
-      { address: wallet, abi: arcVestingAbi, functionName: "releasable", args: [token!] } as const,
+      { address: token, abi: erc20Abi, functionName: "balanceOf", args: [wallet] } as const,
+      { address: wallet, abi: arcVestingAbi, functionName: "released", args: [token] } as const,
+      { address: wallet, abi: arcVestingAbi, functionName: "vestedAmount", args: [token, now] } as const,
+      { address: wallet, abi: arcVestingAbi, functionName: "releasable", args: [token] } as const,
     ]),
   });
-  const uniqueTokens = [...new Set(withToken.map((o) => lower(o.token!)))].map((t) => withToken.find((o) => lower(o.token!) === t)!.token!);
+  const uniqueTokens = [...new Set(withToken.map((o) => lower(o.token)))].map((t) => withToken.find((o) => lower(o.token) === t)!.token);
   const meta = await client.multicall({
     allowFailure: true,
     contracts: uniqueTokens.flatMap((token) => [
@@ -219,8 +191,9 @@ export async function loadVestings(
   });
 
   const wallets: WalletView[] = owned.map((o) => {
+    const token = tokens.get(lower(o.wallet)) ?? null;
     const a = amountsOf.get(lower(o.wallet)) ?? { total: null, vested: null, released: null, releasable: null };
-    return { ...o, tokenInfo: o.token ? (infoOf.get(lower(o.token)) ?? null) : null, ...a };
+    return { ...o, token, tokenInfo: token ? (infoOf.get(lower(token)) ?? null) : null, ...a };
   });
 
   return { now, madeCount, wallets, transferred, tokenLookupFailed, hasMore: from > 0 };

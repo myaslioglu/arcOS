@@ -31,8 +31,7 @@ function Form({ params }: Pick<AppProps, "params">) {
   const tabButton = (id: Tab, label: string) => (
     <button
       type="button"
-      role="tab"
-      aria-selected={tab === id}
+      aria-pressed={tab === id}
       className={`rounded px-3 py-1 text-xs ${tab === id ? "bg-surface-2" : "text-muted"}`}
       onClick={() => setTab(id)}
     >
@@ -42,18 +41,18 @@ function Form({ params }: Pick<AppProps, "params">) {
 
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
-      <div role="tablist" className="flex gap-1 border-b border-border p-2">
+      <div role="group" aria-label="Vesting sections" className="flex gap-1 border-b border-border p-2">
         {tabButton("new", "New schedule")}
         {tabButton("yours", "Your schedules")}
       </div>
       {/* Both stay mounted, so a half-filled form survives a look at the other tab. */}
       <div className="min-h-0 flex-1 overflow-auto">
-        <div hidden={tab !== "new"}>
+        <section aria-label="New schedule" hidden={tab !== "new"}>
           <NewSchedule prefilledToken={prefilled} />
-        </div>
-        <div hidden={tab !== "yours"}>
+        </section>
+        <section aria-label="Your schedules" hidden={tab !== "yours"}>
           <Yours factory={factory} active={tab === "yours"} />
-        </div>
+        </section>
       </div>
       <p className="border-t border-border p-2 text-xs text-accent-3-text">{AUDIT_NOTE}</p>
     </div>

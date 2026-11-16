@@ -1,5 +1,6 @@
 import type { Address } from "@arcos/chain";
 import type { DropRow } from "@/lib/recipient-list";
+import type { FormState, Terms } from "./form";
 import type { RowState, VestingRunResult } from "./runVesting";
 
 /**
@@ -14,6 +15,9 @@ export type VestingSession =
       symbol: string;
       decimals: number;
       rows: DropRow[];
+      /** What the run was started with, in full: a retry of the unfinished rows must use the same terms, not the form's defaults. */
+      form: FormState;
+      terms: Terms;
       states: RowState[];
       /** "approve" while the allowance is being set; "create" while schedules are being made. */
       step: "approve" | "create";
@@ -42,7 +46,7 @@ const subscribe = (fn: () => void): (() => void) => {
 };
 
 /** Starts a run; false when one is already going. */
-function start(token: Address, symbol: string, decimals: number, rows: DropRow[]): boolean {
+function start(token: Address, symbol: string, decimals: number, rows: DropRow[], form: FormState, terms: Terms): boolean {
   if (state.status === "running") return false;
   state = {
     status: "running",
@@ -50,6 +54,8 @@ function start(token: Address, symbol: string, decimals: number, rows: DropRow[]
     symbol,
     decimals,
     rows,
+    form,
+    terms,
     states: rows.map(() => ({ status: "waiting" })),
     step: "approve",
     leftoverAllowance: null,

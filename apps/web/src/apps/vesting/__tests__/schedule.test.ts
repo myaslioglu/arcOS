@@ -91,6 +91,7 @@ describe("validateTerms", () => {
     expect(validateTerms({ ...ok, duration: MAX_DURATION + 1n }).duration).toMatch(/10 years/);
     expect(validateTerms({ ...ok, cliff: 101n }).cliff).toMatch(/longer than the duration/);
     expect(validateTerms({ ...ok, start: now + MAX_DURATION + 1n }).start).toMatch(/10 years/);
+    expect(validateTerms({ ...ok, start: -1n }).start).toMatch(/before 1970/);
   });
   it("asks for what is missing", () => {
     expect(validateTerms({ ...ok, duration: null }).duration).toMatch(/how long/);
@@ -123,6 +124,7 @@ describe("validateAmount and validateAddress", () => {
 describe("startedNote", () => {
   it("says nothing for a future start, and explains a start in the past", () => {
     expect(startedNote(200n, 100n, 0n, 100n)).toBeNull();
+    expect(startedNote(100n, 100n, 0n, 100n)).toBeNull(); // starts right now: nothing to explain
     expect(startedNote(100n, 100n, 50n, 120n)).toMatch(/until the cliff/);
     expect(startedNote(100n, 100n, 0n, 150n)).toMatch(/part of the amount/);
     expect(startedNote(100n, 100n, 0n, 300n)).toMatch(/already ended/);

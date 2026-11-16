@@ -36,6 +36,7 @@ vi.mock("@arcos/shell", async (original) => {
 
 import { AUDIT_NOTE, HOW_IT_WORKS, NOT_DEPLOYED, YOURS_NOTE } from "../copy";
 import { Curve } from "../Curve";
+import { EMPTY_FORM } from "../form";
 import { RunPanel } from "../RunPanel";
 import { session } from "../session";
 import VestingWindow from "../Window";
@@ -58,6 +59,8 @@ describe("the window", () => {
     const html = window_();
     expect(html).toContain("New schedule");
     expect(html).toContain("Your schedules");
+    expect(html).not.toContain('role="tab"');
+    expect(html).toContain('aria-pressed="true"');
     expect(html).toContain(HOW_IT_WORKS);
     expect(html).toContain(AUDIT_NOTE);
     expect(html).toContain(YOURS_NOTE);
@@ -77,7 +80,7 @@ describe("the window", () => {
 
   it("states what a schedule can and can't do, and that nothing has been audited", () => {
     expect(HOW_IT_WORKS).toMatch(/can't be cancelled/);
-    expect(HOW_IT_WORKS).toMatch(/pays the beneficiary/);
+    expect(HOW_IT_WORKS).toMatch(/pays the contract's current owner \(the beneficiary\)/);
     expect(AUDIT_NOTE).toBe("These contracts have not been audited yet. They run on testnet first, ahead of the audit.");
   });
 });
@@ -107,6 +110,8 @@ describe("RunPanel", () => {
     symbol: "TKN",
     decimals: 18,
     rows,
+    form: { ...EMPTY_FORM, startMode: "now" as const },
+    terms: { start: 1_800_000_000n, duration: 4n * 31_536_000n, cliff: 31_536_000n },
     states: [
       { status: "created" as const, hash: "0xabc", vesting: "0x00000000000000000000000000000000000000a1" as const },
       { status: "failed" as const, message: "Your balance of this token is below this amount." },
@@ -129,6 +134,30 @@ describe("RunPanel", () => {
     expect(html).toContain("The vesting contract can still take up to 7 TKN from your wallet");
     expect(html).toContain("Open Revoke");
     expect(html).toContain("Put the unfinished rows back in the list");
+  });
+
+  it("shows the terms the run used, so a retry's terms are never a surprise", () => {
+    const html = panel(done);
+    expect(html).toContain("Terms: starts when created, runs for 4 years, cliff 1 year.");
+  });
+
+  it("announces the final summary through the same live region as the progress", () => {
+    expect(panel(done)).toMatch(/role="status"[^>]*>1 of 2 schedules created/);
+  });
+
+  it("points to the address's transactions when a row may have been sent", () => {
+    const html = render(
+      createElement(RunPanel, {
+        run: { ...done, states: [done.states[0], { status: "unknown" as const }] },
+        onDone: () => undefined,
+        onReuse: () => undefined,
+        onOpenRevoke: () => undefined,
+        account: USER,
+      }),
+    );
+    expect(html).toContain("Wallet error, may have been sent");
+    expect(html).toContain("See your address's transactions on the explorer");
+    expect(html).toContain("1 not confirmed");
   });
 
   it("shows the approval step while it runs", () => {

@@ -71,7 +71,17 @@ describe("runVesting", () => {
     });
     expect(calls).toEqual([1, 2]);
     expect(result.stoppedBecause).toBe("unconfirmed");
+    expect(result.message).toMatch(/^Line 2 /);
     expect(result.states.map((s) => s.status)).toEqual(["created", "unconfirmed", "not_sent"]);
+    expect(leftoverRows(rows, result.states).map((r) => r.line)).toEqual([3]);
+    expect(summaryText(3, summarize(result.states))).toBe("1 of 3 schedules created. 1 not sent. 1 not confirmed.");
+  });
+
+  it("stops at an unknown row (a wallet error after sending), never retries it and keeps it out of the leftover rows", async () => {
+    const result = await runVesting(rows, { createRow: async (r): Promise<RowOutcome> => (r.line === 2 ? { status: "unknown" } : created(r.line)) });
+    expect(result.stoppedBecause).toBe("unknown");
+    expect(result.message).toMatch(/line 2/);
+    expect(result.states.map((s) => s.status)).toEqual(["created", "unknown", "not_sent"]);
     expect(leftoverRows(rows, result.states).map((r) => r.line)).toEqual([3]);
     expect(summaryText(3, summarize(result.states))).toBe("1 of 3 schedules created. 1 not sent. 1 not confirmed.");
   });

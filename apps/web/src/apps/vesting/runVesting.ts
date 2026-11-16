@@ -6,8 +6,10 @@ import type { DropRow } from "@/lib/recipient-list";
 export type RowOutcome =
   | { status: "created"; hash: string; vesting: Address | null }
   | { status: "failed"; message: string; hash?: string }
-  /** The transaction was sent but its receipt couldn't be read: it may have landed, so nothing after it is sent. */
-  | { status: "unconfirmed"; hash: string };
+  /** The transaction was sent but its receipt couldn't be read, or it doesn't show this schedule: it may have landed, so nothing after it is sent. */
+  | { status: "unconfirmed"; hash: string }
+  /** The wallet reported an error after it may have sent the transaction (a lost reply, say) and no new schedule was found: it may have landed. */
+  | { status: "unknown" };
 
 export type RowState =
   | { status: "waiting" }
@@ -15,12 +17,13 @@ export type RowState =
   | { status: "created"; hash: string; vesting: Address | null }
   | { status: "failed"; message: string; hash?: string }
   | { status: "unconfirmed"; hash: string }
+  | { status: "unknown" }
   | { status: "not_sent" };
 
 export type VestingRunResult = {
   /** One entry per row, in order. */
   states: RowState[];
-  stoppedBecause: null | "rejected" | "error" | "unconfirmed";
+  stoppedBecause: null | "rejected" | "error" | "unconfirmed" | "unknown";
   /** A plain sentence, set exactly when `stoppedBecause` is. */
   message: string | null;
 };
@@ -38,7 +41,7 @@ export type RunDeps = {
  * - A row that fails by itself is recorded as failed and the run goes on: the rows are independent.
  * - A thrown error stops the run: a refused signature ("rejected") or any other error. The failing row and every row
  *   after it are "not sent".
- * - An unconfirmed row (sent, receipt unknown) stops the run too, and is never retried, since it may have landed.
+ * - An unconfirmed or unknown row (it may have been sent) stops the run too, and is never offered again, since it may have landed.
  */
 export async function runVesting(rows: readonly DropRow[], deps: RunDeps): Promise<VestingRunResult> {
   const states: RowState[] = rows.map(() => ({ status: "waiting" }));
@@ -63,7 +66,14 @@ export async function runVesting(rows: readonly DropRow[], deps: RunDeps): Promi
       set(i, outcome);
       for (let j = i + 1; j < rows.length; j++) set(j, { status: "not_sent" });
       result.stoppedBecause = "unconfirmed";
-      result.message = `Row ${i + 1} was sent but isn't confirmed. Check the explorer before you create it again.`;
+      result.message = `Line ${rows[i].line} was sent but isn't confirmed. Check the explorer before you create it again.`;
+      return result;
+    }
+    if (outcome.status === "unknown") {
+      set(i, outcome);
+      for (let j = i + 1; j < rows.length; j++) set(j, { status: "not_sent" });
+      result.stoppedBecause = "unknown";
+      result.message = `Your wallet reported an error on line ${rows[i].line}, and the schedule may have been created anyway. Check your address on the explorer before you create it again.`;
       return result;
     }
     set(i, outcome);
@@ -75,10 +85,10 @@ export type RunSummary = { created: number; failed: number; notSent: number; unc
 
 export function summarize(states: readonly RowState[]): RunSummary {
   const count = (s: RowState["status"]) => states.filter((x) => x.status === s).length;
-  return { created: count("created"), failed: count("failed"), notSent: count("not_sent") + count("waiting") + count("creating"), unconfirmed: count("unconfirmed") };
+  return { created: count("created"), failed: count("failed"), notSent: count("not_sent") + count("waiting") + count("creating"), unconfirmed: count("unconfirmed") + count("unknown") };
 }
 
-/** The rows that still need doing, as `address,amount` text's source: the failed and not-sent ones, never the unconfirmed. */
+/** The rows that still need doing, as `address,amount` text's source: the failed and not-sent ones, never an unconfirmed or unknown one. */
 export function leftoverRows(rows: readonly DropRow[], states: readonly RowState[]): DropRow[] {
   return rows.filter((_, i) => states[i]?.status === "failed" || states[i]?.status === "not_sent");
 }

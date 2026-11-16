@@ -1,9 +1,10 @@
 import { formatUnits } from "viem";
-import { explorerUrl } from "@arcos/chain";
+import { explorerUrl, type Address } from "@arcos/chain";
 import { displayAmount } from "@/lib/display-amount";
 import { shortAddress } from "@/lib/format";
 import { leftoverRows, summarize, summaryText, type RowState } from "./runVesting";
 import type { VestingSession } from "./session";
+import { spanText, utcText } from "./span";
 
 type Active = Extract<VestingSession, { status: "running" | "done" }>;
 
@@ -21,6 +22,8 @@ function stateText(s: RowState): string {
       return `Failed. ${s.message}`;
     case "unconfirmed":
       return "Sent, not confirmed";
+    case "unknown":
+      return "Wallet error, may have been sent";
     case "not_sent":
       return "Not sent";
   }
@@ -32,12 +35,15 @@ export function RunPanel({
   onDone,
   onReuse,
   onOpenRevoke,
+  account,
 }: {
   run: Active;
   onDone: () => void;
   /** Puts the failed and unsent rows back into the form's list. */
   onReuse: (rows: ReturnType<typeof leftoverRows>) => void;
   onOpenRevoke: () => void;
+  /** The connected address, for the link to its transactions. */
+  account?: Address;
 }) {
   const done = run.status === "done";
   const total = run.rows.reduce((s, r) => s + r.amount, 0n);
@@ -48,21 +54,29 @@ export function RunPanel({
 
   return (
     <div className="p-3 text-sm" data-testid="vesting-run">
-      {!done && (
-        <>
-          <p className="font-medium" aria-live="polite">
-            {run.step === "approve" ? `Approve ${amount(total)} in your wallet…` : `Creating schedule ${current + 1 || run.rows.length} of ${run.rows.length}…`}
-          </p>
-          <p className="mt-1 text-xs text-muted">Keep this tab open until it finishes. You can close this window; the run continues.</p>
-        </>
+      {/* One live region, mounted from the start, so the progress and the final summary are both announced. */}
+      <p className="font-medium" aria-live="polite" role="status">
+        {!done
+          ? run.step === "approve"
+            ? `Approve ${amount(total)} in your wallet…`
+            : `Creating schedule ${current + 1 || run.rows.length} of ${run.rows.length}…`
+          : run.result
+            ? summaryText(run.rows.length, sum)
+            : "No schedule was created."}
+      </p>
+      {!done && <p className="mt-1 text-xs text-muted">Keep this tab open until it finishes. You can close this window; the run continues.</p>}
+      {done && run.approvalMessage && <p className="mt-1 text-accent-3-text">{`The approval wasn't set. ${run.approvalMessage}`}</p>}
+      {done && run.result?.message && <p className="mt-1 text-accent-3-text">{run.result.message}</p>}
+      {done && account && sum.unconfirmed > 0 && (
+        <p className="mt-1 text-xs">
+          <a className="text-accent-text" href={explorerUrl("address", account)} target="_blank" rel="noreferrer">
+            {"See your address's transactions on the explorer"}
+          </a>
+        </p>
       )}
-      {done && (
-        <>
-          <p className="font-medium">{run.result ? summaryText(run.rows.length, sum) : "No schedule was created."}</p>
-          {run.approvalMessage && <p className="mt-1 text-accent-3-text">{`The approval wasn't set. ${run.approvalMessage}`}</p>}
-          {run.result?.message && <p className="mt-1 text-accent-3-text">{run.result.message}</p>}
-        </>
-      )}
+      <p className="mt-2 text-xs text-muted" data-testid="run-terms">
+        {`Terms: starts ${run.form.startMode === "now" ? "when created" : utcText(run.terms.start)}, runs for ${spanText(run.terms.duration)}, ${run.terms.cliff > 0n ? `cliff ${spanText(run.terms.cliff)}` : "no cliff"}.`}
+      </p>
       <ul className="mt-3 max-h-56 overflow-auto rounded-md border border-border-2 text-xs">
         {run.rows.map((row, i) => {
           const state = run.states[i];

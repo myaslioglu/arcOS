@@ -1,6 +1,7 @@
 import { getAddress, isAddress } from "viem";
 import type { Address, NetworkId } from "@arcos/chain";
-import type { AddedWallet, TokenCache } from "./load";
+import type { AddedWallet } from "./load";
+import type { TokenCache } from "./tokenSource";
 
 /**
  * Wallets a person added by address (ones they came to own, or whose token the event lookup couldn't find). Kept in the

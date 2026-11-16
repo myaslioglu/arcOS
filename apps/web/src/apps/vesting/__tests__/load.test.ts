@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { checkAdded, loadVestings } from "../load";
+import { forgetFailed } from "../tokenSource";
+
+beforeEach(() => forgetFailed());
 
 const FACTORY = "0x1111111111111111111111111111111111111111" as const;
 const USER = "0x2222222222222222222222222222222222222222" as const;
@@ -38,10 +41,12 @@ function fakeClient(over: { events?: (a: { fromBlock: bigint; toBlock?: bigint; 
     if (functionName === "vestingsOfSlice") return made.slice(Number((args as bigint[])[1]));
     if (functionName === "isVesting") return (args as string[])[0].toLowerCase() === W1;
     if (functionName === "owner") return owners[(args as string[] | undefined)?.[0] ?? W1];
+    if (functionName === "balanceOf") return 900n * E18;
+    if (functionName === "released") return 100n * E18;
     throw new Error(`unexpected ${functionName}`);
   });
   // Every wallet was created in block 50; the chain is at block 100.
-  const getCode = vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => (blockNumber >= 50n ? "0x6080" : undefined));
+  const getCode = vi.fn(async ({ blockNumber }: { address?: string; blockNumber: bigint }) => (blockNumber >= 50n ? "0x6080" : undefined));
   const getContractEvents = vi.fn(over.events ?? (async ({ fromBlock }: { fromBlock: bigint; toBlock?: bigint; args?: { beneficiary: string } }) => (fromBlock === 50n ? [W1, W2, W3].map((vesting) => ({ args: { vesting, token: TOKEN } })) : [])));
   const getBlock = vi.fn(async () => ({ timestamp: 1_500n, number: 100n }));
   return { client: { multicall, readContract, getContractEvents, getBlock, getCode } as never, multicall, readContract, getContractEvents, getCode };
@@ -77,9 +82,27 @@ describe("loadVestings", () => {
   it("finds each wallet's creation block by bisection and reads the event from that block alone", async () => {
     const { client, getContractEvents, getCode } = fakeClient();
     await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
-    expect(getContractEvents.mock.calls.every((c) => c[0].fromBlock === 50n && c[0].toBlock === 50n && c[0].args?.beneficiary === USER)).toBe(true);
+    expect(getContractEvents.mock.calls.every((c) => c[0].fromBlock === 50n && c[0].toBlock === 50n && c[0].args === undefined)).toBe(true);
     // 2 owned-or-not wallets x about log2(100) steps, nowhere near a scan of every block
     expect(getCode.mock.calls.length).toBeLessThan(3 * 9);
+  });
+
+  it("looks up tokens only for wallets the user still owns", async () => {
+    const { client, getCode } = fakeClient();
+    await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
+    const looked = new Set(getCode.mock.calls.map((c) => c[0].address?.toLowerCase()));
+    expect(looked.has(W2)).toBe(false);
+    expect(looked.has(W1) && looked.has(W3)).toBe(true);
+  });
+
+  it("does not search again, on the next refresh, for a wallet it already failed to find", async () => {
+    const { client, getCode } = fakeClient({ events: async () => [] });
+    const a = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
+    expect(a.tokenLookupFailed).toBe(true);
+    const calls = getCode.mock.calls.length;
+    const b = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
+    expect(getCode.mock.calls.length).toBe(calls);
+    expect(b.tokenLookupFailed).toBe(true);
   });
 
   it("searches from the configured block, and uses a remembered token without any lookup", async () => {
@@ -127,9 +150,9 @@ describe("loadVestings", () => {
 });
 
 describe("checkAdded", () => {
-  it("takes a wallet ArcOS made and the user owns", async () => {
+  it("takes a wallet ArcOS made, the user owns, and whose token the wallet holds or the factory names", async () => {
     const { client } = fakeClient();
-    expect(await checkAdded(client, FACTORY, USER, W1, TOKEN)).toBeNull();
+    expect(await checkAdded(client, FACTORY, USER, W1, TOKEN)).toBeNull(); // holds 900
   });
   it("refuses malformed input, a wallet ArcOS didn't make and one owned by someone else", async () => {
     const { client } = fakeClient();
@@ -137,5 +160,27 @@ describe("checkAdded", () => {
     expect(await checkAdded(client, FACTORY, USER, W1, "nope")).toMatch(/token address/);
     expect(await checkAdded(client, FACTORY, USER, W2, TOKEN)).toMatch(/didn't create/);
     expect(await checkAdded(client, FACTORY, OTHER, W1, TOKEN)).toMatch(/another address/);
+  });
+  it("says so when the typed token can't be confirmed, and refuses one that isn't the wallet's", async () => {
+    const empty = fakeClient();
+    // a token the wallet holds none of and never released, and no creation event to check it against
+    empty.readContract.mockImplementation(async ({ functionName, args }: Call) => {
+      if (functionName === "isVesting") return true;
+      if (functionName === "owner") return USER;
+      if (functionName === "balanceOf" || functionName === "released") return 0n;
+      throw new Error(`unexpected ${functionName} ${String(args)}`);
+    });
+    const nothing = fakeClient({ events: async () => [] });
+    nothing.readContract.mockImplementation(empty.readContract.getMockImplementation()!);
+    expect(await checkAdded(nothing.client, FACTORY, USER, W1, TOKEN)).toMatch(/Couldn't confirm/);
+    // the factory's own event names another token for this wallet
+    const OTHER_TOKEN = "0x5555555555555555555555555555555555555555";
+    const wrong = fakeClient({ events: async () => [{ args: { vesting: W1, token: OTHER_TOKEN } }] });
+    wrong.readContract.mockImplementation(empty.readContract.getMockImplementation()!);
+    expect(await checkAdded(wrong.client, FACTORY, USER, W1, TOKEN)).toMatch(/isn't the token this schedule was made for/);
+    // and when it does name it, it is confirmed
+    const right = fakeClient({ events: async () => [{ args: { vesting: W1, token: TOKEN } }] });
+    right.readContract.mockImplementation(empty.readContract.getMockImplementation()!);
+    expect(await checkAdded(right.client, FACTORY, USER, W1, TOKEN)).toBeNull();
   });
 });

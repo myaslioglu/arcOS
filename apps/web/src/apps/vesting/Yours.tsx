@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useConnection, usePublicClient } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
-import { getAddress, isAddress } from "viem";
+import { getAddress } from "viem";
 import { activeChain, activeNetwork, explorerUrl, type Address } from "@arcos/chain";
 import { useDesktop } from "@arcos/shell";
 import { describeContractError } from "@/lib/contract-error";
@@ -30,12 +30,11 @@ function Row({ label, value, title }: { label: string; value: string; title?: st
   );
 }
 
-function Wallet({ w, now, factory, onRelease, onToken, busy }: { w: WalletView; now: bigint; factory: Address; onRelease: (w: WalletView) => void; onToken: (w: WalletView, token: string) => string | null; busy: boolean }) {
+function Wallet({ w, now, onRelease, onToken, busy }: { w: WalletView; now: bigint; onRelease: (w: WalletView) => void; onToken: (w: WalletView, token: string) => Promise<string | null>; busy: boolean }) {
   const [tokenText, setTokenText] = useState("");
   const [tokenError, setTokenError] = useState<string | null>(null);
   const state = releaseState(w, busy);
   const end = w.start + w.duration;
-  void factory;
   return (
     <li className="rounded-md border border-border-2 p-3" data-testid="vesting-wallet">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3">
@@ -72,7 +71,7 @@ function Wallet({ w, now, factory, onRelease, onToken, busy }: { w: WalletView; 
           className="mt-2 flex gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            setTokenError(onToken(w, tokenText));
+            void onToken(w, tokenText).then(setTokenError);
           }}
         >
           <input aria-label="Token address of this schedule" className={`${INPUT} flex-1`} placeholder="Token address of this schedule" value={tokenText} onChange={(e) => setTokenText(e.target.value)} />
@@ -145,8 +144,11 @@ export function Yours({ factory, active }: { factory: Address; active: boolean }
     }
   };
 
-  const setToken = (w: WalletView, token: string): string | null => {
-    if (!isAddress(token.trim(), { strict: false })) return "That isn't a token address.";
+  // A token the person types is checked against the wallet before it is kept (see tokenSource.confirmToken).
+  const setToken = async (w: WalletView, token: string): Promise<string | null> => {
+    if (!client) return "Wallet or network isn't ready.";
+    const problem = await checkAdded(client, factory, address, w.wallet, token.trim(), VESTING_FROM_BLOCK[network]);
+    if (problem) return problem;
     setAdded(addWallet(key, w.wallet, getAddress(token.trim()) as Address));
     return null;
   };
@@ -154,7 +156,7 @@ export function Yours({ factory, active }: { factory: Address; active: boolean }
   const submitAdd = async () => {
     if (!client) return;
     setAddError(null);
-    const problem = await checkAdded(client, factory, address, addWalletText.trim(), addTokenText.trim());
+    const problem = await checkAdded(client, factory, address, addWalletText.trim(), addTokenText.trim(), VESTING_FROM_BLOCK[network]);
     if (problem) return setAddError(problem);
     setAdded(addWallet(key, getAddress(addWalletText.trim()) as Address, getAddress(addTokenText.trim()) as Address));
     setAddWalletText("");
@@ -181,7 +183,7 @@ export function Yours({ factory, active }: { factory: Address; active: boolean }
           {data.wallets.length === 0 && <p className="mt-3 text-muted">{data.madeCount === 0 ? "No schedule has been made for this address yet." : "No schedule here belongs to you now."}</p>}
           <ul className="mt-3 grid gap-3">
             {data.wallets.map((w) => (
-              <Wallet key={w.wallet} w={w} now={data.now} factory={factory} busy={releasing === w.wallet} onRelease={(x) => void doRelease(x)} onToken={setToken} />
+              <Wallet key={w.wallet} w={w} now={data.now} busy={releasing === w.wallet} onRelease={(x) => void doRelease(x)} onToken={setToken} />
             ))}
           </ul>
           {data.transferred.length > 0 && (
@@ -207,7 +209,7 @@ export function Yours({ factory, active }: { factory: Address; active: boolean }
       )}
       <details className="mt-4 text-xs">
         <summary className="cursor-pointer text-muted">Open a vesting contract by address</summary>
-        <p className="mt-2 text-muted">{"For a contract that was handed to you, or a schedule whose token isn't found above. It must be one ArcOS created and one you own."}</p>
+        <p className="mt-2 text-muted">{"For a contract that was handed to you, or a schedule whose token isn't found above. It must be one ArcOS created and one you own, and the token must be one the contract holds or has released."}</p>
         <div className="mt-2 grid gap-2">
           <input aria-label="Vesting contract address" className={INPUT} placeholder="Vesting contract address" value={addWalletText} onChange={(e) => setAddWalletText(e.target.value)} />
           <input aria-label="Token address" className={INPUT} placeholder="Token address" value={addTokenText} onChange={(e) => setAddTokenText(e.target.value)} />

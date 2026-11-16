@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore, type ChangeEvent } from "react";
+import { useMemo, useState, useSyncExternalStore, type ChangeEvent } from "react";
 import { useConnection, useReadContract, useReadContracts } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { erc20Abi, formatUnits, isAddress } from "viem";
@@ -27,8 +27,6 @@ const INPUT = "min-w-0 rounded-md border border-border-2 bg-surface px-2 py-1.5 
 const BUTTON = "min-h-8 rounded-md border border-border-2 px-3 text-xs pointer-coarse:min-h-11 disabled:opacity-50";
 const LABEL = "block text-xs text-muted";
 
-const nowSeconds = () => BigInt(Math.floor(Date.now() / 1000));
-
 function UnitSelect({ value, onChange, label, disabled }: { value: FormState["durationUnit"]; onChange: (v: FormState["durationUnit"]) => void; label: string; disabled: boolean }) {
   return (
     <select aria-label={label} className={INPUT} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as FormState["durationUnit"])}>
@@ -46,7 +44,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
   const chain = activeChain();
   const { open, notify } = useDesktop();
   const { address } = useConnection();
-  const { ready, readFee, run } = useCreateVestings();
+  const { ready, readFee, chainNow, run } = useCreateVestings();
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM, token: prefilledToken ?? "" });
@@ -92,11 +90,11 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
   const fee = useQuery({ queryKey: ["vesting-fee", chain.id], queryFn: readFee, enabled: ready, staleTime: 30_000 });
   const feeValue: bigint | "error" | null = fee.isError ? "error" : (fee.data ?? null);
 
-  const [now, setNow] = useState(nowSeconds);
-  useEffect(() => {
-    const id = setInterval(() => setNow(nowSeconds()), 30_000);
-    return () => clearInterval(id);
-  }, []);
+  // "When created" starts at the chain's own time (the latest block), not the browser's clock; the clock stands in only until
+  // the first read answers.
+  const chainTime = useQuery({ queryKey: ["vesting-chain-now", chain.id], queryFn: chainNow, enabled: ready, refetchInterval: 15_000 });
+  const [clockNow] = useState(() => BigInt(Math.floor(Date.now() / 1000)));
+  const now = chainTime.data ?? clockNow;
 
   const plan = useMemo(() => buildPlan(form, decimals !== null && symbol !== null ? decimals : null, now), [form, decimals, symbol, now]);
   const busy = snapshot.status === "running";
@@ -119,26 +117,39 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
         run={snapshot}
         onDone={() => session.dismiss()}
         onReuse={(rows) => {
-          set("mode", "many");
-          set("list", rowsText(rows, snapshot.decimals));
-          set("token", snapshot.token);
+          // The whole form the run began with, so the unfinished rows are made with the same terms.
+          setForm({ ...snapshot.form, token: snapshot.token, mode: "many", list: rowsText(rows, snapshot.decimals) });
           session.dismiss();
         }}
         onOpenRevoke={() => open("revoke")}
+        account={address}
       />
     );
   }
 
-  const submit = () => {
+  const submit = async () => {
     if (!plan.ok || !plan.terms || decimals === null || symbol === null || !tokenCandidate) return;
     if (typeof feeValue !== "bigint") return notify("Couldn't read the fee. Try again.", "warn");
-    // "Now" is read again here, at the moment of signing, not taken from the render.
-    const fresh = buildPlan(form, decimals, nowSeconds());
+    // "Now" is the chain's time, read again here at the moment of signing, not taken from the render.
+    let t: bigint;
+    try {
+      t = await chainNow();
+    } catch {
+      return notify("Couldn't read the chain's time. Try again.", "warn");
+    }
+    const fresh = buildPlan(form, decimals, t);
     if (!fresh.ok || !fresh.terms) return;
-    void run(tokenCandidate, symbol, decimals, fresh.rows, fresh.terms, feeValue).catch((err: unknown) => notify(describeContractError(err), "warn", 6000));
+    await run(tokenCandidate, symbol, decimals, fresh.rows, form, fresh.terms, feeValue).catch((err: unknown) => notify(describeContractError(err), "warn", 6000));
   };
 
   const show = (key: keyof typeof plan.errors, value: string) => (value.trim() !== "" ? plan.errors[key] : undefined);
+  // Every invalid field says so (aria-invalid) and points at its message (aria-describedby).
+  const invalid = (id: string, message: string | undefined) => (message ? { "aria-invalid": true as const, "aria-describedby": `${id}-error` } : {});
+  const tokenMsg = show("token", form.token);
+  const beneficiaryMsg = show("beneficiary", form.beneficiary);
+  const amountMsg = show("amount", form.amount);
+  const listMsg = form.list.trim() !== "" ? plan.errors.list : undefined;
+  const startMsg = plan.errors.start && (form.startMode === "date" ? form.startDate !== "" : true) ? plan.errors.start : undefined;
   const durationError = plan.errors.duration;
   const cliffError = plan.errors.cliff;
   const terms = plan.terms;
@@ -146,7 +157,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
   const totalShort = decimals === null ? "" : displayAmount(formatUnits(total, decimals), { mode: "up" });
   const have = balance.data;
   const short = have !== undefined && decimals !== null && total > have;
-  const note = terms ? startedNote(terms.start, terms.duration, terms.cliff, now) : null;
+  const note = terms && form.startMode === "date" ? startedNote(terms.start, terms.duration, terms.cliff, now) : null;
   const rowCount = plan.rows.length;
   const feeText = vestFeeText(feeValue, rowCount);
   const feeTotal = typeof feeValue === "bigint" ? vestFeeTotal(feeValue, rowCount) : null;
@@ -165,13 +176,13 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
           placeholder="Token contract address"
           value={form.token}
           onChange={(e) => set("token", e.target.value)}
-          aria-invalid={show("token", form.token) ? true : undefined}
+          {...invalid("vesting-token", tokenMsg)}
         />
         <button type="button" className={BUTTON} onClick={() => set("token", USDC)}>
           USDC
         </button>
       </div>
-      {show("token", form.token) && <p className="mt-1 text-xs text-accent-3-text">{plan.errors.token}</p>}
+      {tokenMsg && <p id="vesting-token-error" className="mt-1 text-xs text-accent-3-text">{tokenMsg}</p>}
       {tokenCandidate && decimalsFailed && <p className="mt-1 text-xs text-accent-3-text">{"Couldn't read this token. Check the address."}</p>}
       {tokenCandidate && !decimalsFailed && decimals === null && <p className="mt-1 text-xs text-muted">Reading the token…</p>}
       {symbol !== null && decimals !== null && (
@@ -204,15 +215,16 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
               placeholder="0x…"
               value={form.beneficiary}
               onChange={(e) => set("beneficiary", e.target.value)}
+              {...invalid("vesting-beneficiary", beneficiaryMsg)}
             />
-            {show("beneficiary", form.beneficiary) && <p className="mt-1 text-xs text-accent-3-text">{plan.errors.beneficiary}</p>}
+            {beneficiaryMsg && <p id="vesting-beneficiary-error" className="mt-1 text-xs text-accent-3-text">{beneficiaryMsg}</p>}
           </div>
           <div>
             <label className={LABEL} htmlFor="vesting-amount">
               Amount
             </label>
-            <input id="vesting-amount" className={`${INPUT} mt-1 w-full`} inputMode="decimal" placeholder="1000" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
-            {show("amount", form.amount) && <p className="mt-1 text-xs text-accent-3-text">{plan.errors.amount}</p>}
+            <input id="vesting-amount" className={`${INPUT} mt-1 w-full`} inputMode="decimal" placeholder="1000" value={form.amount} onChange={(e) => set("amount", e.target.value)} {...invalid("vesting-amount", amountMsg)} />
+            {amountMsg && <p id="vesting-amount-error" className="mt-1 text-xs text-accent-3-text">{amountMsg}</p>}
           </div>
         </div>
       ) : (
@@ -226,6 +238,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
             placeholder={"0x… , 12.5"}
             value={form.list}
             onChange={(e) => set("list", e.target.value)}
+            {...invalid("vesting-list", listMsg)}
           />
           <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-muted">
             <label className={`${BUTTON} inline-flex shrink-0 cursor-pointer items-center text-fg focus-within:outline focus-within:outline-1 focus-within:outline-accent`}>
@@ -236,7 +249,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
               {fileName ?? "No file chosen"}
             </span>
           </div>
-          {plan.errors.list && form.list.trim() !== "" && <p className="mt-2 text-xs text-accent-3-text">{plan.errors.list}</p>}
+          {listMsg && <p id="vesting-list-error" className="mt-2 text-xs text-accent-3-text">{listMsg}</p>}
           {plan.issues.length > 0 && (
             <ul className="mt-2 max-h-24 overflow-auto text-xs text-accent-3-text">
               {plan.issues.slice(0, 20).map((i) => (
@@ -265,11 +278,11 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
               </button>
             </div>
             {form.startMode === "date" && (
-              <input aria-label="Start date and time" type="datetime-local" className={INPUT} value={form.startDate} onChange={(e) => set("startDate", e.target.value)} />
+              <input aria-label="Start date and time" type="datetime-local" className={INPUT} value={form.startDate} onChange={(e) => set("startDate", e.target.value)} {...invalid("vesting-start", startMsg)} id="vesting-start" />
             )}
           </div>
           {form.startMode === "date" && <p className="mt-1 text-xs text-muted">Your local time. A date in the past is allowed: what has unlocked by now can be released at once.</p>}
-          {plan.errors.start && (form.startMode === "date" ? form.startDate !== "" : true) && <p className="mt-1 text-xs text-accent-3-text">{plan.errors.start}</p>}
+          {startMsg && <p id="vesting-start-error" className="mt-1 text-xs text-accent-3-text">{startMsg}</p>}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -277,20 +290,20 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
               Runs for
             </label>
             <div className="mt-1 flex gap-1">
-              <input id="vesting-duration" className={`${INPUT} w-16`} inputMode="numeric" value={form.durationValue} onChange={(e) => set("durationValue", e.target.value)} />
+              <input id="vesting-duration" className={`${INPUT} w-16`} inputMode="numeric" value={form.durationValue} onChange={(e) => set("durationValue", e.target.value)} {...invalid("vesting-duration", durationError)} />
               <UnitSelect label="Duration unit" value={form.durationUnit} disabled={false} onChange={(v) => set("durationUnit", v)} />
             </div>
-            {durationError && <p className="mt-1 text-xs text-accent-3-text">{durationError}</p>}
+            {durationError && <p id="vesting-duration-error" className="mt-1 text-xs text-accent-3-text">{durationError}</p>}
           </div>
           <div>
             <label className={LABEL} htmlFor="vesting-cliff">
               Cliff (optional)
             </label>
             <div className="mt-1 flex gap-1">
-              <input id="vesting-cliff" className={`${INPUT} w-16`} inputMode="numeric" placeholder="0" value={form.cliffValue} onChange={(e) => set("cliffValue", e.target.value)} />
+              <input id="vesting-cliff" className={`${INPUT} w-16`} inputMode="numeric" placeholder="0" value={form.cliffValue} onChange={(e) => set("cliffValue", e.target.value)} {...invalid("vesting-cliff", cliffError)} />
               <UnitSelect label="Cliff unit" value={form.cliffUnit} disabled={false} onChange={(v) => set("cliffUnit", v)} />
             </div>
-            {cliffError && <p className="mt-1 text-xs text-accent-3-text">{cliffError}</p>}
+            {cliffError && <p id="vesting-cliff-error" className="mt-1 text-xs text-accent-3-text">{cliffError}</p>}
           </div>
         </div>
       </fieldset>
@@ -317,7 +330,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
             {rowCount} {rowCount === 1 ? "schedule" : "schedules"} · total {totalShort} {symbol}
           </p>
           <p className="mt-1 text-muted">
-            {`Your wallet first asks you to approve exactly ${totalShort} ${symbol} for the vesting contract (skipped when it already covers that), then to confirm each schedule.`}
+            {`Your wallet first asks you to approve exactly ${formatUnits(total, decimals)} ${symbol} for the vesting contract (skipped when it already covers that), then to confirm each schedule.`}
           </p>
           {short && <p className="mt-1 text-accent-3-text">{"Your balance is below this total. Schedules your balance can't cover will fail."}</p>}
           {feeValue === "error" ? (
@@ -338,7 +351,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
       )}
 
       <div className="mt-4">
-        <button type="button" disabled={!plan.ok || typeof feeValue !== "bigint" || !ready} className="w-full rounded-md border border-border-2 px-3 py-2 disabled:opacity-50" onClick={submit}>
+        <button type="button" disabled={!plan.ok || typeof feeValue !== "bigint" || !ready} className="w-full rounded-md border border-border-2 px-3 py-2 disabled:opacity-50" onClick={() => void submit()}>
           {rowCount > 1 ? `Create ${rowCount} schedules` : "Create schedule"}
         </button>
         {!plan.ok && plan.blocker && (form.token.trim() !== "" || form.mode === "many") && <p className="mt-1 text-xs text-muted">{plan.blocker}</p>}
