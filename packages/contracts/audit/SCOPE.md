@@ -1,9 +1,11 @@
 # Audit scope: 4rc.OS R1 contracts
 
 Status: **draft**. The package is frozen later (see "Commit"). Until then, numbers here are measured on the draft's
-base commit and are refreshed at the freeze. The nSLOC and line counts and the test counts below were refreshed for
-the 2026-10-02 contract changes (hooked v4 pools refused at the lock; `renounceOwnership` disabled on `VaultFactory`
-and `ArcVesting`).
+base commit and are refreshed at the freeze. The nSLOC and line counts and the test counts below were last refreshed
+for the owner's decision of 2026-11-16: `VestingFactory.tokenOf` records each wallet's token, and `lockToken` and
+`lockPosition` take the highest share the caller accepts (`maxFeeBps`) and revert `FeeAboveMax` above it. Before that
+they were refreshed for the 2026-10-02 contract changes (hooked v4 pools refused at the lock; `renounceOwnership`
+disabled on `VaultFactory` and `ArcVesting`).
 
 The other documents in this folder:
 - `THREAT-MODEL.md`: actors, assets, trust assumptions, and the open questions for the auditor.
@@ -17,6 +19,7 @@ The other documents in this folder:
 | Frozen commit | `<to be set at the freeze>` |
 | Draft written on | `main` at `5ad18ee` |
 | Updated for the owner's decisions of 2026-10-02 | branch `audit-decisions`, from `main` at `8d91dd1` |
+| Updated for the owner's decision of 2026-11-16 (`tokenOf`, `maxFeeBps`) | branch `r1-contract-changes`, contracts at `8db83fb`, from `main` at `aa4e1eb` |
 
 The package is frozen at the commit whose contracts the testnet apps (Vault, Vesting, and Inspector's lock and
 vesting checks) exercised on Arc Testnet. A contract change before then means a new testnet deployment, and the freeze
@@ -31,15 +34,15 @@ All paths are under `packages/contracts/`.
 |---|---|---:|---:|---|
 | `src/vault/LockVault.sol` | `LockVault` | 65 | 107 | One ERC-20 lock per clone: `extend`, `withdraw` after `unlockAt`, two-step ownership |
 | `src/vault/PositionVault.sol` | `PositionVault` | 169 | 251 | One Uniswap v3 or v4 position NFT per clone: `collect` fees while locked, `withdraw` after `unlockAt` |
-| `src/vault/VaultFactory.sol` | `VaultFactory` | 177 | 295 | Clones and funds vaults, takes the fees, keeps the registries, owns the position-manager allow-list, refuses v4 pools with hooks |
+| `src/vault/VaultFactory.sol` | `VaultFactory` | 184 | 317 | Clones and funds vaults, takes the fees (never a share above the caller's `maxFeeBps`), keeps the registries, owns the position-manager allow-list, refuses v4 pools with hooks |
 | `src/vault/interfaces/IPositionManagers.sol` | `IV3PositionManager`, `IV4PositionManager` | 17 | 54 | The manager calls the vaults make |
 | `src/vesting/ArcVesting.sol` | `ArcVesting` | 26 | 69 | OpenZeppelin `VestingWalletCliff`, native path closed, renounce disabled |
-| `src/vesting/VestingFactory.sol` | `VestingFactory` | 90 | 157 | Deploys and funds one wallet per schedule, takes the fee, keeps the registries |
+| `src/vesting/VestingFactory.sol` | `VestingFactory` | 92 | 165 | Deploys and funds one wallet per schedule, takes the fee, keeps the registries and each wallet's token (`tokenOf`) |
 | `src/ProPass.sol` | `ProPass` | 34 | 60 | Prepaid Pro time per account; forwards the payment |
 | `src/FeeController.sol` | `FeeController` | 83 | 113 | Fee values, caps, 48-hour delay on increases, the fee recipient |
 | `src/interfaces/IFeeController.sol` | `IFeeController` | 3 | 7 | What the fee payers read |
 | `script/DeployR1.s.sol` | `DeployR1` | 155 | 204 | Adds R1's fee keys, deploys the three contracts, allow-lists the v4 PositionManager |
-| **Total** | | **819** | **1,317** | Contracts alone (without the script): **664** nSLOC |
+| **Total** | | **828** | **1,347** | Contracts alone (without the script): **673** nSLOC |
 
 **How nSLOC was measured.** `solidity-code-metrics` 0.0.28, run from `packages/contracts`:
 
@@ -152,37 +155,41 @@ npm run test:fork                     # the fork suite: needs rpc.mainnet.arc.io
 ```
 
 The default run took 122 s on four cores at the draft's base commit: 25 suites, 397 tests, all passing. With the
-2026-10-02 changes it is 25 suites and 401 tests, all passing. Fuzz tests run 512 times; the invariant suites set
-their own runs and depth (see `INVARIANTS.md`), with `fail_on_revert` on.
+2026-10-02 changes it is 25 suites and 401 tests. At `main` `aa4e1eb` it is 27 suites and 449 tests (Inspector's trade
+simulator and the vesting vectors the Vesting app shares came in between), and with the 2026-11-16 changes 27 suites
+and 466 tests, all passing, in 83 s on four cores. Fuzz tests run 512 times; the invariant suites set their own runs
+and depth (see `INVARIANTS.md`), with `fail_on_revert` on.
 
 | Suite | Tests | Covers |
 |---|---:|---|
 | `test/vault/LockVault.t.sol` | 26 | LockVault unit and fuzz |
 | `test/vault/VaultFactory.t.sol` | 30 | lockToken, constructor probes, refusals, renounce disabled |
-| `test/vault/VaultFees.t.sol` | 17 | flat and LP fees, fee changes, blocked recipients |
+| `test/vault/VaultFees.t.sol` | 23 | flat and LP fees, the caller's maximum LP share (`maxFeeBps`), fee changes, blocked recipients |
 | `test/vault/VaultTokens.t.sol` | 13 | fee-on-transfer, rebasing and hostile tokens |
 | `test/vault/VaultRegistry.t.sol` | 14 | registries and slices |
 | `test/vault/VaultFuzz.t.sol` | 4 | lock round trip, time bounds, who receives value |
 | `test/vault/VaultGas.t.sol` | 8 | gas of each entry point |
-| `test/vault/VaultInvariants.t.sol` | 8 | 7 invariants and a scripted handler run |
+| `test/vault/VaultInvariants.t.sol` | 9 | 8 invariants and a scripted handler run |
 | `test/vault/PositionVault.t.sol` | 53 | PositionVault unit tests, the platform-share skip (`test_q9_*`) |
-| `test/vault/PositionFactory.t.sol` | 17 | lockPosition, registries, principal checks, hooked v4 pools |
+| `test/vault/PositionFactory.t.sol` | 21 | lockPosition, registries, principal checks, hooked v4 pools, the caller's maximum share |
 | `test/vault/PositionFuzz.t.sol` | 3 | exact split, who receives value, extend |
-| `test/vault/PositionInvariants.t.sol` | 7 | 6 invariants and a scripted handler run |
+| `test/vault/PositionInvariants.t.sol` | 8 | 7 invariants and a scripted handler run |
 | `test/vesting/ArcVesting.t.sol` | 20 | the schedule, the closed native path, rebasing and taxed tokens, renounce disabled |
-| `test/vesting/VestingFactory.t.sol` | 26 | createVesting, bounds, registries |
+| `test/vesting/VestingFactory.t.sol` | 30 | createVesting, bounds, registries, `tokenOf` |
 | `test/vesting/VestingFuzz.t.sol` | 6 | the curve against a reference, fees, slices |
 | `test/vesting/VestingGas.t.sol` | 6 | gas |
-| `test/vesting/VestingInvariants.t.sol` | 7 | 6 invariants and a scripted handler run |
+| `test/vesting/VestingInvariants.t.sol` | 8 | 7 invariants and a scripted handler run |
+| `test/vesting/VestingVectors.t.sol` | 2 | the curve against the vectors the Vesting app's tests share |
 | `test/ProPass.t.sol` | 22 | ProPass unit, fuzz and gas |
 | `test/FeeController.t.sol` | 14 | FeeController, including the cap fuzz test |
 | `test/DeployR1.t.sol` | 26 | the script's keys, order, refusals and continue mode |
-| **In scope** | **327** | The other 74 tests cover the out-of-scope R0 contracts |
+| **In scope** | **346** | The other 120 tests cover out-of-scope code: the R0 contracts and Inspector's trade simulator |
 
-The fork suite, `test/fork/PositionVault.fork.t.sol` (26 tests), runs `PositionVault` and `VaultFactory` against the
+The fork suite, `test/fork/PositionVault.fork.t.sol` (27 tests), runs `PositionVault` and `VaultFactory` against the
 real Uniswap v3 NonfungiblePositionManager and v4 PositionManager on a fork of Arc mainnet at block 23,450,000, with
 mock-token pools (v3, v4 ERC-20/ERC-20, v4 native). It checks the fee split, every early exit on the vault and on both
-managers, the refusal of a v4 pool with a live hook, and that the owner gets a working position back at `unlockAt`.
+managers, the refusal of a v4 pool with a live hook, the refusal of a share above the caller's `maxFeeBps` before the
+position moves, and that the owner gets a working position back at `unlockAt`.
 It is not part of the default run or of CI, because it needs the network. Test doubles live in `test/vault/mocks/`
 and `test/vesting/mocks/`.
 
