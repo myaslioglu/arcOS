@@ -127,7 +127,9 @@ export function LockList({ factory, wallet, opened, onOpen }: Props) {
         {groups && groups.owner.length > 0 ? (
           <ul className="grid gap-2">{rows(groups.owner, "owner")}</ul>
         ) : (
-          <p className="text-muted">No locks yet. Lock a token or a position in New lock.</p>
+          <p className="text-muted">
+            {data.locks.length > 0 ? "No active locks." : "No locks yet. Lock a token or a position in New lock."}
+          </p>
         )}
         {data.registered > data.readFromRegistry && (
           <button type="button" className={`${BUTTON} w-fit`} onClick={() => setPages((n) => n + 1)}>

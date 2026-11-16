@@ -18,6 +18,13 @@ type Tab = "new" | "locks";
 const shown = new WeakSet<object>();
 
 /**
+ * The vaults opened by a drop or by params, per wallet, for this page: kept outside the component, since the window
+ * unmounts when minimized, closed or covered on a phone, and a vault opened by its address would otherwise drop out
+ * of the list.
+ */
+const openedByWallet = new Map<string, Address[]>();
+
+/**
  * Vault: New lock (NewLock.tsx) and Your locks (LockList.tsx), in two tabs kept mounted so that a form half filled in
  * survives a look at the other. A token or a position dropped on the window, or named by its params, opens New lock
  * with it; a lock opens Your locks with that vault listed. Everything is read on chain before anything is offered.
@@ -37,12 +44,18 @@ function Vault({ factory, params }: { factory: Address; params: Record<string, s
   const { address } = useConnection();
   const [tab, setTab] = useState<Tab>("new");
   const [prefill, setPrefill] = useState<Prefill | null>(null);
-  const [opened, setOpened] = useState<Address[]>([]);
+  const walletKey = (address ?? "").toLowerCase();
+  const [opened, setOpened] = useState<Address[]>(() => openedByWallet.get(walletKey) ?? []);
 
   const show = (target: Target | null) => {
     if (!target) return;
     if (target.kind === "vault") {
-      setOpened((list) => (list.some((a) => a.toLowerCase() === target.vault.toLowerCase()) ? list : [...list, target.vault]));
+      setOpened((list) => {
+        if (list.some((a) => a.toLowerCase() === target.vault.toLowerCase())) return list;
+        const next = [...list, target.vault];
+        openedByWallet.set(walletKey, next);
+        return next;
+      });
       setTab("locks");
       return;
     }

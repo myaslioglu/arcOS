@@ -25,6 +25,7 @@ import {
   dateBounds,
   formatWhen,
   lockReserve,
+  lpSplit,
   presetUnlock,
   unlockFromDate,
   untilText,
@@ -138,7 +139,9 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
       const a = checkAmount(amountText, info.data.decimals, info.data.balance ?? undefined);
       if (!a.ok) return setError(a.error);
       plan = { kind: "token", token, amount: a.units, unlockAt: check.unlockAt };
-      summary = { kind: "token", label: `${displayUnits(a.units, info.data.decimals)} ${info.data.symbol}`, unlockAt: check.unlockAt };
+      // An LP token's vault receives the amount less ArcOS's share: the result says what is in the vault.
+      const held = info.data.pair ? lpSplit(a.units, fees.data.lpBps).toVault : a.units;
+      summary = { kind: "token", label: `${displayUnits(held, info.data.decimals, "down")} ${info.data.symbol}`, unlockAt: check.unlockAt };
     } else {
       if (!manager || tokenId === null) return setError("Pick a position, or type its id.");
       const p = position.data;
@@ -194,11 +197,13 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
               {outcome.vault}
             </a>
           </p>
-          <p className="text-xs">
-            <a className="text-accent-text underline" href={explorerUrl("tx", outcome.hash)} target="_blank" rel="noopener noreferrer">
-              View the transaction on the explorer
-            </a>
-          </p>
+          {outcome.hash && (
+            <p className="text-xs">
+              <a className="text-accent-text underline" href={explorerUrl("tx", outcome.hash)} target="_blank" rel="noopener noreferrer">
+                View the transaction on the explorer
+              </a>
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <button type="button" className={BUTTON} onClick={onShowLocks}>
               See Your locks
@@ -230,7 +235,12 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
             </button>
           </p>
         )}
-        <div>
+        <div className="flex flex-wrap gap-2">
+          {outcome.result === "unconfirmed" && (
+            <button type="button" className={BUTTON} onClick={onShowLocks}>
+              See Your locks
+            </button>
+          )}
           <button type="button" className={BUTTON} onClick={() => vaultSession.dismissLock()}>
             {outcome.result === "unconfirmed" ? "I checked. Start a new lock" : "Try again"}
           </button>

@@ -104,6 +104,16 @@ test.describe("desktop", () => {
     await expect(watchdog.getByText("work in progress", { exact: false })).toHaveCount(0);
   });
 
+  // Vault acts through the VaultFactory, which no network's ARCOS names yet (D6 of the R1/R2 design): the build lists its
+  // grey stand-in, and a deep link opens the "work in progress" window, never the live app's wallet prompt.
+  test("/#app:vault opens Vault's work-in-progress window while no VaultFactory is set", async ({ page }) => {
+    await page.goto("/#app:vault");
+    const vault = page.getByRole("dialog", { name: "Vault" });
+    await expect(vault).toBeVisible();
+    await expect(vault.getByText("Will lock liquidity pool tokens or team tokens until a date you choose.", { exact: true })).toBeVisible();
+    await expect(vault.getByText("Connect a wallet to use this app.", { exact: true })).toHaveCount(0);
+  });
+
   test("/#app:about deep-links to the About window", async ({ page, baseURL }) => {
     await page.goto("/#app:about");
     const about = page.getByRole("dialog", { name: "About" });

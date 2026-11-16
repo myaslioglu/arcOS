@@ -15,9 +15,12 @@ import { FEE_KEYS, lockVaultAbi, positionVaultAbi, vaultFactoryAbi } from "@arco
 import { POSITION_NFT_ABI } from "@/lib/positions";
 import { LOCK_ABI } from "../errors";
 import {
+  ACTION_EVENT,
   actionCall,
+  actionHappened,
   approvalFor,
   collectedFromLogs,
+  findLocked,
   lockCall,
   runAction,
   runLock,
@@ -59,11 +62,18 @@ const positionLocked = (address: Address, vault: Address, tokenId = 7n) =>
 
 type Chain = {
   allowance?: bigint;
+  /** The allowance once the approval has been sent: the amount approved, unless a test says otherwise. */
+  allowanceAfterApprove?: bigint;
   approved?: Address;
   operator?: boolean;
   fee?: bigint;
+  /** The wallet's registry: its length before the lock, and the vaults the lock added. */
+  registry?: { before: bigint; added: Address[] };
+  /** What each vault holds, for findLocked: a token, or a manager and an id. */
+  vaults?: Record<string, { token?: Address; manager?: Address; tokenId?: bigint }>;
+  events?: Array<{ transactionHash: Hex; args: { vault: Address } }>;
   /** What each function's receipt is: a status and logs, or "lost" for one that can't be read. */
-  receipts?: Record<string, { status: "success" | "reverted"; logs: Log[] } | "lost">;
+  receipts?: Record<string, { status: "success" | "reverted"; logs: Log[]; to?: Address } | "lost">;
   /** Errors the simulation or the wallet throws, by function name. */
   simulate?: Record<string, unknown>;
   wallet?: Record<string, unknown>;
@@ -71,18 +81,28 @@ type Chain = {
 
 function fake(c: Chain = {}) {
   const sent: Array<ContractCall & { chainId?: number; value?: bigint; account?: Address }> = [];
+  let approvalSent = false;
+  let lockSent = false;
   const client: FlowClient = {
-    readContract: vi.fn(async ({ functionName, args }: ContractCall) => {
+    readContract: vi.fn(async ({ address, functionName, args }: ContractCall) => {
       if (functionName === "feeController") return CONTROLLER;
       if (functionName === "feeOf") {
         expect(args).toEqual([FEE_KEYS.LOCK_FLAT]);
         return c.fee ?? FEE;
       }
-      if (functionName === "allowance") return c.allowance ?? 0n;
-      if (functionName === "getApproved") return c.approved ?? "0x0000000000000000000000000000000000000000";
+      if (functionName === "allowance") return approvalSent ? (c.allowanceAfterApprove ?? 10n ** 30n) : (c.allowance ?? 0n);
+      if (functionName === "getApproved") return approvalSent ? FACTORY : (c.approved ?? "0x0000000000000000000000000000000000000000");
       if (functionName === "isApprovedForAll") return c.operator ?? false;
+      if (functionName === "vaultsOfLength") return (c.registry?.before ?? 0n) + (lockSent ? BigInt(c.registry?.added.length ?? 0) : 0n);
+      if (functionName === "vaultsOfSlice") return lockSent ? (c.registry?.added ?? []) : [];
+      const v = c.vaults?.[address.toLowerCase()];
+      if (functionName === "token" && v?.token) return v.token;
+      if (functionName === "manager" && v?.manager) return v.manager;
+      if (functionName === "tokenId" && v?.tokenId !== undefined) return v.tokenId;
       throw new Error(`unexpected read ${functionName}`);
     }),
+    getBlockNumber: vi.fn(async () => 1_000n),
+    getContractEvents: vi.fn(async () => c.events ?? []),
     simulateContract: vi.fn(async (args) => {
       if (c.simulate?.[args.functionName]) throw c.simulate[args.functionName];
       return { request: { ...args } };
@@ -96,7 +116,12 @@ function fake(c: Chain = {}) {
   };
   const writeContractAsync = vi.fn(async (request: never) => {
     const r = request as ContractCall & { chainId?: number };
-    if (c.wallet?.[r.functionName]) throw c.wallet[r.functionName];
+    const error = c.wallet?.[r.functionName];
+    // A refusal sends nothing; any other error here stands for a reply lost after the transaction went out.
+    if (error && (error as { name?: string }).name === "UserRejectedRequestError") throw error;
+    if (r.functionName === "approve") approvalSent = true;
+    if (r.functionName.startsWith("lock")) lockSent = true;
+    if (error) throw error;
     sent.push(r);
     // The hash names the function, so a receipt can be picked per call.
     return `0x${r.functionName}` as Hex;
@@ -211,6 +236,65 @@ describe("runLock: a token", () => {
   });
 });
 
+describe("runLock: what the chain says decides", () => {
+  const lost = Object.assign(new Error("Request expired"), { code: -32603 });
+
+  it("finds the lock in the registry after a wallet error that came after sending, and reports it with its transaction", async () => {
+    const f = fake({
+      registry: { before: 3n, added: [FAKE_VAULT, VAULT] },
+      vaults: { [FAKE_VAULT.toLowerCase()]: { token: TOKEN_B }, [VAULT.toLowerCase()]: { token: TOKEN } },
+      events: [{ transactionHash: "0xfound", args: { vault: VAULT } }],
+      wallet: { lockToken: lost },
+    });
+    expect(await runLock(tokenPlan, FACTORY, FEE, f.deps)).toEqual({ result: "locked", vault: VAULT, hash: "0xfound" });
+    expect(f.client.getContractEvents).toHaveBeenCalledWith(expect.objectContaining({ address: FACTORY, eventName: "TokenLocked", args: { owner: WALLET }, fromBlock: 1_000n }));
+  });
+
+  it("finds a position's lock by its manager and id", async () => {
+    const f = fake({
+      registry: { before: 0n, added: [VAULT] },
+      vaults: { [VAULT.toLowerCase()]: { manager: MANAGER, tokenId: 7n } },
+      wallet: { lockPosition: lost },
+    });
+    expect(await runLock(positionPlan, FACTORY, FEE, f.deps)).toEqual({ result: "locked", vault: VAULT });
+  });
+
+  it("calls the outcome unknown, never failed, when no new lock is listed: no blind second lock", async () => {
+    const f = fake({ registry: { before: 2n, added: [] }, wallet: { lockToken: lost } });
+    expect(await runLock(tokenPlan, FACTORY, FEE, f.deps)).toEqual({
+      result: "unconfirmed",
+      message: "Your wallet answered with an error, and no new lock is listed yet. Check Your locks before you lock again.",
+    });
+    const other = fake({ registry: { before: 0n, added: [FAKE_VAULT] }, vaults: { [FAKE_VAULT.toLowerCase()]: { token: TOKEN_B } }, wallet: { lockToken: lost } });
+    expect((await runLock(tokenPlan, FACTORY, FEE, other.deps)).result).toBe("unconfirmed");
+  });
+
+  it("says nothing is found when the registry can't be read", async () => {
+    const f = fake();
+    (f.client.readContract as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("rpc down"));
+    expect(await findLocked(f.client, FACTORY, tokenPlan, WALLET, 0n, 1n)).toBeNull();
+  });
+
+  it("goes on to the lock when an approval's wallet error came after it was set, and stops when it wasn't", async () => {
+    const set = fake({ wallet: { approve: lost }, receipts: { lockToken: { status: "success", logs: [tokenLocked(FACTORY, VAULT)] } } });
+    expect(await runLock(tokenPlan, FACTORY, FEE, set.deps)).toEqual({ result: "locked", vault: VAULT, hash: "0xlockToken" });
+    const notSet = fake({ wallet: { approve: lost }, allowanceAfterApprove: 0n });
+    expect(await runLock(tokenPlan, FACTORY, FEE, notSet.deps)).toMatchObject({ result: "failed", approvalLeft: false });
+    expect(notSet.sent).toEqual([]);
+  });
+
+  it("reads the allowance again after a successful approval receipt: a cancelled approval stops before the lock", async () => {
+    const f = fake({ allowanceAfterApprove: 999n });
+    expect(await runLock(tokenPlan, FACTORY, FEE, f.deps)).toEqual({
+      result: "failed",
+      message: "The approval didn't take effect, so nothing was locked. Try again.",
+      hash: "0xapprove",
+      approvalLeft: false,
+    });
+    expect(f.sent.map((x) => x.functionName)).toEqual(["approve"]);
+  });
+});
+
 describe("runLock: a position", () => {
   it("approves the factory for this one position, then locks it", async () => {
     const f = fake({ receipts: { lockPosition: { status: "success", logs: [positionLocked(FACTORY, VAULT)] } } });
@@ -283,12 +367,55 @@ describe("runAction", () => {
     expect(collectedFromLogs([], VAULT)).toEqual([]);
   });
 
-  it("extends, withdraws, transfers and accepts, each one transaction", async () => {
-    for (const action of [{ kind: "extend", unlockAt: UNLOCK }, { kind: "withdraw" }, { kind: "transfer", to: OTHER }, { kind: "accept" }] as const) {
-      const f = fake();
-      expect((await runAction({ vault: VAULT, kind: "token" }, action, f.deps)).result, action.kind).toBe("done");
+  /** The receipt an action's call gets: from the vault, with the event the vault emits for it. */
+  const receiptFor = (kind: "extend" | "withdraw" | "transfer" | "accept", from: Address = VAULT) => {
+    const log =
+      kind === "extend"
+        ? eventLog(from, lockVaultAbi as Abi, "Extended", { unlockAt: BigInt(UNLOCK) })
+        : kind === "withdraw"
+          ? eventLog(from, lockVaultAbi as Abi, "Withdrawn", { to: WALLET, amount: 1n })
+          : kind === "transfer"
+            ? eventLog(from, lockVaultAbi as Abi, "OwnershipTransferStarted", { from: WALLET, to: OTHER })
+            : eventLog(from, lockVaultAbi as Abi, "OwnershipTransferred", { from: OTHER, to: WALLET });
+    return { status: "success" as const, logs: [log], to: VAULT };
+  };
+  const actions = [
+    ["extend", { kind: "extend", unlockAt: UNLOCK }, "extend"],
+    ["withdraw", { kind: "withdraw" }, "withdraw"],
+    ["transfer", { kind: "transfer", to: OTHER }, "transferOwnership"],
+    ["accept", { kind: "accept" }, "acceptOwnership"],
+  ] as const;
+
+  it("extends, withdraws, transfers and accepts, each one transaction that counts once the vault's event is in its receipt", async () => {
+    for (const [kind, action, fn] of actions) {
+      const f = fake({ receipts: { [fn]: receiptFor(kind) } });
+      expect((await runAction({ vault: VAULT, kind: "token" }, action, f.deps)).result, kind).toBe("done");
       expect(f.sent).toHaveLength(1);
     }
+  });
+
+  it("calls a successful receipt without the vault's event, or one for another contract, unconfirmed: a cancelled or replaced transaction", async () => {
+    for (const [kind, action, fn] of actions) {
+      const empty = fake({ receipts: { [fn]: { status: "success", logs: [], to: VAULT } } });
+      expect(await runAction({ vault: VAULT, kind: "token" }, action, empty.deps), kind).toMatchObject({ result: "unconfirmed", hash: `0x${fn}` });
+      const elsewhere = fake({ receipts: { [fn]: receiptFor(kind, FAKE_VAULT) } });
+      expect((await runAction({ vault: VAULT, kind: "token" }, action, elsewhere.deps)).result, kind).toBe("unconfirmed");
+    }
+    const replaced = fake({ receipts: { collect: { status: "success", logs: [], to: WALLET } } });
+    expect((await runAction({ vault: VAULT, kind: "position" }, { kind: "collect" }, replaced.deps)).result).toBe("unconfirmed");
+    // A collect with nothing to collect emits nothing: its own receipt counts.
+    const nothing = fake({ receipts: { collect: { status: "success", logs: [], to: VAULT } } });
+    expect(await runAction({ vault: VAULT, kind: "position" }, { kind: "collect" }, nothing.deps)).toEqual({ result: "done", hash: "0xcollect", collected: [] });
+    expect(ACTION_EVENT).toEqual({ extend: "Extended", collect: null, withdraw: "Withdrawn", transfer: "OwnershipTransferStarted", accept: "OwnershipTransferred" });
+    expect(actionHappened({ status: "success", logs: [] }, { vault: VAULT, kind: "token" }, { kind: "collect" })).toBe(true);
+  });
+
+  it("never calls a wallet error after sending a failure: the vault is read again", async () => {
+    const lost = Object.assign(new Error("Request expired"), { code: -32603 });
+    expect(await runAction({ vault: VAULT, kind: "token" }, { kind: "withdraw" }, fake({ wallet: { withdraw: lost } }).deps)).toEqual({
+      result: "unconfirmed",
+      message: "Your wallet answered with an error, so the transaction may or may not have been sent. Check the vault before you try again.",
+    });
   });
 
   it("says a refusal, a revert, an unknown outcome and a decoded error each its own way", async () => {
