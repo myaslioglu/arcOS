@@ -11,7 +11,6 @@ import { notifyBalanceChanged } from "@/lib/balance-refresh";
 import { displayWei } from "@/lib/display-amount";
 import type { DropRow } from "@/lib/recipient-list";
 import { wagmiConfig } from "@/providers/wagmi";
-import { tokenCache } from "./added";
 import type { FormState, Terms } from "./form";
 import { runVesting, type RowOutcome } from "./runVesting";
 import { session } from "./session";
@@ -159,7 +158,6 @@ export function useCreateVestings() {
                 l.args.beneficiary.toLowerCase() === row.address.toLowerCase(),
             );
             if (!created) return { status: "unconfirmed", hash };
-            tokenCache(activeNetwork()).set(created.args.vesting, token);
             return { status: "created", hash, vesting: created.args.vesting };
           },
         });

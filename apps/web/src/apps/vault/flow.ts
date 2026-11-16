@@ -1,6 +1,6 @@
 import { erc20Abi, parseEventLogs, zeroAddress, type Abi, type Address, type Hex, type Log } from "viem";
 import { FEE_KEYS, feeControllerAbi, formatUsdc, lockVaultAbi, positionVaultAbi, vaultFactoryAbi } from "@arcos/chain";
-import { UserFacingError, wasNotSent } from "@/lib/contract-error";
+import { GENERIC_TRANSACTION_ERROR, INSUFFICIENT_FUNDS_ERROR, UserFacingError, wasNotSent } from "@/lib/contract-error";
 import { assertWalletOnChain, withChain } from "@/lib/paid-write";
 import { POSITION_NFT_ABI } from "@/lib/positions";
 import { LOCK_ABI, describeVaultError } from "./errors";
@@ -29,15 +29,18 @@ export type LockPlan =
 export type LockStep = "approve" | "lock" | "find";
 
 export type ContractCall = { address: Address; abi: Abi | readonly unknown[]; functionName: string; args?: readonly unknown[] };
-type Receipt = { status: "success" | "reverted"; logs: readonly Log[]; to?: Address | null };
+type Receipt = { status: "success" | "reverted"; logs: readonly Log[]; to?: Address | null; blockNumber?: bigint };
 /** TokenLocked's or PositionLocked's arguments, as viem's getContractEvents decodes them. */
 type FactoryEventArgs = { vault?: Address; token?: Address; manager?: Address; tokenId?: bigint; amount?: bigint; fee?: bigint; unlockAt?: bigint };
 type FactoryEvent = { transactionHash: Hex | null; args: FactoryEventArgs };
 
-/** The reads, the simulation and the receipt the flows need, as viem's public client answers them. */
+/**
+ * The reads, the simulation and the receipt the flows need, as viem's public client answers them. A simulation with
+ * `blockNumber` runs on the state that block left: how a mined lock that reverted is asked why (whyLockReverted).
+ */
 export type FlowClient = {
   readContract: (args: ContractCall) => Promise<unknown>;
-  simulateContract: (args: ContractCall & { account: Address; value?: bigint }) => Promise<{ request: object }>;
+  simulateContract: (args: ContractCall & { account: Address; value?: bigint; blockNumber?: bigint }) => Promise<{ request: object }>;
   waitForTransactionReceipt: (args: { hash: Hex }) => Promise<Receipt>;
   getBlockNumber: () => Promise<bigint>;
   getContractEvents: (args: { address: Address; abi: Abi | readonly unknown[]; eventName: string; args?: object; fromBlock: bigint }) => Promise<readonly FactoryEvent[]>;
@@ -127,11 +130,39 @@ export async function approvalFor(plan: LockPlan, factory: Address, account: Add
     : { address: plan.manager, abi: POSITION_NFT_ABI, functionName: "approve", args: [factory, plan.tokenId] };
 }
 
-/** The lock call itself, for the wallet as the vault's owner. */
-export function lockCall(plan: LockPlan, factory: Address, account: Address): ContractCall {
+/**
+ * The most this lock accepts for ArcOS's share, in basis points (the factory's `maxFeeBps`): the share the form showed.
+ * The LP share for a token shaped like a v2 pair; the share of collected fees for a position, which the vault keeps for
+ * life; 0 for any other token, which pays no share (so a token that answers as a pair by the time the lock runs is
+ * refused, not charged). A share in force above it when the lock runs reverts the lock with FeeAboveMax.
+ */
+export function maxFeeBps(plan: LockPlan, shown: FeeAmounts): bigint {
+  if (plan.kind === "position") return shown.shareBps;
+  return plan.pair ? shown.lpBps : 0n;
+}
+
+/** The lock call itself, for the wallet as the vault's owner, accepting at most the share the form showed. */
+export function lockCall(plan: LockPlan, factory: Address, account: Address, shown: FeeAmounts): ContractCall {
+  const max = maxFeeBps(plan, shown);
   return plan.kind === "token"
-    ? { address: factory, abi: LOCK_ABI, functionName: "lockToken", args: [plan.token, plan.amount, BigInt(plan.unlockAt), account] }
-    : { address: factory, abi: LOCK_ABI, functionName: "lockPosition", args: [plan.manager, plan.tokenId, BigInt(plan.unlockAt), account] };
+    ? { address: factory, abi: LOCK_ABI, functionName: "lockToken", args: [plan.token, plan.amount, BigInt(plan.unlockAt), account, max] }
+    : { address: factory, abi: LOCK_ABI, functionName: "lockPosition", args: [plan.manager, plan.tokenId, BigInt(plan.unlockAt), account, max] };
+}
+
+/**
+ * Why a mined lock reverted, as a sentence: the same call simulated again on the state its block left names the error,
+ * a fee raised just before the lock was mined above all (FeeAboveMax, WrongFee). LOCK_REVERTED when that can't tell:
+ * no block number, a simulation that goes through now, or an error that decodes to no contract error of the vault's.
+ */
+export async function whyLockReverted(client: Pick<FlowClient, "simulateContract">, call: ContractCall & { account: Address; value: bigint }, blockNumber: bigint | undefined): Promise<string> {
+  if (blockNumber === undefined) return LOCK_REVERTED;
+  try {
+    await client.simulateContract({ ...call, blockNumber });
+    return LOCK_REVERTED;
+  } catch (err) {
+    const said = describeVaultError(err);
+    return said === GENERIC_TRANSACTION_ERROR || said === INSUFFICIENT_FUNDS_ERROR ? LOCK_REVERTED : said;
+  }
 }
 
 /**
@@ -237,7 +268,9 @@ export async function pollLocked(
  * 3. the approval, if the factory hasn't one yet: the exact amount (an ERC-20 or a v2 LP token) or `approve(factory,
  *    tokenId)` (a position), simulated, signed, confirmed, and read again;
  * 4. the fees once more, since an approval can take minutes; then `lockToken` or `lockPosition` with `value` = the
- *    flat fee, simulated, signed, and confirmed, and the vault read from the factory's event.
+ *    flat fee and `maxFeeBps` = the share the form showed (maxFeeBps), simulated, signed, and confirmed, and the vault
+ *    read from the factory's event. A raise applied after the last read and before the lock is mined reverts it
+ *    (WrongFee, FeeAboveMax), and whyLockReverted says so.
  * `onStep` hears each step as it starts, and again once the wallet has signed it. A lock sent whose outcome can't be
  * read is "unconfirmed": never reported as failed, which would invite a second, separately charged lock.
  */
@@ -284,7 +317,8 @@ export async function runLock(
 
     onStep?.("lock", false);
     const fee = await checkFees();
-    const { request } = await client.simulateContract({ ...lockCall(plan, factory, account), account, value: fee });
+    const call = { ...lockCall(plan, factory, account, shown), account, value: fee };
+    const { request } = await client.simulateContract(call);
     // What the registry holds now, to look for this lock in if the wallet's answer is lost after sending.
     const fromBlock = await client.getBlockNumber();
     const before = (await client.readContract({ address: factory, abi: vaultFactoryAbi, functionName: "vaultsOfLength", args: [account] })) as bigint;
@@ -300,7 +334,9 @@ export async function runLock(
     onStep?.("lock", true);
     const receipt = await settle(client, hash);
     if (!receipt) return { result: "unconfirmed", message: UNCONFIRMED_LOCK, hash };
-    if (receipt.status === "reverted") return { result: "failed", message: LOCK_REVERTED, hash, approvalLeft };
+    if (receipt.status === "reverted") {
+      return { result: "failed", message: await whyLockReverted(client, call, receipt.blockNumber), hash, approvalLeft };
+    }
     const locked = lockedFromLogs(receipt.logs, factory, plan, account);
     if (!locked) return { result: "unconfirmed", message: NO_VAULT, hash };
     return { result: "locked", ...locked, hash };

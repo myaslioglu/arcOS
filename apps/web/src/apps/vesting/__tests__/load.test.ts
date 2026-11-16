@@ -1,24 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { checkAdded, loadVestings } from "../load";
-import { forgetFailed } from "../tokenSource";
-
-beforeEach(() => forgetFailed());
 
 const FACTORY = "0x1111111111111111111111111111111111111111" as const;
 const USER = "0x2222222222222222222222222222222222222222" as const;
 const OTHER = "0x3333333333333333333333333333333333333333" as const;
 const TOKEN = "0x4444444444444444444444444444444444444444" as const;
+const TOKEN_B = "0x5555555555555555555555555555555555555555" as const;
 const W1 = "0x00000000000000000000000000000000000000a1" as const;
 const W2 = "0x00000000000000000000000000000000000000a2" as const;
 const W3 = "0x00000000000000000000000000000000000000a3" as const;
+const W4 = "0x00000000000000000000000000000000000000a4" as const;
+const ZERO = "0x0000000000000000000000000000000000000000";
 const E18 = 10n ** 18n;
 
 type Call = { address: string; functionName: string; args?: readonly unknown[] };
 
-/** A chain of three wallets made for USER; W2 has since been handed to OTHER. Wallet W1: 1000 TKN, 100 released, 900 held. */
-function fakeClient(over: { events?: (a: { fromBlock: bigint; toBlock?: bigint; args?: { beneficiary: string } }) => unknown; owners?: Record<string, string>; made?: string[] } = {}) {
+/**
+ * A chain of three wallets made for USER, all of TOKEN but W3, which is of TOKEN_B; W2 has since been handed to OTHER.
+ * Each wallet: 1000 tokens, 100 released, 900 held. `tokens` is what the factory's `tokenOf` answers per wallet, zero
+ * for anything it didn't make.
+ */
+function fakeClient(over: { owners?: Record<string, string>; made?: string[]; tokens?: Record<string, string>; failTokenOf?: string } = {}) {
   const made = over.made ?? [W1, W2, W3];
-  const owners: Record<string, string> = { [W1]: USER, [W2]: OTHER, [W3]: USER, ...over.owners };
+  const owners: Record<string, string> = { [W1]: USER, [W2]: OTHER, [W3]: USER, [W4]: USER, ...over.owners };
+  const tokens: Record<string, string> = { [W1]: TOKEN, [W2]: TOKEN, [W3]: TOKEN_B, ...over.tokens };
   const answer = (c: Call): unknown => {
     const w = c.address.toLowerCase();
     switch (c.functionName) {
@@ -26,161 +31,148 @@ function fakeClient(over: { events?: (a: { fromBlock: bigint; toBlock?: bigint; 
       case "start": return 1_000n;
       case "duration": return 1_000n;
       case "cliff": return 1_400n;
+      case "tokenOf": {
+        if (c.address !== FACTORY) throw new Error("tokenOf is the factory's");
+        const wallet = String(c.args?.[0]).toLowerCase();
+        if (wallet === over.failTokenOf) throw new Error("reverted");
+        return tokens[wallet] ?? ZERO;
+      }
       case "balanceOf": return 900n * E18;
       case "released": return 100n * E18;
       case "vestedAmount": return 450n * E18;
       case "releasable": return 350n * E18;
-      case "symbol": return "TKN";
+      case "symbol": return w === TOKEN_B ? "TKB" : "TKN";
       case "decimals": return 18;
       default: throw new Error(`unexpected ${c.functionName}`);
     }
   };
-  const multicall = vi.fn(async ({ contracts }: { contracts: Call[] }) => contracts.map((c) => ({ status: "success" as const, result: answer(c) })));
+  const multicall = vi.fn(async ({ contracts }: { contracts: Call[] }) =>
+    contracts.map((c) => {
+      try {
+        return { status: "success" as const, result: answer(c) };
+      } catch (error) {
+        return { status: "failure" as const, error };
+      }
+    }),
+  );
   const readContract = vi.fn(async ({ functionName, args }: Call) => {
     if (functionName === "vestingsOfLength") return BigInt(made.length);
     if (functionName === "vestingsOfSlice") return made.slice(Number((args as bigint[])[1]));
-    if (functionName === "isVesting") return (args as string[])[0].toLowerCase() === W1;
-    if (functionName === "owner") return owners[(args as string[] | undefined)?.[0] ?? W1];
-    if (functionName === "balanceOf") return 900n * E18;
-    if (functionName === "released") return 100n * E18;
+    if (functionName === "isVesting") return (args as string[])[0].toLowerCase() in tokens;
+    if (functionName === "owner") return owners[W1];
     throw new Error(`unexpected ${functionName}`);
   });
-  // Every wallet was created in block 50; the chain is at block 100.
-  const getCode = vi.fn(async ({ blockNumber }: { address?: string; blockNumber: bigint }) => (blockNumber >= 50n ? "0x6080" : undefined));
-  const getContractEvents = vi.fn(over.events ?? (async ({ fromBlock }: { fromBlock: bigint; toBlock?: bigint; args?: { beneficiary: string } }) => (fromBlock === 50n ? [W1, W2, W3].map((vesting) => ({ args: { vesting, token: TOKEN } })) : [])));
   const getBlock = vi.fn(async () => ({ timestamp: 1_500n, number: 100n }));
-  return { client: { multicall, readContract, getContractEvents, getBlock, getCode } as never, multicall, readContract, getContractEvents, getCode };
+  // A loader that searched history for a wallet's token would call these; nothing may.
+  const getCode = vi.fn();
+  const getContractEvents = vi.fn();
+  return { client: { multicall, readContract, getBlock, getCode, getContractEvents } as never, multicall, readContract, getCode, getContractEvents };
 }
 
+/** The `tokenOf` calls of every multicall made, as [multicall index, wallet]. */
+const tokenOfCalls = (multicall: ReturnType<typeof fakeClient>["multicall"]) =>
+  multicall.mock.calls.flatMap(([{ contracts }], i) => contracts.filter((c) => c.functionName === "tokenOf").map((c) => [i, c.args?.[0]]));
+
 describe("loadVestings", () => {
-  it("lists the wallets the user still owns, newest first, with the wallet's own numbers", async () => {
+  it("lists the wallets the user still owns, newest first, with the wallet's own numbers and the token tokenOf names", async () => {
     const { client } = fakeClient();
-    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [] });
     expect(data.now).toBe(1_500n);
     expect(data.madeCount).toBe(3);
-    expect(data.wallets.map((w) => w.wallet)).toEqual([W3, W1]);
-    expect(data.wallets[0]).toMatchObject({ token: TOKEN, tokenInfo: { symbol: "TKN", decimals: 18 }, start: 1_000n, duration: 1_000n, cliff: 400n, released: 100n * E18, vested: 450n * E18, releasable: 350n * E18 });
+    expect(data.wallets.map((w) => [w.wallet, w.token])).toEqual([
+      [W3, TOKEN_B],
+      [W1, TOKEN],
+    ]);
+    expect(data.wallets[1]).toMatchObject({ tokenInfo: { symbol: "TKN", decimals: 18 }, start: 1_000n, duration: 1_000n, cliff: 400n, released: 100n * E18, vested: 450n * E18, releasable: 350n * E18 });
+    expect(data.wallets[0].tokenInfo).toEqual({ symbol: "TKB", decimals: 18 });
     // total is what the contract counts: its balance plus what it has released
     expect(data.wallets[0].total).toBe(1000n * E18);
     expect(data.hasMore).toBe(false);
   });
 
+  it("reads every wallet's token from the factory's tokenOf in the one multicall that reads their terms, and searches no history", async () => {
+    const { client, multicall, getCode, getContractEvents } = fakeClient();
+    await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [{ wallet: W4 }] });
+    // Every wallet of the list, in the first multicall: the three made for the user and the added one.
+    expect(tokenOfCalls(multicall)).toEqual([
+      [0, W3],
+      [0, W2],
+      [0, W1],
+      [0, W4],
+    ]);
+    expect(getCode).not.toHaveBeenCalled();
+    expect(getContractEvents).not.toHaveBeenCalled();
+    // The terms with their tokens, the amounts, and the tokens' names: three multicalls for the whole list.
+    expect(multicall).toHaveBeenCalledTimes(3);
+  });
+
   it("leaves out a wallet whose ownership moved, and says which", async () => {
     const { client } = fakeClient();
-    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [] });
     expect(data.transferred).toEqual([W2]);
     expect(data.wallets.some((w) => w.wallet === W2)).toBe(false);
   });
 
   it("pages: reads only the newest `count`", async () => {
     const { client } = fakeClient();
-    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 1, fromBlock: null, added: [] });
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 1, added: [] });
     expect(data.wallets.map((w) => w.wallet)).toEqual([W3]);
     expect(data.hasMore).toBe(true);
   });
 
-  it("finds each wallet's creation block by bisection and reads the event from that block alone", async () => {
-    const { client, getContractEvents, getCode } = fakeClient();
-    await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
-    expect(getContractEvents.mock.calls.every((c) => c[0].fromBlock === 50n && c[0].toBlock === 50n && c[0].args === undefined)).toBe(true);
-    // 2 owned-or-not wallets x about log2(100) steps, nowhere near a scan of every block
-    expect(getCode.mock.calls.length).toBeLessThan(3 * 9);
-  });
-
-  it("looks up tokens only for wallets the user still owns", async () => {
-    const { client, getCode } = fakeClient();
-    await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
-    const looked = new Set(getCode.mock.calls.map((c) => c[0].address?.toLowerCase()));
-    expect(looked.has(W2)).toBe(false);
-    expect(looked.has(W1) && looked.has(W3)).toBe(true);
-  });
-
-  it("does not search again, on the next refresh, for a wallet it already failed to find", async () => {
-    const { client, getCode } = fakeClient({ events: async () => [] });
-    const a = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
-    expect(a.tokenLookupFailed).toBe(true);
-    const calls = getCode.mock.calls.length;
-    const b = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
-    expect(getCode.mock.calls.length).toBe(calls);
-    expect(b.tokenLookupFailed).toBe(true);
-  });
-
-  it("searches from the configured block, and uses a remembered token without any lookup", async () => {
-    const first = fakeClient();
-    await loadVestings(first.client, { factory: FACTORY, user: USER, count: 20, fromBlock: 40n, added: [] });
-    expect(Math.min(...first.getCode.mock.calls.map((c) => Number(c[0].blockNumber)))).toBeGreaterThanOrEqual(40);
-    const cached = fakeClient();
-    const cache = { get: () => TOKEN, set: vi.fn() };
-    const data = await loadVestings(cached.client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [], cache });
-    expect(cached.getCode).not.toHaveBeenCalled();
-    expect(data.wallets[0].token).toBe(TOKEN);
-  });
-
-  it("remembers what it finds", async () => {
-    const { client } = fakeClient();
-    const cache = { get: () => undefined, set: vi.fn() };
-    await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [], cache });
-    expect(cache.set).toHaveBeenCalledWith(W1, TOKEN);
-  });
-
-  it("shows no amounts, and says the lookup failed, when the token can't be found; an added token fills them in", async () => {
-    const { client } = fakeClient({ events: async () => { throw new Error("range too large"); } });
-    const bare = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [] });
-    expect(bare.tokenLookupFailed).toBe(true);
-    expect(bare.wallets.map((w) => [w.token, w.total, w.releasable])).toEqual([[null, null, null], [null, null, null]]);
-    const fixed = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [{ wallet: W1, token: TOKEN }] });
-    const w1 = fixed.wallets.find((w) => w.wallet === W1)!;
-    expect(w1.total).toBe(1000n * E18);
-    expect(fixed.wallets.find((w) => w.wallet === W3)!.total).toBeNull();
-  });
-
-  it("lists a wallet the user was handed, marked as added", async () => {
-    // W2 was made for someone else and is now owned by USER; only W1 was made for USER.
-    const { client } = fakeClient({ made: [W1], owners: { [W2]: USER } });
-    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [{ wallet: W2, token: TOKEN }] });
-    expect(data.wallets.map((w) => [w.wallet, w.source])).toEqual([[W1, "made"], [W2, "added"]]);
+  it("lists a wallet the user was handed, marked as added, with its token from tokenOf", async () => {
+    // W4 was made for someone else and is now owned by USER; only W1 was made for USER.
+    const { client } = fakeClient({ made: [W1], tokens: { [W4]: TOKEN_B } });
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [{ wallet: W4 }] });
+    expect(data.wallets.map((w) => [w.wallet, w.source, w.token])).toEqual([
+      [W1, "made", TOKEN],
+      [W4, "added", TOKEN_B],
+    ]);
     expect(data.transferred).toEqual([]);
   });
 
-  it("does not list an added wallet the user doesn't own", async () => {
+  it("does not list an added wallet the user doesn't own, or one the factory didn't make (tokenOf is zero)", async () => {
     const { client } = fakeClient();
-    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, fromBlock: null, added: [{ wallet: W2, token: TOKEN }] });
-    expect(data.wallets.some((w) => w.wallet === W2)).toBe(false);
+    // W2 belongs to OTHER; W4 is the user's, but tokenOf knows nothing of it: another factory's, say.
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [{ wallet: W2 }, { wallet: W4 }] });
+    expect(data.wallets.map((w) => w.wallet)).toEqual([W3, W1]);
+  });
+
+  it("leaves out a wallet whose token can't be read, and still lists the others", async () => {
+    const { client } = fakeClient({ failTokenOf: W3 });
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [] });
+    expect(data.wallets.map((w) => w.wallet)).toEqual([W1]);
+  });
+
+  it("keeps a wallet whose token's decimals can't be read, without amounts in its units", async () => {
+    const { client, multicall } = fakeClient();
+    const real = multicall.getMockImplementation()!;
+    multicall.mockImplementation(async (args) => {
+      const out = await real(args);
+      return args.contracts.map((c, i) => (c.functionName === "decimals" && c.address === TOKEN_B ? { status: "failure" as const, error: new Error("no") } : out[i]));
+    });
+    const data = await loadVestings(client, { factory: FACTORY, user: USER, count: 20, added: [] });
+    expect(data.wallets.find((w) => w.wallet === W3)).toMatchObject({ token: TOKEN_B, tokenInfo: null });
+    expect(data.wallets.find((w) => w.wallet === W1)?.tokenInfo).toEqual({ symbol: "TKN", decimals: 18 });
   });
 });
 
 describe("checkAdded", () => {
-  it("takes a wallet ArcOS made, the user owns, and whose token the wallet holds or the factory names", async () => {
+  it("takes a wallet ArcOS made that the user owns", async () => {
     const { client } = fakeClient();
-    expect(await checkAdded(client, FACTORY, USER, W1, TOKEN)).toBeNull(); // holds 900
+    expect(await checkAdded(client, FACTORY, USER, W1)).toBeNull();
   });
+
   it("refuses malformed input, a wallet ArcOS didn't make and one owned by someone else", async () => {
     const { client } = fakeClient();
-    expect(await checkAdded(client, FACTORY, USER, "0x12", TOKEN)).toMatch(/vesting wallet/);
-    expect(await checkAdded(client, FACTORY, USER, W1, "nope")).toMatch(/token address/);
-    expect(await checkAdded(client, FACTORY, USER, W2, TOKEN)).toMatch(/didn't create/);
-    expect(await checkAdded(client, FACTORY, OTHER, W1, TOKEN)).toMatch(/another address/);
+    expect(await checkAdded(client, FACTORY, USER, "0x12")).toMatch(/vesting wallet/);
+    expect(await checkAdded(client, FACTORY, USER, W4)).toMatch(/didn't create/);
+    expect(await checkAdded(client, FACTORY, OTHER, W1)).toMatch(/another address/);
   });
-  it("says so when the typed token can't be confirmed, and refuses one that isn't the wallet's", async () => {
-    const empty = fakeClient();
-    // a token the wallet holds none of and never released, and no creation event to check it against
-    empty.readContract.mockImplementation(async ({ functionName, args }: Call) => {
-      if (functionName === "isVesting") return true;
-      if (functionName === "owner") return USER;
-      if (functionName === "balanceOf" || functionName === "released") return 0n;
-      throw new Error(`unexpected ${functionName} ${String(args)}`);
-    });
-    const nothing = fakeClient({ events: async () => [] });
-    nothing.readContract.mockImplementation(empty.readContract.getMockImplementation()!);
-    expect(await checkAdded(nothing.client, FACTORY, USER, W1, TOKEN)).toMatch(/Couldn't confirm/);
-    // the factory's own event names another token for this wallet
-    const OTHER_TOKEN = "0x5555555555555555555555555555555555555555";
-    const wrong = fakeClient({ events: async () => [{ args: { vesting: W1, token: OTHER_TOKEN } }] });
-    wrong.readContract.mockImplementation(empty.readContract.getMockImplementation()!);
-    expect(await checkAdded(wrong.client, FACTORY, USER, W1, TOKEN)).toMatch(/isn't the token this schedule was made for/);
-    // and when it does name it, it is confirmed
-    const right = fakeClient({ events: async () => [{ args: { vesting: W1, token: TOKEN } }] });
-    right.readContract.mockImplementation(empty.readContract.getMockImplementation()!);
-    expect(await checkAdded(right.client, FACTORY, USER, W1, TOKEN)).toBeNull();
+
+  it("says so when the wallet can't be read", async () => {
+    const { client, readContract } = fakeClient();
+    readContract.mockRejectedValue(new Error("rpc down"));
+    expect(await checkAdded(client, FACTORY, USER, W1)).toMatch(/Couldn't read that wallet/);
   });
 });

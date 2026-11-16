@@ -29,8 +29,10 @@ import {
   findLocked,
   lockCall,
   lockedFromLogs,
+  maxFeeBps,
   runAction,
   runLock,
+  whyLockReverted,
   type ContractCall,
   type FlowClient,
   type FlowDeps,
@@ -90,9 +92,11 @@ type Chain = {
   vaults?: Record<string, { token?: Address; manager?: Address; tokenId?: bigint; unlockAt?: bigint }>;
   events?: FactoryEvent[];
   /** What each function's receipt is: a status and logs, or "lost" for one that can't be read. */
-  receipts?: Record<string, { status: "success" | "reverted"; logs: Log[]; to?: Address } | "lost">;
+  receipts?: Record<string, { status: "success" | "reverted"; logs: Log[]; to?: Address; blockNumber?: bigint } | "lost">;
   /** Errors the simulation or the wallet throws, by function name. */
   simulate?: Record<string, unknown>;
+  /** Errors a simulation at a past block (a mined lock asked why it reverted) throws, by function name. */
+  replay?: Record<string, unknown>;
   wallet?: Record<string, unknown>;
 };
 
@@ -131,6 +135,10 @@ function fake(c: Chain = {}) {
     getBlockNumber: vi.fn(async () => 1_000n),
     getContractEvents: vi.fn(async () => (c.events ?? []) as never),
     simulateContract: vi.fn(async (args) => {
+      if (args.blockNumber !== undefined) {
+        if (c.replay?.[args.functionName]) throw c.replay[args.functionName];
+        return { request: { ...args } };
+      }
       if (c.simulate?.[args.functionName]) throw c.simulate[args.functionName];
       return { request: { ...args } };
     }),
@@ -175,7 +183,8 @@ describe("runLock: a token", () => {
     expect(outcome).toEqual({ result: "locked", vault: VAULT, hash: "0xlockToken", amount: 995n });
     expect(f.sent.map((s) => [s.functionName, s.address, s.args, s.value, s.chainId])).toEqual([
       ["approve", TOKEN, [FACTORY, 1000n], undefined, CHAIN],
-      ["lockToken", FACTORY, [TOKEN, 1000n, BigInt(UNLOCK), WALLET], FEE, CHAIN],
+      // Not a pair: it accepts no share at all.
+      ["lockToken", FACTORY, [TOKEN, 1000n, BigInt(UNLOCK), WALLET, 0n], FEE, CHAIN],
     ]);
     expect(f.sent[0]?.abi).toBe(erc20Abi);
     expect(f.sent[1]?.abi).toBe(LOCK_ABI);
@@ -304,6 +313,66 @@ describe("runLock: the fees it charges are the ones the form showed", () => {
     expect(feeChange(lpPlan, SHOWN, { ...now, shareBps: SHOWN.shareBps })?.message).toMatch(/LP token lock changed to 1%/);
     expect(feeChange(positionPlan, SHOWN, { ...now, lpBps: SHOWN.lpBps })?.message).toMatch(/collected fees changed to 5%/);
     expect(feeChange(lpPlan, SHOWN, SHOWN)).toBeNull();
+  });
+});
+
+describe("runLock: a share raised above the one the form showed (FeeAboveMax)", () => {
+  /** FeeAboveMax as viem hands it over, decoded with the lock's ABI. */
+  const feeAboveMax = (key: Hex, current: bigint, max: bigint, functionName: string) =>
+    new ContractFunctionRevertedError({
+      abi: LOCK_ABI as Abi,
+      data: encodeErrorResult({ abi: vaultFactoryAbi, errorName: "FeeAboveMax", args: [key, current, max] }),
+      functionName,
+    });
+  const LP_ROSE = "ArcOS's share of an LP token lock rose to 1%, above the 0.5% this lock accepted. Nothing was locked and no fee was taken. Check it and lock again.";
+  const SHARE_ROSE =
+    "ArcOS's share of collected fees rose to 5%, above the 2% this lock accepted. Nothing was locked and no fee was taken. Check it and lock again.";
+
+  it("sends an LP token's lock with the LP share the form showed", async () => {
+    const f = fake({ receipts: { lockToken: { status: "success", logs: [tokenLocked(FACTORY, VAULT, { amount: 995n, fee: 5n })] } } });
+    expect((await runLock(lpPlan, FACTORY, SHOWN, f.deps)).result).toBe("locked");
+    expect(f.sent.at(-1)?.args).toEqual([TOKEN, 1000n, BigInt(UNLOCK), WALLET, 50n]);
+  });
+
+  it("says a raise the simulation meets in so many words, before the wallet opens, with the approval it gave still set", async () => {
+    const f = fake({ simulate: { lockToken: feeAboveMax(FEE_KEYS.LOCK_LP_BPS, 100n, 50n, "lockToken") } });
+    expect(await runLock(lpPlan, FACTORY, SHOWN, f.deps)).toEqual({ result: "failed", message: LP_ROSE, approvalLeft: true });
+    expect(f.sent.map((s) => s.functionName)).toEqual(["approve"]);
+  });
+
+  it("names a lock that reverted on chain by asking again at its block: a raise applied just before it was mined", async () => {
+    const f = fake({
+      receipts: { lockPosition: { status: "reverted", logs: [], blockNumber: 1_234n } },
+      replay: { lockPosition: feeAboveMax(FEE_KEYS.LOCK_FEE_SHARE_BPS, 500n, 200n, "lockPosition") },
+    });
+    expect(await runLock(positionPlan, FACTORY, SHOWN, f.deps)).toEqual({ result: "failed", message: SHARE_ROSE, hash: "0xlockPosition", approvalLeft: true });
+    // The same call, the same fee and maximum, on the state the lock's block left.
+    expect(f.client.simulateContract).toHaveBeenLastCalledWith(
+      expect.objectContaining({ functionName: "lockPosition", args: [MANAGER, 7n, BigInt(UNLOCK), WALLET, 200n], value: FEE, account: WALLET, blockNumber: 1_234n }),
+    );
+  });
+
+  it("keeps the plain sentence when the question can't be asked or answered: no block, a call that goes through now, an error it can't name", async () => {
+    const plain = "The lock reverted. Nothing was locked, and the fee wasn't taken.";
+    const noBlock = fake({ receipts: { lockToken: { status: "reverted", logs: [] } } });
+    expect(await runLock(tokenPlan, FACTORY, SHOWN, noBlock.deps)).toMatchObject({ result: "failed", message: plain });
+    const passesNow = fake({ receipts: { lockToken: { status: "reverted", logs: [], blockNumber: 9n } } });
+    expect(await runLock(tokenPlan, FACTORY, SHOWN, passesNow.deps)).toMatchObject({ result: "failed", message: plain });
+    const unknown = fake({ receipts: { lockToken: { status: "reverted", logs: [], blockNumber: 9n } }, replay: { lockToken: new Error("rpc down") } });
+    expect(await runLock(tokenPlan, FACTORY, SHOWN, unknown.deps)).toMatchObject({ result: "failed", message: plain });
+    const poor = fake({ receipts: { lockToken: { status: "reverted", logs: [], blockNumber: 9n } }, replay: { lockToken: named("InsufficientFundsError") } });
+    expect(await runLock(tokenPlan, FACTORY, SHOWN, poor.deps)).toMatchObject({ result: "failed", message: plain });
+    expect(await whyLockReverted(passesNow.client, { ...lockCall(tokenPlan, FACTORY, WALLET, SHOWN), account: WALLET, value: FEE }, undefined)).toBe(plain);
+  });
+
+  it("calls the wallet's own gas estimate meeting the raise a plain failure in the same words", async () => {
+    const reverted = {
+      name: "ContractFunctionExecutionError",
+      cause: { name: "ContractFunctionRevertedError", raw: "0x1234", data: { errorName: "FeeAboveMax", args: [FEE_KEYS.LOCK_LP_BPS, 100n, 50n] } },
+    };
+    const f = fake({ wallet: { lockToken: reverted } });
+    expect(await runLock(lpPlan, FACTORY, SHOWN, f.deps)).toEqual({ result: "failed", message: LP_ROSE, approvalLeft: true });
+    expect(f.client.getContractEvents).not.toHaveBeenCalled();
   });
 });
 
@@ -436,7 +505,8 @@ describe("runLock: a position", () => {
     expect(await runLock(positionPlan, FACTORY, SHOWN, f.deps)).toEqual({ result: "locked", vault: VAULT, hash: "0xlockPosition" });
     expect(f.sent.map((s) => [s.functionName, s.address, s.args, s.value])).toEqual([
       ["approve", MANAGER, [FACTORY, 7n], undefined],
-      ["lockPosition", FACTORY, [MANAGER, 7n, BigInt(UNLOCK), WALLET], FEE],
+      // At most the share of collected fees the form showed, which the vault keeps for life.
+      ["lockPosition", FACTORY, [MANAGER, 7n, BigInt(UNLOCK), WALLET, 200n], FEE],
     ]);
     expect(f.sent[0]?.abi).toBe(POSITION_NFT_ABI);
   });
@@ -463,8 +533,18 @@ describe("the calls themselves", () => {
   });
 
   it("locks for the wallet itself", () => {
-    expect(lockCall(tokenPlan, FACTORY, WALLET).args?.[3]).toBe(WALLET);
-    expect(lockCall(positionPlan, FACTORY, WALLET).args?.[3]).toBe(WALLET);
+    expect(lockCall(tokenPlan, FACTORY, WALLET, SHOWN).args?.[3]).toBe(WALLET);
+    expect(lockCall(positionPlan, FACTORY, WALLET, SHOWN).args?.[3]).toBe(WALLET);
+  });
+
+  it("accepts at most the share the form showed: the LP share for a pair, the collect share for a position, none for any other token", () => {
+    const shown = { flat: FEE, lpBps: 75n, shareBps: 250n };
+    expect(maxFeeBps(lpPlan, shown)).toBe(75n);
+    expect(maxFeeBps(positionPlan, shown)).toBe(250n);
+    expect(maxFeeBps(tokenPlan, shown)).toBe(0n);
+    expect(lockCall(lpPlan, FACTORY, WALLET, shown).args).toEqual([TOKEN, 1000n, BigInt(UNLOCK), WALLET, 75n]);
+    expect(lockCall(positionPlan, FACTORY, WALLET, shown).args).toEqual([MANAGER, 7n, BigInt(UNLOCK), WALLET, 250n]);
+    expect(lockCall(tokenPlan, FACTORY, WALLET, shown).args).toEqual([TOKEN, 1000n, BigInt(UNLOCK), WALLET, 0n]);
   });
 
   it("makes each action's call on the vault's own ABI, withdraws to the wallet, and cancels a handover to no one", () => {

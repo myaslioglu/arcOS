@@ -33,9 +33,9 @@ export function amountText(units: bigint | null, info: TokenInfo | null): string
 export type ReleaseState = { enabled: boolean; label: string; reason: string | null };
 
 /** Whether the Release button can be pressed, and what it says. The wallet's own `releasable(token)` decides. */
-export function releaseState(w: Pick<WalletView, "token" | "tokenInfo" | "releasable">, busy: boolean): ReleaseState {
+export function releaseState(w: Pick<WalletView, "tokenInfo" | "releasable">, busy: boolean): ReleaseState {
   if (busy) return { enabled: false, label: "Releasing…", reason: null };
-  if (w.token === null || w.tokenInfo === null) return { enabled: false, label: "Release", reason: "Add this wallet's token to see what can be released." };
+  if (w.tokenInfo === null) return { enabled: false, label: "Release", reason: "Couldn't read this schedule's token. Try again." };
   if (w.releasable === null) return { enabled: false, label: "Release", reason: "Couldn't read what can be released. Try again." };
   if (w.releasable === 0n) return { enabled: false, label: "Release", reason: "Nothing can be released yet." };
   return { enabled: true, label: `Release ${amountText(w.releasable, w.tokenInfo)}`, reason: null };

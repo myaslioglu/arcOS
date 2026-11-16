@@ -82,9 +82,12 @@ describe("a raise the FeeController has scheduled", () => {
     );
   });
 
-  it("says a raise that is due can land at any moment, before this lock is mined too", () => {
+  it("says a raise that is due can land at any moment, before this lock is mined too, and that the lock then fails", () => {
     expect(raiseLine("lp", { value: 100n, effectiveAt: NOW }, 50n, NOW)).toBe(
-      "ArcOS's share of an LP token lock can rise to 1% at any moment: the raise is due, and anyone can apply it.",
+      "ArcOS's share of an LP token lock can rise to 1% at any moment: the raise is due, and anyone can apply it. If it rises before this lock is mined, the lock fails and only gas is spent.",
+    );
+    expect(raiseLine("share", { value: 500n, effectiveAt: NOW - 1 }, 200n, NOW)).toBe(
+      "ArcOS's share of collected fees can rise to 5% at any moment: the raise is due, and anyone can apply it. If it rises before this lock is mined, the lock fails and only gas is spent. A vault keeps the share it was made with.",
     );
     expect(raiseLine("flat", { value: 40n * 10n ** 18n, effectiveAt: NOW - 1 }, 30n * 10n ** 18n, NOW)).toBe(
       "The lock fee can rise to 40 USDC at any moment: the raise is due, and anyone can apply it. If it rises before this lock is mined, the lock fails and only gas is spent.",

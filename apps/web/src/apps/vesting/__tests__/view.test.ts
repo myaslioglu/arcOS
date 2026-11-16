@@ -42,7 +42,7 @@ describe("releaseState", () => {
     expect(releaseState({ ...w, releasable: 0n }, false)).toMatchObject({ enabled: false, reason: "Nothing can be released yet." });
     expect(releaseState({ ...w, releasable: 5n * 10n ** 18n }, false)).toEqual({ enabled: true, label: "Release 5 TKN", reason: null });
     expect(releaseState({ ...w, releasable: 5n }, true).enabled).toBe(false);
-    expect(releaseState({ ...w, token: null, tokenInfo: null, releasable: null }, false).reason).toMatch(/Add this wallet's token/);
+    expect(releaseState({ ...w, tokenInfo: null, releasable: null }, false).reason).toBe("Couldn't read this schedule's token. Try again.");
     expect(releaseState({ ...w, releasable: null }, false).reason).toMatch(/Couldn't read/);
   });
 });
