@@ -19,6 +19,7 @@ Automated analysis, not investment advice.
 | Bridge | Move USDC to and from Arc | Live |
 | Wallet | Connect, switch network, disconnect | Live |
 | About | What ArcOS is, read from inside the app | Live |
+| Help | A short guide: what ArcOS is, how to get started, what each app is for and how to protect your wallet. The Help item on the desktop and the Help menu open it | Live |
 | Terminal | Opens apps and reads the chain from typed commands; it never signs or sends anything | Live |
 | Revoke | Lists a wallet's live token approvals and revokes one with a transaction the wallet confirms | Live |
 | Radar | Lists new tokens as the index records them, each with Inspector's checks | Live |

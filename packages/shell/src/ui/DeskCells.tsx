@@ -38,8 +38,8 @@ export function FolderCell({
 
 /**
  * A desktop item: its file or link art over its caption. A link is an `<a>` that opens in a new tab with no opener;
- * a file is a button that hands itself to `onOpen`, so its window grows out of it. `loose` stands it in the desk's
- * last column. Hookless, so a test can call it and press it.
+ * a file is a button that hands itself to `onOpen`, so its window grows out of it. `loose` stands it on the desk: a file
+ * in the last column, a link in the one before it (desk.css). Hookless, so a test can call it and press it.
  */
 export function DeskItemCell({
   item,
@@ -50,7 +50,9 @@ export function DeskItemCell({
   loose: boolean;
   onOpen: (item: DeskItem, from: HTMLElement) => void;
 }) {
-  const className = loose ? "os-desk-cell os-desk-cell--loose" : "os-desk-cell";
+  const className = loose
+    ? `os-desk-cell os-desk-cell--loose${item.art === "link" ? " os-desk-cell--link" : ""}`
+    : "os-desk-cell";
   const style = { "--os-hue": item.hue } as React.CSSProperties;
   if (item.action.kind === "href") {
     const label = `${item.label}: ${item.blurb} (opens in a new tab)`;

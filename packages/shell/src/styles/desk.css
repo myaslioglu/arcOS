@@ -10,7 +10,7 @@
  * lift desktop.css gives the app icons.
  */
 
-/* The desk: folders down the first column, desk items down the last, the wallpaper open between them. The columns are
+/* The desk: folders down the first column, desk items down the last two, the wallpaper open between them. The columns are
    spread edge to edge, so the last one stands against the right side; four rows keep every icon clear of the dock.
    The bottom cushion (padding-bottom) is 5rem at every height. The dock's band is about 71px and the four rows end
    550px down the screen (the 40px bar, 18px of padding, four 7.5rem rows and three 4px gaps), so 80px clears the dock,
@@ -208,8 +208,12 @@
 .os-roadmap-blurb { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-roadmap-stage { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--accent-3-text); }
 
-/* Desk items stand in the last column. */
+/* Desk items stand on the right: the files down the last column, the links down the one before it. Four rows hold four
+   of each, and none lands in an implicit fifth row behind the dock (see .os-desk). A desk too narrow for three columns
+   (three cells, two gaps and the side padding: 25.25rem) stands the links under the files instead, where it scrolls. */
 .os-desk-cell--loose { grid-column: -2 / -1; }
+.os-desk-cell--loose.os-desk-cell--link { grid-column: -3 / -2; }
+@media (max-width: 25.25rem) { .os-desk-cell--loose.os-desk-cell--link { grid-column: -2 / -1; } }
 
 /* A file: a page with a folded corner, its glyph and its extension. */
 .os-file {

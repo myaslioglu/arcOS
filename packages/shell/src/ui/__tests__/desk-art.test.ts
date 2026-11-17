@@ -49,7 +49,7 @@ describe("DeskItemCell", () => {
     const onOpen = vi.fn();
     const html = renderToStaticMarkup(createElement(DeskItemCell, { item: GITHUB, loose: true, onOpen }));
     expect(html).toMatch(
-      /^<a href="https:\/\/github.com\/myaslioglu\/arcOS" target="_blank" rel="noopener noreferrer" class="os-desk-cell os-desk-cell--loose"/,
+      /^<a href="https:\/\/github.com\/myaslioglu\/arcOS" target="_blank" rel="noopener noreferrer" class="os-desk-cell os-desk-cell--loose os-desk-cell--link"/,
     );
     expect(html).toContain('aria-label="GitHub: The source code (opens in a new tab)"');
   });
@@ -92,5 +92,16 @@ describe("DeskFolders", () => {
       "GitHub: The source code (opens in a new tab)",
     ]);
     expect(html.split("os-desk-cell--loose").length - 1).toBe(2);
+  });
+
+  it("stands the files in the last column and the links in the one before it, so four rows hold five items", () => {
+    const fileCell = DeskItemCell({ item: README, loose: true, onOpen: () => {} }) as ReactElement<{ className: string }>;
+    const linkCell = DeskItemCell({ item: GITHUB, loose: true, onOpen: () => {} }) as ReactElement<{ className: string }>;
+    expect(fileCell.props.className).toBe("os-desk-cell os-desk-cell--loose");
+    expect(linkCell.props.className).toBe("os-desk-cell os-desk-cell--loose os-desk-cell--link");
+    // Off the desk (the touch home's grid), neither is placed in a column.
+    expect((DeskItemCell({ item: GITHUB, loose: false, onOpen: () => {} }) as ReactElement<{ className: string }>).props.className).toBe(
+      "os-desk-cell",
+    );
   });
 });

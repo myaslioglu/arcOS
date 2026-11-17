@@ -73,7 +73,18 @@ describe("the no-score rule", () => {
     expect(Object.hasOwn(NEEDS_CONTRACT, "stats")).toBe(false);
     expect(appsFor("mainnet").filter((m) => m.id === "stats")).toHaveLength(1);
     expect(appsFor("testnet").filter((m) => m.id === "stats")).toHaveLength(1);
-    expect(LIVE.filter((m) => m.category === "system").map((m) => m.id)).toEqual(["finder", "wallet", "about", "stats", "revoke", "terminal"]);
+    expect(LIVE.filter((m) => m.category === "system").map((m) => m.id)).toEqual(["finder", "wallet", "help", "about", "stats", "revoke", "terminal"]);
+  });
+
+  it("lists Help as a live app in the System folder, before About, on both networks, with no wallet and no contract gate", () => {
+    const help = LIVE.find((m) => m.id === "help");
+    expect(help).toMatchObject({ name: "Help", blurb: "Start here: a short guide to ArcOS", category: "system", requiresWallet: false, release: "r0" });
+    expect(help?.comingSoon).toBeFalsy();
+    expect(help?.tag).toBeUndefined();
+    expect(LIVE.indexOf(help!)).toBe(LIVE.findIndex((m) => m.id === "about") - 1);
+    expect(Object.hasOwn(NEEDS_CONTRACT, "help")).toBe(false);
+    expect(appsFor("mainnet").filter((m) => m.id === "help")).toHaveLength(1);
+    expect(appsFor("testnet").filter((m) => m.id === "help")).toHaveLength(1);
   });
 
   it("lists Watchdog as a live app after Inspector, on both networks, and not among the gated apps", () => {
