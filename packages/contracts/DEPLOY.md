@@ -463,6 +463,11 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
 | Arc Testnet (5042002) | FeeController | [`0xC470753e83c151a6A4A360869270291A6ED70d99`](https://explorer.testnet.arc.io/address/0xC470753e83c151a6A4A360869270291A6ED70d99) |
 | Arc Testnet (5042002) | TokenFactory | [`0x41FaFc54ED3be1545695B82af4aA490607447884`](https://explorer.testnet.arc.io/address/0x41FaFc54ED3be1545695B82af4aA490607447884) |
 | Arc Testnet (5042002) | Multisend (previous version, still the app's on testnet) | [`0x113f3864C94ff6a14310a789bD671de5b78D6CBf`](https://explorer.testnet.arc.io/address/0x113f3864C94ff6a14310a789bD671de5b78D6CBf) |
+| Arc Testnet (5042002) | VaultFactory (R1, 2026-11-17, from ddf1f5c) | [`0x18A3c9ca7D7800a5dDA376bDFa4c0AA187675A23`](https://explorer.testnet.arc.io/address/0x18A3c9ca7D7800a5dDA376bDFa4c0AA187675A23) |
+| Arc Testnet (5042002) | LockVault implementation (`VaultFactory.lockVaultImpl()`) | [`0x222d1c94eeb6f0F28c0B1B9D295164d818e4749e`](https://explorer.testnet.arc.io/address/0x222d1c94eeb6f0F28c0B1B9D295164d818e4749e) |
+| Arc Testnet (5042002) | PositionVault implementation (`VaultFactory.positionVaultImpl()`) | [`0x0c487aEaEcC35Cf521ad970f605624A072afcDC0`](https://explorer.testnet.arc.io/address/0x0c487aEaEcC35Cf521ad970f605624A072afcDC0) |
+| Arc Testnet (5042002) | VestingFactory (R1) | [`0x1bDedA7EeA176d81c08DEA397058043124FE30d9`](https://explorer.testnet.arc.io/address/0x1bDedA7EeA176d81c08DEA397058043124FE30d9) |
+| Arc Testnet (5042002) | ProPass (R1) | [`0x458e1e67c7ea1c7c12E7587E147fCD1e73d6f0F5`](https://explorer.testnet.arc.io/address/0x458e1e67c7ea1c7c12E7587E147fCD1e73d6f0F5) |
 | Arc (5042) | FeeController | [`0x2B37F9a9443B2DfaE6B7C7063586935a574B5699`](https://explorer.arc.io/address/0x2B37F9a9443B2DfaE6B7C7063586935a574B5699) |
 | Arc (5042) | TokenFactory | [`0xa68edD822048C00dC816d93005B72F8a50234a24`](https://explorer.arc.io/address/0xa68edD822048C00dC816d93005B72F8a50234a24) |
 | Arc (5042) | Multisend (2026-10-30, from 4fd5f94) | [`0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e`](https://explorer.arc.io/address/0x84593c14E52Ee27E25dD5573f2d5AC652AD2480e) |
@@ -470,8 +475,10 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
 
 Every row but mainnet's previous Multisend is also `ARCOS` in `packages/chain/src/addresses.ts`, which is what the app
 reads.
-R1's VaultFactory, VestingFactory and ProPass are not deployed yet (see "R1" above); they join this table after step
-8 there.
+R1's VaultFactory, VestingFactory and ProPass were deployed on Arc Testnet on 2026-11-17 (see "R1" above), from the
+project wallet with `DeployR1` at main `ddf1f5c` (nonces 6 to 14, nine transactions). The FeeController's owner and
+recipient, and the VaultFactory's owner, are the project wallet; the five R1 keys read back as in step 7's table, and
+Uniswap v4's PositionManager is allowed. They are not deployed on mainnet. Explorer source verification is not done yet.
 
 The mainnet Multisend was deployed again on 2026-10-30, against the same FeeController and with the same ABI and fee
 keys. The previous version's `sendNative` copied each recipient's return data into memory; the new one makes the
@@ -491,8 +498,10 @@ Test it on testnet against a Circle-documented blocklisted test address, if one 
 per-row failure behavior in the UI. (`docs/QA-R0.md` item 31 is the same check.)
 
 T1, for R1: does an ERC-20 transfer of USDC (`0x3600…0000`) to a contract whose `receive` reverts succeed on Arc?
-A fork can't answer it (a fork can't move `0x3600` USDC). R1 step 7 settles it with a 1 USDC schedule after the
-deployment.
+A fork can't answer it (a fork can't move `0x3600` USDC). Answered on 2026-11-17: yes, it passes. A 1 USDC one-hour
+schedule to the project wallet was created at the vesting wallet
+[`0xb351215AB81Ba99a40723b29f8565c3cb0234b3F`](https://explorer.testnet.arc.io/address/0xb351215AB81Ba99a40723b29f8565c3cb0234b3F); `isVesting` is true, `tokenOf` is `0x3600…0000` and its USDC
+balance is `1000000`. So USDC can be vested. The release after the hour is still to be done.
 
 Every step that signs a transaction is the owner's: with a keystore key in a terminal, or with the browser-wallet path
 above, where the owner confirms each transaction in the wallet. After a deployment, the three addresses (they're

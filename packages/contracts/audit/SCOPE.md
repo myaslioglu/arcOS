@@ -26,6 +26,8 @@ vesting checks) exercised on Arc Testnet. A contract change before then means a 
 moves to that commit. At the freeze, the deployed runtime bytecode is compared with that commit's build (immutables
 masked), as was done for R0's mainnet deployment.
 
+Runtime bytecode on Arc Testnet matches main at `ddf1f5c`, immutables masked (checked 2026-11-17): VaultFactory, VestingFactory, ProPass and the two vault implementations, with the same CBOR metadata hash.
+
 ## In-scope files
 
 All paths are under `packages/contracts/`.
@@ -122,16 +124,16 @@ Dependencies are installed with `npm ci` at the repository root.
 
 ## Deployed addresses
 
-None yet for R1. The contracts go to Arc Testnet first (DEPLOY.md, "R1"). Mainnet comes after the audit.
+R1 is deployed on Arc Testnet (2026-11-17, from main at `ddf1f5c`; DEPLOY.md, "R1"). Mainnet comes after the audit.
 
 | Network | Contract | Address |
 |---|---|---|
 | Arc Testnet (5042002) | `FeeController` (R0, reused) | `0xC470753e83c151a6A4A360869270291A6ED70d99` |
-| Arc Testnet (5042002) | `VaultFactory` | `<not deployed yet>` |
-| Arc Testnet (5042002) | `LockVault` implementation (`VaultFactory.lockVaultImpl()`) | `<not deployed yet>` |
-| Arc Testnet (5042002) | `PositionVault` implementation (`VaultFactory.positionVaultImpl()`) | `<not deployed yet>` |
-| Arc Testnet (5042002) | `VestingFactory` | `<not deployed yet>` |
-| Arc Testnet (5042002) | `ProPass` | `<not deployed yet>` |
+| Arc Testnet (5042002) | `VaultFactory` | `0x18A3c9ca7D7800a5dDA376bDFa4c0AA187675A23` |
+| Arc Testnet (5042002) | `LockVault` implementation (`VaultFactory.lockVaultImpl()`) | `0x222d1c94eeb6f0F28c0B1B9D295164d818e4749e` |
+| Arc Testnet (5042002) | `PositionVault` implementation (`VaultFactory.positionVaultImpl()`) | `0x0c487aEaEcC35Cf521ad970f605624A072afcDC0` |
+| Arc Testnet (5042002) | `VestingFactory` | `0x1bDedA7EeA176d81c08DEA397058043124FE30d9` |
+| Arc Testnet (5042002) | `ProPass` | `0x458e1e67c7ea1c7c12E7587E147fCD1e73d6f0F5` |
 | Arc (5042) | `FeeController` (R0) | `0x2B37F9a9443B2DfaE6B7C7063586935a574B5699` |
 | Arc (5042) | R1 contracts | none (after the audit) |
 

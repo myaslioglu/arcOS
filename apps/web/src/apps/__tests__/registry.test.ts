@@ -1,6 +1,6 @@
 import { Lock } from "lucide-react";
 import { describe, expect, it } from "vitest";
-import { ARCOS } from "@arcos/chain";
+import { ARCOS, activeNetwork } from "@arcos/chain";
 import type { AppManifest } from "@arcos/shell";
 import { CATEGORY_HUE, appHue, stageLabel } from "@arcos/shell/core";
 import { APPS, LIVE, NEEDS_CONTRACT, appsFor, contractAddress } from "../registry";
@@ -13,8 +13,8 @@ const DATES = /\b(?:19|20)\d\d\b|\b(?:January|February|March|April|May|June|July
 
 describe("APPS", () => {
   it("gives every registered app a hue, coming-soon apps included", () => {
-    expect(APPS.some((m) => m.comingSoon)).toBe(true);
-    for (const m of APPS) {
+    expect(SOON.length).toBeGreaterThan(0);
+    for (const m of [...APPS, ...SOON]) {
       expect(appHue(m), m.id).toMatch(/^var\(--[\w-]+\)$/);
       expect(appHue(m), m.id).toBe(CATEGORY_HUE[m.category]);
     }
@@ -137,12 +137,13 @@ describe("the registry, gated per network (D6)", () => {
     }
   });
 
-  it("lists the same apps on both networks today, since no network has a gated contract yet: each gated app grey", () => {
+  it("lists each gated app grey on mainnet (no gated contract there yet) and live on testnet (R1 is deployed there)", () => {
     const ungated = LIVE.filter((m) => !Object.hasOwn(NEEDS_CONTRACT, m.id));
     expect(ids(appsFor("mainnet"))).toEqual(ids([...ungated, ...SOON]));
-    expect(ids(appsFor("testnet"))).toEqual(ids([...ungated, ...SOON]));
-    expect(ids(APPS)).toEqual(ids([...ungated, ...SOON]));
-    for (const m of APPS) if (Object.hasOwn(NEEDS_CONTRACT, m.id)) expect(m.comingSoon, m.id).toBe(true);
+    for (const m of appsFor("mainnet")) if (Object.hasOwn(NEEDS_CONTRACT, m.id)) expect(m.comingSoon, m.id).toBe(true);
+    expect(ids(appsFor("testnet"))).toEqual(ids([...LIVE, ...SOON.filter((m) => !Object.hasOwn(NEEDS_CONTRACT, m.id))]));
+    for (const m of appsFor("testnet")) if (Object.hasOwn(NEEDS_CONTRACT, m.id)) expect(m.comingSoon, m.id).toBeUndefined();
+    expect(ids(APPS)).toEqual(ids(appsFor(activeNetwork())));
   });
 
   describe("Vesting", () => {
@@ -156,14 +157,15 @@ describe("the registry, gated per network (D6)", () => {
       expect(NEEDS_CONTRACT.vesting).toBe("vestingFactory");
     });
 
-    it("shows the grey stand-in on both networks while no VestingFactory address is set", () => {
-      for (const network of ["mainnet", "testnet"] as const) {
-        const apps = appsFor(network).filter((m) => m.id === "vesting");
-        expect(apps, network).toHaveLength(1);
-        expect(apps[0].comingSoon, network).toBe(true);
-      }
+    it("is live on testnet, where a VestingFactory is set, and grey on mainnet, where none is", () => {
+      const onMainnet = appsFor("mainnet").filter((m) => m.id === "vesting");
+      expect(onMainnet).toHaveLength(1);
+      expect(onMainnet[0].comingSoon).toBe(true);
+      const onTestnet = appsFor("testnet").filter((m) => m.id === "vesting");
+      expect(onTestnet).toHaveLength(1);
+      expect(onTestnet[0].comingSoon).toBeUndefined();
       expect(ARCOS.mainnet?.vestingFactory ?? null).toBeNull();
-      expect(ARCOS.testnet?.vestingFactory ?? null).toBeNull();
+      expect(ARCOS.testnet?.vestingFactory).toBe("0x1bDedA7EeA176d81c08DEA397058043124FE30d9");
     });
 
     it("shows the live app, and not the stand-in, where the factory has an address", () => {
@@ -243,11 +245,11 @@ describe("Vault, gated on the VaultFactory", () => {
     expect(grey).toMatchObject({ name: live?.name, blurb: live?.blurb, icon: live?.icon, category: live?.category });
   });
 
-  it("is grey on both networks today, since neither names a VaultFactory", () => {
-    for (const network of ["mainnet", "testnet"] as const) {
-      expect(contractAddress(ARCOS[network], "vaultFactory"), network).toBeNull();
-      expect(appsFor(network).filter((m) => m.id === "vault"), network).toEqual([grey]);
-    }
+  it("is grey on mainnet, which names no VaultFactory, and live on testnet, which does", () => {
+    expect(contractAddress(ARCOS.mainnet, "vaultFactory")).toBeNull();
+    expect(appsFor("mainnet").filter((m) => m.id === "vault")).toEqual([grey]);
+    expect(contractAddress(ARCOS.testnet, "vaultFactory")).toBe("0x18A3c9ca7D7800a5dDA376bDFa4c0AA187675A23");
+    expect(appsFor("testnet").filter((m) => m.id === "vault")).toEqual([live]);
   });
 
   it("is live, once, wherever a VaultFactory is set, and the stand-in is gone there", () => {
