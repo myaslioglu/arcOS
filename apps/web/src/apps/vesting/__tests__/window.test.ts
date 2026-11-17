@@ -95,6 +95,10 @@ describe("the window", () => {
       expect(intro.steps).toHaveLength(3);
       expect(intro.uses.join(" ")).toMatch(/one-year cliff: nothing unlocks in the first year/);
       expect(intro.limits).toContain("A schedule can't be cancelled or changed once it is made.");
+      // ArcVesting is Ownable: a handover is one step, with no accepting side to catch a wrong address.
+      expect(intro.limits).toContain(
+        "The beneficiary can hand the schedule to another address. Handing it over takes one step and can't be undone, so check the address.",
+      );
       for (const line of [intro.lead, ...intro.uses, ...intro.steps, ...intro.limits]) {
         expect(line).toMatch(/^[A-Z].*\.$/);
         expect(line).not.toMatch(/\d\s*(USDC|%)/);
@@ -108,6 +112,7 @@ describe("the window", () => {
   it("states what a schedule can and can't do, and that nothing has been audited", () => {
     expect(HOW_IT_WORKS).toMatch(/can't be cancelled/);
     expect(HOW_IT_WORKS).toMatch(/pays the contract's current owner \(the beneficiary\)/);
+    expect(HOW_IT_WORKS).toMatch(/Handing it over takes one step, so check the address\.$/);
     expect(AUDIT_NOTE).toBe("These contracts have not been audited yet. They run on testnet first, ahead of the audit.");
   });
 });

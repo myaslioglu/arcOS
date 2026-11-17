@@ -68,7 +68,7 @@ export function AppIntroView({ id, content, art, open, onToggle, onHide, toggleR
               <li key={line} className="flex items-start gap-2 text-xs leading-5">
                 <span
                   aria-hidden
-                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent-2/15 font-mono text-[11px] font-medium text-accent-2-text"
+                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-accent-2/50 font-mono text-[11px] font-medium text-accent-2-text"
                 >
                   {i + 1}
                 </span>

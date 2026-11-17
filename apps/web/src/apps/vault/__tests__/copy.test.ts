@@ -53,12 +53,26 @@ describe("Vault's copy", () => {
     expect(intro.uses.join(" ")).toMatch(/LP tokens \(the receipt you get for adding liquidity to a pool\)/);
     expect(intro.steps).toHaveLength(3);
     expect(intro.limits).toContain("A lock can't be cancelled. You can move the unlock date later, never earlier.");
-    expect(intro.limits.join(" ")).toMatch(/Only the vault's owner can take the tokens out\./);
+    expect(intro.limits.join(" ")).toMatch(/Only the vault's owner can withdraw\./);
+    expect(intro.limits.join(" ")).toMatch(/A locked position still earns trading fees, and its owner can collect them before the unlock date\./);
     for (const line of [intro.lead, ...intro.uses, ...intro.steps, ...intro.limits]) {
       expect(line).toMatch(/^[A-Z].*\.$/);
       // Fees change and the form reads them live: the explainer states none.
       expect(line).not.toMatch(/\d\s*(USDC|%)/);
       expect(line).not.toMatch(/\u2014/);
+    }
+  });
+
+  // LockVault trusts its token: one that freezes or confiscates balances can defeat a lock, and a position's owner
+  // collects its fees while it is locked. So the explainer says "can't be withdrawn early", never that nothing can move.
+  it("claims no more than a lock can hold, and says a lock is only as sound as its token", () => {
+    const intro = vaultIntro("mainnet");
+    expect(intro.lead).toContain("They can't be withdrawn early, not even by you");
+    expect(intro.limits).toContain(
+      "A lock is only as sound as its token: a token whose owner can freeze or take balances can still get around it. Check the token with Inspector.",
+    );
+    for (const line of [intro.lead, ...intro.uses, ...intro.steps, ...intro.limits]) {
+      expect(line).not.toMatch(/\bnobody can\b|can't be pulled|can't be moved|can never\b/i);
     }
   });
 

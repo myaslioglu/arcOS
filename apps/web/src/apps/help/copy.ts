@@ -123,8 +123,8 @@ export const APP_GUIDE: Readonly<Record<string, AppGuide>> = {
     mainnetOnly: true,
   },
   vault: {
-    what: "Locks tokens or liquidity until a date you choose. Nobody can take them out before then.",
-    when: "Use it to show buyers your project's liquidity can't be pulled, or to lock your team's own tokens.",
+    what: "Locks tokens or liquidity until a date you choose, so they can't be withdrawn early.",
+    when: "Use it to show buyers your project's liquidity can't be withdrawn early, or to lock your team's own tokens.",
   },
   vesting: {
     what: "Pays tokens out little by little on a schedule, to one person or a list.",
@@ -184,7 +184,7 @@ export const GLOSSARY: readonly { term: string; meaning: string }[] = [
   { term: "Gas", meaning: "The fee the network charges for each transaction. On Arc it is paid in USDC." },
   { term: "Approval", meaning: "Your permission for an app or contract to move a token for you. Revoke can take it back." },
   { term: "LP token", meaning: "The receipt you get for adding liquidity to a trading pool. It lets you take your share back out." },
-  { term: "Lock", meaning: "Tokens kept in a contract until a date. Nobody can move them before then." },
+  { term: "Lock", meaning: "Tokens kept in a contract until a date, so they can't be withdrawn early. A lock is only as sound as its token." },
   { term: "Vesting", meaning: "Tokens that unlock little by little over time, sometimes after a wait called a cliff." },
 ];
 

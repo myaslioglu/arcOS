@@ -11,6 +11,9 @@ const grey = APPS.filter((m) => m.comingSoon);
 // What dates a sentence: a year, a month or a quarter. Case-sensitive, so the modal verb "may" isn't read as May.
 const DATES = /\b(?:19|20)\d\d\b|\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Q[1-4])\b/;
 
+// A URL, or a host name: dot-separated labels ending in a letters-only top-level label ("testnet.4rcos.com").
+const HOST = /[a-z][a-z0-9+.-]*:\/\/|\bwww\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/i;
+
 describe("APPS", () => {
   it("gives every registered app a hue, coming-soon apps included", () => {
     expect(SOON.length).toBeGreaterThan(0);
@@ -28,6 +31,21 @@ describe("APPS", () => {
         expect(line, m.id).toMatch(/^[A-Z][^!]*\.$/);
         expect(line, m.id).not.toMatch(DATES);
       }
+    }
+  });
+
+  // A grey app is shown on 4rcos.com, so it may not point anywhere: a host that has no DNS yet would be a dead
+  // address there. Its window links only to the repository, which the shell adds itself.
+  it("names no host name or URL in a grey app's details", () => {
+    for (const m of SOON) for (const line of m.details ?? []) expect(line, m.id).not.toMatch(HOST);
+  });
+
+  it("catches a host name or URL in any form", () => {
+    for (const line of ["Try it on testnet.4rcos.com.", "See https://example.org/x.", "Visit 4rcos.com.", "Go to www.arc.io."]) {
+      expect(line, line).toMatch(HOST);
+    }
+    for (const line of ["It runs on a testnet first, and comes here once its contracts are audited.", "Pays 0.5 USDC. Then stops."]) {
+      expect(line, line).not.toMatch(HOST);
     }
   });
 

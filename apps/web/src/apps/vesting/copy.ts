@@ -5,7 +5,7 @@ import type { IntroContent } from "@/lib/intro";
 
 /** Under the New schedule form: what creating a schedule does. */
 export const HOW_IT_WORKS =
-  "The tokens move into a vesting contract made for the beneficiary. They unlock over time, and a release always pays the contract's current owner (the beneficiary). A schedule can't be cancelled or changed. The beneficiary can hand the contract to another address.";
+  "The tokens move into a vesting contract made for the beneficiary. They unlock over time, and a release always pays the contract's current owner (the beneficiary). A schedule can't be cancelled or changed. The beneficiary can hand the contract to another address. Handing it over takes one step, so check the address.";
 
 /** Always visible, under both tabs. */
 export const AUDIT_NOTE = "These contracts have not been audited yet. They run on testnet first, ahead of the audit.";
@@ -42,6 +42,7 @@ export function vestingIntro(network: NetworkId): IntroContent {
     limits: [
       "A schedule can't be cancelled or changed once it is made.",
       "Released tokens always go to the contract's owner, the beneficiary, whoever presses Release.",
+      "The beneficiary can hand the schedule to another address. Handing it over takes one step and can't be undone, so check the address.",
       "The fee is shown before you sign.",
       ...(network === "testnet" ? ["Not audited yet, so Vesting runs on this testnet site only. Test tokens have no value."] : []),
     ],

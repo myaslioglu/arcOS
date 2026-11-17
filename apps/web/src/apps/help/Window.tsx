@@ -215,7 +215,7 @@ function AppCard({ card, onOpen }: { card: GuideCard; onOpen: (appId: string) =>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
             <h4 className="font-mono text-[13px] font-medium">{app.name}</h4>
             {coming && (
-              <span className="rounded-full bg-accent-3/15 px-2 py-0.5 text-[11px] text-accent-3-text">{`Soon: ${stage.toLowerCase()}`}</span>
+              <span className="rounded-full border border-accent-3/50 px-2 py-0.5 text-[11px] text-accent-3-text">{`Soon: ${stage.toLowerCase()}`}</span>
             )}
             {note && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted">{note}</span>}
           </div>

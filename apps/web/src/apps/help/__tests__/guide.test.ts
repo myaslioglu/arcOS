@@ -163,6 +163,13 @@ describe("Help's copy", () => {
     for (const line of allCopy()) expect(line).not.toMatch(/\b(safe(ly|ty)?|guarantee[ds]?|free|instant(ly)?|no risk|risk-free|profit)\b/i);
   });
 
+  it("claims no more than a lock can hold: a lock can't be withdrawn early, which isn't the same as nothing can move", () => {
+    for (const line of allCopy()) expect(line).not.toMatch(/\bnobody can\b|can't be pulled|can't be moved/i);
+    expect(GLOSSARY.find((g) => g.term === "Lock")?.meaning).toBe(
+      "Tokens kept in a contract until a date, so they can't be withdrawn early. A lock is only as sound as its token.",
+    );
+  });
+
   it("states no fee amount: each app shows its own before you sign", () => {
     for (const line of allCopy()) expect(line).not.toMatch(/\d\s*(USDC|%)|\bUSDC\s*\d/);
   });

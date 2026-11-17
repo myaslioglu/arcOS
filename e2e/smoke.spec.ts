@@ -111,7 +111,7 @@ test.describe("desktop", () => {
     const vault = page.getByRole("dialog", { name: "Vault" });
     await expect(vault).toBeVisible();
     await expect(
-      vault.getByText("Will lock tokens or liquidity until a date you choose. Until then nobody can take them out, not even the owner.", {
+      vault.getByText("Will lock tokens or liquidity until a date you choose, so they can't be withdrawn early, not even by the owner.", {
         exact: true,
       }),
     ).toBeVisible();

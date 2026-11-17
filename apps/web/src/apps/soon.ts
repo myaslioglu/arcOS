@@ -28,9 +28,9 @@ export const SOON: AppManifest[] = [
     category: "trust",
     release: "r2",
     details: [
-      "Will lock tokens or liquidity until a date you choose. Until then nobody can take them out, not even the owner.",
-      "For a project showing buyers its liquidity can't be pulled, or a team locking its own tokens.",
-      "It comes here once its contracts are audited. Until then, you can try it with test tokens on testnet.4rcos.com.",
+      "Will lock tokens or liquidity until a date you choose, so they can't be withdrawn early, not even by the owner.",
+      "For a project showing buyers its liquidity can't be withdrawn early, or a team locking its own tokens.",
+      "It runs on a testnet first, and comes here once its contracts are audited.",
     ],
   }),
   soon({
@@ -43,7 +43,7 @@ export const SOON: AppManifest[] = [
     details: [
       "Will pay tokens out little by little on a schedule you set, with an optional cliff: a wait before anything unlocks.",
       "For paying a teammate or an investor over months or years. They collect each part as it unlocks.",
-      "It comes here once its contracts are audited. Until then, you can try it with test tokens on testnet.4rcos.com.",
+      "It runs on a testnet first, and comes here once its contracts are audited.",
     ],
   }),
 ];

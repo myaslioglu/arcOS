@@ -28,9 +28,9 @@ export const NOT_YOURS = "You don't own this vault, so you can only look.";
 export function vaultIntro(network: NetworkId): IntroContent {
   return {
     title: "What is Vault?",
-    lead: "Vault locks tokens away until a date you choose. Until then nobody can take them out, not even you, and anyone can look the lock up on the explorer.",
+    lead: "Vault locks tokens away until a date you choose. They can't be withdrawn early, not even by you, and anyone can look the lock up on the explorer.",
     uses: [
-      "A project locks its LP tokens (the receipt you get for adding liquidity to a pool), so buyers can see the liquidity can't be pulled out.",
+      "A project locks its LP tokens (the receipt you get for adding liquidity to a pool), so buyers can see the liquidity can't be withdrawn early.",
       "A team locks its own tokens for a year, to show it is in for the long run.",
     ],
     steps: [
@@ -40,7 +40,9 @@ export function vaultIntro(network: NetworkId): IntroContent {
     ],
     limits: [
       "A lock can't be cancelled. You can move the unlock date later, never earlier.",
-      "Only the vault's owner can take the tokens out. You can hand a vault to someone else, and they accept it in Vault.",
+      "Only the vault's owner can withdraw. You can hand a vault to someone else, and they accept it in Vault.",
+      "A locked position still earns trading fees, and its owner can collect them before the unlock date.",
+      "A lock is only as sound as its token: a token whose owner can freeze or take balances can still get around it. Check the token with Inspector.",
       "The fees are shown before you sign.",
       ...(network === "testnet" ? ["Not audited yet, so Vault runs on this testnet site only. Test tokens have no value."] : []),
     ],
