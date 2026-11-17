@@ -33,7 +33,7 @@
   {
     "id": "GHSA-fc5q-39xc-vjpf",
     "package": "picomatch",
-    "reason": "no patched picomatch exists (<=4.0.7, the latest release); the CLI reaches it only through chokidar, which its emulators use to watch our rules file and functions folder in CI, and node-gyp's tinyglobby never runs (installs use --ignore-scripts), so no attacker-supplied pattern reaches picomatch",
+    "reason": "no patched picomatch exists (<=4.0.7, the latest release); the CLI reaches it only through chokidar, which its Firestore emulator uses to watch our rules file in CI, and node-gyp's tinyglobby never runs (installs use --ignore-scripts), so no attacker-supplied pattern reaches picomatch",
     "until": "2026-12-17",
     "paths": ["tools/firebase"],
     "runtime": true

@@ -247,14 +247,14 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
     imports only `unstorage`'s core (it carries its own IndexedDB driver) and its Node build `unstorage/drivers/fs-lite`,
     so nothing in the web build loads the npm `anymatch` or `picomatch` packages. Next's server ships its own copy of
     picomatch, which matches only the `images` patterns from `next.config`, and there are none.
-  - The pinned Firebase CLI (`tools/firebase`) reaches picomatch only through `chokidar`, which its emulators use to
-    watch our rules file and functions folder in CI's emulator runs. Its other path, `node-gyp` → `tinyglobby`, never
+  - The pinned Firebase CLI (`tools/firebase`) reaches picomatch only through `chokidar`, which its Firestore emulator
+    uses to watch our rules file in CI's emulator runs. Its other path, `node-gyp` → `tinyglobby`, never
     runs: every install of the CLI uses `npm ci --ignore-scripts`.
 - **Decided by:** the project owner, in chat, 2026-11-17.
 - **Handled by:** two expiring entries in `scripts/audit-allowlist.json`, one for the root audit and one for
   `tools/firebase` (both `runtime: true`, until 2026-12-17). Remove them once patched releases cover both lines in use
-  (2.x and 4.x) and the lockfiles pick them up. If only 4.x is patched, overriding `anymatch`, `readdirp` and
-  `micromatch` onto it crosses a major version and needs its own check, as with `toml` above.
+  (2.x and 4.x) and the lockfiles pick them up. If only 4.x is patched, moving the picomatch under `anymatch`, `readdirp`
+  and `micromatch` to 4.x crosses a major version and needs its own check, as with `toml` above.
 
 ### `query-string` (via `@walletconnect/utils`)
 
