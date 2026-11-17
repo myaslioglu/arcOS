@@ -11,6 +11,9 @@ const grey = APPS.filter((m) => m.comingSoon);
 // What dates a sentence: a year, a month or a quarter. Case-sensitive, so the modal verb "may" isn't read as May.
 const DATES = /\b(?:19|20)\d\d\b|\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Q[1-4])\b/;
 
+// A URL, or a host name: dot-separated labels ending in a letters-only top-level label ("testnet.4rcos.com").
+const HOST = /[a-z][a-z0-9+.-]*:\/\/|\bwww\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/i;
+
 describe("APPS", () => {
   it("gives every registered app a hue, coming-soon apps included", () => {
     expect(SOON.length).toBeGreaterThan(0);
@@ -28,6 +31,21 @@ describe("APPS", () => {
         expect(line, m.id).toMatch(/^[A-Z][^!]*\.$/);
         expect(line, m.id).not.toMatch(DATES);
       }
+    }
+  });
+
+  // A grey app is shown on 4rcos.com, so it may not point anywhere: a host that has no DNS yet would be a dead
+  // address there. Its window links only to the repository, which the shell adds itself.
+  it("names no host name or URL in a grey app's details", () => {
+    for (const m of SOON) for (const line of m.details ?? []) expect(line, m.id).not.toMatch(HOST);
+  });
+
+  it("catches a host name or URL in any form", () => {
+    for (const line of ["Try it on testnet.4rcos.com.", "See https://example.org/x.", "Visit 4rcos.com.", "Go to www.arc.io."]) {
+      expect(line, line).toMatch(HOST);
+    }
+    for (const line of ["It runs on a testnet first, and comes here once its contracts are audited.", "Pays 0.5 USDC. Then stops."]) {
+      expect(line, line).not.toMatch(HOST);
     }
   });
 
@@ -73,7 +91,18 @@ describe("the no-score rule", () => {
     expect(Object.hasOwn(NEEDS_CONTRACT, "stats")).toBe(false);
     expect(appsFor("mainnet").filter((m) => m.id === "stats")).toHaveLength(1);
     expect(appsFor("testnet").filter((m) => m.id === "stats")).toHaveLength(1);
-    expect(LIVE.filter((m) => m.category === "system").map((m) => m.id)).toEqual(["finder", "wallet", "about", "stats", "revoke", "terminal"]);
+    expect(LIVE.filter((m) => m.category === "system").map((m) => m.id)).toEqual(["finder", "wallet", "help", "about", "stats", "revoke", "terminal"]);
+  });
+
+  it("lists Help as a live app in the System folder, before About, on both networks, with no wallet and no contract gate", () => {
+    const help = LIVE.find((m) => m.id === "help");
+    expect(help).toMatchObject({ name: "Help", blurb: "Start here: a short guide to ArcOS", category: "system", requiresWallet: false, release: "r0" });
+    expect(help?.comingSoon).toBeFalsy();
+    expect(help?.tag).toBeUndefined();
+    expect(LIVE.indexOf(help!)).toBe(LIVE.findIndex((m) => m.id === "about") - 1);
+    expect(Object.hasOwn(NEEDS_CONTRACT, "help")).toBe(false);
+    expect(appsFor("mainnet").filter((m) => m.id === "help")).toHaveLength(1);
+    expect(appsFor("testnet").filter((m) => m.id === "help")).toHaveLength(1);
   });
 
   it("lists Watchdog as a live app after Inspector, on both networks, and not among the gated apps", () => {

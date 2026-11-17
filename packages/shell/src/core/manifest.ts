@@ -90,8 +90,9 @@ export const ROADMAP_APP_ID = "roadmap";
 /** Ids the desktop keeps for its own windows. No app may register one. */
 export const RESERVED_APP_IDS: readonly string[] = [FOLDER_APP_ID, ROADMAP_APP_ID];
 
-/** A grey app's "work in progress" window. */
-export const WIP_WINDOW: WindowSize = { w: 380, h: 300 };
+/** A grey app's "work in progress" window: tall enough for its blurb, three details of two lines each, its stage and
+ * the GitHub link without scrolling. */
+export const WIP_WINDOW: WindowSize = { w: 400, h: 380 };
 
 export const ROADMAP_WINDOW: WindowSize = { w: 460, h: 420 };
 

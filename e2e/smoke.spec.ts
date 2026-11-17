@@ -110,8 +110,45 @@ test.describe("desktop", () => {
     await page.goto("/#app:vault");
     const vault = page.getByRole("dialog", { name: "Vault" });
     await expect(vault).toBeVisible();
-    await expect(vault.getByText("Will lock liquidity pool tokens or team tokens until a date you choose.", { exact: true })).toBeVisible();
+    await expect(
+      vault.getByText("Will lock tokens or liquidity until a date you choose, so they can't be withdrawn early, not even by the owner.", {
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(vault.getByText("Connect a wallet to use this app.", { exact: true })).toHaveCount(0);
+  });
+
+  // Help stands at the top of the desk's last column. Its guide lists this site's apps from the registry: on this
+  // mainnet build Vault is the grey stand-in, so its card says it comes after the audit and opens the stand-in's window.
+  test("the desk's Help item opens the guide, which lists the apps and opens them", async ({ page }) => {
+    await page.goto("/");
+    await hydrated(page);
+
+    await page.getByRole("group", { name: "Desktop" }).getByRole("button", { name: /^Help: / }).click();
+    const help = page.getByRole("dialog", { name: "Help" });
+    await expect(help).toBeVisible();
+    await expect(help.getByRole("heading", { level: 2, name: "What is ArcOS?" })).toBeVisible();
+    for (const name of ["Get started", "What can I do here?", "Protect your wallet", "Words to know"]) {
+      await expect(help.getByRole("heading", { level: 2, name })).toBeAttached();
+    }
+
+    await help.getByRole("navigation", { name: "Help sections" }).getByRole("button", { name: "Apps" }).click();
+    await expect(help.getByRole("heading", { level: 2, name: "What can I do here?" })).toBeFocused();
+    const vault = help.locator('li[data-app="vault"]');
+    await expect(vault.getByText("Soon: after the audit", { exact: true })).toBeVisible();
+    await expect(help.locator('li[data-app="meme"]')).toHaveCount(0);
+
+    await help.locator('li[data-app="inspector"]').getByRole("button", { name: "Open Inspector" }).click();
+    await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
+  });
+
+  test("the menu bar's Help menu opens the guide", async ({ page }) => {
+    await page.goto("/");
+    await hydrated(page);
+
+    await page.getByRole("navigation", { name: "menu bar" }).getByRole("button", { name: "Help", exact: true }).click();
+    await page.getByRole("menuitem", { name: "ArcOS Help" }).click();
+    await expect(page.getByRole("dialog", { name: "Help" })).toBeVisible();
   });
 
   test("/#app:about deep-links to the About window", async ({ page, baseURL }) => {

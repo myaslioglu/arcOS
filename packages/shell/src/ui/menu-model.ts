@@ -28,6 +28,8 @@ export type MenuEntry = MenuItem | MenuGroup | { type: "sep" };
 export type Menu = { id: string; name: string; label: string; brand?: boolean; narrow?: boolean; entries: MenuEntry[] };
 
 export type MenuActions = {
+  /** Opens the desktop's guide, first in Help. Missing: Help has no guide item. */
+  help?: () => void;
   search: () => void;
   openApp: (appId: string) => void;
   about: () => void;
@@ -82,7 +84,8 @@ const item = (label: string, onSelect: () => void, extra: Partial<MenuItem> = {}
  * The menu bar's menus, as data. The brand menu holds About and Keyboard shortcuts. File searches, opens any app (a
  * grey one opens its "work in progress" window, so it is hinted "Soon", as is a tagged one) and closes the focused window. Window is as it
  * was. View picks the desktop's view and the theme, and stays on narrow screens, because "Match system" can't be
- * reached from the theme button. Help holds the shortcuts, the Roadmap, the repository and About.
+ * reached from the theme button. Help opens with the guide ("<brand> Help", when there is one), then holds the
+ * shortcuts, the Roadmap, the repository and About.
  */
 export function menuModel(input: MenuInput): Menu[] {
   const { brand, on } = input;
@@ -166,6 +169,7 @@ export function menuModel(input: MenuInput): Menu[] {
       name: "Help",
       label: "Help",
       entries: [
+        ...(on.help ? [item(`${brand} Help`, on.help), SEP] : []),
         item("Keyboard shortcuts", on.shortcuts),
         item("Roadmap", on.roadmap),
         ...(input.repoUrl ? [item("GitHub ↗", on.github)] : []),

@@ -20,6 +20,7 @@ export default function Home() {
         brand="ArcOS"
         badge={networkBadge(activeNetwork())}
         aboutAppId="about"
+        helpAppId="help"
         repoUrl={REPO_URL}
         deskItems={DESK_ITEMS}
         wallpaperSlot={<PulseChart />}

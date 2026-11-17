@@ -5,7 +5,8 @@ import { DeskItemCell, FolderCell } from "./DeskCells";
 
 /**
  * The desk, the Folders view: a folder for each category that has apps, in the rack's order, down the first column,
- * and the desk items down the last, with the wallpaper open between them. A single click or Enter opens a folder or a
+ * and the desk items on the right: the files down the last column, the links down the one before it, with the
+ * wallpaper open between them. A single click or Enter opens a folder or a
  * file; a link opens in a new tab. There is no double-click, so touch and keyboard behave the same.
  */
 export function DeskFolders({

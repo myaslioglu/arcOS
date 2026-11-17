@@ -207,7 +207,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
         <div className="mt-3 grid gap-3">
           <div>
             <label className={LABEL} htmlFor="vesting-beneficiary">
-              Beneficiary
+              Beneficiary (who gets the tokens)
             </label>
             <input
               id="vesting-beneficiary"
@@ -306,6 +306,7 @@ export function NewSchedule({ prefilledToken }: { prefilledToken: Address | null
             {cliffError && <p id="vesting-cliff-error" className="mt-1 text-xs text-accent-3-text">{cliffError}</p>}
           </div>
         </div>
+        <p className="text-xs text-muted">The cliff is a wait at the start: nothing unlocks until it ends.</p>
       </fieldset>
 
       {terms && (

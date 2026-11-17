@@ -39,6 +39,8 @@ type Props = {
   badge?: string;
   /** App opened by "About …". */
   aboutAppId?: string;
+  /** App opened by "<brand> Help", the Help menu's first item. Missing: the item is left off. */
+  helpAppId?: string;
   /** Right side of the menu bar: network, wallet, balance. */
   statusSlot?: React.ReactNode;
   /** Extra launcher rows computed from the query, e.g. "Inspect 0x…". */
@@ -72,6 +74,7 @@ export function DesktopShell({
   brand,
   badge,
   aboutAppId = "about",
+  helpAppId,
   statusSlot,
   quickActions,
   repoUrl,
@@ -123,7 +126,7 @@ export function DesktopShell({
     [open],
   );
 
-  // A desk item that opens a window (readme.txt, roadmap.txt) comes here; a link is an <a> and opens its own tab.
+  // A desk item that opens a window (Help, readme.txt, roadmap.txt) comes here; a link is an <a> and opens its own tab.
   const openDeskItem = useCallback(
     (item: DeskItem, from: HTMLElement) => {
       if (item.action.kind === "app") open(item.action.appId, {}, from);
@@ -219,6 +222,7 @@ export function DesktopShell({
               onSearch={() => setLauncher(true)}
               onOpenApp={(id) => open(id)}
               onAbout={() => open(aboutAppId)}
+              onHelp={helpAppId ? () => open(helpAppId) : undefined}
               onRoadmap={() => open(ROADMAP_APP_ID)}
               repoUrl={repoUrl}
               onFocus={actions.focus}

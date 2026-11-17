@@ -102,7 +102,7 @@ describe("openActionFor", () => {
       instanceKey: "",
       params: {},
       title: "Vault",
-      size: { w: 380, h: 300 },
+      size: { w: 400, h: 380 },
       flush: false,
     });
   });

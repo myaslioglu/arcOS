@@ -112,4 +112,15 @@ describe("desk.css", () => {
     expect(desk).toMatch(/padding:\s*18px 14px 5rem;/);
     expect(css).not.toMatch(/@media[^{]*\b(?:max|min)-height/);
   });
+
+  // Four rows keep the desk clear of the dock, so a fifth desk item in one column would land behind it. The files take
+  // the last column and the links the one before it; only a desk too narrow for three columns stacks them in one.
+  it("stands the desk's files in the last column and its links in the one before it", () => {
+    expect(css).toMatch(/\.os-desk\s*\{[^}]*grid-template-rows:\s*repeat\(4,/);
+    expect(css).toMatch(/\.os-desk-cell--loose\s*\{\s*grid-column:\s*-2 \/ -1;\s*\}/);
+    expect(css).toMatch(/\.os-desk-cell--loose\.os-desk-cell--link\s*\{\s*grid-column:\s*-3 \/ -2;\s*\}/);
+    const narrow = blocksInside(css, "@media (max-width: 25.25rem)");
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0]).toMatch(/\.os-desk-cell--loose\.os-desk-cell--link\s*\{\s*grid-column:\s*-2 \/ -1;\s*\}/);
+  });
 });

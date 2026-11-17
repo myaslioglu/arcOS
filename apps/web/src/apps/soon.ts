@@ -28,9 +28,9 @@ export const SOON: AppManifest[] = [
     category: "trust",
     release: "r2",
     details: [
-      "Will lock liquidity pool tokens or team tokens until a date you choose.",
-      "Inspector will count tokens held in it as locked.",
-      "Needs its own contracts and an audit first.",
+      "Will lock tokens or liquidity until a date you choose, so they can't be withdrawn early, not even by the owner.",
+      "For a project showing buyers its liquidity can't be withdrawn early, or a team locking its own tokens.",
+      "It runs on a testnet first, and comes here once its contracts are audited.",
     ],
   }),
   soon({
@@ -41,9 +41,9 @@ export const SOON: AppManifest[] = [
     category: "trust",
     release: "r2",
     details: [
-      "Will release tokens to each recipient on a schedule, with an optional cliff.",
-      "Recipients will claim what has vested from their own wallets.",
-      "Needs its own contracts and an audit first.",
+      "Will pay tokens out little by little on a schedule you set, with an optional cliff: a wait before anything unlocks.",
+      "For paying a teammate or an investor over months or years. They collect each part as it unlocks.",
+      "It runs on a testnet first, and comes here once its contracts are audited.",
     ],
   }),
 ];

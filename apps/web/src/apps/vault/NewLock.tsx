@@ -329,7 +329,11 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
           </button>
         ))}
       </div>
-      <p className="-mt-2 text-xs text-muted">Drop a token or a position from Finder here, or type it below.</p>
+      <p className="-mt-2 text-xs text-muted">
+        {mode === "token"
+          ? "A token, or an LP token (the receipt for adding liquidity to a Uniswap v2 pool). Drop one from Finder here, or type its address below."
+          : "A position is your share of a Uniswap pool. Pick one below, drop one from Finder here, or type its id."}
+      </p>
 
       {mode === "token" ? (
         <div className="grid gap-3">
@@ -475,6 +479,7 @@ export function NewLock({ factory, wallet, prefill, onShowLocks }: Props) {
 
       <fieldset className="grid gap-2">
         <legend className="text-xs text-muted">Unlock date</legend>
+        <p className="text-xs text-muted">Locked until this date. You can move it later, never earlier.</p>
         <div className="flex flex-wrap gap-2">
           {PRESET_DAYS.map((days) => (
             <button

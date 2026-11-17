@@ -128,6 +128,20 @@ describe("menuModel", () => {
     expect(on.about).toHaveBeenCalledTimes(1);
   });
 
+  it("opens the guide from Help's first item, when the desktop has one", () => {
+    const help = vi.fn();
+    const { menus, on } = model();
+    const plain = model({ on: { ...on, help } }).menus;
+    const entries = menu(plain, "help").entries;
+    expect(entries[0]).toMatchObject({ type: "item", label: "ArcOS Help" });
+    expect(entries[1]).toEqual({ type: "sep" });
+    expect(items(entries).map((i) => i.label)).toEqual(["ArcOS Help", "Keyboard shortcuts", "Roadmap", "GitHub ↗", "About ArcOS"]);
+    items(entries)[0].onSelect();
+    expect(help).toHaveBeenCalledTimes(1);
+    // Without a guide, Help is as it was.
+    expect(items(menu(menus, "help").entries).map((i) => i.label)).toEqual(["Keyboard shortcuts", "Roadmap", "GitHub ↗", "About ArcOS"]);
+  });
+
   it("leaves GitHub out of Help without a repository URL", () => {
     const help = items(menu(model({ repoUrl: "" }).menus, "help").entries);
     expect(help.map((i) => i.label)).toEqual(["Keyboard shortcuts", "Roadmap", "About ArcOS"]);

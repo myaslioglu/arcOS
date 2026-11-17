@@ -21,6 +21,8 @@ type Props = {
   onSearch: () => void;
   onOpenApp: (appId: string) => void;
   onAbout: () => void;
+  /** Opens the guide from Help's first item. Missing: Help has no guide item. */
+  onHelp?: () => void;
   onRoadmap: () => void;
   onFocus: (winId: string) => void;
   onCloseActive: () => void;
@@ -91,6 +93,7 @@ export function MenuBar(props: Props) {
     touch,
     repoUrl,
     on: {
+      help: props.onHelp,
       search: props.onSearch,
       openApp: props.onOpenApp,
       about: props.onAbout,
