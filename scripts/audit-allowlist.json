@@ -25,7 +25,7 @@
   {
     "id": "GHSA-fc5q-39xc-vjpf",
     "package": "picomatch",
-    "reason": "no patched picomatch exists (the advisory covers <=4.0.7, the latest release); the ReDoS needs an attacker-supplied glob pattern, and every pattern here is our own: vite, vitest and tinyglobby glob this repo's config at build and test time, and WalletConnect's unstorage loads anymatch only in its Node fs driver, which the app never uses (it takes fs-lite and indexedb)",
+    "reason": "no patched picomatch exists (the advisory covers <=4.0.7, the latest release; 2.3.2 is the latest 2.x); the ReDoS needs an attacker-supplied glob pattern, and every pattern here is our own: vitest (and its vite) and the lint config glob this repo at test and lint time, and WalletConnect's unstorage loads anymatch only in its Node fs driver, which nothing here loads (its browser build imports only the unstorage core, its Node build fs-lite)",
     "until": "2026-12-17",
     "paths": ["."],
     "runtime": true
@@ -33,7 +33,7 @@
   {
     "id": "GHSA-fc5q-39xc-vjpf",
     "package": "picomatch",
-    "reason": "no patched picomatch exists (<=4.0.7, the latest release); the CLI globs only patterns from this repo (firebase.json, our source) in the deploy job, so no attacker-supplied pattern reaches picomatch",
+    "reason": "no patched picomatch exists (<=4.0.7, the latest release); the CLI reaches it only through chokidar, which its emulators use to watch our rules file and functions folder in CI, and node-gyp's tinyglobby never runs (installs use --ignore-scripts), so no attacker-supplied pattern reaches picomatch",
     "until": "2026-12-17",
     "paths": ["tools/firebase"],
     "runtime": true

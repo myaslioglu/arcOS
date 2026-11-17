@@ -231,22 +231,30 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
 - **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-11-29). Remove it
   once the Circle and Reown packages move to a patched `zod`.
 
-### `picomatch` (via `vite`, `vitest`, WalletConnect's `unstorage`, and the Firebase CLI)
+### `picomatch` (via vitest and its vite, the ESLint config, WalletConnect's `unstorage`, and the Firebase CLI)
 
 - **Advisory:** GHSA-fc5q-39xc-vjpf (`severity: high`, published 2026-10-19): a glob pattern made of single-branch
   repeated extglobs (`+(*)`, `+(*a)`) compiles to a regular expression that backtracks exponentially, blocking the event
-  loop. It covers `picomatch <= 4.0.7`, and 4.0.7 is the latest release, so there is no version to update or override to.
-- **Why it's unreachable here:** the attacker has to supply the glob pattern. Every pattern picomatch sees here is ours:
-  - `vite`, `vitest` and `tinyglobby` glob this repository's own config and source, at build and test time only.
+  loop. It covers `picomatch <= 4.0.7`. 4.0.7 is the latest release, and 2.3.2 (the line `anymatch`, `readdirp` and
+  `micromatch` use) the latest 2.x, so there is no version to update or override to.
+- **Why it isn't exploitable here:** the attacker has to supply the glob pattern. picomatch does run here, but every
+  pattern it gets is ours:
+  - vitest (and its vite) and the lint config (`eslint-config-next` → `fast-glob` → `micromatch`; typescript-eslint and
+    `eslint-import-resolver-typescript` → `tinyglobby`) glob this repository's own config and source, at test and lint
+    time only.
   - In the root lockfile picomatch is also a runtime dependency, through `@walletconnect/keyvaluestorage` →
-    `unstorage` → `anymatch`. `unstorage` loads `anymatch` only in its Node `fs` driver; WalletConnect uses the
-    `fs-lite` and `indexedb` drivers, and the web build ships neither `anymatch` nor `picomatch`.
-  - The pinned Firebase CLI (`tools/firebase`) globs the paths in `firebase.json` and our source in the deploy job, as
-    with the `braces` entry before it.
+    `unstorage` → `anymatch`. `unstorage` loads `anymatch` only in its Node `fs` driver. WalletConnect's browser build
+    imports only `unstorage`'s core (it carries its own IndexedDB driver) and its Node build `unstorage/drivers/fs-lite`,
+    so nothing in the web build loads the npm `anymatch` or `picomatch` packages. Next's server ships its own copy of
+    picomatch, which matches only the `images` patterns from `next.config`, and there are none.
+  - The pinned Firebase CLI (`tools/firebase`) reaches picomatch only through `chokidar`, which its emulators use to
+    watch our rules file and functions folder in CI's emulator runs. Its other path, `node-gyp` → `tinyglobby`, never
+    runs: every install of the CLI uses `npm ci --ignore-scripts`.
 - **Decided by:** the project owner, in chat, 2026-11-17.
 - **Handled by:** two expiring entries in `scripts/audit-allowlist.json`, one for the root audit and one for
-  `tools/firebase` (both `runtime: true`, until 2026-12-17). Remove them once a patched `picomatch` is published and
-  the lockfiles pick it up (with an `overrides` entry if a dependency pins an old range).
+  `tools/firebase` (both `runtime: true`, until 2026-12-17). Remove them once patched releases cover both lines in use
+  (2.x and 4.x) and the lockfiles pick them up. If only 4.x is patched, overriding `anymatch`, `readdirp` and
+  `micromatch` onto it crosses a major version and needs its own check, as with `toml` above.
 
 ### `query-string` (via `@walletconnect/utils`)
 
