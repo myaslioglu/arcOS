@@ -21,5 +21,21 @@
     "until": "2026-11-29",
     "paths": ["."],
     "runtime": true
+  },
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "no patched picomatch exists (the advisory covers <=4.0.7, the latest release); the ReDoS needs an attacker-supplied glob pattern, and every pattern here is our own: vite, vitest and tinyglobby glob this repo's config at build and test time, and WalletConnect's unstorage loads anymatch only in its Node fs driver, which the app never uses (it takes fs-lite and indexedb)",
+    "until": "2026-12-17",
+    "paths": ["."],
+    "runtime": true
+  },
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "no patched picomatch exists (<=4.0.7, the latest release); the CLI globs only patterns from this repo (firebase.json, our source) in the deploy job, so no attacker-supplied pattern reaches picomatch",
+    "until": "2026-12-17",
+    "paths": ["tools/firebase"],
+    "runtime": true
   }
 ]

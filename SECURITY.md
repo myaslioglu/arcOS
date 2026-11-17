@@ -231,6 +231,23 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
 - **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-11-29). Remove it
   once the Circle and Reown packages move to a patched `zod`.
 
+### `picomatch` (via `vite`, `vitest`, WalletConnect's `unstorage`, and the Firebase CLI)
+
+- **Advisory:** GHSA-fc5q-39xc-vjpf (`severity: high`, published 2026-10-19): a glob pattern made of single-branch
+  repeated extglobs (`+(*)`, `+(*a)`) compiles to a regular expression that backtracks exponentially, blocking the event
+  loop. It covers `picomatch <= 4.0.7`, and 4.0.7 is the latest release, so there is no version to update or override to.
+- **Why it's unreachable here:** the attacker has to supply the glob pattern. Every pattern picomatch sees here is ours:
+  - `vite`, `vitest` and `tinyglobby` glob this repository's own config and source, at build and test time only.
+  - In the root lockfile picomatch is also a runtime dependency, through `@walletconnect/keyvaluestorage` →
+    `unstorage` → `anymatch`. `unstorage` loads `anymatch` only in its Node `fs` driver; WalletConnect uses the
+    `fs-lite` and `indexedb` drivers, and the web build ships neither `anymatch` nor `picomatch`.
+  - The pinned Firebase CLI (`tools/firebase`) globs the paths in `firebase.json` and our source in the deploy job, as
+    with the `braces` entry before it.
+- **Decided by:** the project owner, in chat, 2026-11-17.
+- **Handled by:** two expiring entries in `scripts/audit-allowlist.json`, one for the root audit and one for
+  `tools/firebase` (both `runtime: true`, until 2026-12-17). Remove them once a patched `picomatch` is published and
+  the lockfiles pick it up (with an `overrides` entry if a dependency pins an old range).
+
 ### `query-string` (via `@walletconnect/utils`)
 
 - **Advisory:** GHSA-qr28-fpjm-wq7f (`decode-uri-component <= 0.5.0`, denial of service). `@walletconnect/utils`
