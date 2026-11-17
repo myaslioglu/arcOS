@@ -867,14 +867,18 @@ describe("the Firestore tests in CI", () => {
     ]);
   });
 
-  it("allows nothing in functions/deploy, and nothing as a runtime dependency except in tools/firebase and the zod exception", () => {
+  it("allows nothing in functions/deploy, and nothing as a runtime dependency except in tools/firebase and the named exceptions", () => {
     const allowlist = JSON.parse(read("scripts/audit-allowlist.json"));
+    // The runtime exceptions outside tools/firebase, each in SECURITY.md: zod GHSA-mrhx-c7xc-m3w5, which has no 3.x patch
+    // and whose 4.x breaks @circle-fin/* ("zod"), and picomatch GHSA-fc5q-39xc-vjpf, which has no patched release at all
+    // ("picomatch"). Both expire; the test names them so no other runtime entry slips in.
+    const named = { "GHSA-mrhx-c7xc-m3w5": "zod", "GHSA-fc5q-39xc-vjpf": "picomatch" };
     for (const entry of allowlist) {
       expect(entry.paths ?? ["."]).not.toContain("functions/deploy");
-      // The one runtime exception outside tools/firebase: zod GHSA-mrhx-c7xc-m3w5, which has no 3.x patch and whose 4.x
-      // breaks @circle-fin/* (SECURITY.md, "zod"). It expires; the test names it so no other runtime entry slips in.
-      if (entry.runtime && entry.id !== "GHSA-mrhx-c7xc-m3w5") expect(entry.paths).toEqual(["tools/firebase"]);
-      if (entry.id === "GHSA-mrhx-c7xc-m3w5") expect(entry).toMatchObject({ package: "zod", paths: ["."], runtime: true });
+      const rootRuntime = entry.runtime && !(entry.paths ?? ["."]).every((p) => p === "tools/firebase");
+      if (!rootRuntime) continue;
+      expect(Object.keys(named)).toContain(entry.id);
+      expect(entry).toMatchObject({ package: named[entry.id], paths: ["."], runtime: true });
     }
   });
 
