@@ -2,7 +2,8 @@
 
 ArcOS (live at https://4rcos.com) is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
 contract, mint one without writing code, send a token to many wallets in one flow, swap and
-bridge, and revoke token approvals. A Terminal reads the chain and opens apps from typed
+bridge, and revoke token approvals. Together, these apps work as a self-serve launch kit for a token
+([Launch a token](#launch-a-token)). A Terminal reads the chain and opens apps from typed
 commands, and a Roadmap window lists the apps still on the way.
 
 Automated analysis, not investment advice.
@@ -37,6 +38,34 @@ address is set — with it unset, both apps still work and simply charge no fee.
 requires one dependency exception (a transitive `toml` advisory forced to a patched major via an
 npm `overrides` entry); see [SECURITY.md](./SECURITY.md#dependency-exceptions) for exactly what,
 why, and the condition for removing it.
+
+## Launch a token
+
+ArcOS is also a self-serve launch kit. A project can take its token from creation to a public check with the apps
+below. Nobody at ArcOS has to approve a launch, and nothing is sent until you confirm it in your own wallet.
+
+| Step | App | Status |
+| --- | --- | --- |
+| 1. Create the token | Mint | Live |
+| 2. Share it out to the team, investors or a community | Drop | Live |
+| 3. Add liquidity | None: ArcOS has no pool app, so you make the pool on a DEX on Arc, such as Uniswap | Outside ArcOS |
+| 4. Lock the liquidity and the team's tokens | Vault | Live on the testnet site; mainnet after the audit |
+| 5. Vest team and investor allocations | Vesting | Live on the testnet site; mainnet after the audit |
+| 6. Let buyers check it | Inspector, and its public proof page `/t/<address>` | Live |
+| 7. Keep an eye on it | Watchdog, Radar, Revoke | Live |
+
+- Vault locks a token, a Uniswap v2 LP token or a Uniswap v3 or v4 position until a date you choose (Arc Testnet has
+  Uniswap v4 only). Nobody can withdraw it before that date, not even its owner. A lock is only as sound as its token,
+  so check the token with Inspector.
+- Vesting pays tokens out on a schedule with an optional cliff, to one wallet or to a list from a CSV file, each row
+  its own schedule.
+- The Vault and Vesting contracts were deployed on Arc Testnet on 2026-11-17 and are not audited yet. They come to Arc
+  mainnet only after an external audit.
+- Inspector doesn't recognise ArcOS locks or vesting schedules yet, so the proof page doesn't show them. That comes
+  after the audit.
+- Watchdog sends a Telegram message when a watched token's owner, supply, pause state, implementation or deepest pool
+  changes. Radar lists new tokens with Inspector's checks. Revoke takes back approvals you no longer need. Watchdog and
+  Radar read Arc mainnet only.
 
 ## Run it
 
