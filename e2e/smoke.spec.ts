@@ -110,7 +110,11 @@ test.describe("desktop", () => {
     await page.goto("/#app:vault");
     const vault = page.getByRole("dialog", { name: "Vault" });
     await expect(vault).toBeVisible();
-    await expect(vault.getByText("Will lock liquidity pool tokens or team tokens until a date you choose.", { exact: true })).toBeVisible();
+    await expect(
+      vault.getByText("Will lock tokens or liquidity until a date you choose. Until then nobody can take them out, not even the owner.", {
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(vault.getByText("Connect a wallet to use this app.", { exact: true })).toHaveCount(0);
   });
 

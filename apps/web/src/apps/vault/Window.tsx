@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useConnection } from "wagmi";
 import type { Address } from "viem";
+import { activeNetwork } from "@arcos/chain";
 import { useDropTarget, type AppProps } from "@arcos/shell";
+import { AppIntro } from "@/components/AppIntro";
 import { ConnectGate } from "@/components/ConnectGate";
 import { vaultFactoryOf } from "@/lib/vault-factory";
-import { UNAUDITED } from "./copy";
+import { UNAUDITED, vaultIntro } from "./copy";
+import { VaultIntroArt } from "./IntroArt";
 import { LockList } from "./LockList";
 import { vault as manifest } from "./manifest";
 import { NewLock, type Prefill } from "./NewLock";
@@ -28,19 +31,22 @@ const openedByWallet = new Map<string, Address[]>();
  * Vault: New lock (NewLock.tsx) and Your locks (LockList.tsx), two sections kept mounted so that a form half filled in
  * survives a look at the other. A token or a position dropped on the window, or named by its params, opens New lock
  * with it; a lock opens Your locks with that vault listed. Everything is read on chain before anything is offered.
+ * "What is Vault?" (copy.ts's vaultIntro) stands above both sections, and above the wallet prompt before one is
+ * connected: open the first time, hidden once the visitor hides it.
  */
 export default function VaultWindow({ params }: AppProps) {
   const { address } = useConnection();
   const factory = vaultFactoryOf();
   if (!factory) return <p className="p-5 text-sm text-muted">{"Vault isn't on this network yet."}</p>;
+  const intro = <AppIntro id="vault" content={vaultIntro(activeNetwork())} art={<VaultIntroArt />} />;
   return (
-    <ConnectGate>
-      <Vault key={address} factory={factory} params={params} />
+    <ConnectGate intro={intro}>
+      <Vault key={address} factory={factory} params={params} intro={intro} />
     </ConnectGate>
   );
 }
 
-function Vault({ factory, params }: { factory: Address; params: Record<string, string> }) {
+function Vault({ factory, params, intro }: { factory: Address; params: Record<string, string>; intro: ReactNode }) {
   const { address } = useConnection();
   const [tab, setTab] = useState<Tab>("new");
   const [prefill, setPrefill] = useState<Prefill | null>(null);
@@ -98,6 +104,7 @@ function Vault({ factory, params }: { factory: Address; params: Record<string, s
       </div>
       {/* Both stay mounted, so a half-filled form survives a look at the other section. */}
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="mb-4">{intro}</div>
         <section aria-label="New lock" hidden={tab !== "new"}>
           <NewLock factory={factory} wallet={address} prefill={prefill} onShowLocks={() => setTab("locks")} />
         </section>

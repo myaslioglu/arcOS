@@ -34,7 +34,7 @@ vi.mock("@arcos/shell", async (original) => {
   return { ...real, useDesktop: () => ({ open: () => undefined, notify: () => undefined }), useDropTarget: () => ({ over: false, props: {} }) };
 });
 
-import { AUDIT_NOTE, HOW_IT_WORKS, NOT_DEPLOYED, YOURS_NOTE } from "../copy";
+import { AUDIT_NOTE, HOW_IT_WORKS, NOT_DEPLOYED, YOURS_NOTE, vestingIntro } from "../copy";
 import { Curve } from "../Curve";
 import { EMPTY_FORM } from "../form";
 import { RunPanel } from "../RunPanel";
@@ -76,6 +76,33 @@ describe("the window", () => {
     for (const [name, line] of Object.entries({ HOW_IT_WORKS, AUDIT_NOTE, YOURS_NOTE })) {
       expect(line, name).not.toMatch(/\b(safe|guaranteed|free|instant|instantly)\b/i);
     }
+  });
+
+  it("explains Vesting above both tabs, open the first time: what it does, who it is for, three steps, and its limits", () => {
+    state.factory = FACTORY;
+    const html = window_();
+    const intro = vestingIntro("testnet");
+    expect(html).toContain('data-intro="vesting"');
+    expect(html).toContain("What is Vesting?");
+    expect(html).toMatch(/<h2[^>]*><button[^>]*aria-expanded="true"/);
+    for (const line of [intro.lead, ...intro.uses, ...intro.steps, ...intro.limits]) expect(html).toContain(line);
+    expect(html.indexOf('data-intro="vesting"')).toBeLessThan(html.indexOf('aria-label="New schedule"'));
+  });
+
+  it("explains a cliff, says a schedule can't be cancelled, and names no fee amount", () => {
+    for (const network of ["mainnet", "testnet"] as const) {
+      const intro = vestingIntro(network);
+      expect(intro.steps).toHaveLength(3);
+      expect(intro.uses.join(" ")).toMatch(/one-year cliff: nothing unlocks in the first year/);
+      expect(intro.limits).toContain("A schedule can't be cancelled or changed once it is made.");
+      for (const line of [intro.lead, ...intro.uses, ...intro.steps, ...intro.limits]) {
+        expect(line).toMatch(/^[A-Z].*\.$/);
+        expect(line).not.toMatch(/\d\s*(USDC|%)/);
+        expect(line).not.toMatch(/\b(safe|guaranteed|free|instant|instantly)\b/i);
+      }
+    }
+    expect(vestingIntro("testnet").limits.at(-1)).toBe("Not audited yet, so Vesting runs on this testnet site only. Test tokens have no value.");
+    expect(vestingIntro("mainnet").limits.join(" ")).not.toMatch(/testnet|test tokens/i);
   });
 
   it("states what a schedule can and can't do, and that nothing has been audited", () => {

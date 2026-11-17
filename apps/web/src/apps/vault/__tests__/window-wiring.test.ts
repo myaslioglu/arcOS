@@ -163,6 +163,21 @@ afterEach(async () => {
 });
 
 describe("the window", () => {
+  it("explains Vault above both sections, open the first time, and hides it on request", async () => {
+    window.localStorage.clear();
+    await mount();
+    const intro = host.querySelector<HTMLElement>('section[data-intro="vault"]')!;
+    const toggle = intro.querySelector<HTMLButtonElement>("h2 button")!;
+    expect(toggle.textContent).toContain("What is Vault?");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(intro.textContent).toContain("Vault locks tokens away until a date you choose.");
+    expect(intro.compareDocumentPosition(panel("New lock")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panel("New lock").contains(intro)).toBe(false);
+    await click(button("Got it, hide this", intro));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    window.localStorage.clear();
+  });
+
   it("opens on New lock, says the contracts aren't audited, and says what custody means", async () => {
     await mount();
     expect(pressedSection()).toBe("New lock");

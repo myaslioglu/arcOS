@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CUSTODY_POSITION, CUSTODY_TOKEN, NOT_YOURS, TRANSFER_NOTE, UNAUDITED } from "../copy";
+import { CUSTODY_POSITION, CUSTODY_TOKEN, NOT_YOURS, TRANSFER_NOTE, UNAUDITED, vaultIntro } from "../copy";
 
 /**
  * Vault's words, held to the copy rules: plain sentences, the product named "ArcOS", custody said as it is, the missing
@@ -44,6 +44,29 @@ describe("Vault's copy", () => {
 
   it("names the product ArcOS, never its old name", () => {
     for (const file of SOURCES) expect(readFileSync(path.join(DIR, file), "utf8"), file).not.toMatch(/4rc\.OS/);
+  });
+
+  it("explains Vault in plain words: what it does, who it is for, three steps, and what it doesn't do", () => {
+    const intro = vaultIntro("testnet");
+    expect(intro.title).toBe("What is Vault?");
+    expect(intro.lead).toMatch(/^Vault locks tokens away until a date you choose\./);
+    expect(intro.uses.join(" ")).toMatch(/LP tokens \(the receipt you get for adding liquidity to a pool\)/);
+    expect(intro.steps).toHaveLength(3);
+    expect(intro.limits).toContain("A lock can't be cancelled. You can move the unlock date later, never earlier.");
+    expect(intro.limits.join(" ")).toMatch(/Only the vault's owner can take the tokens out\./);
+    for (const line of [intro.lead, ...intro.uses, ...intro.steps, ...intro.limits]) {
+      expect(line).toMatch(/^[A-Z].*\.$/);
+      // Fees change and the form reads them live: the explainer states none.
+      expect(line).not.toMatch(/\d\s*(USDC|%)/);
+      expect(line).not.toMatch(/\u2014/);
+    }
+  });
+
+  it("says Vault isn't audited and runs on testnet only on the testnet site, and not on mainnet", () => {
+    expect(vaultIntro("testnet").limits.at(-1)).toBe("Not audited yet, so Vault runs on this testnet site only. Test tokens have no value.");
+    const mainnet = vaultIntro("mainnet");
+    expect(mainnet.limits.join(" ")).not.toMatch(/testnet|test tokens/i);
+    expect(mainnet.limits).toEqual(vaultIntro("testnet").limits.slice(0, -1));
   });
 
   it("catches the words it is meant to catch", () => {
