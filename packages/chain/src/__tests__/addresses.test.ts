@@ -62,12 +62,13 @@ describe("addresses", () => {
     expect(CHAINS.mainnet.contracts?.multicall3?.address).toBe(MULTICALL3);
     expect(CHAINS.testnet.contracts?.multicall3?.address).toBe(MULTICALL3);
   });
-  it("keeps R1's contracts null until DeployR1 has run: on testnet for now, and on mainnet", () => {
-    for (const network of ["testnet", "mainnet"] as const) {
-      expect(ARCOS[network]?.vaultFactory, network).toBeNull();
-      expect(ARCOS[network]?.vestingFactory, network).toBeNull();
-      expect(ARCOS[network]?.proPass, network).toBeNull();
-    }
+  it("names R1's contracts on testnet (DeployR1, 2026-11-17) and keeps them null on mainnet", () => {
+    expect(ARCOS.testnet?.vaultFactory).toBe("0x18A3c9ca7D7800a5dDA376bDFa4c0AA187675A23");
+    expect(ARCOS.testnet?.vestingFactory).toBe("0x1bDedA7EeA176d81c08DEA397058043124FE30d9");
+    expect(ARCOS.testnet?.proPass).toBe("0x458e1e67c7ea1c7c12E7587E147fCD1e73d6f0F5");
+    expect(ARCOS.mainnet?.vaultFactory).toBeNull();
+    expect(ARCOS.mainnet?.vestingFactory).toBeNull();
+    expect(ARCOS.mainnet?.proPass).toBeNull();
   });
   it("wires a deployment that passes the shape check on both networks", () => {
     expect(checkArcosAddresses(ARCOS.testnet)).toEqual({ status: "ok" });

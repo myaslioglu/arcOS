@@ -11,6 +11,7 @@ vi.mock("wagmi", () => ({
   useConnection: () => ({ address: state.address }),
   useReadContract: () => ({ data: undefined, isLoading: false }),
   useReadContracts: () => ({ data: undefined }),
+  usePublicClient: () => undefined,
 }));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: state.holdings, isLoading: false, isError: false }),

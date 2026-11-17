@@ -118,7 +118,7 @@ export type ArcosContracts = {
   feeController: Address;
   tokenFactory: Address;
   multisend: Address;
-  /** R1 (packages/contracts/script/DeployR1.s.sol). Absent or null until deployed on that network. */
+  /** R1 (packages/contracts/script/DeployR1.s.sol). Null where not deployed on that network (mainnet, for now). */
   vaultFactory?: Address | null;
   vestingFactory?: Address | null;
   proPass?: Address | null;
@@ -135,8 +135,8 @@ export type ArcosContracts = {
  * (`PREVIOUS_MULTISENDS` in packages/chain/src/usage.ts), and DEPLOY.md's Deployments table keeps it.
  * Testnet: deployed 2026-09-22; each contract's `feeController()` was read back on chain and matches. Its Multisend is
  * still the previous version.
- * R1's contracts (vaultFactory, vestingFactory, proPass) go on testnet first, through DeployR1 (DEPLOY.md, "R1"); they
- * stay null until then, and null on mainnet.
+ * R1's contracts (vaultFactory, vestingFactory, proPass) were deployed on testnet on 2026-11-17 through DeployR1
+ * (DEPLOY.md, "R1"), from main at ddf1f5c. Mainnet stays null until the audit is done.
  */
 export const ARCOS: Record<NetworkId, ArcosContracts | null> = {
   mainnet: {
@@ -151,8 +151,8 @@ export const ARCOS: Record<NetworkId, ArcosContracts | null> = {
     feeController: "0xC470753e83c151a6A4A360869270291A6ED70d99",
     tokenFactory: "0x41FaFc54ED3be1545695B82af4aA490607447884",
     multisend: "0x113f3864C94ff6a14310a789bD671de5b78D6CBf",
-    vaultFactory: null,
-    vestingFactory: null,
-    proPass: null,
+    vaultFactory: "0x18A3c9ca7D7800a5dDA376bDFa4c0AA187675A23",
+    vestingFactory: "0x1bDedA7EeA176d81c08DEA397058043124FE30d9",
+    proPass: "0x458e1e67c7ea1c7c12E7587E147fCD1e73d6f0F5",
   },
 };

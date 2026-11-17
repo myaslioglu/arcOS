@@ -24,8 +24,8 @@ Automated analysis, not investment advice.
 | Radar | Lists new tokens as the index records them, each with Inspector's checks | Live |
 | Stats | How much ArcOS is used: tokens created, Drop transactions and recipients on Arc mainnet, each with how to check it on the explorer | Live |
 | Watchdog | Alerts when a token you hold changes | Live |
-| Vault | Lock liquidity and team tokens | Coming soon |
-| Vesting | Release tokens on a schedule | Coming soon |
+| Vault | Lock liquidity and team tokens | Live on the testnet site; mainnet after the audit |
+| Vesting | Release tokens on a schedule | Live on the testnet site; mainnet after the audit |
 | Meme | Soon | Coming soon |
 
 Mint and Drop call `TokenFactory` and `Multisend`, which are deployed on Arc mainnet and Arc Testnet
