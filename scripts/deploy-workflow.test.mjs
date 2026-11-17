@@ -876,7 +876,9 @@ describe("the Firestore tests in CI", () => {
     for (const entry of allowlist) {
       expect(entry.paths ?? ["."]).not.toContain("functions/deploy");
       const rootRuntime = entry.runtime && !(entry.paths ?? ["."]).every((p) => p === "tools/firebase");
-      if (rootRuntime) expect(entry).toMatchObject({ package: named[entry.id], paths: ["."], runtime: true });
+      if (!rootRuntime) continue;
+      expect(Object.keys(named)).toContain(entry.id);
+      expect(entry).toMatchObject({ package: named[entry.id], paths: ["."], runtime: true });
     }
   });
 
