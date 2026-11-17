@@ -60,16 +60,16 @@ Watchdog and Radar only on https://4rcos.com (Arc mainnet).
 - The Vault and Vesting contracts were deployed on Arc Testnet (https://testnet.4rcos.com) on 2026-11-17 and are not
   audited yet. They come to Arc mainnet only after an external audit
   ([scope and threat model](packages/contracts/audit/SCOPE.md)).
-- Vault locks a token, a Uniswap v2 LP token or a Uniswap v3 or v4 position (not a v4 pool with a hook, nor an
-  Aerodrome position) until a date you choose (Arc Testnet has Uniswap v4 only). The vault contract lets nobody
+- Vault locks a token, a Uniswap v2 LP token or a Uniswap v3 or v4 position (not a position in a v4 pool with a hook,
+  nor an Aerodrome position) until a date you choose. Arc Testnet has Uniswap v4 only. The vault contract lets nobody
   withdraw it before that date, not even its owner, though a locked position's owner can still collect its trading
   fees. A lock is only as sound as its token, so check the token with Inspector.
 - Vesting unlocks tokens evenly over the time you set, with an optional cliff, and the beneficiary releases what has
   unlocked. It pays one wallet or a list (pasted or from a CSV, up to 50 rows a run). Each row gets its own vesting
   contract on the same terms.
 - Inspector doesn't recognise ArcOS locks or vesting schedules yet, so the proof page doesn't show them. That is still
-  to come. Until then, share the vault's address: anyone can open it in Vault ("Open a vault by its address") or on
-  the explorer.
+  to come. Until then, share the vault's address: anyone can look it up on the explorer, or open it in Vault on the
+  testnet site with a wallet connected ("Open a vault by its address").
 - Watchdog sends a Telegram message when a watched token's owner, supply, pause state, implementation or deepest pool
   changes. Radar lists new tokens with Inspector's checks. Revoke takes back approvals you no longer need. Watchdog and
   Radar read Arc mainnet only.
@@ -146,8 +146,9 @@ the suite's types; `npm run lint` covers it too.
 - `functions` — the scheduled functions (codebase `arcos`): `arcosIndexer` records new USDC and
   EURC pools and their tokens, inspects them, keeps Radar's first pages and counts usage for Stats. Bundled with esbuild
   into `functions/deploy`.
-- `packages/contracts` — the Solidity contracts (the three live ones, and Vault, Vesting and ProPass on Arc Testnet),
-  their Foundry tests, scripts, deployment guide and audit package.
+- `packages/contracts` — the Solidity contracts (FeeController, TokenFactory and Multisend on both networks; Vault,
+  Vesting and ProPass, Watchdog Pro's payment contract, on Arc Testnet only; Inspector's trade simulator), their
+  Foundry tests, scripts, deployment guide and audit package.
 - `docs/QA-R0.md` — the manual test script for this release.
 - `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the deploy and its smoke checks.
 - `docs/OPERATIONS.md` — what runs where, the indexer's console controls, deploying the functions, costs and checks.
@@ -179,7 +180,9 @@ The contracts are deployed on Arc mainnet and Arc Testnet, and none have been au
 whoever runs it.
 
 Vault and Vesting are different: they hold users' tokens by design, until an unlock date or along a schedule. They run
-on Arc Testnet only and come to Arc mainnet after an external audit (`packages/contracts/audit`).
+on Arc Testnet only and come to Arc mainnet after an external audit (`packages/contracts/audit`). New locks and
+schedules pay their fee to the same fee recipient, so they would stop too if it failed; withdrawals and releases pay no
+fee and keep working.
 
 ## How Inspector decides things
 
