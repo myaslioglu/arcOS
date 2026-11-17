@@ -2,9 +2,9 @@
 
 ArcOS (live at https://4rcos.com) is a desktop-style web app for Circle's Arc network. It lets you inspect a token's
 contract, mint one without writing code, send a token to many wallets in one flow, swap and
-bridge, and revoke token approvals. Together, these apps work as a self-serve launch kit for a token
-([Launch a token](#launch-a-token)). A Terminal reads the chain and opens apps from typed
-commands, and a Roadmap window lists the apps still on the way.
+bridge, and revoke token approvals. A project can also launch its own token with ArcOS
+([Launch a token](#launch-a-token)); locks and vesting run on the testnet site until their audit. A Terminal reads
+the chain and opens apps from typed commands, and a Roadmap window lists the apps still on the way.
 
 Automated analysis, not investment advice.
 
@@ -44,25 +44,32 @@ why, and the condition for removing it.
 ArcOS is also a self-serve launch kit. A project can take its token from creation to a public check with the apps
 below. Nobody at ArcOS has to approve a launch, and nothing is sent until you confirm it in your own wallet.
 
+No single site runs every step yet: Vault and Vesting run only on https://testnet.4rcos.com until their audit, and
+Watchdog and Radar only on https://4rcos.com (Arc mainnet).
+
 | Step | App | Status |
 | --- | --- | --- |
 | 1. Create the token | Mint | Live |
-| 2. Share it out to the team, investors or a community | Drop | Live |
-| 3. Add liquidity | None: ArcOS has no pool app, so you make the pool on a DEX on Arc, such as Uniswap | Outside ArcOS |
+| 2. Send it to holders, such as a community airdrop | Drop | Live |
+| 3. Add liquidity | None: ArcOS has no pool app. Make the pool on Uniswap on Arc; Vault can lock Uniswap pools only, and on v4 only pools without a hook | Outside ArcOS |
 | 4. Lock the liquidity and the team's tokens | Vault | Live on the testnet site; mainnet after the audit |
 | 5. Vest team and investor allocations | Vesting | Live on the testnet site; mainnet after the audit |
 | 6. Let buyers check it | Inspector, and its public proof page `/t/<address>` | Live |
-| 7. Keep an eye on it | Watchdog, Radar, Revoke | Live |
+| 7. Keep an eye on it | Watchdog, Radar, Revoke | Live (Watchdog and Radar on Arc mainnet only) |
 
-- Vault locks a token, a Uniswap v2 LP token or a Uniswap v3 or v4 position until a date you choose (Arc Testnet has
-  Uniswap v4 only). Nobody can withdraw it before that date, not even its owner. A lock is only as sound as its token,
-  so check the token with Inspector.
-- Vesting pays tokens out on a schedule with an optional cliff, to one wallet or to a list from a CSV file, each row
-  its own schedule.
-- The Vault and Vesting contracts were deployed on Arc Testnet on 2026-11-17 and are not audited yet. They come to Arc
-  mainnet only after an external audit.
-- Inspector doesn't recognise ArcOS locks or vesting schedules yet, so the proof page doesn't show them. That comes
-  after the audit.
+- The Vault and Vesting contracts were deployed on Arc Testnet (https://testnet.4rcos.com) on 2026-11-17 and are not
+  audited yet. They come to Arc mainnet only after an external audit
+  ([scope and threat model](packages/contracts/audit/SCOPE.md)).
+- Vault locks a token, a Uniswap v2 LP token or a Uniswap v3 or v4 position (not a v4 pool with a hook, nor an
+  Aerodrome position) until a date you choose (Arc Testnet has Uniswap v4 only). The vault contract lets nobody
+  withdraw it before that date, not even its owner, though a locked position's owner can still collect its trading
+  fees. A lock is only as sound as its token, so check the token with Inspector.
+- Vesting unlocks tokens evenly over the time you set, with an optional cliff, and the beneficiary releases what has
+  unlocked. It pays one wallet or a list (pasted or from a CSV, up to 50 rows a run). Each row gets its own vesting
+  contract on the same terms.
+- Inspector doesn't recognise ArcOS locks or vesting schedules yet, so the proof page doesn't show them. That is still
+  to come. Until then, share the vault's address: anyone can open it in Vault ("Open a vault by its address") or on
+  the explorer.
 - Watchdog sends a Telegram message when a watched token's owner, supply, pause state, implementation or deepest pool
   changes. Radar lists new tokens with Inspector's checks. Revoke takes back approvals you no longer need. Watchdog and
   Radar read Arc mainnet only.
@@ -139,8 +146,8 @@ the suite's types; `npm run lint` covers it too.
 - `functions` — the scheduled functions (codebase `arcos`): `arcosIndexer` records new USDC and
   EURC pools and their tokens, inspects them, keeps Radar's first pages and counts usage for Stats. Bundled with esbuild
   into `functions/deploy`.
-- `packages/contracts` — the three Solidity contracts and their Foundry tests, scripts and
-  deployment guide.
+- `packages/contracts` — the Solidity contracts (the three live ones, and Vault, Vesting and ProPass on Arc Testnet),
+  their Foundry tests, scripts, deployment guide and audit package.
 - `docs/QA-R0.md` — the manual test script for this release.
 - `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the deploy and its smoke checks.
 - `docs/OPERATIONS.md` — what runs where, the indexer's console controls, deploying the functions, costs and checks.
@@ -165,11 +172,14 @@ same transaction and reverts the whole action if that transfer fails, so if that
 becomes unable to receive value — a contract with no `receive()`, or one blocklisted on Arc — every
 paid action starts reverting until the owner points `FeeController` at a working address with
 `setRecipient`. This is a risk to the ACTION (it stops working until fixed), not to your funds:
-these contracts hold no funds between transactions, so nothing here is ever at risk of being lost.
+these three contracts hold no funds between transactions, so nothing in them is ever at risk of being lost.
 
 The contracts are deployed on Arc mainnet and Arc Testnet, and none have been audited. See
 `packages/contracts/DEPLOY.md` for the addresses, how deployment works and what it needs from
 whoever runs it.
+
+Vault and Vesting are different: they hold users' tokens by design, until an unlock date or along a schedule. They run
+on Arc Testnet only and come to Arc mainnet after an external audit (`packages/contracts/audit`).
 
 ## How Inspector decides things
 
