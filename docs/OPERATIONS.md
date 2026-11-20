@@ -314,16 +314,15 @@ index holds more) and, for each v4 pool among them, the position keys the index 
 all, and the cursor. It reads the blocks after the cursor itself (at most 10,000 blocks, three `eth_getLogs`:
 `Initialize` with the token as currency0 and as currency1, then the pools' `ModifyLiquidity`), then every position's
 liquidity and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active
-liquidity. With that it does one thing: it detects liquidity a wallet can withdraw, and makes lp-lock a fail or a
-warning. It never makes a pass: when it finds no wallet in the way, or can't read the whole picture, lp-lock is what
-the check from before the index says (v2 LP tokens only), word for word, so no token passes with the index that
-wouldn't pass without it. A launch burned into a v4 pool, behind a launchpad's hook or not, reads "couldn't check".
-A fail from it always rests on at least 1,000 USDC that wallets can withdraw from plain pools (v2, or v4 against USDC
-with a fixed fee of at most 1% and no swap hook) and that sits within reach of sellers, between the market price
-(where plain pools' tokens for sale have taken 1,000 USDC) and half of it; tokens for sale alone, and anything in other pools, make a warning
-at most. The rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the
-header of `packages/inspector/src/checks.ts`: who holds the USDC in the pools, and who the next buyers would pay, in
-order of what a buyer pays per token (LP fee included), on one path over every pool.
+liquidity. With that it does one thing: it warns about liquidity a wallet can withdraw. It never makes a pass and never
+a fail: every pass, fail and unknown of lp-lock is what the check from before the index says (v2 LP tokens only), word
+for word, and a warning from the positions takes the place of that check's pass or unknown, never of its fail. A launch
+burned into a v4 pool reads "couldn't check"; one held by a wallet reads as a warning, titled "Wallets hold most of the
+USDC in this token's pools" or "Wallets would take most of what buyers pay next" when that is what the pools show, and
+"Some liquidity isn't locked" otherwise. Failing a token on its v4 positions is a follow-up: it needs the USDC that
+could really be sold into, matched holder by holder to the tokens for sale, or the deployer's identity. The rule, who
+can make which warning and at what cost are in the README, "How Inspector decides things", and in the header of
+`packages/inspector/src/checks.ts`.
 
 The v4 reading is left out when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is
 more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 500 positions, the token has more than
@@ -377,7 +376,7 @@ run a minute, longer while inspections run long.
 
 Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives exactly the answers it gave before
 the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be read without an index yet"), since
-until the backfill is done neither the positions nor the token's old v4 pools are all listed. The fails and warnings
+until the backfill is done neither the positions nor the token's old v4 pools are all listed. The warnings
 from positions start on their own once it has caught up. Watch `positionsIndex/mainnet.block` against `head`, or
 `behind` in the run line. After that a run reads one window of about 120 blocks.
 
