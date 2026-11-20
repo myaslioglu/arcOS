@@ -80,8 +80,11 @@ export async function runPositions(args: {
   const doc = await ensurePositionsIndex(db, network, fromBlock, now(), tip);
   const deadline = started + limits.deadlineMs;
   let cursor = doc.block;
-  let span = MAX_WINDOW;
+  // The width the last stored window was read with: a stretch of dense blocks isn't found out again from the cap each run.
+  let span = typeof doc.span === "number" && doc.span >= 1 ? Math.min(MAX_WINDOW, Math.floor(doc.span)) : MAX_WINDOW;
   let refusals = 0;
+  // Once the node has refused a width in this run, no window is tried that wide again.
+  let ceiling = MAX_WINDOW;
   // Every pass applies a window, finds one already applied, or follows a cursor another run moved; the bound keeps a
   // cursor that keeps moving from holding the run.
   for (let passes = 0; result.windows < limits.maxWindows && passes < limits.maxWindows * 2 && elapsed() < limits.untilMs && elapsed() - stepStarted < limits.stepMs; passes++) {
@@ -98,7 +101,9 @@ export async function runPositions(args: {
           log.error("arcosIndexer positions window refused", { width, refusals });
           break;
         }
-        span = shrink(width, e.suggested);
+        // The node's own hint when it gives one ("retry with the range A-B": 9,473 blocks, say), else half.
+        span = e.suggested !== undefined && e.suggested >= 1 && e.suggested < width ? e.suggested : shrink(width);
+        ceiling = Math.min(ceiling, span);
         continue;
       }
       result.error ??= nameOf(e);
@@ -108,7 +113,7 @@ export async function runPositions(args: {
     let applied;
     try {
       applied = await applyPositionsWindow(db, network, window, decodePositionLogs(logs, poolManager, window), {
-        tip, now: now(), pools: decodePoolLogs(logs, network, window), until: started + limits.writeUntilMs, clock: now,
+        tip, now: now(), pools: decodePoolLogs(logs, network, window), until: started + limits.writeUntilMs, clock: now, span,
       });
     } catch (e) {
       result.error ??= nameOf(e);
@@ -131,7 +136,7 @@ export async function runPositions(args: {
       result.windows++;
       result.positions += applied.written;
       result.pools += applied.pools;
-      span = grow(span);
+      span = Math.min(grow(span), ceiling);
     }
     cursor = applied.block;
   }

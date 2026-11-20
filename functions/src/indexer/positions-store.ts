@@ -108,7 +108,8 @@ const CREATE_RETRIES = 3;
  *    The caller never reads past the main indexer's cursor (positions-run.ts), so every pool here that
  *    the main indexer is to record, it has recorded already: this step only adds the pools from before its first block,
  *    and can't take a pool's doc (the main indexer's mark that the pool's token is handled) from under it;
- * 2. in one transaction, moves the cursor from `from - 1` to `to` (forward only), or reports that it wasn't there.
+ * 2. in one transaction, moves the cursor from `from - 1` to `to` (forward only), or reports that it wasn't there
+ *    `options.span`, the width the caller read this window with, is stored with it for the next run.
  * The positions go first: a run that dies between the two repeats the window, and never leaves the cursor past a
  * position that isn't stored. A reader that takes the cursor first and the positions after it therefore sees every
  * position opened up to that cursor.
@@ -124,7 +125,7 @@ export async function applyPositionsWindow(
   network: NetworkId,
   window: { from: number; to: number },
   positions: readonly SeenPosition[],
-  options: { tip: number; now: number; pools?: readonly PoolDoc[]; until?: number; clock?: () => number },
+  options: { tip: number; now: number; pools?: readonly PoolDoc[]; until?: number; clock?: () => number; span?: number },
 ): Promise<PositionsApplyResult> {
   const collection = db.collection(COLLECTIONS.positions);
   const entries: { ref: DocumentReference; doc: PositionDoc }[] = positions.map((p) => ({
@@ -178,7 +179,7 @@ export async function applyPositionsWindow(
     const doc = snap.data() as PositionsIndexDoc;
     if (doc.block >= window.to) return { kind: "already", block: doc.block };
     if (doc.block !== window.from - 1) return { kind: "moved", block: doc.block };
-    tx.update(ref, { block: window.to, head: Math.max(doc.head ?? 0, options.tip), updatedAt: Timestamp.fromMillis(options.now) });
+    tx.update(ref, { block: window.to, head: Math.max(doc.head ?? 0, options.tip), updatedAt: Timestamp.fromMillis(options.now), ...(options.span === undefined ? {} : { span: options.span }) });
     return { kind: "applied", block: window.to, written, pools };
   });
 }

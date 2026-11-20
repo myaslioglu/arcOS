@@ -172,6 +172,8 @@ export type PositionsIndexDoc = {
   block: number;
   fromBlock: number;
   head: number;
+  /** The width in blocks of the last window that was read and stored: where the next run starts, not at the cap again. Absent before the first. */
+  span?: number;
   updatedAt: TimestampLike;
 };
 

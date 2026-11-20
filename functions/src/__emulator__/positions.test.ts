@@ -215,6 +215,21 @@ describe("the position index's step of a run", () => {
     expect((await indexedPositions(db, "mainnet", POOL)).positions).toHaveLength(3);
   });
 
+  it("takes the width the node suggests when it refuses, and starts the next run from the width that worked", async () => {
+    await stateAt(START + 29_999);
+    const many = [modifyLiquidity(START + 1_000, POOL, NFTS, 1n), modifyLiquidity(START + 12_000, POOL, NFTS, 2n), modifyLiquidity(START + 25_000, POOL, NFTS, 3n)];
+    const chain = fakeChain({ head: START + 29_999, logs: many, maxSpan: 9_473, suggest: 9_473 });
+    const first = await go(chain, { fromBlock: START, limits: { maxWindows: 2 } });
+    expect(first.positions).toMatchObject({ windows: 2, positions: 2, error: null });
+    // One refusal at the cap, then the hint, not half of the cap, and nothing wider again in this run.
+    expect(chain.asked.map((w) => w.to - w.from + 1)).toEqual([10_000, 9_473, 9_473]);
+    expect((await db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet")).get()).data()).toMatchObject({ span: 9_473, block: START + 18_945 });
+    // The next run doesn't begin at 10,000 again.
+    const next = fakeChain({ head: START + 29_999, logs: many, maxSpan: 9_473, suggest: 9_473 });
+    expect((await go(next, { fromBlock: START, limits: { maxWindows: 1 } })).positions).toMatchObject({ windows: 1, positions: 1, error: null });
+    expect(next.asked[0]).toEqual({ from: START + 18_946, to: START + 28_418 });
+  });
+
   it("names a window that can't be read, keeps what it stored, and repeats that window on the next run", async () => {
     await stateAt(HEAD);
     const result = await go(fakeChain({ head: HEAD, logs, failCall: 2 }));

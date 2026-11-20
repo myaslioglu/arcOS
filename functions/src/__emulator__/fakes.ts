@@ -78,6 +78,8 @@ export type FakeChainOptions = {
   logs?: RawLog[];
   /** The node refuses any window wider than this (as -32012 would). */
   maxSpan?: number;
+  /** With `maxSpan`: the width the refusal suggests ("retry with the range A-B"). */
+  suggest?: number;
   /** The node refuses even this one block. */
   refuseBlock?: number;
   /** The nth eth_getLogs call (1-based) fails at the transport level. */
@@ -97,7 +99,7 @@ export function fakeChain(options: FakeChainOptions): LogChain & { asked: { from
     logs: async ({ addresses, topic0s, from, to }: { addresses: readonly Address[]; topic0s: readonly Hex[]; from: number; to: number }) => {
       asked.push({ from, to });
       if (options.failCall === asked.length) throw new Error("ECONNRESET");
-      if (options.maxSpan !== undefined && to - from + 1 > options.maxSpan) throw new RangeRefused();
+      if (options.maxSpan !== undefined && to - from + 1 > options.maxSpan) throw new RangeRefused(options.suggest);
       if (options.refuseBlock !== undefined && from <= options.refuseBlock && options.refuseBlock <= to) throw new RangeRefused();
       const wanted = new Set(addresses.map((a) => a.toLowerCase()));
       return (options.logs ?? []).filter((log) => {
