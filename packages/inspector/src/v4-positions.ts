@@ -123,13 +123,15 @@ const E30 = 10n ** 30n;
  *   already priced past the target has nothing more coming to it. Without `lookTo` it looks to the TOKEN's price
  *   doubling in this pool: the raw price is currency1 per currency0, so when the token is currency0 that is the raw
  *   price doubling (its square root times sqrt 2), and when the token is currency1 it is the raw price halving.
- * The token side has no part in either number.
+ * - `reach`: the quote currency sellers would take out of it by selling the token down to half its price in this
+ *   pool: `now` less its quote amount there. What sits further down is out of reach: nobody sells into it.
+ * The token side has no part in any of them.
  */
 export function positionQuote(
   p: { sqrtPriceX96: bigint; tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean },
   lookTo?: bigint,
-): { now: bigint; inflow: bigint } {
-  if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return { now: 0n, inflow: 0n };
+): { now: bigint; inflow: bigint; reach: bigint } {
+  if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return { now: 0n, inflow: 0n, reach: 0n };
   const [lower, upper] = [sqrtRatioAtTick(p.tickLower), sqrtRatioAtTick(p.tickUpper)];
   const quoteAt = (sqrtP: bigint) => {
     const { amount0, amount1 } = amountsForLiquidity(sqrtP, lower, upper, p.liquidity);
@@ -138,7 +140,9 @@ export function positionQuote(
   const target = lookTo ?? (p.quoteIsCurrency0 ? (p.sqrtPriceX96 * E30) / SQRT2_E30 : (p.sqrtPriceX96 * SQRT2_E30) / E30);
   const now = quoteAt(p.sqrtPriceX96);
   const then = target > 0n ? quoteAt(target) : now;
-  return { now, inflow: then > now ? then - now : 0n };
+  // The token's price halved: the mirror of the doubling above.
+  const below = quoteAt(p.quoteIsCurrency0 ? (p.sqrtPriceX96 * SQRT2_E30) / E30 : (p.sqrtPriceX96 * E30) / SQRT2_E30);
+  return { now, inflow: then > now ? then - now : 0n, reach: now > below ? now - below : 0n };
 }
 
 // One price for every pool of a token, whatever the pool's orientation and its quote currency's decimals: the square

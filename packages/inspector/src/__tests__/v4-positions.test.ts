@@ -98,6 +98,24 @@ describe("amountsForLiquidity: Uniswap's LiquidityAmounts.getAmountsForLiquidity
 });
 
 describe("positionQuote: a position in the quote currency alone", () => {
+  it("reach: what sellers take out by selling the token down to half its price, either way up", () => {
+    const L18 = 10n ** 18n;
+    // The token as currency0: half the price is about 6,932 ticks down. A range wholly below that holds quote out of reach.
+    const far = positionQuote({ sqrtPriceX96: Q96, tickLower: -20_000, tickUpper: -8_000, liquidity: L18, quoteIsCurrency0: false });
+    expect(far.now).toBeGreaterThan(0n);
+    expect(far.reach).toBe(0n);
+    // A range just under the price is all within reach, and one from the price far down in part.
+    const near = positionQuote({ sqrtPriceX96: Q96, tickLower: -3_000, tickUpper: -60, liquidity: L18, quoteIsCurrency0: false });
+    expect(near.reach).toBe(near.now);
+    const long = positionQuote({ sqrtPriceX96: Q96, tickLower: -40_000, tickUpper: 0, liquidity: L18, quoteIsCurrency0: false });
+    expect(long.reach > 0n && long.reach < long.now).toBe(true);
+    // Mirrored: the token as currency1, its price falling as the raw price rises.
+    const mirrored = positionQuote({ sqrtPriceX96: Q96, tickLower: 60, tickUpper: 3_000, liquidity: L18, quoteIsCurrency0: true });
+    expect(mirrored.reach).toBe(mirrored.now);
+    expect(mirrored.reach).toBe(near.reach);
+    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: 8_000, tickUpper: 20_000, liquidity: L18, quoteIsCurrency0: true }).reach).toBe(0n);
+  });
+
   const L = 10n ** 18n;
   const range = { tickLower: -600, tickUpper: 600 };
   const [lower, upper] = [sqrtRatioAtTick(-600), sqrtRatioAtTick(600)];
@@ -150,12 +168,12 @@ describe("positionQuote: a position in the quote currency alone", () => {
 
   it("gains nothing in a range the doubled price doesn't reach, or one the price has left on the token's upside", () => {
     // Token currency0: doubling ends at tick 6,931. A range from 7,000 up isn't reached; one below the price is all quote already.
-    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: 7_000, tickUpper: 8_000, liquidity: L, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n });
+    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: 7_000, tickUpper: 8_000, liquidity: L, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n, reach: 0n });
     const below = positionQuote({ sqrtPriceX96: Q96, tickLower: -1_200, tickUpper: -600, liquidity: L, quoteIsCurrency0: false });
     expect(below.now).toBeGreaterThan(0n);
     expect(below.inflow).toBe(0n);
     // Token currency1: the mirror.
-    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: -8_000, tickUpper: -7_000, liquidity: L, quoteIsCurrency0: true })).toEqual({ now: 0n, inflow: 0n });
+    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: -8_000, tickUpper: -7_000, liquidity: L, quoteIsCurrency0: true })).toEqual({ now: 0n, inflow: 0n, reach: 0n });
     expect(positionQuote({ sqrtPriceX96: Q96, tickLower: 600, tickUpper: 1_200, liquidity: L, quoteIsCurrency0: true }).inflow).toBe(0n);
   });
 
@@ -163,8 +181,8 @@ describe("positionQuote: a position in the quote currency alone", () => {
     const part = positionQuote({ sqrtPriceX96: Q96, tickLower: 3_000, tickUpper: 12_000, liquidity: L, quoteIsCurrency0: false });
     expect(part.now).toBe(0n);
     expect(part.inflow).toBe((L * (up(Q96) - sqrtRatioAtTick(3_000))) / Q96);
-    expect(positionQuote({ sqrtPriceX96: Q96, ...range, liquidity: 0n, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n });
-    expect(positionQuote({ sqrtPriceX96: 0n, ...range, liquidity: L, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n });
+    expect(positionQuote({ sqrtPriceX96: Q96, ...range, liquidity: 0n, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n, reach: 0n });
+    expect(positionQuote({ sqrtPriceX96: 0n, ...range, liquidity: L, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n, reach: 0n });
   });
 });
 

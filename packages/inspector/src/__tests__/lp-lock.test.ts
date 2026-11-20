@@ -331,13 +331,44 @@ describe("buyers' money in price order: the review's cases", () => {
     );
   });
 
-  it("C and D. a stranger's USDC parked as bids below a burned launch: material only from 1,000 USDC in the pools", async () => {
+  it("C and D. a stranger's USDC parked as bids below a burned launch: a warning from 5% of the USDC in the pools, a fail only within reach of sellers", async () => {
+    // Parked under half the price: nobody sells into it, and leaving it there risks nothing.
     const parked = (usdc: bigint) => nft(4, quoteOnlyL(T0 - 20_000, T0 - 7_020, usdc), T0 - 20_000, T0 - 7_020);
-    // 2,000 beside 2,000 burned: half the USDC in the pools is a wallet's.
-    await paidToWallets([main([twoSided(2, 2_000n), parked(2_000n)])], { 2: DEAD, 4: WALLET_2 });
+    // 2,000 beside 2,000 burned, or 200,000: half or all but all of the USDC in the pools, and out of reach.
+    expect((await verdict([main([twoSided(2, 2_000n), parked(2_000n)])], { 2: DEAD, 4: WALLET_2 })).status).toBe("warn");
+    expect((await verdict([main([twoSided(2, 2_000n), parked(200_000n)])], { 2: DEAD, 4: WALLET_2 })).status).toBe("warn");
     // 120 beside 2,000: 5.7%.
     expect((await verdict([main([twoSided(2, 2_000n), parked(120n)])], { 2: DEAD, 4: WALLET_2 })).status).toBe("warn");
     await quiet([main([twoSided(2, 2_000n), parked(100n)])], { 2: DEAD, 4: WALLET_2 });
+  });
+
+  it("bids within reach: what sellers would take by selling the token down to half its price", async () => {
+    // A burned range from half the price to twice it holding 1,000 USDC: all of it within reach.
+    const burned = twoSided(2, 1_000n);
+    // 1,200 USDC at a hundredth of the price: none of it within reach. A warning, on what the pools hold.
+    const deep = T0 - 46_080;
+    const far = nft(4, quoteOnlyL(deep - 6_000, deep, 1_200n), deep - 6_000, deep);
+    const f = await verdict([main([burned, far])], { 2: DEAD, 4: WALLET_2 });
+    expect(f.status).toBe("warn");
+    expect(f.detail).toBe("Of the 2,199 USDC in its pools now, wallets' positions hold 1,199 and burned or locked ones 999.");
+    // The same 1,200 just under the price, where sellers can take it: half or more of what is within reach. A fail.
+    const near = nft(4, quoteOnlyL(T0 - 3_000, T0 - 60, 1_200n), T0 - 3_000, T0 - 60);
+    expect((await verdict([main([burned, near])], { 2: DEAD, 4: WALLET_2 })).status).toBe("fail");
+    // A range reaching from the price far down counts for its upper part: 3,000 USDC over [0.01x, 1x], a third or so in reach.
+    const long = nft(4, quoteOnlyL(deep, T0 - 60, 3_000n), deep, T0 - 60);
+    expect((await verdict([main([twoSided(2, 5_000n), long])], { 2: DEAD, 4: WALLET_2 })).status).toBe("warn");
+    // A wallet launch whose 10,000 USDC sits in range: a fail, as the live ones are.
+    expect((await verdict([main([twoSided(7, 10_000n)])], { 7: WALLET })).status).toBe("fail");
+  });
+
+  it("the money beside the asks must be within reach too", async () => {
+    const deep = T0 - 46_080;
+    const far = nft(4, quoteOnlyL(deep - 6_000, deep, 1_200n), deep - 6_000, deep);
+    const near = nft(4, quoteOnlyL(T0 - 3_000, T0 - 60, 1_200n), T0 - 3_000, T0 - 60);
+    // A wallet's launch, 5,000 burned USDC in range, and the wallet's 1,200 parked out of reach: the tokens alone, a warning.
+    expect((await verdict([main([launch(1), twoSided(2, 5_000n), far])], { 1: WALLET, 2: DEAD, 4: WALLET })).status).toBe("warn");
+    // With the 1,200 within reach the bids alone still fail nothing (a fifth of what is in reach), and the asks do.
+    expect((await verdict([main([launch(1), twoSided(2, 5_000n), near])], { 1: WALLET, 2: DEAD, 4: WALLET })).status).toBe("fail");
   });
 
   it("bids under 1,000 USDC can't fail or warn: a stranger's parked USDC beside a burned launch, or a wallet's bought-through range", async () => {
@@ -412,7 +443,8 @@ describe("earlier cases, under the price-ordered rule", () => {
     const holdsAll = nft(1, quoteOnlyL(T0 - 600, T0, 5_000n), T0 - 600, T0);
     const f = await verdict([main([holdsAll, launch(2, 900_000_000n)])], { 1: WALLET, 2: DEAD });
     expect(f.status).toBe("fail");
-    expect(f.detail).toMatch(/100% into burned or locked ones\. Of the 4,999 USDC in its pools now, wallets' positions hold 4,999 and burned or locked ones 0\./);
+    // Wallets take nothing on the path, so the finding is the line that carries it.
+    expect(f.detail).toBe("Of the 4,999 USDC in its pools now, wallets' positions hold 4,999 and burned or locked ones 0.");
   });
 
   it("a wallet's range just above the price, beside a small burned in-range position, doesn't pass", async () => {
@@ -607,7 +639,7 @@ describe("one path over every pool, by what a buyer pays; only wallets in plain 
       const f = await verdict([main([launch(1)]), parked(1_001n)], { 1: DEAD, 2: WALLET_2 });
       expect(f.status).toBe("warn");
       expect(f.detail).toBe(
-        `In the pools Inspector can read, of the first 1,000 USDC buyers would pay for this token, 0% goes into positions wallets can withdraw and 100% into burned or locked ones. Of the 1,000 USDC in its pools now, wallets' positions hold 1,000 (1,000 of it behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC, where nobody may be able to sell into it) and burned or locked ones 0. ${ORDER}`,
+        "Of the 1,000 USDC in its pools now, wallets' positions hold 1,000 (1,000 of it behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC, where nobody may be able to sell into it) and burned or locked ones 0.",
       );
       // However much: bids outside plain pools never fail.
       expect((await verdict([main([twoSided(1, 2_000n)]), parked(500_000n)], { 1: DEAD, 2: WALLET_2 })).status).toBe("warn");
