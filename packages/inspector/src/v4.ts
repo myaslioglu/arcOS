@@ -112,10 +112,12 @@ export type V4Read = {
   /** StateView answered at least one question with something it could be decoded from: the contracts are there. */
   answered: boolean;
   pools: Pool[];
+  /** The index listed more usable pools than `MAX_EXTRA_POOLS`: the ones past it were not read. */
+  truncated: boolean;
 };
 
 /** The index may list many pools for one token; one multicall carries no more than this many of them. */
-const MAX_EXTRA_POOLS = 50;
+export const MAX_EXTRA_POOLS = 50;
 const MAX_FEE = 2 ** 24 - 1; // a uint24
 const MAX_TICK_SPACING = 32767; // v4 allows 1 to 32767
 
@@ -136,8 +138,9 @@ function usable(key: PoolKey, token: Address, quotes: readonly V4Quote[]): { key
 /**
  * The standard hookless keys for every quote currency, then the index's pools that are usable, each pool once. The cap on
  * the index's pools counts the ones that survive validation and dedupe, so junk entries can't crowd real ones out.
+ * `truncated` says a usable pool was left out by the cap: a pool nobody read, which the caller must not take for absent.
  */
-function candidates(token: Address, quotes: readonly V4Quote[], extra: readonly ExtraPool[]): Candidate[] {
+function candidateList(token: Address, quotes: readonly V4Quote[], extra: readonly ExtraPool[]): { asked: Candidate[]; truncated: boolean } {
   const seen = new Set<string>();
   const out: Candidate[] = [];
   const add = (key: PoolKey, quote: V4Quote): boolean => {
@@ -149,19 +152,19 @@ function candidates(token: Address, quotes: readonly V4Quote[], extra: readonly 
   };
   for (const quote of quotes) for (const t of STANDARD_V4_TIERS) add(v4PoolKey(token, quote.address, t.fee, t.tickSpacing), quote);
   let taken = 0;
+  let truncated = false;
   for (const e of extra) {
-    if (taken >= MAX_EXTRA_POOLS) break;
     const found = e.version === "v4" ? usable(e.key, token, quotes) : null;
-    if (found && add(found.key, found.quote)) taken++;
+    if (!found) continue;
+    if (taken < MAX_EXTRA_POOLS) {
+      if (add(found.key, found.quote)) taken++;
+    } else if (!seen.has(v4PoolId(found.key))) {
+      truncated = true;
+      break;
+    }
   }
-  return out;
+  return { asked: out, truncated };
 }
-
-/**
- * The ids of every v4 pool an inspection of `token` asks StateView about: the standard hookless keys and the index's usable
- * pools. The position index is looked up for exactly these (`InspectInput.v4Positions`).
- */
-export const v4CandidateIds = (token: Address, quotes: readonly V4Quote[], extra: readonly ExtraPool[]): Hex[] => candidates(token, quotes, extra).map((c) => c.id);
 
 /** A raw amount of a currency with `decimals` decimals, in 6 decimals (cut, not rounded). */
 export const toSixDecimals = (raw: bigint, decimals: number): bigint =>
@@ -241,8 +244,8 @@ export async function readV4Pools(a: {
   /** How many units of the quote currency a liquid pool must pay out. */
   quoteUnits: bigint;
 }): Promise<V4Read> {
-  const asked = candidates(a.token, a.quotes, a.extra);
-  if (asked.length === 0) return { answered: false, pools: [] };
+  const { asked, truncated } = candidateList(a.token, a.quotes, a.extra);
+  if (asked.length === 0) return { answered: false, pools: [], truncated };
   let state: BatchResult[];
   try {
     state = await multicall(
@@ -253,7 +256,7 @@ export async function readV4Pools(a: {
       ]),
     );
   } catch (e) {
-    if (e instanceof CallReverted) return { answered: false, pools: [] };
+    if (e instanceof CallReverted) return { answered: false, pools: [], truncated };
     throw e;
   }
   const answered = asked.some((_, i) => state[i * 2]!.ok);
@@ -266,7 +269,7 @@ export async function readV4Pools(a: {
     // A liquidity read that failed inside an answered multicall is a depth of 0, never a made-up figure.
     return [{ ...c, sqrtPriceX96, tick, liquidity: liquidity.ok ? (liquidity.value as bigint) : 0n }];
   });
-  if (live.length === 0) return { answered, pools: [] };
+  if (live.length === 0) return { answered, pools: [], truncated };
 
   const pools = await mapLimited(live, QUOTE_CONCURRENCY, async (c): Promise<Pool> => {
     const held = quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: c.liquidity, quoteIsCurrency0: c.quoteIsCurrency0 });
@@ -282,5 +285,5 @@ export async function readV4Pools(a: {
       return { ...base, liquid: null, undecided: "quote-unavailable" };
     }
   });
-  return { answered, pools };
+  return { answered, pools, truncated };
 }

@@ -452,7 +452,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }),
     guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),
-    guard("lp-lock", () => checkLpLock(input, poolScan, decimals === null ? null : Number(decimals))),
+    guard("lp-lock", () => checkLpLock(input, poolScan)),
     guard("prevrandao", () => checkPrevrandao(input, logicCode, logicGap)).then(gateOpcodes),
     // Behaviour measured at this block, not a statement about the code, so no logic gate: what the code may do later is
     // the privileges and proxy findings' business.

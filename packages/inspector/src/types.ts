@@ -185,6 +185,11 @@ export type PoolScan = {
    * "no pool" and "thin" can't be claimed while one is silent; a liquid pool found elsewhere still stands.
    */
   silent: string[];
+  /**
+   * The index listed more v4 pools for the token than discovery reads (`MAX_EXTRA_POOLS`), so some were not looked at.
+   * Absent or false: every pool the index listed was read.
+   */
+  truncated?: boolean;
 };
 
 /**
@@ -234,8 +239,13 @@ export type InspectInput = {
   /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */
   extraPools?: ExtraPool[];
   /**
-   * The index's positions for this token's Uniswap v4 pools (see `V4PositionIndex`; `v4PoolIdsToIndex` names the pools to
-   * look up). With it, lp-lock reads who holds the liquidity of v4 pools. Without it, a v4 pool's positions can't be read
+   * The index holds more pools for this token than `extraPools` lists (its read stops at a limit). The lp-lock check
+   * can't then add up the token's liquidity: a pool nobody listed is a pool nobody read.
+   */
+  extraPoolsTruncated?: boolean;
+  /**
+   * The index's positions for this token's Uniswap v4 pools (see `V4PositionIndex`): the pools the index lists for the
+   * token. With it, lp-lock reads who holds the liquidity of v4 pools. Without it, a v4 pool's positions can't be read
    * and lp-lock answers as it did before there was an index.
    */
   v4Positions?: V4PositionIndex;

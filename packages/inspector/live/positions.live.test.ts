@@ -7,13 +7,13 @@
  * The tokens come from the site's Radar (the newest v4 tokens), or from LP_LOCK_TOKENS (comma-separated addresses). A
  * token's pools are found by their `Initialize` logs, looked for in the last LP_LOCK_LOOKBACK windows of 10,000 blocks (6
  * unless set: about 8 hours), so an older token needs a larger number and takes two requests a window.
- * What it prints is the result table; what it asserts is what must hold of any token: the finding is one of the three
- * the check can give, and a pass or a fail is backed by the shares it states.
+ * What it prints is the result table; what it asserts is what must hold of any token: the finding is one of the four
+ * the check can give, a pass rests on at least 950 USDC burned or locked, and a fail or a warning offers Vault.
  */
 import { decodeEventLog, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import { DEX, UNISWAP_V4, type Address } from "@arcos/chain";
-import { SHARE_SCALE, checkLpLock, erc20Abi, findPools, tallyLiquidity } from "../src/checks";
+import { SHARE_SCALE, checkLpLock, findPools, tallyLiquidity, type LiquiditySums } from "../src/checks";
 import type { ExtraPool, InspectInput, V4PositionIndex } from "../src/types";
 import { MODIFY_LIQUIDITY_TOPIC, positionFromLog } from "../src/v4-positions";
 import { v4PoolId } from "../src/v4";
@@ -87,20 +87,21 @@ describe("lp-lock over real v4 pools, read-only", () => {
       // The standard hookless keys the scan also probes have no entry above; one that exists reads as "missing".
       const scan = await findPools(input);
       for (const p of scan.pools) if (p.version === "v4" && p.poolId && !index.pools[p.poolId.toLowerCase()]) index.pools[p.poolId.toLowerCase()] = { positions: [], truncated: false };
-      const decimals = Number(await reader.read(address, erc20Abi, "decimals").catch(() => 18));
-      const finding = await checkLpLock(input, scan, decimals);
-      const tally = (await tallyLiquidity(input, scan, DEX.mainnet!))!; // the index built above is 20 blocks behind: never stale
+      const finding = await checkLpLock(input, scan);
+      // Null: no v4 pool is involved (the index built above is 20 blocks behind, so it is never stale).
+      const tally = await tallyLiquidity(input, scan, DEX.mainnet!);
       const units = (scaled: bigint) => Number(scaled / SHARE_SCALE) / 1e6;
-      expect(["pass", "fail", "unknown"]).toContain(finding.status);
-      if (finding.status === "pass") expect((tally.burned + tally.locked) * 100n).toBeGreaterThanOrEqual((tally.burned + tally.locked + tally.withdrawable + Object.values(tally.unknown).reduce((s, v) => s + v, 0n)) * 95n);
-      if (finding.status !== "unknown") expect(tally.blockers).toEqual([]);
-      if (finding.status === "fail") expect(finding).toMatchObject({ fixAppId: "vault" });
+      const sums = (m: LiquiditySums) => ({ burned: units(m.burned), locked: units(m.locked), withdrawable: units(m.withdrawable), unknown: Object.fromEntries(Object.entries(m.unknown).filter(([, v]) => v > 0n).map(([k, v]) => [k, units(v)])) });
+      expect(["pass", "warn", "fail", "unknown"]).toContain(finding.status);
+      if (finding.status === "pass" && tally) expect((tally.now.burned + tally.now.locked) / SHARE_SCALE).toBeGreaterThanOrEqual(950_000_000n);
+      if (finding.status === "fail" || finding.status === "warn") expect(finding).toMatchObject({ fixAppId: "vault" });
       rows.push({
         token: address,
         pools: scan.pools.map((p) => `${p.version}${p.key && BigInt(p.key.hooks) !== 0n ? `+hook ${p.key.hooks}` : ""} ${p.poolId ?? p.address}`),
         positions: Object.fromEntries(Object.entries(index.pools).map(([id, v]) => [id.slice(0, 10), v.positions.length])),
-        withdrawableHolds: { quote: Number(tally.withdrawableHolds.quote) / 1e6, tokenRaw: tally.withdrawableHolds.token.toString() },
-        value: { burned: units(tally.burned), locked: units(tally.locked), withdrawable: units(tally.withdrawable), unknown: Object.fromEntries(Object.entries(tally.unknown).filter(([, v]) => v > 0n).map(([k, v]) => [k, units(v)])) },
+        now: tally && sums(tally.now),
+        ahead: tally && sums(tally.ahead),
+        blockers: tally?.blockers,
         status: finding.status,
         title: finding.title,
         detail: finding.detail,

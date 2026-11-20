@@ -11,13 +11,14 @@ import {
   MODIFY_LIQUIDITY_TOPIC,
   TAIL_MAX_BLOCKS,
   amountsForLiquidity,
-  balancesValue,
+  beforeDeadline,
   classifyHolder,
   hookCanChangeRemoval,
   isPositionKey,
   positionFromLog,
-  positionHoldings,
-  positionValue,
+  positionQuote,
+  ReadsTimedOut,
+  v2Inflow,
   readHolderCode,
   readV4Positions,
   type V4PoolRef,
@@ -91,48 +92,82 @@ describe("amountsForLiquidity: Uniswap's LiquidityAmounts.getAmountsForLiquidity
   });
 });
 
-describe("positionValue: a position at the pool's price, in the quote currency", () => {
+describe("positionQuote: a position in the quote currency alone", () => {
   const L = 10n ** 18n;
   const range = { tickLower: -600, tickUpper: 600 };
   const [lower, upper] = [sqrtRatioAtTick(-600), sqrtRatioAtTick(600)];
+  // Square roots of a price doubled and halved, as the function takes them.
+  const SQRT2 = 1_414_213_562_373_095_048_801_688_724_209n;
+  const up = (sqrtP: bigint) => (sqrtP * SQRT2) / 10n ** 30n;
+  const down = (sqrtP: bigint) => (sqrtP * 10n ** 30n) / SQRT2;
 
-  it("adds the quote amount and the token amount at the price: at price 1 the two sides are worth their sum", () => {
+  it("holds now the quote side of LiquidityAmounts, whichever currency the quote is, and never the token side", () => {
     const { amount0, amount1 } = amountsForLiquidity(Q96, lower, upper, L);
     expect(amount0).toBeGreaterThan(0n);
-    expect(positionValue({ sqrtPriceX96: Q96, ...range, liquidity: L, quoteIsCurrency0: false })).toBe(amount0 + amount1);
-    expect(positionValue({ sqrtPriceX96: Q96, ...range, liquidity: L, quoteIsCurrency0: true })).toBe(amount0 + amount1);
+    expect(positionQuote({ sqrtPriceX96: Q96, ...range, liquidity: L, quoteIsCurrency0: false }).now).toBe(amount1);
+    expect(positionQuote({ sqrtPriceX96: Q96, ...range, liquidity: L, quoteIsCurrency0: true }).now).toBe(amount0);
   });
 
-  it("prices the token side at the current price: currency1 per currency0 is (sqrtP / 2^96)^2", () => {
-    // Price 4 (sqrtP = 2): the range [-600, 600] is all below it, so the position is all currency1.
-    const high = 2n * Q96;
-    const all1 = amountsForLiquidity(high, lower, upper, L).amount1;
-    expect(positionValue({ sqrtPriceX96: high, ...range, liquidity: L, quoteIsCurrency0: false })).toBe(all1);
-    expect(positionValue({ sqrtPriceX96: high, ...range, liquidity: L, quoteIsCurrency0: true })).toBe(all1 / 4n);
-    // Price 1/4: all currency0, worth a quarter of its amount in currency1.
-    const low = Q96 / 2n;
-    const all0 = amountsForLiquidity(low, lower, upper, L).amount0;
-    expect(positionValue({ sqrtPriceX96: low, ...range, liquidity: L, quoteIsCurrency0: true })).toBe(all0);
-    expect(positionValue({ sqrtPriceX96: low, ...range, liquidity: L, quoteIsCurrency0: false })).toBe(all0 / 4n);
+  it("is not moved by the pool's price when it holds only tokens: no price gives them a value", () => {
+    // Quote is currency1; the range is above the price, so the position is all currency0, the token.
+    for (const tick of [-200_000, -6_000, -601]) {
+      expect(positionQuote({ sqrtPriceX96: sqrtRatioAtTick(tick), ...range, liquidity: L, quoteIsCurrency0: false }).now).toBe(0n);
+    }
+    // The mirror, quote currency0: all currency1 when the raw price is above the range.
+    expect(positionQuote({ sqrtPriceX96: sqrtRatioAtTick(700_000), ...range, liquidity: L, quoteIsCurrency0: true }).now).toBe(0n);
   });
 
-  it("is one-sided exactly on a range edge: all currency0 at tickLower's price, all currency1 at tickUpper's", () => {
-    expect(amountsForLiquidity(lower, lower, upper, L).amount1).toBe(0n);
-    expect(amountsForLiquidity(upper, lower, upper, L).amount0).toBe(0n);
-    expect(positionValue({ sqrtPriceX96: upper, ...range, liquidity: L, quoteIsCurrency0: false })).toBe((L * (upper - lower)) / Q96);
+  it("gains, while the token's price doubles, its quote at the doubled price less its quote now: token as currency0, the raw price doubles", () => {
+    // From price 1 the doubled price (tick 6,931) is past the range's top: it ends holding only quote, all of L * (upper - lower).
+    const all = (L * (upper - lower)) / Q96;
+    const q = positionQuote({ sqrtPriceX96: Q96, ...range, liquidity: L, quoteIsCurrency0: false });
+    expect(q.now + q.inflow).toBe(all);
+    // A wide range the doubled price stays inside: the gain is L * (sqrtP' - sqrtP), by the liquidity math.
+    const wide = positionQuote({ sqrtPriceX96: Q96, tickLower: -60_000, tickUpper: 60_000, liquidity: L, quoteIsCurrency0: false });
+    expect(wide.inflow).toBe(amountsForLiquidity(up(Q96), sqrtRatioAtTick(-60_000), sqrtRatioAtTick(60_000), L).amount1 - wide.now);
+    // sqrt 2 - 1 of L, to within the rounding of two floors.
+    expect(wide.inflow - (L * 414_213_562_373_095_048n) / 10n ** 18n).toBeLessThan(3n);
+    expect((L * 414_213_562_373_095_048n) / 10n ** 18n - wide.inflow).toBeLessThan(3n);
   });
 
-  it("is zero without liquidity or without a price", () => {
-    expect(positionValue({ sqrtPriceX96: Q96, ...range, liquidity: 0n, quoteIsCurrency0: false })).toBe(0n);
-    expect(positionValue({ sqrtPriceX96: 0n, ...range, liquidity: L, quoteIsCurrency0: false })).toBe(0n);
+  it("looks the other way when the token is currency1: its price doubling is the raw price halving", () => {
+    const wide = { tickLower: -60_000, tickUpper: 60_000 };
+    const q = positionQuote({ sqrtPriceX96: Q96, ...wide, liquidity: L, quoteIsCurrency0: true });
+    expect(q.inflow).toBe(amountsForLiquidity(down(Q96), sqrtRatioAtTick(-60_000), sqrtRatioAtTick(60_000), L).amount0 - q.now);
+    expect(q.inflow).toBeGreaterThan(0n);
+    // Had it looked up instead of down, the quote would have shrunk and the inflow been cut to zero.
+    expect(amountsForLiquidity(up(Q96), sqrtRatioAtTick(-60_000), sqrtRatioAtTick(60_000), L).amount0).toBeLessThan(q.now);
+    // At price 1 the two orientations mirror each other.
+    const mirrored = positionQuote({ sqrtPriceX96: Q96, ...wide, liquidity: L, quoteIsCurrency0: false });
+    expect(q.inflow - mirrored.inflow).toBeLessThan(3n);
+    expect(mirrored.inflow - q.inflow).toBeLessThan(3n);
+  });
+
+  it("gains nothing in a range the doubled price doesn't reach, or one the price has left on the token's upside", () => {
+    // Token currency0: doubling ends at tick 6,931. A range from 7,000 up isn't reached; one below the price is all quote already.
+    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: 7_000, tickUpper: 8_000, liquidity: L, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n });
+    const below = positionQuote({ sqrtPriceX96: Q96, tickLower: -1_200, tickUpper: -600, liquidity: L, quoteIsCurrency0: false });
+    expect(below.now).toBeGreaterThan(0n);
+    expect(below.inflow).toBe(0n);
+    // Token currency1: the mirror.
+    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: -8_000, tickUpper: -7_000, liquidity: L, quoteIsCurrency0: true })).toEqual({ now: 0n, inflow: 0n });
+    expect(positionQuote({ sqrtPriceX96: Q96, tickLower: 600, tickUpper: 1_200, liquidity: L, quoteIsCurrency0: true }).inflow).toBe(0n);
+  });
+
+  it("takes part of the inflow when the doubled price ends inside the range, and is zero without liquidity or a price", () => {
+    const part = positionQuote({ sqrtPriceX96: Q96, tickLower: 3_000, tickUpper: 12_000, liquidity: L, quoteIsCurrency0: false });
+    expect(part.now).toBe(0n);
+    expect(part.inflow).toBe((L * (up(Q96) - sqrtRatioAtTick(3_000))) / Q96);
+    expect(positionQuote({ sqrtPriceX96: Q96, ...range, liquidity: 0n, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n });
+    expect(positionQuote({ sqrtPriceX96: 0n, ...range, liquidity: L, quoteIsCurrency0: false })).toEqual({ now: 0n, inflow: 0n });
   });
 });
 
-describe("balancesValue: a pool's two balances at its price", () => {
-  it("adds the token balance at the price to the quote balance, whichever side the quote is", () => {
-    expect(balancesValue({ sqrtPriceX96: 2n * Q96, quoteBalance: 100n, tokenBalance: 10n, quoteIsToken0: false })).toBe(140n);
-    expect(balancesValue({ sqrtPriceX96: 2n * Q96, quoteBalance: 100n, tokenBalance: 40n, quoteIsToken0: true })).toBe(110n);
-    expect(balancesValue({ sqrtPriceX96: 0n, quoteBalance: 100n, tokenBalance: 0n, quoteIsToken0: true })).toBe(100n);
+describe("v2Inflow", () => {
+  it("is the reserve times sqrt 2 - 1: what a constant-product pair's quote side gains while the price doubles", () => {
+    // x * y = k and the price y / x doubling: y' = y * sqrt 2.
+    expect(v2Inflow(10_000_000_000n)).toBe(4_142_135_623n);
+    expect(v2Inflow(0n)).toBe(0n);
   });
 });
 
@@ -273,7 +308,10 @@ describe("readV4Positions", () => {
     const positions = [nft(1, L), nft(2, 3n * L), { owner: SENDER, tickLower: -60, tickUpper: 60, salt: salt(0), liquidity: L }, nft(3, 0n)];
     const reader = chain(positions);
     const [got] = await read(reader, index(positions));
-    const held = (liquidity: bigint, lower: number, upper: number) => positionHoldings({ sqrtPriceX96: Q96, tickLower: lower, tickUpper: upper, liquidity, quoteIsCurrency0: false });
+    const held = (liquidity: bigint, lower: number, upper: number) => {
+      const q = positionQuote({ sqrtPriceX96: Q96, tickLower: lower, tickUpper: upper, liquidity, quoteIsCurrency0: false });
+      return { quote: q.now, inflow: q.inflow };
+    };
     expect(got).toEqual({
       pool,
       gap: null,
@@ -283,10 +321,7 @@ describe("readV4Positions", () => {
         { holder: SENDER, tokenId: null, ...held(L, -60, 60) },
       ],
     });
-    // The value is the two amounts together at the price: here price 1, so their sum.
-    const one = held(L, -600, 600);
-    expect(one.quote + one.token).toBe(one.value);
-    expect(one.quote).toBeGreaterThan(0n);
+    expect(held(L, -600, 600).quote).toBeGreaterThan(0n);
     // Everything at one block, a little behind the tip; and ownerOf only for the NFTs that hold liquidity.
     expect(new Set(reader.batchBlocks)).toEqual(new Set([HEAD - HEAD_MARGIN]));
     expect(reader.batches.flatMap((b) => b.calls).filter((c) => c.fn === "ownerOf").map((c) => c.args[0])).toEqual([1n, 2n]);
@@ -296,8 +331,8 @@ describe("readV4Positions", () => {
   it("converts a native-USDC pool's 18-decimal amounts to 6", async () => {
     const positions = [{ owner: SENDER, tickLower: -600, tickUpper: 600, salt: salt(0), liquidity: 10n ** 24n }];
     const [got] = await read(chain(positions), index(positions), [{ ...pool, quoteDecimals: 18 }]);
-    const raw = positionValue({ sqrtPriceX96: Q96, tickLower: -600, tickUpper: 600, liquidity: 10n ** 24n, quoteIsCurrency0: false });
-    expect(got).toMatchObject({ gap: null, positions: [{ value: raw / 10n ** 12n, quote: positionHoldings({ sqrtPriceX96: Q96, tickLower: -600, tickUpper: 600, liquidity: 10n ** 24n, quoteIsCurrency0: false }).quote / 10n ** 12n }] });
+    const raw = positionQuote({ sqrtPriceX96: Q96, tickLower: -600, tickUpper: 600, liquidity: 10n ** 24n, quoteIsCurrency0: false });
+    expect(got).toMatchObject({ gap: null, positions: [{ quote: raw.now / 10n ** 12n, inflow: raw.inflow / 10n ** 12n }] });
   });
 
   it("reads the blocks after the index's cursor itself, and adds the positions they opened", async () => {
@@ -306,12 +341,12 @@ describe("readV4Positions", () => {
     const reader = chain([...indexed, fresh], { logs: [modifyLog(id, PM, -600, 600, 2n * L, salt(2), 950n), modifyLog(id, PM, -600, 600, 1n, salt(1), 950n), modifyLog(POOL_ID, PM, -600, 600, 1n, salt(9), 950n), modifyLog(id, PM, -600, 600, 1n, salt(77), 900n)] });
     const [got] = await read(reader, index(indexed, { cursor: 900 }));
     expect(got).toMatchObject({ gap: null, positions: [{ tokenId: 1n }, { tokenId: 2n }] });
-    // Three questions of the same blocks: the pools' positions, and pools created with the token on either side.
+    // Three questions of the same blocks: pools created with the token on either side, then the pools' positions.
     const tail = { address: UNISWAP_V4.poolManager, fromBlock: 901n, toBlock: HEAD - HEAD_MARGIN };
     expect(reader.logQueries).toEqual([
-      { ...tail, topics: [MODIFY_LIQUIDITY_TOPIC, [id]] },
       { ...tail, topics: [INITIALIZE_TOPIC, null, topic(TOKEN)] },
       { ...tail, topics: [INITIALIZE_TOPIC, null, null, topic(TOKEN)] },
+      { ...tail, topics: [MODIFY_LIQUIDITY_TOPIC, [id]] },
     ]);
   });
 
@@ -363,6 +398,29 @@ describe("readV4Positions", () => {
     const reader = chain(positions);
     expect(await read(reader, index(positions, { cursor: Number(HEAD) + 5 }))).toMatchObject([{ gap: null, positions: [{ tokenId: 1n }] }]);
     expect(reader.logQueries).toEqual([]);
+  });
+
+  it("reads a pool created after the cursor from the tail alone: no entry in the index is needed, and none is missing", async () => {
+    const fresh = nft(2, L);
+    const logs = [initialize(id, TOKEN, USDC, 940n), modifyLog(id, PM, -600, 600, L, salt(2), 950n)];
+    const got = await readAll(chain([fresh], { logs }), { cursor: 900, pools: {} });
+    expect(got).toMatchObject({ unlisted: [], pools: [{ gap: null, positions: [{ tokenId: 2n }] }] });
+    // Created before the cursor and not in the index: missing, as ever.
+    expect(await read(chain([fresh], { logs: [initialize(id, TOKEN, USDC, 900n)] }), { cursor: 900, pools: {} })).toEqual([{ pool, gap: "missing" }]);
+  });
+
+  it("gives up at the deadline: nothing is started after it, and an answer still missing at it is not waited for", async () => {
+    const positions = [nft(1, L)];
+    const late = chain(positions);
+    await expect(readV4Positions({ reader: late, v4: UNISWAP_V4, pools: [pool], index: index(positions), token: TOKEN, quotes: [USDC], deadlineAt: Date.now() - 1 })).rejects.toBeInstanceOf(ReadsTimedOut);
+    expect(late.batches).toEqual([]);
+    const hung = chain(positions);
+    const slow = { ...hung, read: () => new Promise<never>(() => {}) };
+    await expect(readV4Positions({ reader: slow, v4: UNISWAP_V4, pools: [pool], index: index(positions), token: TOKEN, quotes: [USDC], deadlineAt: Date.now() + 30 })).rejects.toBeInstanceOf(ReadsTimedOut);
+    await expect(readHolderCode({ ...hung, getCode: () => new Promise<never>(() => {}) }, [{ holder: WALLET, value: 1n }], [], Date.now() + 30)).rejects.toBeInstanceOf(ReadsTimedOut);
+    await expect(beforeDeadline(Date.now() + 1_000, async () => "in time")).resolves.toBe("in time");
+    await expect(beforeDeadline(undefined, async () => "no deadline")).resolves.toBe("no deadline");
+    await expect(beforeDeadline(Date.now() + 1_000, async () => Promise.reject(new Error("its own")))).rejects.toThrow("its own");
   });
 
   it("says missing for a pool the index didn't look up, which an empty list is not", async () => {
