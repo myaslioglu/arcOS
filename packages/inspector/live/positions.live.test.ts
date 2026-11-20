@@ -8,8 +8,8 @@
  * token's pools are found by their `Initialize` logs, looked for in the last LP_LOCK_LOOKBACK windows of 10,000 blocks (6
  * unless set: about 8 hours), so an older token needs a larger number and takes two requests a window.
  * What it prints is the result table; what it asserts is what must hold of any token: the finding is one of the four
- * the check can give, a pass or an unknown is word for word what the check says without the index (the index only adds
- * fails and warnings), and a fail or a warning offers Vault.
+ * the check can give, a pass, a fail or an unknown is word for word what the check says without the index (the index
+ * only adds warnings), and a warning offers Vault.
  */
 import { decodeEventLog, erc20Abi, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
@@ -98,8 +98,8 @@ describe("lp-lock over real v4 pools, read-only", () => {
       const tokens = (raw: bigint) => Number(raw / 10n ** BigInt(decimals ?? 18));
       const sums = (m: ClassSums, as: (v: bigint) => number = units) => Object.fromEntries(HOLDER_CLASSES.filter((k) => m[k] > 0n).map((k) => [k, as(m[k])]));
       expect(["pass", "warn", "fail", "unknown"]).toContain(finding.status);
-      if (finding.status === "pass" || finding.status === "unknown") expect(finding).toEqual(await checkLpLock({ ...input, v4Positions: undefined }, scan));
-      if (finding.status === "fail" || finding.status === "warn") expect(finding).toMatchObject({ fixAppId: "vault" });
+      if (finding.status !== "warn") expect(finding).toEqual(await checkLpLock({ ...input, v4Positions: undefined }, scan));
+      if (finding.status === "warn") expect(finding).toMatchObject({ fixAppId: "vault" });
       rows.push({
         token: address,
         pools: scan.pools.map((p) => `${p.version}${p.key && BigInt(p.key.hooks) !== 0n ? `+hook ${p.key.hooks}` : ""} ${p.poolId ?? p.address}`),

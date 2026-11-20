@@ -19,7 +19,6 @@ import {
   isPositionKey,
   positionFromLog,
   positionQuote,
-  quoteHeldAt,
   ReadsTimedOut,
   doubledPrice,
   rawSqrtPriceAt,
@@ -99,20 +98,6 @@ describe("amountsForLiquidity: Uniswap's LiquidityAmounts.getAmountsForLiquidity
 });
 
 describe("positionQuote: a position in the quote currency alone", () => {
-  it("quoteHeldAt: what a range would hold with its pool at another price, either way up", () => {
-    const L18 = 10n ** 18n;
-    const range = { tickLower: -3_000, tickUpper: -60, liquidity: L18 };
-    // The token as currency0: a range under the price holds quote only, all of it, and none once the price is under it.
-    const full = quoteHeldAt({ ...range, quoteIsCurrency0: false }, Q96);
-    expect(full).toBe(positionQuote({ sqrtPriceX96: Q96, ...range, quoteIsCurrency0: false }).now);
-    expect(quoteHeldAt({ ...range, quoteIsCurrency0: false }, sqrtRatioAtTick(-3_000))).toBe(0n);
-    const part = quoteHeldAt({ ...range, quoteIsCurrency0: false }, sqrtRatioAtTick(-1_500));
-    expect(part > 0n && part < full).toBe(true);
-    // Mirrored: the token as currency1.
-    expect(quoteHeldAt({ tickLower: 60, tickUpper: 3_000, liquidity: L18, quoteIsCurrency0: true }, Q96)).toBe(full);
-    expect(quoteHeldAt({ tickLower: 60, tickUpper: 3_000, liquidity: L18, quoteIsCurrency0: true }, sqrtRatioAtTick(3_000))).toBe(0n);
-    expect(quoteHeldAt({ ...range, quoteIsCurrency0: false }, 0n)).toBe(0n);
-  });
 
   const L = 10n ** 18n;
   const range = { tickLower: -600, tickUpper: 600 };
