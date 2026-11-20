@@ -313,7 +313,8 @@ all, and the cursor. It reads the blocks after the cursor itself (at most 10,000
 `Initialize` with the token as currency0 and as currency1, then the pools' `ModifyLiquidity`), then every position's
 liquidity and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active
 liquidity. What it counts is the quote currency: what each position holds of USDC or EURC now, and that plus what buyers
-would pay into each position of the main pool before the price doubles; a token amount is never priced (the rule and
+would pay into each position, in any of the token's v2 and v4 pools, before its price reaches twice what it is in the
+main pool (the pool holding the most quote now); a token amount is never priced (the rule and
 its reasons are in the README, "How Inspector decides things", and in the header of
 `packages/inspector/src/checks.ts`). "Couldn't check liquidity locks", never a pass or a fail, when: a pool has more
 than 500 positions; the token has more than 50 v4 pools; the positions don't add up (a gap in the index); a pool of the

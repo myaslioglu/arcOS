@@ -208,10 +208,12 @@ It counts the quote currency and never prices a token amount. Tokens cost their 
 and a pool's price is whatever whoever initialised it chose, so "tokens times price" can be made any
 size: a burned range of tokens far above the price, or a dust position in a side pool set at an
 absurd price, would outweigh every real dollar. So the check measures two things and needs both: the
-USDC or EURC each position holds now, and that plus what buyers would pay into each position of the
-token's main pool (the one holding the most quote now) before the price doubles. The second is what
-catches a wallet's range sitting just above the price, which holds no USDC yet and takes the next
-buyers' money.
+USDC or EURC each position holds now, and that plus what buyers would pay into each position, in any
+of the token's v2 and v4 pools, before its price reaches twice what it is in the main pool (the one
+holding the most quote now). The second is what catches a wallet's range sitting just above the
+price, in the main pool or in a cheaper one beside it, which holds no USDC yet and takes the next
+buyers' money: buyers are routed to the cheapest pool first. A pool priced above twice the main
+pool's price counts only for the USDC or EURC in it.
 
 - Fail, "Liquidity isn't locked": wallets can withdraw half or more.
 - Pass, "Liquidity is burned or locked": at least 95% is burned or locked by both measures, and the
@@ -422,7 +424,8 @@ is never worse than it was.
   It says nothing about what a pool's hook does to swaps, and nothing about tokens: a wallet that
   holds tokens, in a position above the price or outside any pool, can still sell them into the
   locked liquidity, which is what the holders check looks at. The look-ahead stops at twice the
-  price and at the main pool, so a wallet's range further up, or in another pool, isn't counted. A
+  main pool's price, so a wallet's range beyond that isn't counted, in any pool, and nor is any range
+  in a Uniswap v3 or Aerodrome pool. A
   third party's position counts like the deployer's: anyone adding more than 5% of the liquidity
   from a wallet turns a pass into a warning, and half into a fail.
 - Without a fresh index (testnet, a browser that couldn't fetch it, the index switched off or more
