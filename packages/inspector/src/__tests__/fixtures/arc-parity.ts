@@ -392,6 +392,7 @@ function recorded(inner: ChainReader, log: string[]): ChainReader {
     read: (a, abi, fn, args, options) => note(`read ${a} ${fn} ${argsOf(fn, args ?? [])} ${show(options ?? {})}`, () => inner.read(a, abi, fn, args, options)),
     blockNumber: () => note("blockNumber", () => inner.blockNumber()),
     gasPrice: () => note("gasPrice", () => inner.gasPrice()),
+    logs: (filter) => note(`logs ${show(filter)}`, () => inner.logs(filter)),
     callWithOverride: (call, overrides) => {
       const { args } = decodeFunctionData({ abi: tradeSimulatorAbi, data: call.data });
       const trade = args[0] as { router: string } & Record<string, unknown>;

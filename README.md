@@ -111,8 +111,8 @@ rest of the site runs as before and sign-in answers "Sign-in isn't available rig
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
-and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the
-network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
+and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), and runs the
+liquidity-lock check over the positions of the newest v4 tokens on Radar, so it needs the network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
 test:emulator -w @arcos/data` runs the Firestore suite against the local emulator; it needs Java 21
 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase CLI in
 `tools/firebase`, which the root install leaves out: install it once with
@@ -196,6 +196,70 @@ folding an unknown into either a pass or a fail. A missing or unreadable owner n
 privileged function into a "can't be called" pass: if the contract has no `owner()`/`getOwner()`
 but does have privileged functions, both the ownership and privileges findings read "unknown", not
 "pass" — the same rule that applies to any other failed or missing read.
+
+The liquidity lock check counts Uniswap v2 LP tokens: the share of a pair's LP supply that is burned
+or in a known lock contract. That check decides every pass and every fail. For Uniswap v4, on
+mainnet, Inspector also reads the positions themselves, from the indexer's position index, and what
+that adds is warnings only. It does not certify Uniswap v4 liquidity as locked, and it does not fail
+a token: when it finds nothing to warn about, the answer is the one the v2 check gives, which for a
+token with only v4 pools is "couldn't check".
+
+What it reads: every v4 position's liquidity and, for a PositionManager NFT, its owner, live; every
+v2 pair by who holds its LP token. A wallet is an address with no code. Burn addresses, lock
+contracts, any other contract, and a wallet in a pool whose hook runs when liquidity is removed (it
+can block or tax the withdrawal) are not counted as wallets.
+
+It looks at two things, in every pool it can read.
+
+- The USDC and EURC in the pools now, by who holds the position.
+- Who the next buyers would pay. Every position selling the token above its pool's price is put in
+  order of what a buyer pays per token there, the pool's LP fee included. The check starts at the
+  cheapest, finds the price at which buyers have paid 1,000 USDC, and looks at every point from
+  there to twice that price: of the money paid in so far, how much went into wallets' positions.
+
+Pools are plain or not. A plain pool is a Uniswap v2 pair, or a v4 pool against USDC with a fixed LP
+fee of at most 1% and no hook that runs in swaps. In any other pool (behind a swap hook, with a
+dynamic or very high fee, or quoted in EURC) a hook can refuse every swap and a price can mean
+nothing.
+
+The warning has one of two titles, each a statement of what was read:
+
+- "Wallets hold most of the USDC Inspector found in its pools": wallets in plain pools hold at
+  least 1,000 USDC, and more than half of all the USDC in the pools Inspector reads.
+- "Some liquidity isn't locked": wallets in plain pools would be paid more than 5% of buyers' money
+  at some point of the window (up to all of it: the stronger title is kept for USDC in the pools,
+  since tokens for sale cost nothing and show where buyers' money goes only when the token's market
+  is on the pools read), or hold more than 5% of the USDC once the pools hold 1,000; or wallets in
+  any pool take or hold half or more there; or wallets offer, beyond the window, a tenth or more of
+  all the tokens for sale in the pools (counted, never priced).
+
+The detail starts "In the pools Inspector can read", gives the numbers ("of the first 1,000 USDC
+buyers would pay for this token, 62% goes into positions wallets can withdraw and 38% into burned or
+locked ones. Of the 1,234 USDC in its pools now, ..."), links the largest position and offers Vault.
+A fresh wallet-held launch therefore reads "Some liquidity isn't locked" with 100% in its detail,
+and moves to the USDC title once buyers have paid 1,000 USDC into the wallet's position and that
+is more than half of all the USDC in the pools. Where burned positions hold as much or more (a
+wallet's range first in line with a few hundred USDC paid in, beside 1,500 USDC in a burned range),
+it stays "Some liquidity isn't locked", and the detail still shows who is paid first.
+It says "wallets", never "the deployer": Inspector doesn't know whose wallet it is. When a share
+rests only on wallets outside plain pools it says so ("would go into positions wallets can withdraw,
+if the hooks and fees of the pools selling it let buyers through"), and burned or locked liquidity
+outside plain pools is given as that, on its own. Only pools against USDC, EURC or native USDC are
+looked for and counted, as in every other check.
+
+Why a warning and not a fail: tokens for sale cost nothing and a pool's price is whatever its
+creator chose; USDC parked under a price nobody sells at is at no risk; and one holder's tokens can
+sit beside another holder's USDC. Failing a token on its v4 positions needs more than Inspector
+reads today (the USDC that could really be sold into, matched holder by holder to the tokens for
+sale, or knowing which wallet is the deployer's), and is left for later.
+
+The v4 reading is left out, and the v2 check answers alone, on testnet, which has no index; when the
+index couldn't be fetched, is switched off or is more than 10,000 blocks behind the chain; when the
+token has more than 50 v4 pools or a pool with more than 500 positions; when a pool was created in
+the last minutes and isn't indexed yet; when reading the positions fails or takes longer than the
+inspection has; and for a token with no Uniswap v4 pool. In every one of those cases the answer is
+exactly the v2 check's. And whenever the v2 check fails a token, that fail stands whatever the v4
+reading says.
 
 ## What Inspector can and can't see
 
@@ -372,9 +436,37 @@ but does have privileged functions, both the ownership and privileges findings r
   against contract callers reverts the simulated sell although a later sell from a wallet might go
   through; the finding then says "Selling straight back, in the same transaction and from a contract,
   reverted" rather than that no sell can ever succeed.
-- Liquidity lock detection only reads Uniswap v2 LP token balances. Positions in v3, v4 and Aerodrome
-  pools can't be read without an index yet, so a token with only those pools reads "unknown" for it,
-  and so does a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
+- The liquidity lock check passes or fails a token only on Uniswap v2 LP tokens. Uniswap v4
+  positions are read, on mainnet, only to warn about liquidity wallets can withdraw: a token whose
+  v4 liquidity is burned reads "couldn't check", not "pass", and one whose v4 liquidity sits in a
+  wallet reads as a warning, not "fail". Positions in Uniswap v3 and Aerodrome pools aren't read at
+  all. One consequence is as old as the check: a burned v2 pair passes even when a wallet holds a
+  token-only range in a v3 or Aerodrome pool beside it, which holds no USDC to compare.
+- Who can make a v4 warning, and what it costs. "Wallets hold most of the USDC": anyone who leaves
+  1,000 USDC, and more than everyone else holds, in a wallet's position in a plain pool; parked
+  far under the price it risks nothing. "Some liquidity isn't locked": about 50 USDC worth of
+  tokens under the market in a plain pool; USDC parked in a wallet's position in a plain pool,
+  anywhere under the price and at no risk, above 5% of the USDC in the pools; when the token's
+  market isn't on the pools Inspector reads (Uniswap v3 or Aerodrome, another currency, another
+  DEX, or nothing left for sale), any tokens at any price in a new plain pool, which are then all
+  there is to read; a tenth of all the tokens for sale parked far above the price; or, at half
+  instead of 5%, tokens or USDC behind a hook that refuses swaps, where the warning says it
+  depends on the hook. Each title is true of the pools read, and a third party's wallet counts like
+  the deployer's: the warning never says whose it is.
+- A v4 warning can be avoided by someone who sets out to, for the cost of gas: free tokens burned
+  under a wallet's launch shrink its share; liquidity kept in a pool that isn't plain gets the
+  plain title at most; EURC is counted 1:1 with USDC though it trades above it; 51 empty pools, or
+  a flood of position changes in the last blocks, make the positions unreadable. None of this
+  produces a pass.
+- The v4 reading is as of the block it was read at: nothing re-inspects a token when its price moves,
+  and the window moves with the price. Past the window, a wallet's tokens for sale are reported only
+  from a tenth of all the tokens for sale in the pools. It says nothing about tokens a wallet
+  holds outside any pool, which is what the holders check looks at. Up to 500 holders are
+  classified; what the rest hold is not counted as a wallet's, and a warning says so when it could
+  matter.
+- A v4 pool with a hook or a non-standard fee is found through the indexer's list of every v4 pool
+  since the PoolManager's deployment. Pools against a currency other than USDC, EURC or native USDC
+  are never looked for, so liquidity there is never counted, whoever holds it.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
   Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
   the name.

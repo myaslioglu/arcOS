@@ -69,6 +69,27 @@ export function radarFeedId(network: NetworkId, filter: RadarFeedFilter): string
   return `${assertNetwork(network)}:${filter}`;
 }
 
+const SALT = /^0x[0-9a-fA-F]{64}$/;
+/** Uniswap v4's tick bounds (TickMath.MIN_TICK and MAX_TICK). */
+const MAX_TICK = 887_272;
+
+/**
+ * positions/{network}:{poolId}:{owner}:{tickLower}:{tickUpper}:{salt}: the PoolManager's own key for a position, so the
+ * same position always has the same doc and writing it again changes nothing.
+ */
+export function positionId(network: NetworkId, pool: string, key: { owner: string; tickLower: number; tickUpper: number; salt: string }): string {
+  if (typeof pool !== "string" || !V4_POOL_ID.test(pool)) throw new DataError("pool-id", "Not a v4 pool id: expected 0x and 64 hex digits");
+  const { tickLower, tickUpper, salt } = key;
+  if (!Number.isInteger(tickLower) || !Number.isInteger(tickUpper) || tickLower < -MAX_TICK || tickUpper > MAX_TICK || tickLower >= tickUpper) {
+    throw new DataError("ticks", "Not a tick range: expected whole ticks, lower below upper, within Uniswap v4's bounds");
+  }
+  if (typeof salt !== "string" || !SALT.test(salt)) throw new DataError("salt", "Not a position salt: expected 0x and 64 hex digits");
+  return `${assertNetwork(network)}:${pool.toLowerCase()}:${normalizeAddress(key.owner)}:${tickLower}:${tickUpper}:${salt.toLowerCase()}`;
+}
+
+/** positionsIndex/{network}: the position index's cursor, one doc per network. */
+export const positionsIndexId = (network: NetworkId): string => assertNetwork(network);
+
 const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /** stats/{network}: the running totals of the usage counter, one doc per network. */

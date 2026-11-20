@@ -45,11 +45,96 @@
  *   Aerodrome) that never answered while another did: a liquid pool found elsewhere still passes, but
  *   "no pool" and "thin" wait for it. A v4 pool is liquid when a V4Quoter quote for 1,000 USDC out
  *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing.
- * - lp-lock: no DEX is configured, pool discovery failed, the pool contracts never answered (or a
- *   family didn't and no pool was found), only pools other than Uniswap v2 exist (positions in v3, v4
- *   and Aerodrome pools can't be read without an index), the v2 pair's LP totalSupply is zero (no
- *   evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain
- *   whose lock contracts aren't vetted (`lockersVetted`), where the rest may sit in one.
+ * - lp-lock is the check from before the position index (`lpLockWithoutIndex`), and that check alone decides every
+ *   pass and every unknown. Only Uniswap v2 has LP tokens to count. Unknown when no DEX is configured, pool discovery
+ *   failed, the pool contracts never answered (or a family didn't and no pool was found), only pools other than
+ *   Uniswap v2 exist, a pool of another kind may hold more than a burned pair, the v2 pair's LP totalSupply is zero
+ *   (no evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain whose lock
+ *   contracts aren't vetted (`lockersVetted`), where the rest may sit in one. One thing it doesn't see, as before: a
+ *   wallet's token-only range in a Uniswap v3 or Aerodrome pool beside a burned v2 pair holds no quote, so the pair
+ *   still passes.
+ * - lp-lock with the position index adds WARNINGS for Uniswap v4 liquidity, and nothing else: never a pass, never a
+ *   fail (`tallyLiquidity`, lp-path.ts, `lpLockByPath`). Every pass, every fail and every unknown is the old check's,
+ *   word for word. The reading runs when a v4 pool is involved and the index is fresh (`input.v4Positions`: mainnet,
+ *   the index read, not switched off, its cursor within 10,000 blocks of the head). When it finds nothing to warn
+ *   about, can't read the whole picture, or fails in any way (its reads outlast the inspection's deadline, a node
+ *   refuses the index's tail, anything throws), the finding is the old check's. The old check is started first and
+ *   runs beside it, with the time it always had. A warning replaces the old check's pass or unknown, never its fail.
+ *   What it reads: every v4 position, live (`StateView.getPositionInfo`, the exact LiquidityAmounts math), classified
+ *   by its holder, the PositionManager NFT's owner or else the address that holds it in the PoolManager
+ *   (`classifyHolder`); every v2 pair split by LP-token holder; a v3 or Aerodrome pool's quote balance, nobody's in
+ *   particular. Only a wallet's share (an address with no code) counts toward a warning. A burn address, a known
+ *   locker, a contract (it may be a locker with terms of its own, a Safe, a launchpad or the pool's hook), a wallet in
+ *   a pool whose hook runs on removal (the hook-address bits BEFORE_REMOVE_LIQUIDITY 1 << 9, AFTER_REMOVE_LIQUIDITY
+ *   1 << 8, AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA 1 << 0: it can block or tax a withdrawal), v2 LP on a chain whose
+ *   lock contracts aren't vetted, and a holder whose code wasn't read only make that share smaller.
+ *   Pools are plain or not. Plain: a v2 pair, or a v4 pool with no hook that runs in swaps (BEFORE_SWAP 1 << 7,
+ *   AFTER_SWAP 1 << 6 and their RETURNS_DELTA bits 1 << 3 and 1 << 2), a fixed LP fee of at most 1% (never the
+ *   dynamic-fee flag 0x800000), and USDC or native USDC as the quote (EURC is no dollar, and no rate is read for
+ *   it). In any other pool a wallet's position is still a wallet's, but whether a buyer or a seller ever reaches it
+ *   is the pool's to decide, and putting it there costs nothing.
+ *   Bids: the quote currency in the pools now (USDC, native USDC, and EURC 1:1), every pool, every class in the total
+ *   (a v3 or Aerodrome pool's quote too, as nobody's).
+ *   Asks: every position selling tokens above its pool's price, in every v2 and v4 pool, on one axis of what a buyer
+ *   pays per token, which is the pool's price divided by one minus its LP fee: 0.3% in a v2 pair, slot0's `lpFee` in
+ *   a v4 pool (for a dynamic-fee pool, the fee of the moment). The path starts at the cheapest ask of any pool; P1 is
+ *   the price at which 1,000 units (`MIN_DEPTH`) have been paid in; the window runs to twice that price, and the
+ *   shares of what has been paid in are read at P1, at the window's end and at every range edge in between. A path
+ *   that never takes 1,000 units is one prefix, worded without a window.
+ *   The warning, by title, each a statement of what was read:
+ *   - "Wallets hold most of the USDC Inspector found in its pools": wallets in plain pools hold at least 1,000
+ *     units of the bids, and more than half of all of them;
+ *   - "Some liquidity isn't locked": wallets in plain pools take more than 5% at some prefix (up to all of it: the
+ *     strong title is for money in the pools, never for tokens for sale, which are free and say where buyers' money
+ *     goes only when the token's market is on the pools read), or hold more than 5% of
+ *     the bids once the pools hold 1,000 units; or wallets, plain or not, take or hold half or more there (a wallet
+ *     outside plain pools alone warns only from half); or wallets sell, beyond the window, a tenth or more of all the
+ *     tokens for sale on the path (counted, never priced, and not measured against the supply).
+ *   The detail starts "In the pools Inspector can read", gives the shares and amounts, never names a deployer (it is
+ *   wallets, whoever's), and where a share rests only on wallets outside plain pools says so ("would go ..., if the
+ *   hooks and fees of the pools selling it let buyers through"; bids "behind a swap hook, a dynamic or high fee, or
+ *   in a pool not quoted in USDC, where nobody may be able to sell into it"). Burned or locked liquidity in such
+ *   pools is given as that, apart. A finding leaves the path out when wallets take nothing on it. Up to 500 holders'
+ *   code is read (`readHolderCode`: one state-overridden eth_call per 250, single reads when a node refuses that),
+ *   largest first; a warning says so when the holders left unclassified could bring wallets to half.
+ *   Why it never fails a token (a follow-up): tokens for sale are free and a pool's price is its creator's choice;
+ *   quote parked under a price nobody sells at is at no risk (under a launch range holding the whole supply, no
+ *   bid can ever be sold into); and a stranger's listing can stand beside another holder's money. A fail from
+ *   positions needs the bids bounded by the tokens that could be sold into them, money matched to asks holder by
+ *   holder and pro rata, or the deployer's identity.
+ *   It says nothing (the old check answers) when: a family of pool contracts never answered; a v2 LP token's
+ *   totalSupply is zero; the list of the token's pools was cut short (the index lists at most 50 and says when there
+ *   are more, `extraPoolsTruncated`; discovery reads at most 50, `PoolScan.truncated`); a v4 pool of the token against
+ *   a quote currency was created after the index's cursor and isn't among the pools found; or a v4 pool's positions
+ *   can't be relied on (the index has no entry for it, lists more than 500 positions for it or 2,000 over the token's
+ *   pools, lists positions whose in-range liquidity doesn't add up to the pool's active liquidity exactly, which means
+ *   a gap in the index, or a position or an NFT's owner doesn't answer); and when anything stops it, as above.
+ *   Which pools: discovery probes a token's standard hookless v4 keys; a pool with a hook or another fee is found only
+ *   through the index (`extraPools`). The indexer's position step therefore records every v4 pool the PoolManager
+ *   initialised since its deployment, on the same cursor as the positions, and the check reads `Initialize` over the
+ *   blocks after that cursor with the token as currency0 and as currency1. Pools against a currency other than USDC,
+ *   EURC or native USDC are not looked for and never counted, here as in every other check.
+ *   Who can make which warning, and at what cost:
+ *   - "most of the USDC": anyone who leaves at least 1,000 units, and more than everyone else holds, in a wallet's
+ *     position in a plain pool. Parked far under the price, or under a launch range nobody can sell out of, it
+ *     costs capital and risks nothing. It is true as stated: the USDC is there, and a wallet can withdraw it;
+ *   - "some liquidity isn't locked": about 50 units' worth of tokens under the market in a plain pool; any tokens at
+ *     any price in a new plain pool when the token's market isn't on the pools read (Uniswap v3 or Aerodrome, another
+ *     currency or DEX, nothing left for sale), for gas, with a detail that begins by saying which pools it is about;
+ *     a tenth of
+ *     all the tokens for sale parked beyond the window; about 500 units' worth behind a hook that refuses swaps, or
+ *     USDC there to half of the bids (both at no risk, and worded as depending on the hook); USDC above 5% of the
+ *     bids anywhere in a plain pool.
+ *   And who can avoid one, for gas: free tokens burned under a wallet's launch, in a plain pool or not, shrink its
+ *   share; liquidity held in a pool that isn't plain gets the plain title at most; 51 empty pools or a flood of
+ *   `ModifyLiquidity` in the index's tail stop the reading. None of this makes a pass.
+ *   Also open: a finding is as of its block (nothing re-inspects a token when its price moves); v3 and Aerodrome
+ *   positions aren't read; the in-range sum catches a missing position only while its range holds the current tick;
+ *   a holder's code is read at the latest block; fees owed to a position aren't counted; the protocol fee isn't in
+ *   the price a buyer pays; a hook's bits say when it runs, not what it does.
+ *   Without an index (testnet; an inspection that couldn't fetch it; the indexer's `positions` switch off), with one
+ *   more than 10,000 blocks behind the head (its backfill: a stale index can't say which pools there are), or with no
+ *   v4 pool involved (none found, none created since the cursor, no pool list cut short), none of this runs.
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  * - trade: no DEX or no trade quote is configured, pool discovery failed, no USDC pool was found, or the round trip
@@ -71,9 +156,14 @@ import { BURN_ADDRESSES, type Address, type DexConfig } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { ContractInfo, HolderPage } from "./explorer";
-import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolScan, type PoolVersion } from "./types";
+import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolKey, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
-import { readV4Pools, toSixDecimals, type V4Quote } from "./v4";
+import { MAX_EXTRA_POOLS, readV4Pools, toSixDecimals, type V4Quote } from "./v4";
+import {
+  MAX_POSITIONS_PER_POOL, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, readHolderCode, readV4Positions, v2TokenSqrtPrice,
+  type PoolGap, type V4PoolRef,
+} from "./v4-positions";
+import { HOLDER_CLASSES, findPath, noSums, v2Ask, v4Ask, type Ask, type AskPath, type ClassSums, type HolderClass } from "./lp-path";
 import { MIN_DEPTH, STATUS, buyDidNotTrade, poolCouldNotTrade, orderDepth, v2Out, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, tradeSetup, type TradeAttempt, type TradeSetup } from "./simulate";
 
 export const erc20Abi = parseAbi([
@@ -343,7 +433,7 @@ const uniswapV2V3Name = (dex: DexConfig): string => `Uniswap ${listWith("and", [
  * own quote, and the native currency and its ERC-20 view (`nativeQuote.erc20View`, Arc's USDC at 0x3600) are one asset, so
  * inspecting that ERC-20 leaves out both forms of it.
  */
-function v4Quotes(input: InspectInput, dex: DexConfig): V4Quote[] {
+function v4Quotes(input: Pick<InspectInput, "address" | "nativeQuote">, dex: DexConfig): V4Quote[] {
   const token = lower(input.address);
   const quotes = dex.quoteTokens.filter((q) => lower(q.address) !== token).map((q) => ({ ...q, decimals: 6 }));
   const native = input.nativeQuote;
@@ -454,6 +544,7 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     ],
     factoriesAnswered: families.some((f) => f.configured && f.answered),
     silent: families.filter((f) => f.configured && !f.answered).map((f) => f.name),
+    ...(v4Read?.truncated ? { truncated: true } : {}),
   };
 }
 
@@ -837,9 +928,385 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
     : finding("liquidity", "warn", "Thin liquidity", deepest, { evidenceUrl: url });
 }
 
-export async function checkLpLock(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
+/**
+ * lp-lock. What the position index adds is warnings for Uniswap v4 liquidity, and nothing else:
+ * - `lpLockWithoutIndex`, the check as it was before there was a position index, unchanged, has the last word on
+ *   every pass, every fail and every unknown. The new path can't produce any of them;
+ * - `lpLockByPath`, when a v4 pool is involved and the index is fresh, follows buyers' money in the order it would
+ *   arrive and looks at who holds the quote currency already in the pools. When wallets hold or would take enough of
+ *   it, it answers "warn". When they don't, when it can't read the whole picture, or when it fails in any way (its
+ *   reads time out, a node refuses them, anything throws), it says nothing and the old check's answer is the finding,
+ *   word for word.
+ * A warning takes the place of the old check's pass or unknown, and gives way to its fail.
+ * `token` is the inspected token's total supply and decimals, when known: the decimals are how a token count is written.
+ */
+export async function checkLpLock(input: InspectInput, scan: PoolScan | null, token: TokenFacts = { supply: null, decimals: null }): Promise<Finding> {
   if (!input.dex) return finding("lp-lock", "unknown", "Locks aren't checked on this network", "No DEX registry is configured here.");
   if (scan === null) return finding("lp-lock", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
+  if (!input.v4Positions || !input.dex.v4) return lpLockWithoutIndex(input, scan);
+  // The old check starts first and runs beside the new path, with all the time it had before there was one.
+  const before = lpLockWithoutIndex(input, scan);
+  before.catch(() => undefined);
+  let found: Finding | null = null;
+  try {
+    const tally = await tallyLiquidity(input, scan, input.dex);
+    found = tally === null ? null : lpLockByPath(scan, input.dex, tally, token);
+  } catch {
+    // Whatever stopped the new path (the inspection's deadline, a node refusing the index's tail, anything else), it
+    // has nothing to add, and takes nothing away: the old check answers.
+  }
+  const old = await before;
+  return found !== null && old.status !== "fail" ? found : old;
+}
+
+/** The token's total supply (raw units) and decimals, null when they couldn't be read. */
+export type TokenFacts = { supply: bigint | null; decimals: number | null };
+
+/**
+ * What `tallyLiquidity` found, for the verdict. Quote amounts are 6-decimal units times `SHARE_SCALE`; token amounts raw.
+ * - `bids`: the quote currency the positions hold now, by class (`HolderClass`), over every pool found;
+ * - `path`: where buyers' money would go (`AskPath`), one path over every pool found. Null when nothing is for sale;
+ * - `unclassifiedHolders`: how many holders' code wasn't read;
+ * - `blockers`: the reasons the picture itself isn't complete. With any, the new path says nothing;
+ * - the two links: the largest position (or v2 holder list, or pool) of each kind.
+ */
+export type LiquidityTally = {
+  bids: ClassSums;
+  path: AskPath | null;
+  unclassifiedHolders: number;
+  blockers: string[];
+  openUrl: string | null;
+  safeUrl: string | null;
+};
+
+/**
+ * Amounts are kept in the quote currency's 6-decimal units times this, so that splitting a v2 pair's reserve by its LP
+ * holders loses nothing that could move a share across a line.
+ */
+export const SHARE_SCALE = 10n ** 12n;
+
+const GAP_REASON: Record<PoolGap, string> = {
+  missing: "The position index has no entry yet for a Uniswap v4 pool of this token.",
+  truncated: `A Uniswap v4 pool of this token has more than ${MAX_POSITIONS_PER_POOL} positions, more than this check reads.`,
+  // Not shown: an index this far behind sends the whole check to `lpLockWithoutIndex` (see `tallyLiquidity`).
+  stale: `The position index is more than ${TAIL_MAX_BLOCKS.toLocaleString("en-US")} blocks behind the chain.`,
+  mismatch: "The position index has a gap: the positions it lists for a Uniswap v4 pool don't add up to the pool's liquidity.",
+  unreadable: "The positions of a Uniswap v4 pool couldn't be read.",
+};
+
+/**
+ * Uniswap v4 reads a hook's permissions off its address (v4-core `src/libraries/Hooks.sol`). These four let it run in a
+ * swap: BEFORE_SWAP (1 << 7) and AFTER_SWAP (1 << 6) can refuse one, and their RETURNS_DELTA flags (1 << 3, 1 << 2) can
+ * take part of what it pays. In such a pool "buyers pay this position" is the hook's to decide.
+ */
+const SWAP_FLAGS = (1n << 7n) | (1n << 6n) | (1n << 3n) | (1n << 2n);
+const hookRunsInSwaps = (key: PoolKey): boolean => (BigInt(key.hooks) & SWAP_FLAGS) !== 0n;
+/** A v4 pool key's fee field with this value means the fee is the hook's to set, swap by swap (v4-core `LPFeeLibrary`). */
+const DYNAMIC_FEE_FLAG = 0x800000;
+/** The highest LP fee of a plain pool, in pips: 1%, the top standard tier. Above it no router sends a buyer. */
+const MAX_PLAIN_FEE = 10_000;
+
+/**
+ * Everything lp-lock's new path reads, over every pool the scan found, in the quote currency.
+ *
+ * Who holds what:
+ * - a Uniswap v2 pair, by LP-token balance: burn addresses, the chain's known lockers, and the rest, which is
+ *   withdrawable where the chain's lock contracts are vetted (`lockersVetted`) and "unvetted" where they aren't;
+ * - a Uniswap v4 position, read live, by its holder (`classifyHolder`): burned, locked, a wallet's (withdrawable, or
+ *   "hook" when the pool's hook runs on removal and so can block or tax it), a contract's (it may be a locker, and its
+ *   terms aren't read), or unclassified (past the `MAX_HOLDER_CODE_READS` largest holders);
+ * - a Uniswap v3 or Aerodrome pool: "venue" as a whole, its positions can't be read. Its quote counts in the bids;
+ *   what it sells is on no path.
+ * In a pool that isn't plain (a hook that runs in swaps, a dynamic fee or one above 1%, a quote that isn't USDC) a
+ * wallet's slice is "elsewhere" and a burned or locked one "doubted": see `HolderClass`.
+ *
+ * What is measured (`LiquidityTally`):
+ * - `bids`: the quote currency each class holds now, in every pool. EURC counts 1:1 with USDC;
+ * - `path`: the asks, every position's token side above its pool's price, as one path over every pool, ordered by
+ *   what a buyer pays per token, the pool's LP fee included (lp-path.ts). A v2 pair charges 0.3%; a v4 pool its
+ *   `lpFee` as slot0 has it now, which for a dynamic-fee pool is the fee of the moment. EURC counts 1:1 with USDC,
+ *   which misplaces an EURC pool's asks by what EURC trades away from a dollar.
+ *
+ * Answers null when the new path has nothing to read: the index is more than `TAIL_MAX_BLOCKS` behind the head, or no
+ * v4 pool is involved (see `checkLpLock`). Rejects with `ReadsTimedOut` when the inspection's deadline passes first.
+ */
+export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: DexConfig): Promise<LiquidityTally | null> {
+  const dollar = (symbol: string | undefined) => symbol === "USDC";
+  const { reader, explorerBase } = input;
+  if (!dex.v4 || !input.v4Positions) return null;
+  // A second kept for the rest of the report, as the trade check keeps one.
+  const deadlineAt = input.deadlineAt === undefined ? undefined : input.deadlineAt - 1_000;
+  // The index first, before anything is counted: whether it is fresh decides whether this path answers at all.
+  const quotes = v4Quotes(input, dex);
+  let unmapped = false;
+  const quoteOf = new Map<string, string>();
+  const refs = scan.pools.flatMap((p): V4PoolRef[] => {
+    if (p.version !== "v4") return [];
+    const { key, poolId } = p;
+    const quoteIsCurrency0 = key !== undefined && lower(key.currency1) === lower(input.address);
+    const quote = key && quotes.find((q) => lower(q.address) === lower(quoteIsCurrency0 ? key.currency0 : key.currency1));
+    if (key && poolId && quote) {
+      quoteOf.set(lower(poolId), quote.symbol);
+      return [{ poolId, key, quoteIsCurrency0, quoteDecimals: quote.decimals }];
+    }
+    unmapped = true;
+    return [];
+  });
+  // Asked even with no v4 pool to read: the index's tail also says whether the token gained a v4 pool the lookup missed.
+  const v4Read = await readV4Positions({ reader, v4: dex.v4, pools: refs, index: input.v4Positions, token: input.address, quotes: quotes.map((q) => q.address), deadlineAt });
+  if (v4Read.stale) return null;
+  // A pool list that was cut short may hide a v4 pool, so it counts as one being involved.
+  const listTruncated = input.extraPoolsTruncated === true || scan.truncated === true;
+  const v4Involved = unmapped || listTruncated || v4Read.unlisted.length > 0 || scan.pools.some((p) => p.version === "v4");
+  if (!v4Involved) return null;
+
+  // What keeps the picture itself from being complete. Any one of them makes the answer unknown.
+  const blockers = new Set<string>();
+  const silent = silentNote(scan);
+  if (silent) blockers.add(silent);
+  if (listTruncated) blockers.add(`This token has more Uniswap v4 pools than are read (over ${MAX_EXTRA_POOLS}), so its liquidity can't be added up.`);
+  if (unmapped) blockers.add(GAP_REASON.unreadable);
+  if (v4Read.unlisted.length > 0) blockers.add("A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.");
+
+  const bids = noSums();
+  const asks: Ask[] = [];
+  /** A holder's class in a pool that isn't plain: a wallet's is "elsewhere", burned or locked is "doubted". */
+  const classIn = (isPlain: boolean, owner: HolderClass): HolderClass => (isPlain ? owner : owner === "withdrawable" ? "elsewhere" : owner === "burned" || owner === "locked" ? "doubted" : owner);
+  // The largest slice of each kind, for the evidence link: by the quote it holds now and what it would take.
+  let largestOpen: { amount: bigint; url: string } | null = null;
+  let largestSafe: { amount: bigint; url: string } | null = null;
+  const note = (owner: HolderClass, amount: bigint, url: string) => {
+    if (amount <= 0n) return;
+    if (owner === "burned" || owner === "locked" || owner === "doubted") {
+      if (!largestSafe || amount > largestSafe.amount) largestSafe = { amount, url };
+    } else if (!largestOpen || amount > largestOpen.amount) largestOpen = { amount, url };
+  };
+
+  // Uniswap v2: the pair, split by who holds the LP token.
+  for (const pair of scan.pools) {
+    if (pair.version !== "v2") continue;
+    const read = (fn: string, args: unknown[] = []) => beforeDeadline(deadlineAt, () => reader.read(pair.address, erc20Abi, fn, args) as Promise<bigint>);
+    const supply = await read("totalSupply");
+    if (supply === 0n) {
+      // No evidence to compute a locked share from: an LP token with 0 supply isn't a "fail".
+      blockers.add("The v2 LP token's totalSupply is 0.");
+      continue;
+    }
+    const [burnt, inLockers] = await Promise.all(
+      [BURN_ADDRESSES, input.knownLockers].map(async (holders) => (await Promise.all(holders.map((a) => catchReverted(read("balanceOf", [a]), 0n)))).reduce((s, b) => s + b, 0n)),
+    );
+    const kept = burnt! + inLockers! > supply ? supply : burnt! + inLockers!;
+    const share = (amount: bigint) => {
+      const safe = (amount * kept) / supply;
+      const burned = kept === 0n ? 0n : (safe * burnt!) / (burnt! + inLockers!);
+      return { burned, locked: safe - burned, rest: amount - safe };
+    };
+    const [quote, tokens] = [share(pair.depth * SHARE_SCALE), share(pair.tokenReserve ?? 0n)];
+    const price = v2TokenSqrtPrice(pair.depth, pair.tokenReserve ?? 0n);
+    const url = `${explorerBase}/token/${pair.address}?tab=holders`;
+    // "Withdrawable" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
+    // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
+    for (const [owner, part] of [["burned", "burned"], ["locked", "locked"], [input.lockersVetted ? "withdrawable" : "unvetted", "rest"]] as const) {
+      // A v2 pair is plain when its quote is a dollar.
+      const as = classIn(dollar(pair.quote), owner);
+      bids[as] += quote[part];
+      const ask = v2Ask({ owner: as, price, reserve: quote[part], tokens: tokens[part] });
+      if (ask) asks.push(ask);
+      note(owner, quote[part], url);
+    }
+  }
+
+  // Uniswap v3 and Aerodrome: positions are NFTs nothing here reads. The pool's quote is nobody's in particular, and
+  // what it sells is on no path.
+  for (const p of scan.pools) {
+    if (p.version !== "v3" && p.version !== "aero") continue;
+    bids.venue += p.depth * SHARE_SCALE;
+    note("venue", p.depth * SHARE_SCALE, `${explorerBase}/address/${p.address}`);
+  }
+
+  // Uniswap v4: the positions, each by its holder.
+  const { positionManager } = dex.v4;
+  const pools = v4Read.pools.flatMap((r) => {
+    if (r.gap !== null) {
+      blockers.add(GAP_REASON[r.gap]);
+      return [];
+    }
+    return [r];
+  });
+  // Ranked for the code reads by the quote each holds now and its liquidity: a holder past the cap stays unclassified.
+  const { code, unread: unclassifiedHolders } = await readHolderCode(
+    reader,
+    pools.flatMap((r) => r.positions.map((p) => ({ holder: p.holder, value: p.quote * 2n ** 128n + p.liquidity }))),
+    input.knownLockers,
+    deadlineAt,
+  );
+  for (const r of pools) {
+    const removalHook = hookCanChangeRemoval(r.pool.key);
+    // Plain: nothing but the liquidity math stands between a buyer and the position, at a fee a router would pay, in dollars.
+    const isPlain = !hookRunsInSwaps(r.pool.key) && r.pool.key.fee !== DYNAMIC_FEE_FLAG && r.lpFee <= MAX_PLAIN_FEE && dollar(quoteOf.get(lower(r.pool.poolId)));
+    for (const position of r.positions) {
+      const holder = lower(position.holder);
+      const who = classifyHolder(position.holder, { knownLockers: input.knownLockers, code: code.has(holder) ? code.get(holder)! : undefined });
+      const owner = classIn(isPlain, who === "wallet" ? (removalHook ? "hook" : "withdrawable") : who);
+      const url = position.tokenId === null ? `${explorerBase}/address/${position.holder}` : `${explorerBase}/token/${positionManager}/instance/${position.tokenId}`;
+      const ask = v4Ask({
+        owner,
+        sqrtPriceX96: r.sqrtPriceX96,
+        tickLower: position.tickLower,
+        tickUpper: position.tickUpper,
+        liquidity: position.liquidity,
+        quoteIsCurrency0: r.pool.quoteIsCurrency0,
+        quoteDecimals: r.pool.quoteDecimals,
+        feePips: r.lpFee,
+        scale: SHARE_SCALE,
+      });
+      bids[owner] += position.quote * SHARE_SCALE;
+      if (ask) asks.push(ask);
+      // A position that only sells tokens holds no quote yet: one unit, so that it can still be the one linked.
+      note(owner, position.quote * SHARE_SCALE + (ask ? 1n : 0n), url);
+    }
+  }
+
+  return {
+    bids,
+    path: findPath(asks, MIN_DEPTH * SHARE_SCALE),
+    unclassifiedHolders,
+    blockers: [...blockers],
+    openUrl: (largestOpen as { url: string } | null)?.url ?? null,
+    safeUrl: (largestSafe as { url: string } | null)?.url ?? null,
+  };
+}
+
+/**
+ * A raw token amount as a finding says it: "5.2M tokens", cut to one decimal, or "tokens" when the token's decimals aren't
+ * known. Never the token's symbol: the deployer chose it, and it has no place in a sentence about what a wallet holds.
+ */
+function tokenAmount(raw: bigint, decimals: number | null): string {
+  if (decimals === null || !Number.isInteger(decimals) || decimals < 0 || decimals > 77) return "tokens";
+  const whole = raw / 10n ** BigInt(decimals);
+  if (whole < 1_000n) return `${whole} tokens`;
+  const steps: [bigint, string][] = [[10n ** 12n, "T"], [10n ** 9n, "B"], [10n ** 6n, "M"], [10n ** 3n, "K"]];
+  const [unit, letter] = steps.find(([size]) => whole >= size)!;
+  const tenths = (whole * 10n) / unit;
+  // Past the trillions the figure is written out: "1,234T" would be harder to read than the number.
+  if (letter === "T" && tenths >= 10_000n) return `${whole.toLocaleString("en-US")} tokens`;
+  return `${tenths / 10n}${tenths % 10n === 0n ? "" : `.${tenths % 10n}`}${letter} tokens`;
+}
+
+/**
+ * The new path's verdict over `tallyLiquidity`: a warning, or null (nothing to add: the old check answers). It never
+ * fails a token and never passes one.
+ * On the path, a "prefix" is the quote buyers have paid in from the cheapest ask of any pool up to some price; the
+ * window is every prefix from P1, where 1,000 units have been paid (`MIN_DEPTH`), to twice that price, or the whole
+ * path as one prefix when it never takes 1,000. Every class counts in a prefix's total. P is the share of wallets in
+ * plain pools ("withdrawable"), W that plus wallets in the other pools ("elsewhere").
+ * The warning has one of two titles, each a plain statement of what was read:
+ * - "Wallets hold most of the USDC Inspector found in its pools": wallets in plain pools hold at least 1,000 units
+ *   of the bids, and more than half of all of them. Money, which is there whatever the token's market is;
+ * - "Some liquidity isn't locked": P > 5% in some prefix (a majority too: the detail gives the share, and tokens for
+ *   sale alone carry no stronger title), or of the bids once the pools hold 1,000 units; or W >= 50%
+ *   there with wallets outside plain pools among them (alone they warn only from half: what they show costs nothing
+ *   and may be out of anyone's reach); or the tokens wallets sell beyond the window are a tenth or more of all the
+ *   tokens for sale on the path.
+ * Why no fail: every way of proving that the money buyers pay is a rug-puller's to take has had a hole. Tokens are
+ * free and a pool's price is its creator's choice; quote parked under a price nobody sells at is at no risk; a
+ * stranger's listing can stand beside another holder's money. A fail from positions would need the bids bounded by
+ * the tokens that could actually be sold into them, money matched to asks holder by holder, or the deployer's
+ * identity. Until then the reading says what wallets hold and would be paid, in the pools read here, and no more.
+ * Any blocker: null.
+ */
+function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, token: TokenFacts): Finding | null {
+  if (tally.blockers.length > 0) return null;
+  const { bids, path } = tally;
+  // The quote currencies of the pools found, in the config's order (USDC before EURC).
+  const found = new Set(scan.pools.map((p) => p.quote));
+  const symbol = [...new Set([...dex.quoteTokens.map((q) => q.symbol).filter((q) => found.has(q)), ...found])].join("/");
+  const sum = (m: ClassSums) => HOLDER_CLASSES.reduce((s, owner) => s + m[owner], 0n);
+  const safe = (m: ClassSums) => m.burned + m.locked;
+  const wallets = (m: ClassSums) => m.withdrawable + m.elsewhere;
+  const pct = (part: bigint, of: bigint) => formatPct(of === 0n ? 0 : Number((part * 10_000n) / of) / 100);
+  const units = (scaled: bigint) => wholeUnits(scaled / SHARE_SCALE);
+  // What buyers pay up to a point on the path, to the nearest unit: the point is found to the unit, not below it.
+  const paid = (scaled: bigint) => wholeUnits(((scaled / SHARE_SCALE + 500_000n) / 1_000_000n) * 1_000_000n);
+  // Shares are compared with a millionth of slack: amounts are rounded down position by position, and a share that is
+  // exactly on a line must not fall on either side of it by that dust.
+  const DUST = 1_000_000n;
+  const atLeast = (part: bigint, of: bigint, percent: bigint) => part * 100n + of / DUST >= of * percent;
+  const above = (part: bigint, of: bigint, percent: bigint) => part * 100n > of * percent + of / DUST;
+  /** The view where `of` is the largest share; the first of equals, which says it best. */
+  const most = (of: (m: ClassSums) => bigint, among: ClassSums[]) => among.reduce((a, b) => (of(b) * sum(a) > of(a) * sum(b) + (sum(a) * sum(b)) / DUST ? b : a));
+  const THOUSAND = MIN_DEPTH * SHARE_SCALE;
+
+  // --- Asks.
+  const views = (path?.prefixes ?? []).filter((p) => sum(p) > 0n);
+  const plainWarn = views.some((m) => above(m.withdrawable, sum(m), 5n));
+  const anyWarn = plainWarn || views.some((m) => m.elsewhere > 0n && atLeast(wallets(m), sum(m), 50n));
+  // Tokens wallets still sell beyond the window: counted, never priced, and set against every token for sale on the path.
+  const beyond = path?.beyond ?? noSums();
+  const forSale = path === null ? 0n : path.windowTokens + sum(path.beyond);
+  const beyondPlain = beyond.withdrawable > 0n && beyond.withdrawable * 10n >= forSale;
+  const beyondAny = wallets(beyond) > 0n && wallets(beyond) * 10n >= forSale;
+
+  // --- Bids.
+  const bidTotal = sum(bids);
+  const bidsMaterial = bidTotal >= THOUSAND;
+  // "Most" is more than half.
+  const mostOfBids = bids.withdrawable >= THOUSAND && above(bids.withdrawable, bidTotal, 50n);
+  const bidsPlainWarn = bidsMaterial && above(bids.withdrawable, bidTotal, 5n);
+  const bidsAnyWarn = bidsPlainWarn || (bidsMaterial && bids.elsewhere > 0n && atLeast(wallets(bids), bidTotal, 50n));
+
+  if (!anyWarn && !beyondAny && !bidsAnyWarn) return null;
+
+  // --- The words. All wallets are quoted, and "would ... if" is said where the share rests on wallets outside plain pools.
+  const asksConditional = !plainWarn && anyWarn;
+  const beyondConditional = !beyondPlain && beyondAny;
+  const of = plainWarn || !anyWarn ? (m: ClassSums) => m.withdrawable : wallets;
+  const worst = views.length > 0 ? most(of, views) : null;
+  const beyondTokens = beyondAny ? (beyondConditional ? wallets(beyond) : beyond.withdrawable) : 0n;
+  const HOOKED = "behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC";
+  /** Burned or locked liquidity outside plain pools is said apart, never folded into either side. */
+  const lockedShares = (m: ClassSums) =>
+    m.doubted > 0n
+      ? `, ${pct(safe(m), sum(m))} into burned or locked ones and ${pct(m.doubted, sum(m))} into burned or locked ones ${HOOKED}`
+      : ` and ${pct(safe(m), sum(m))} into burned or locked ones`;
+  // Holders whose code wasn't read could be wallets too: said when, with them, wallets would reach half.
+  const couldBeHalf = !mostOfBids && [...views, ...(bidsMaterial ? [bids] : [])].some((m) => m.unclassified > 0n && atLeast(wallets(m) + m.unclassified, sum(m), 50n));
+  // The path is described only when wallets take something on it, or sell beyond its window: a finding shows the lines
+  // that carry it.
+  const onPath = worst !== null && (of(worst) > 0n || beyondTokens > 0n);
+  const windowed = path?.reached === true;
+  const first = worst === null ? "" : windowed ? `of the first ${paid(sum(worst))} ${symbol} buyers would pay for this token` : `of the ${paid(sum(worst))} ${symbol} buyers could pay for the tokens now for sale`;
+  const lines = [
+    worst &&
+      onPath &&
+      (asksConditional
+        ? `${first}, ${pct(of(worst), sum(worst))} would go into positions wallets can withdraw${lockedShares(worst)}, if the hooks and fees of the pools selling it let buyers through.`
+        : `${first}, ${pct(of(worst), sum(worst))} goes into positions wallets can withdraw${lockedShares(worst)}.`),
+    bidTotal > 0n &&
+      `of the ${units(bidTotal)} ${symbol} in its pools now, wallets' positions hold ${units(wallets(bids))}${bids.elsewhere > 0n ? ` (${units(bids.elsewhere)} of it ${HOOKED}, where nobody may be able to sell into it)` : ""}${bids.doubted > 0n ? `, burned or locked ones ${units(safe(bids))} and burned or locked ones ${HOOKED} ${units(bids.doubted)}` : ` and burned or locked ones ${units(safe(bids))}`}.`,
+    beyondTokens > 0n &&
+      `wallets also hold ${tokenAmount(beyondTokens, token.decimals)} in positions above twice that price${beyondConditional ? `, ${HOOKED}` : ""}, which buyers would pay into if the price rises that far.`,
+    couldBeHalf && `${tally.unclassifiedHolders.toLocaleString("en-US")} holders of this token's liquidity weren't classified, more than this check reads: with them, wallets could hold half or more.`,
+    onPath &&
+      (windowed
+        ? `counted in the order buyers' money would arrive, by what a buyer pays per token in each pool, fee included, up to twice the price at which ${MIN_UNITS} ${symbol} has been paid.`
+        : `counted in the order buyers' money would arrive, by what a buyer pays per token in each pool, fee included; the tokens for sale would take under ${MIN_UNITS} ${symbol} in all.`),
+  ].filter((x): x is string => typeof x === "string");
+  // The reading is about the pools read here, and says so where it starts.
+  const sentence = (line: string) => `${line[0]!.toUpperCase()}${line.slice(1)}`;
+  const detail = `In the pools Inspector can read, ${[lines[0]!, ...lines.slice(1).map(sentence)].join(" ")}`;
+  // The strong title rests on money in the pools, never on tokens for sale: those are free, and say where buyers'
+  // money goes only when the token's market is on the pools read.
+  const title = mostOfBids ? `Wallets hold most of the ${symbol} Inspector found in its pools` : "Some liquidity isn't locked";
+  return finding("lp-lock", "warn", title, detail, { evidenceUrl: tally.openUrl, fixAppId: "vault" });
+}
+
+/**
+ * lp-lock without the position index: only Uniswap v2 has LP tokens to count, and a pool of another kind that may hold
+ * more than the pair keeps a burned pair from passing. This is the check as it stood before the index, kept for the
+ * inspections that have none (testnet, a browser that couldn't fetch it) and for a token with no v2 or v4 pool.
+ */
+async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<Finding> {
   const v2 = scan.pools.filter((p) => p.version === "v2");
   if (v2.length === 0) {
     // Only v2 has LP tokens to count. Positions in v3, v4 and Aerodrome pools are NFTs or entries in the PoolManager, and

@@ -8,6 +8,8 @@ import {
   poolId,
   radarFeedFilter,
   radarFeedId,
+  positionId,
+  positionsIndexId,
   statsDaysId,
   statsId,
   tokenId,
@@ -158,6 +160,43 @@ describe("statsId and statsDaysId", () => {
       expect(refusal(() => statsDaysId("mainnet", month)).code, month).toBe("stats-month");
     }
     expect(refusal(() => statsDaysId("mainnet", 202610 as never)).code).toBe("stats-month");
+  });
+});
+
+describe("positionId and positionsIndexId", () => {
+  const SALT = `0x${"0".repeat(60)}BEEF`;
+  const key = { owner: ADDR_MIXED, tickLower: -887_250, tickUpper: 887_250, salt: SALT };
+
+  it("is the PoolManager's key for the position, lowercased, under the network", () => {
+    expect(positionId("mainnet", POOL32.toUpperCase().replace("0X", "0x"), key)).toBe(`mainnet:${POOL32}:${ADDR}:-887250:887250:${SALT.toLowerCase()}`);
+    expect(positionsIndexId("mainnet")).toBe("mainnet");
+  });
+
+  it("is the same id however the key is cased, and another for any other key", () => {
+    const id = positionId("mainnet", POOL32, key);
+    expect(positionId("mainnet", POOL32, { ...key, owner: ADDR, salt: SALT.toLowerCase() })).toBe(id);
+    const others = [
+      positionId("testnet", POOL32, key),
+      positionId("mainnet", `0x${"cd".repeat(32)}`, key),
+      positionId("mainnet", POOL32, { ...key, owner: USDC }),
+      positionId("mainnet", POOL32, { ...key, tickLower: -887_200 }),
+      positionId("mainnet", POOL32, { ...key, tickUpper: 887_200 }),
+      positionId("mainnet", POOL32, { ...key, salt: `0x${"0".repeat(64)}` }),
+    ];
+    expect(new Set([id, ...others]).size).toBe(7);
+  });
+
+  it("refuses what can't be a position: a pool id that isn't 32 bytes, bad ticks, a bad salt, a bad owner or network", () => {
+    expect(refusal(() => positionId("mainnet", ADDR, key)).code).toBe("pool-id");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, tickLower: 60, tickUpper: 60 })).code).toBe("ticks");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, tickLower: 0.5 })).code).toBe("ticks");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, tickLower: -887_273 })).code).toBe("ticks");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, tickUpper: 887_273 })).code).toBe("ticks");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, salt: "0x01" })).code).toBe("salt");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, salt: `0x${"0".repeat(63)}/` })).code).toBe("salt");
+    expect(refusal(() => positionId("mainnet", POOL32, { ...key, owner: "0x12" })).code).toBe("address");
+    expect(refusal(() => positionId("devnet" as never, POOL32, key)).code).toBe("network");
+    expect(refusal(() => positionsIndexId("devnet" as never)).code).toBe("network");
   });
 });
 

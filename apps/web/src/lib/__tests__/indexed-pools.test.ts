@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PoolDoc } from "@arcos/data";
-import { IndexUnavailable, extraPoolsFrom, fetchExtraPools, indexEnabled, indexedPoolsSource, poolsAnswer } from "../indexed-pools";
+import { IndexUnavailable, extraPoolsFrom, extrasFrom, fetchExtraPools, fetchIndexedExtras, indexEnabled, indexedPoolsSource, indexedPositionsSource, poolsAnswer, positionsFrom, type IndexedPools } from "../indexed-pools";
 
 const TOKEN = "0x470f09ae20163d5e243f6530fb328912a8fcb099";
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -69,7 +69,7 @@ describe("indexedPoolsSource", () => {
   afterEach(() => vi.useRealTimers());
 
   it("keeps an answer a minute per token, whatever the address's case", async () => {
-    const load = vi.fn(async () => [doc({})]);
+    const load = vi.fn(async () => ({ pools: [doc({})], truncated: false }));
     let t = 0;
     const source = indexedPoolsSource({ load, now: () => t });
     await source.pools(TOKEN);
@@ -83,7 +83,7 @@ describe("indexedPoolsSource", () => {
 
   it("gives up on a slow read after the deadline, then reads nothing for a minute", async () => {
     let t = 0;
-    const load = vi.fn(() => new Promise<PoolDoc[]>(() => {}));
+    const load = vi.fn(() => new Promise<IndexedPools>(() => {}));
     const source = indexedPoolsSource({ load, now: () => t, deadlineMs: 1_500 });
     const slow = source.pools(TOKEN);
     const settled = expect(slow).rejects.toBeInstanceOf(IndexUnavailable);
@@ -93,19 +93,19 @@ describe("indexedPoolsSource", () => {
     await expect(source.pools("0x1111111111111111111111111111111111111111")).rejects.toBeInstanceOf(IndexUnavailable);
     expect(load).toHaveBeenCalledTimes(1);
     t = 61_501;
-    load.mockResolvedValueOnce([]);
-    await expect(source.pools(TOKEN)).resolves.toEqual([]);
+    load.mockResolvedValueOnce({ pools: [], truncated: false });
+    await expect(source.pools(TOKEN)).resolves.toEqual({ pools: [], truncated: false });
   });
 
   it("never caches a failure as an answer", async () => {
     let t = 0;
-    const load = vi.fn().mockRejectedValueOnce(new Error("PERMISSION_DENIED")).mockResolvedValue([doc({})]);
+    const load = vi.fn().mockRejectedValueOnce(new Error("PERMISSION_DENIED")).mockResolvedValue({ pools: [doc({})], truncated: false });
     const source = indexedPoolsSource({ load, now: () => t, cooldownMs: 10 });
     await expect(source.pools(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
     t = 9;
     await expect(source.pools(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
     t = 11;
-    await expect(source.pools(TOKEN)).resolves.toHaveLength(1);
+    await expect(source.pools(TOKEN)).resolves.toMatchObject({ pools: [{}] });
   });
 });
 
@@ -122,5 +122,120 @@ describe("fetchExtraPools", () => {
       throw new TypeError("fetch failed");
     }) as typeof fetch;
     expect(await fetchExtraPools(TOKEN, down)).toEqual([]);
+  });
+});
+
+describe("the positions in an answer", () => {
+  const POOL = `0x${"9e".repeat(32)}`;
+  const position = { owner: "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b", tickLower: -887_250, tickUpper: 887_250, salt: `0x${"0".repeat(59)}51137` } as const;
+  const index = { cursor: 32_211_901, pools: { [POOL]: { positions: [position], truncated: false } } };
+
+  it("goes into the route's answer when the index has any, and is left out when it has none", () => {
+    expect(poolsAnswer([doc({})], index).positions).toEqual(index);
+    expect(poolsAnswer([doc({})], null)).not.toHaveProperty("positions");
+    expect(poolsAnswer([doc({})])).not.toHaveProperty("positions");
+  });
+
+  it("comes back out of the answer as the Inspector's v4Positions, through JSON", () => {
+    const answer: unknown = JSON.parse(JSON.stringify(poolsAnswer([doc({ version: "v4", key })], index)));
+    expect(positionsFrom(answer)).toEqual(index);
+    expect(extrasFrom(answer)).toEqual({ extraPools: [{ version: "v4", key }], v4Positions: index });
+    expect(extrasFrom(poolsAnswer([doc({ version: "v4", key })]))).toEqual({ extraPools: [{ version: "v4", key }] });
+  });
+
+  it("is undefined when the answer carries none, or no usable cursor", () => {
+    for (const answer of [null, {}, { positions: null }, { positions: [] }, { positions: { cursor: "5", pools: {} } }, { positions: { cursor: -1, pools: {} } }, { positions: { cursor: 1.5, pools: {} } }, { positions: { cursor: 5 } }]) {
+      expect(positionsFrom(answer), JSON.stringify(answer)).toBeUndefined();
+    }
+  });
+
+  it("leaves out a pool whose entry isn't well formed: it then reads as not in the index, never as empty", () => {
+    const bad = [
+      { positions: [{ ...position, owner: "0x12" }], truncated: false },
+      { positions: [{ ...position, tickLower: 5, tickUpper: 5 }], truncated: false },
+      { positions: [{ ...position, salt: "0x01" }], truncated: false },
+      { positions: [position], truncated: "no" },
+      { positions: "all of them", truncated: false },
+      { positions: Array.from({ length: 501 }, () => position), truncated: false },
+      null,
+    ];
+    for (const entry of bad) {
+      expect(positionsFrom({ positions: { cursor: 5, pools: { [POOL]: entry } } }), JSON.stringify(entry)?.slice(0, 80)).toEqual({ cursor: 5, pools: {} });
+    }
+    // A pool id that isn't 32 bytes of lowercase hex is nobody's.
+    expect(positionsFrom({ positions: { cursor: 5, pools: { "0x12": { positions: [], truncated: false }, [POOL.toUpperCase()]: { positions: [], truncated: false } } } })).toEqual({ cursor: 5, pools: {} });
+  });
+
+  it("keeps a truncated flag and an empty list as they are, and drops fields it doesn't know", () => {
+    const got = positionsFrom({ positions: { cursor: 5, extra: 1, pools: { [POOL]: { positions: [{ ...position, liquidity: "9" }], truncated: true, more: 1 } } } });
+    expect(got).toEqual({ cursor: 5, pools: { [POOL]: { positions: [position], truncated: true } } });
+    expect(positionsFrom({ positions: { cursor: 5, pools: { [POOL]: { positions: [], truncated: false } } } })).toEqual({ cursor: 5, pools: { [POOL]: { positions: [], truncated: false } } });
+  });
+
+  it("stops at 2,000 positions over all pools: the pools past it are left out", () => {
+    const pools = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`0x${i.toString(16).padStart(64, "0")}`, { positions: Array.from({ length: 500 }, () => position), truncated: false }]));
+    expect(Object.keys(positionsFrom({ positions: { cursor: 5, pools } })!.pools)).toHaveLength(4);
+  });
+});
+
+describe("fetchIndexedExtras", () => {
+  it("reads the pools and the positions from the route, and takes any failure as nothing indexed", async () => {
+    const POOL = `0x${"9e".repeat(32)}`;
+    const index = { cursor: 9, pools: { [POOL]: { positions: [], truncated: false } } };
+    const ok = (async () => Response.json(poolsAnswer([doc({ version: "v4", key })], index))) as typeof fetch;
+    expect(await fetchIndexedExtras(TOKEN, ok)).toEqual({ extraPools: [{ version: "v4", key }], v4Positions: index });
+    const unavailable = (async () => Response.json({ error: "x" }, { status: 503 })) as typeof fetch;
+    expect(await fetchIndexedExtras(TOKEN, unavailable)).toEqual({ extraPools: [] });
+    const down = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    expect(await fetchIndexedExtras(TOKEN, down)).toEqual({ extraPools: [] });
+  });
+});
+
+describe("indexedPositionsSource", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const index = { cursor: 9, pools: {} };
+
+  it("keeps an answer a minute per token, and gives up on a slow read after its own deadline", async () => {
+    let t = 0;
+    const load = vi.fn(async (token: string) => (token === "0xslow" ? new Promise<never>(() => {}) : index));
+    const source = indexedPositionsSource({ load, now: () => t, deadlineMs: 1_500 });
+    expect(await source.positions(TOKEN)).toEqual(index);
+    expect(await source.positions(TOKEN.toUpperCase().replace("0X", "0x"))).toEqual(index);
+    expect(load).toHaveBeenCalledTimes(1);
+    const slow = expect(source.positions("0xslow")).rejects.toBeInstanceOf(IndexUnavailable);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await slow;
+    t = 1_500;
+  });
+
+  it("has no cooldown: one token's slow or failed positions never stop the next token's", async () => {
+    const load = vi.fn(async (token: string) => {
+      if (token === "0xheavy") return new Promise<never>(() => {});
+      if (token === "0xbroken") throw new Error("RESOURCE_EXHAUSTED");
+      return index;
+    });
+    const source = indexedPositionsSource({ load, deadlineMs: 300 });
+    const heavy = expect(source.positions("0xheavy")).rejects.toBeInstanceOf(IndexUnavailable);
+    await vi.advanceTimersByTimeAsync(300);
+    await heavy;
+    await expect(source.positions("0xbroken")).rejects.toBeInstanceOf(IndexUnavailable);
+    // Straight after both failures, with no time passed.
+    await expect(source.positions("0xother")).resolves.toEqual(index);
+    await expect(source.positions("0xthird")).resolves.toEqual(index);
+    // And the token that failed is tried again, not answered from a kept failure.
+    load.mockResolvedValueOnce(index);
+    await expect(source.positions("0xbroken")).resolves.toEqual(index);
+  });
+});
+
+describe("a truncated pool list in an answer", () => {
+  it("goes into the answer only when true, and comes out as the Inspector's extraPoolsTruncated", () => {
+    expect(poolsAnswer([doc({ version: "v4", key })], null, true)).toMatchObject({ truncated: true });
+    expect(poolsAnswer([doc({ version: "v4", key })], null, false)).not.toHaveProperty("truncated");
+    expect(extrasFrom(JSON.parse(JSON.stringify(poolsAnswer([doc({ version: "v4", key })], null, true))))).toEqual({ extraPools: [{ version: "v4", key }], extraPoolsTruncated: true });
+    expect(extrasFrom({ pools: [], truncated: "yes" })).toEqual({ extraPools: [] });
   });
 });

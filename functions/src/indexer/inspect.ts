@@ -91,7 +91,7 @@ export function liveInspector(options: { network: NetworkId; apiKey?: string; cl
   const turn = spacedTurns();
   // One record for the instance: a refusal in one run holds the next run's requests too.
   const refusals: Refusals = { until: 0 };
-  return async (address, extraPools, budget) => {
+  return async (address, { extraPools, extraPoolsTruncated, v4Positions }, budget) => {
     const controller = new AbortController();
     let scan: PoolScan | null = null;
     const explorer =
@@ -104,6 +104,8 @@ export function liveInspector(options: { network: NetworkId; apiKey?: string; cl
         explorer,
         ...chainInput(chain),
         extraPools,
+        ...(extraPoolsTruncated ? { extraPoolsTruncated } : {}),
+        ...(v4Positions ? { v4Positions } : {}),
         // The trade check fits its round trips inside the same deadline.
         deadlineAt: Date.now() + INSPECTION_MS,
         onPools: (found) => {

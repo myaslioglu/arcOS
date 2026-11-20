@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PoolDoc } from "@arcos/data";
+import type { IndexedToken } from "@/lib/indexed-pools";
 
 // The real module is server-only and opens Firestore; the route only needs its answer.
-const { indexedPools } = vi.hoisted(() => ({ indexedPools: vi.fn<(token: string) => Promise<PoolDoc[]>>() }));
-vi.mock("@/lib/indexed-pools-server", () => ({ indexedPools }));
+const { indexedToken } = vi.hoisted(() => ({ indexedToken: vi.fn<(token: string) => Promise<IndexedToken>>() }));
+vi.mock("@/lib/indexed-pools-server", () => ({ indexedToken }));
 
 import { GET } from "@/app/api/pools/[token]/route";
 import { IndexUnavailable } from "@/lib/indexed-pools";
@@ -24,38 +25,56 @@ const get = (token: string) =>
 describe("GET /api/pools/[token]", () => {
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
-    indexedPools.mockReset();
+    indexedToken.mockReset();
   });
   afterEach(() => vi.unstubAllEnvs());
 
   it("answers the token's indexed pools, v4 keys included, kept a minute at the CDN", async () => {
-    indexedPools.mockResolvedValue([pool]);
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: false, positions: null });
     const res = await get(TOKEN);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, s-maxage=60");
     expect(await res.json()).toEqual({
       pools: [{ id: pool.poolId, version: "v4", quote: "USDC-native", fee: 10_000, createdBlock: 7, key: KEY, depthUsdc: null }],
     });
-    expect(indexedPools).toHaveBeenCalledWith(TOKEN);
+    expect(indexedToken).toHaveBeenCalledWith(TOKEN);
+  });
+
+  it("answers the positions the index holds for the token's v4 pools, under its cursor", async () => {
+    const positions = {
+      cursor: 32_211_901,
+      pools: { [pool.poolId]: { positions: [{ owner: "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b", tickLower: -887_250, tickUpper: 887_250, salt: `0x${"0".repeat(59)}51137` }], truncated: false } },
+    } satisfies IndexedToken["positions"];
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: false, positions });
+    const body = (await (await get(TOKEN)).json()) as { positions: unknown; pools: unknown[] };
+    expect(body.positions).toEqual(positions);
+    expect(body.pools).toHaveLength(1);
+  });
+
+  it("says when the index holds more pools than it answered, and says nothing of it otherwise", async () => {
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: true, positions: null });
+    expect(await (await get(TOKEN)).json()).toMatchObject({ truncated: true });
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: false, positions: null });
+    expect(await (await get(TOKEN)).json()).not.toHaveProperty("truncated");
   });
 
   it("refuses what isn't an address, without reading the index", async () => {
     const res = await get("0x12");
     expect(res.status).toBe(400);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(indexedPools).not.toHaveBeenCalled();
+    expect(indexedToken).not.toHaveBeenCalled();
   });
 
   it("is not there on testnet, which has no index", async () => {
     vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
     const res = await get(TOKEN);
     expect(res.status).toBe(404);
-    expect(indexedPools).not.toHaveBeenCalled();
+    expect(indexedToken).not.toHaveBeenCalled();
   });
 
   it("answers 503, uncached, when the index can't be read, and logs the error's name only", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    indexedPools.mockRejectedValue(Object.assign(new Error("projects/arcos-c80cf/databases/arcos PERMISSION_DENIED"), { name: "IndexUnavailable" }));
+    indexedToken.mockRejectedValue(Object.assign(new Error("projects/arcos-c80cf/databases/arcos PERMISSION_DENIED"), { name: "IndexUnavailable" }));
     const res = await get(TOKEN);
     expect(res.status).toBe(503);
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -66,7 +85,7 @@ describe("GET /api/pools/[token]", () => {
   it("logs the read's own error code, a gRPC status, with the 503, and never its message", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const denied = Object.assign(new Error("7 PERMISSION_DENIED: Missing or insufficient permissions on projects/arcos-c80cf/databases/arcos"), { code: 7 });
-    indexedPools.mockRejectedValue(new IndexUnavailable(undefined, { cause: denied }));
+    indexedToken.mockRejectedValue(new IndexUnavailable(undefined, { cause: denied }));
     expect((await get(TOKEN)).status).toBe(503);
     expect(log).toHaveBeenCalledWith("pools failed", "IndexUnavailable", 7);
     expect(log.mock.calls.flat().some((v) => String(v).includes("arcos-c80cf"))).toBe(false);
@@ -74,7 +93,7 @@ describe("GET /api/pools/[token]", () => {
   });
 
   it("limits each client to 30 requests a minute", async () => {
-    indexedPools.mockResolvedValue([]);
+    indexedToken.mockResolvedValue({ pools: [], truncated: false, positions: null });
     const req = () => GET(new Request(`https://4rcos.test/api/pools/${TOKEN}`, { headers: { "x-forwarded-for": "203.0.113.9" } }), { params: Promise.resolve({ token: TOKEN }) });
     for (let i = 0; i < 30; i++) expect((await req()).status).toBe(200);
     expect((await req()).status).toBe(429);

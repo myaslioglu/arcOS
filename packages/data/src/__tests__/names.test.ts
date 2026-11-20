@@ -40,7 +40,7 @@ describe("networks", () => {
 });
 
 describe("collections", () => {
-  it("are the twelve of design 1.6 and Stats' two, each under its own name", () => {
+  it("are the twelve of design 1.6, Stats' two and the position index's two, each under its own name", () => {
     expect(COLLECTIONS).toEqual({
       indexer: "indexer",
       tokens: "tokens",
@@ -56,6 +56,8 @@ describe("collections", () => {
       radarFeed: "radarFeed",
       stats: "stats",
       statsDays: "statsDays",
+      positions: "positions",
+      positionsIndex: "positionsIndex",
     });
   });
 });

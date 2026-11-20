@@ -1,6 +1,6 @@
 import { encodeAbiParameters, encodeEventTopics, parseAbi, type Hex } from "viem";
 import { ARCOS, DEX, USDC, tokenFactoryAbi, type Address } from "@arcos/chain";
-import type { PoolScan, Report } from "@arcos/inspector";
+import { MODIFY_LIQUIDITY_TOPIC, type PoolScan, type Report, type V4PositionIndex } from "@arcos/inspector";
 import type { RawLog } from "../indexer/events";
 import { RangeRefused, type LogChain } from "../indexer/rpc";
 import type { ExplorerBudget, InspectToken } from "../indexer/run";
@@ -46,6 +46,18 @@ export function v4Pool(block: number, token: Address, id: Hex, hooks: Address = 
   };
 }
 
+/** A PoolManager ModifyLiquidity: `sender` changing its position [tickLower, tickUpper] with `salt` in pool `id` by `delta`. */
+export function modifyLiquidity(block: number, id: Hex, sender: Address, salt: bigint, delta = 10n ** 18n, tickLower = -600, tickUpper = 600, logIndex = 0): RawLog {
+  return {
+    address: DEX.mainnet!.v4!.poolManager,
+    topics: [MODIFY_LIQUIDITY_TOPIC, id, `0x${sender.slice(2).toLowerCase().padStart(64, "0")}`],
+    data: encodeAbiParameters([{ type: "int24" }, { type: "int24" }, { type: "int256" }, { type: "bytes32" }], [tickLower, tickUpper, delta, `0x${salt.toString(16).padStart(64, "0")}`]),
+    blockNumber: hex(block),
+    logIndex: hex(logIndex),
+    blockTimestamp: hex(timeOf(block)),
+  };
+}
+
 /** A ArcOS TokenFactory TokenCreated. */
 export function created(block: number, token: Address, symbol: string, logIndex = 0): RawLog {
   return {
@@ -66,6 +78,8 @@ export type FakeChainOptions = {
   logs?: RawLog[];
   /** The node refuses any window wider than this (as -32012 would). */
   maxSpan?: number;
+  /** With `maxSpan`: the width the refusal suggests ("retry with the range A-B"). */
+  suggest?: number;
   /** The node refuses even this one block. */
   refuseBlock?: number;
   /** The nth eth_getLogs call (1-based) fails at the transport level. */
@@ -85,7 +99,7 @@ export function fakeChain(options: FakeChainOptions): LogChain & { asked: { from
     logs: async ({ addresses, topic0s, from, to }: { addresses: readonly Address[]; topic0s: readonly Hex[]; from: number; to: number }) => {
       asked.push({ from, to });
       if (options.failCall === asked.length) throw new Error("ECONNRESET");
-      if (options.maxSpan !== undefined && to - from + 1 > options.maxSpan) throw new RangeRefused();
+      if (options.maxSpan !== undefined && to - from + 1 > options.maxSpan) throw new RangeRefused(options.suggest);
       if (options.refuseBlock !== undefined && from <= options.refuseBlock && options.refuseBlock <= to) throw new RangeRefused();
       const wanted = new Set(addresses.map((a) => a.toLowerCase()));
       return (options.logs ?? []).filter((log) => {
@@ -129,7 +143,7 @@ export function fakeReport(address: Address, passes: number, liquid: boolean, ov
   };
 }
 
-export type InspectCall = { token: Address; extraPools: unknown[]; budget: ExplorerBudget | null };
+export type InspectCall = { token: Address; extraPools: unknown[]; extraPoolsTruncated: boolean | undefined; v4Positions: V4PositionIndex | undefined; budget: ExplorerBudget | null };
 
 /** An inspector that answers from `answers` by token (lowercase), spending `explorerCalls` of the budget each time. */
 export function fakeInspector(
@@ -137,8 +151,8 @@ export function fakeInspector(
   explorerCalls = 0,
 ): InspectToken & { calls: InspectCall[] } {
   const calls: InspectCall[] = [];
-  const fn = (async (token, extraPools, budget) => {
-    calls.push({ token, extraPools, budget });
+  const fn = (async (token, { extraPools, extraPoolsTruncated, v4Positions }, budget) => {
+    calls.push({ token, extraPools, extraPoolsTruncated, v4Positions, budget });
     for (let i = 0; i < explorerCalls && budget; i++) budget.spend();
     const answer = answers[token.toLowerCase()];
     if (!answer) throw new Error("no fake answer");

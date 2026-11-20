@@ -57,6 +57,14 @@ export const UNISWAP_V4: UniswapV4Config = {
 };
 
 /**
+ * The block that deployed the v4 PoolManager: where the position index starts reading its `ModifyLiquidity` logs, so that
+ * every position of every pool is in it. Mainnet: `eth_getCode` at the PoolManager is empty at block 1,948,055 and 24,009
+ * bytes at 1,948,056 (2026-05-27T00:02:19Z; read from rpc.mainnet.arc.io on 2026-11-20). Null where no index is kept:
+ * Firestore holds mainnet data only.
+ */
+export const UNISWAP_V4_FROM: Record<NetworkId, number | null> = { mainnet: 1_948_056, testnet: null };
+
+/**
  * Aerodrome Slipstream on Arc mainnet (testnet has no code at either address). `eth_getCode` on 2026-09-29: factory 9,492
  * bytes, position manager 24,516 bytes (its `factory()` is the factory below).
  * `tickSpacings` come from the factory's own `tickSpacings()` view, read on 2026-09-29 as [1, 50, 100, 200, 2000, 10]

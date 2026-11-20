@@ -108,9 +108,9 @@ describe("liveInspector", () => {
       return Response.json({});
     }) as typeof fetch;
     const inspectToken = liveInspector({ network: "mainnet", client: empty, fetchFn });
-    await expect(inspectToken("0x470f09ae20163d5e243f6530fb328912a8fcb099", [], budgetOf(5))).rejects.toMatchObject({ name: "NotAContract" });
+    await expect(inspectToken("0x470f09ae20163d5e243f6530fb328912a8fcb099", { extraPools: [] }, budgetOf(5))).rejects.toMatchObject({ name: "NotAContract" });
     const keyed = liveInspector({ network: "mainnet", apiKey: "k", client: empty, fetchFn });
-    await expect(keyed("0x470f09ae20163d5e243f6530fb328912a8fcb099", [], null)).rejects.toMatchObject({ name: "NotAContract" });
+    await expect(keyed("0x470f09ae20163d5e243f6530fb328912a8fcb099", { extraPools: [] }, null)).rejects.toMatchObject({ name: "NotAContract" });
     expect(asked).toEqual([]);
   });
 
@@ -127,7 +127,7 @@ describe("liveInspector", () => {
       }),
     });
     for (const [network, chainId] of [["mainnet", 5042], ["testnet", 5042002]] as const) {
-      const { report } = await liveInspector({ network, client: node })("0x470f09ae20163d5e243f6530fb328912a8fcb099", [], null);
+      const { report } = await liveInspector({ network, client: node })("0x470f09ae20163d5e243f6530fb328912a8fcb099", { extraPools: [] }, null);
       expect(report, network).toMatchObject({ network, chain: "arc", chainId, total: 9 });
     }
   });

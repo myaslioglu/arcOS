@@ -1,6 +1,6 @@
 import type { PublicClient } from "viem";
 import { activeNetwork, arcInspectChain, type Address } from "@arcos/chain";
-import { blockscoutSource, chainInput, viemReader, type ExplorerApi, type ExtraPool, type InspectInput } from "@arcos/inspector";
+import { blockscoutSource, chainInput, viemReader, type ExplorerApi, type ExtraPool, type InspectInput, type V4PositionIndex } from "@arcos/inspector";
 
 /**
  * An inspection of `address` on Arc, the site's own chain on its network (`arcInspectChain`): the browser Inspector and the
@@ -17,6 +17,10 @@ export function inspectInput(
   extraPools?: ExtraPool[],
   /** When the caller stops waiting (ms since the epoch): the trade check fits its eth_calls inside it. */
   deadlineAt?: number,
+  /** The index's positions for the token's v4 pools (indexed-pools.ts): what lp-lock reads who holds the liquidity from. */
+  v4Positions?: V4PositionIndex,
+  /** The index holds more pools for the token than `extraPools` lists: lp-lock then can't add its liquidity up. */
+  extraPoolsTruncated?: boolean,
 ): InspectInput {
   const network = activeNetwork();
   const chain = arcInspectChain(network);
@@ -31,5 +35,7 @@ export function inspectInput(
     ...chainInput(chain),
     ...(extraPools && extraPools.length > 0 ? { extraPools } : {}),
     ...(deadlineAt === undefined ? {} : { deadlineAt }),
+    ...(v4Positions ? { v4Positions } : {}),
+    ...(extraPoolsTruncated ? { extraPoolsTruncated } : {}),
   };
 }

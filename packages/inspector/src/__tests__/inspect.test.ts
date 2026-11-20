@@ -76,6 +76,7 @@ function reader(f: Fake): ChainReader {
     gasPrice: async () => 1n,
     // A node that ignores the override: the simulator never runs (trade.test.ts covers what it says).
     callWithOverride: async () => "0x",
+    logs: async () => [],
   };
 }
 

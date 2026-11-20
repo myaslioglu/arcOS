@@ -9,9 +9,9 @@ All of it is in the Firebase project `arcos-c80cf`, region `europe-west4`.
 
 | Piece | Runs as | Reads | Writes |
 |---|---|---|---|
-| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, radarFeed, indexer, stats) | nothing in Firestore yet |
+| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, positions, positionsIndex, radarFeed, indexer, stats) | nothing in Firestore yet |
 | App Hosting `arcos-testnet`: https://testnet.4rcos.com | `arcos-testnet-web@` | Arc testnet RPC and explorer | nothing; it has no Firestore access |
-| Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API, the Telegram Bot API (sends only), Firestore `arcos` (`watches`, `users`; `count()` aggregations of `users`, `watches`, `watchState`, `tokens`) | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed`, `watchState`, `alerts`, `deliveries`, `stats`, `statsDays`, `users.telegram` (cleared when a chat blocked the bot) |
+| Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API, the Telegram Bot API (sends only), Firestore `arcos` (`watches`, `users`; `count()` aggregations of `users`, `watches`, `watchState`, `tokens`) | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed`, `watchState`, `alerts`, `deliveries`, `stats`, `statsDays`, `positions`, `positionsIndex`, `users.telegram` (cleared when a chat blocked the bot) |
 | Cloud Scheduler job of `arcosIndexer`, every minute (UTC) | calls the function with an OIDC token of `arcos-jobs@` | | |
 | Firestore database `arcos` (Native, `europe-west4`) | | | |
 
@@ -56,7 +56,8 @@ in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s coold
    is skipped (it is inspected when someone opens it), and one whose inspection fails three times is skipped too. The
    expiry only reaches the head of the queue (the `INSPECT_PER_TICK` × 4 tokens a run reads), so an old token further
    back stays `queued` until it gets there. The index's Uniswap v4 pools of a token, hooked ones included, go to the
-   Inspector as extra pools. Each report is kept 90 days (`reports/`, TTL on `expiresAt`); the token keeps the summary,
+   Inspector as extra pools, and the positions the index holds for the token's v4 pools go with them (below, "The
+   position index"). Each report is kept 90 days (`reports/`, TTL on `expiresAt`); the token keeps the summary,
    its best pool and Radar's two flags.
 6. Brings the four Radar first pages (`radarFeed/mainnet:{all,liquid,passing,liquid-passing}`) up to date with the
    tokens the run changed, and rebuilds one of the four from its query, a different one each minute, writing a page
@@ -64,11 +65,14 @@ in each instance and 20 s at the CDN, with its own 1.5 s deadline and 60 s coold
    again within four runs.
 6b. Stats (below): counts ArcOS's usage on chain in windows of its own cursor, and refreshes the counts of ArcOS's own
    data every 10 minutes. Skipped when the `stats` switch is `false`.
+6c. The position index (below): records the liquidity positions the Uniswap v4 PoolManager's `ModifyLiquidity` logs
+   name, and a pool doc for every v4 pool its `Initialize` logs name that has none, in windows of its own cursor.
+   Skipped when the `positions` switch is `false`.
 7. Ends the run: `lastRunAt` (never moved back), the run's explorer calls added to the day's count, Watchdog's page
    cursor (`watchCursor`) when the step ran, and the lease given back if it is still this run's.
 
 Once the window phase (steps 2 to 4) is over, steps 5, 6 and 7 run whatever fails in step 4b, steps 6 and 7 run
-whatever fails in step 5, and a failure in step 6 or 6b doesn't stop step 7; the error's name is in the run's log line
+whatever fails in step 5, and a failure in step 6, 6b or 6c doesn't stop step 7; the error's name is in the run's log line
 (`error`), with its `code` when it has one, and, for a Firestore error, its `details` with URLs and addresses masked,
 cut to 200 characters (never the message, which could carry a node's URL). Before that, they don't: a run that can't read the head, halts, or fails to write a window's pools,
 tokens or cursor ends there, with no feed update and no `lastRunAt`. It has spent no explorer call yet, so the day's
@@ -103,14 +107,15 @@ In the Firebase console, Firestore, database `arcos`, collection `indexer`, docu
 | `paused` | `true` | The next run stops at once: no RPC call, no write. Set it back to `false` to resume where the cursor is. |
 | `inspect` | `false` | New tokens are recorded as `skipped` instead of queued, and no inspection runs. Pools, tokens and the cursor still move. |
 | `halted` | (set by the indexer) | The indexer stopped itself, and says why: the node refused even a one-block window, or refused 24 windows in one run. Read the reason, fix the cause, then set the field to `null`. |
-| `block` | a block number | The cursor: the last block fully read. Lowering it makes the next runs read those blocks again (nothing is duplicated). Never raise it past blocks not yet read: they would be skipped. The indexer itself only ever moves it forward. |
+| `block` | a block number | The cursor: the last block fully read. Lowering it makes the next runs read those blocks again (nothing is duplicated). Lowering it below the block the indexer first started at does not index the older v4 tokens: the position index's step has given their pools a doc, and a pool that has one counts as handled. Never raise it past blocks not yet read: they would be skipped. The indexer itself only ever moves it forward. |
 | `runningUntil`, `runId` | (set by the indexer) | The lease of the run in progress, `null` between runs. While `runningUntil` is in the future, a new run skips. Leave them alone: a lease left by a run that died expires 150 seconds after it was taken. |
 | `watch` | `false` | Stops the whole Watchdog step (no check, no fan-out, no send). A missing field reads as `true`. |
 | `telegram` | `false` | Stops Watchdog's Telegram sends only: the checks still run, alerts and deliveries are still written, and the deliveries wait as `pending` (they expire after a day). A missing field reads as `true`. |
 | `stats` | `false` | Stops the whole Stats step (no `eth_getLogs`, no write to `stats`/`statsDays`, no server counts). The totals and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. |
+| `positions` | `false` | Stops the position index's step (no `eth_getLogs`, no write to `positions`/`positionsIndex`, no pool doc added). The positions and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. The readers respect it at once: while it is `false` no positions are served (`readPositionsCursor` answers null), so from the next inspection on the liquidity-lock check runs as it did before the index, for every token: v2 pairs are judged on their LP tokens and a v4 pool reads "Couldn't check liquidity locks" (the site keeps a token's answer 60 seconds). Nothing gets worse than it was before the index. Switched on again, the step catches up from its cursor, and the v4 answers come back once the cursor is within 10,000 blocks of the head. |
 | `watchCursor` | (set by the indexer) | The `watchState` doc id Watchdog's checks ended at; the next run's page starts after it. Set it to `null` to start the round from the first token. |
 
-The indexer never writes `paused`, `inspect`, `watch`, `telegram` or `stats`. Change them only between runs (any time is fine: the
+The indexer never writes `paused`, `inspect`, `watch`, `telegram`, `stats` or `positions`. Change them only between runs (any time is fine: the
 next run reads them).
 
 ## Watchdog
@@ -264,15 +269,146 @@ events, which `stats/mainnet.excluded` holds in the console. `fees` should match
 The run line gains `stats: { windows, tokensCreated, drops, behind, error }`: counts and the name of an error, no
 address. `behind` is the blocks the Stats cursor is short of the run's head.
 
+## The position index
+
+What Inspector's liquidity-lock check reads Uniswap v4 pools from. A v4 position is an entry in the PoolManager keyed by
+(pool id, owner, tickLower, tickUpper, salt), with no token of its own, and only the PoolManager's `ModifyLiquidity`
+logs say which entries exist. Step 6c of the indexer run (mainnet only) records them, with a cursor of its own, apart
+from the indexer's and from Stats'. The same step completes the list of v4 pools: the same windows carry the
+PoolManager's `Initialize` logs, and every v4 pool the pool index keeps (a quote currency on exactly one side) gets a
+doc in `pools` if it has none. Code: `functions/src/indexer/positions-run.ts` and `positions-store.ts`; the reads
+are `indexedPositions` and `indexedPositionsFor` in `packages/data/src/server/positions.ts`; the check is
+`packages/inspector/src/v4-positions.ts` and `checkLpLock`.
+
+**What is stored.**
+- `positions/mainnet:{poolId}:{owner}:{tickLower}:{tickUpper}:{salt}`: one doc per position, under the PoolManager's
+  own key for it: `poolId`, `owner` (the event's `sender`), `tickLower`, `tickUpper`, `salt`, `tokenId` (the
+  PositionManager NFT, when the PositionManager holds the position: its salt is the token id) and `firstBlock`. No
+  amount: the check reads each position's liquidity from the chain. Every `ModifyLiquidity` is recorded, whatever the
+  pool, because a pool created before the pool index began (around 2026-10-01) has no doc in `pools`. A doc is never
+  deleted, so a position that was emptied stays listed and reads as holding nothing.
+- `pools/mainnet:{poolId}`, for v4 pools from before the main indexer's first block (about 2026-10-01): the same doc
+  the main indexer writes (`poolToDoc` of `selectPool`'s pool, the key with its hook), with no depth sampled. Only
+  the pool doc: no token doc, nothing queued for inspection, nothing in Radar. This is how an inspection finds an old
+  pool with a hook or a non-standard fee, which its own discovery never probes; without it a burned small pool could
+  pass beside a larger pool nobody had looked at.
+- `positionsIndex/mainnet`: `block` (the cursor: the last block whose logs are all in `positions` and `pools`),
+  `fromBlock` (1,948,056, the PoolManager's deployment), `head` (the finalized block at the last run) and `updatedAt`.
+
+**Not fighting the main indexer.** In `pools`, a doc is the main indexer's mark that a pool's token is handled, so the
+step must never create one for a pool the main indexer has yet to see. It never reads past the main indexer's cursor
+(`indexer/mainnet.block` as this run left it): every pool at or below it that the main indexer records, it has
+recorded already, and the step writes pool docs with `create`, which Firestore refuses over a doc that exists (a
+refused batch is read again and what is still missing is written). So in
+practice it adds the pools older than the main indexer's first block and nothing else. If the main indexer is behind,
+the position index waits behind it.
+
+**Exactly once.** A window's positions and pools are written first, each under its own key and only if it isn't there
+yet, and the cursor is moved after them, in a transaction that stops if the cursor isn't at the window's start. A run
+that dies in between, or runs out of time, repeats the window and writes only what is still missing; applying a window
+again changes no doc. A reader that takes the
+cursor first and the positions after it sees every position opened up to that cursor.
+
+**What Inspector does with it.** An inspection gets the index's pools for the token (at most 50, with a flag when the
+index holds more) and, for each v4 pool among them, the position keys the index holds, at most 500 a pool and 2,000 in
+all, and the cursor. It reads the blocks after the cursor itself (at most 10,000 blocks, three `eth_getLogs`:
+`Initialize` with the token as currency0 and as currency1, then the pools' `ModifyLiquidity`), then every position's
+liquidity and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active
+liquidity. With that it does one thing: it warns about liquidity a wallet can withdraw. It never makes a pass and never
+a fail: every pass, fail and unknown of lp-lock is what the check from before the index says (v2 LP tokens only), word
+for word, and a warning from the positions takes the place of that check's pass or unknown, never of its fail. A launch
+burned into a v4 pool reads "couldn't check"; one held by a wallet reads as a warning, titled "Wallets hold most of the
+USDC Inspector found in its pools" once wallets hold 1,000 USDC there and more than half of it, and "Some liquidity
+isn't locked" otherwise (a fresh wallet-held launch nobody has bought from, say). Failing a token on its v4 positions
+is a follow-up: it needs the USDC that could really be sold into, matched holder by holder to the tokens for sale, or the deployer's identity. The rule, who
+can make which warning and at what cost are in the README, "How Inspector decides things", and in the header of
+`packages/inspector/src/checks.ts`.
+
+The v4 reading is left out when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is
+more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 500 positions, the token has more than
+50 v4 pools, the positions don't add up (a gap in the index), or a pool of the token was created since the cursor and
+the inspection wasn't given it. A pool created since the cursor that the inspection does have is read from those
+blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never counted.
+The same when the v4 reads fail or outlast the inspection's deadline (a node refusing the tail's `eth_getLogs`, which
+Arc does past 20,000 results, is one way): the old check is started first, runs beside them, and answers. Holders are classified
+by their code, up to 500 of them, in one state-overridden `eth_call` per 250 (40 single `eth_getCode` reads when a
+node refuses the override).
+
+Known limits, accepted: a stored inspection is as of its block and nothing re-inspects a token when its price moves; a
+token whose old pools the backfill adds later is not re-queued for inspection (a follow-up: re-queue the tokens of
+pools the positions step creates); anyone can take the v4 reading away from a token by creating 51 empty pools for it,
+which leaves it with the old check's answer.
+
+**The reads, and their bounds.** The indexer's own inspections, `/api/inspect`, `/t` and `/badge` read the index
+directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions`, `truncated`).
+- Pools first: one query, 51 docs at most (`indexedPoolList`: 50 and one more to know there are more).
+- Positions after them, only for v4 pools the index lists for the token: an address with no indexed pool costs no
+  positions read. Four pools at a time, in order, each asked for no more than what was left of the 2,000 when its four
+  began (and no more than 500), plus one; a pool over its share, or past the total, ends the reading. So at most 2,000
+  docs plus 1,500 plus one a pool, whatever the pools hold.
+- Two more reads by id for the cursor and the switch (`positionsIndex/mainnet`, `indexer/mainnet`).
+- On the site the positions have 1.5 seconds of their own and no cooldown: when they are slow or fail, the pools are
+  still answered, `positions` is left out, and the next token is read as usual (the pools' read keeps its 1.5 seconds
+  and its 60-second cooldown). In the indexer the positions read has 3 seconds (`POSITIONS_READ_MS`); past it the
+  inspection goes on without them. Logs: `positions failed <name>` on the site, `arcosIndexer positions not read` in
+  the function.
+- The queries are two equality filters (`network` and `poolId`, or `token`), served by Firestore's single-field
+  indexes: no composite index, so nothing to deploy to `firestore/arcos.indexes.json`, and the rules don't change
+  (every client read is refused; both readers use the Admin SDK with `roles/datastore.user` on `arcos`).
+
+**The first run, and the backfill.** The first run after the deploy creates `positionsIndex/mainnet` with the cursor
+one block before 1,948,056 and starts reading. From there to the head on 2026-11-20 (block 32.2 million) is about
+3,030 windows of 10,000 blocks. The step has its own budgets: no window starts after 104 s of the run or more than
+10 s after the step began, at most 12 windows a run, no RPC answer is waited for past 110 s, and no round of a window's
+writes starts past 112 s. It runs after every other step, so it never moves them. When the node refuses a window it is
+retried at the width the node suggests (9,473 blocks, say), or at half when it suggests none; nothing that wide is tried
+again in that run, and the width that worked is stored on `positionsIndex/mainnet` (`span`), where the next run starts.
+
+A window is one `eth_getLogs` (400 ms after the previous call) and its writes. The writes go in chunks of 400 docs,
+six chunks at a time, each chunk one read of which docs exist and one batch of the new ones. Most windows are sparse
+and take about a second, so a run fits about 8 into its 10 s. Some are dense: the densest on mainnet (blocks 21,185,000
+to 21,194,472) has 19,996 logs, 7,678 of them new pools, which is about 50 chunks and 10 to 20 s of writes. A run that
+starts such a window can therefore end up to about 20 s later than it otherwise would, and never writes past 112 s
+plus one round. A window the run's time doesn't cover is left unfinished (`arcosIndexer positions window unfinished`
+in the log, a warning and not an error): what was written stays, the cursor doesn't move, and the next run reads those
+chunks, finds them stored and goes on with the rest. So the backfill takes some 300 to 500 runs: 5 to 8 hours at one
+run a minute, longer while inspections run long.
+
+Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives exactly the answers it gave before
+the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be read without an index yet"), since
+until the backfill is done neither the positions nor the token's old v4 pools are all listed. The warnings
+from positions start on their own once it has caught up. Watch `positionsIndex/mainnet.block` against `head`, or
+`behind` in the run line. After that a run reads one window of about 120 blocks.
+
+**Redoing it.** Set `positions` to `false` on `indexer/mainnet`, wait for the run in progress to end, delete the
+document `positionsIndex/mainnet` (and the `positions` docs, if they are to be rebuilt too; leaving them is harmless,
+since a position already there is left as it is), then set `positions` back to `true` or delete the field. To read some
+blocks again without starting over, lower `positionsIndex/mainnet.block`: nothing is duplicated.
+
+**Cost.** Backfill: about 3,030 `eth_getLogs`, and per window two transactions (the step's `ensure`, which raises
+`head`, and the cursor) plus one read per position or pool named and one write per new one; the PoolManager emitted about
+2,600 `ModifyLiquidity` a day in November 2026, so the whole history is some hundreds of thousands of events: well under
+$1. Steady state: 1 `eth_getLogs` a run and about 2,600 reads and at most as many writes a day. An inspection reads the
+token's pools, two docs by id, and one query per v4 pool of the token (one read when empty, else one per position,
+2,000 at most in all); the site keeps a token's answer 60 seconds. No explorer calls.
+
+The run line gains `positions: { windows, positions, pools, behind, error }`: the windows applied, the new positions
+stored, the pool docs added, the blocks the cursor is short of the run's head, and the name of an error. No address.
+
 ## The site's reads
 
-- `GET /api/pools/[token]` answers the token's indexed pools, v4 pool keys included, kept 60 seconds at the CDN.
+- `GET /api/pools/[token]` answers the token's indexed pools, v4 pool keys included (at most 50, with `truncated: true`
+  when the index holds more), and under `positions` the position index for the token's v4 pools (the cursor, and per
+  pool id the position keys, at most 500 a pool and 2,000 in all, else `truncated`), kept 60 seconds at the CDN.
+  `positions` is absent before the position index's first run, while its switch is off, or when it couldn't be read
+  in time.
 - `GET /api/radar` answers the first Radar page of a filter (the newest 50 tokens, each with Inspector's counts), kept 20
   seconds at the CDN; the Radar window polls it every 20 seconds.
 - `GET /api/stats` answers the usage counts (above, "Stats"), kept 60 seconds at the CDN; the Stats window polls it every
   60 seconds. Public, with CORS open to any origin; 404 on testnet.
-- `/api/inspect`, `/t` and `/badge` pass the index's v4 pools to the Inspector, and the Inspector window reads them from
-  `/api/pools`. This is how a v4 pool with a hook, or with a fee outside the five standard tiers, gets inspected.
+- `/api/inspect`, `/t` and `/badge` pass the index's v4 pools and their positions to the Inspector, and the Inspector
+  window reads them from `/api/pools`. This is how a v4 pool with a hook, or with a fee outside the five standard tiers,
+  gets inspected, and how the liquidity-lock check reads who holds a v4 pool's liquidity.
 - The site reads the index only on mainnet, and only on App Hosting (or against the emulator), so a dev server never
   reaches the live database. A read gets 1.5 seconds; after a failure the site reads nothing for a minute. Without the
   index, every inspection runs as before, on its own pool discovery.
@@ -616,7 +752,7 @@ resource.type="cloud_run_revision" resource.labels.service_name="arcosindexer" j
 ```
 
 Each run logs one line: `arcosIndexer run` with `from`, `to`, `windows`, `pools`, `tokens`, `inspected`, `failed`,
-`expired`, `feeds`, `explorerCalls`, Watchdog's `watch` counters (above) and Stats' `stats` counters; a halted indexer logs `arcosIndexer halted`
+`expired`, `feeds`, `explorerCalls`, Watchdog's `watch` counters (above), Stats' `stats` counters and the position index's `positions` counters; a halted indexer logs `arcosIndexer halted`
 with its reason. No line carries an address: the run line leaves out Watchdog's page cursor, a `watchState` doc id
 that names a token. In Firestore, `indexer/mainnet` shows the cursor (`block`), `lastRunAt`, the day's explorer calls
 and Watchdog's `watchCursor`.
@@ -661,6 +797,11 @@ are made on RPC only and marked `degraded` unless the budget grows.
   one block by log index, the minimum fee, failed rows, native against token drops, the left-out wallet, removed logs,
   unknown topics, duplicates, day keys. Stats' emulator suite (`stats.test.ts`) applies a window twice, from two runs at
   once, out of order and across a month; runs the step through `runIndexer` (cursor, window cap, time limit, switch,
-  refused and failed windows, the 10-minute server counts, no address in a log line).
+  refused and failed windows, the 10-minute server counts, no address in a log line). The position index's unit tests
+  (`positions.test.ts`) decode generated `ModifyLiquidity` logs and hold its caps and time limits against the
+  Inspector's and the function's; its emulator suite (`positions.test.ts`) applies a window twice and after a crash,
+  runs the step through `runIndexer` (cursor, window cap, both time limits, switch, refused and failed windows), checks
+  the pool docs it adds (an old hooked pool, no token doc, a doc of the main indexer's left alone, nothing read past
+  the main indexer's cursor) and what an inspection is handed.
 - `npm run test:live -w @arcos/functions`: read-only calls to Arc mainnet (the indexer's three, and Stats' decode of the
   first window from the FeeController's deployment). Not part of CI.
