@@ -147,7 +147,7 @@ export type RunResult =
       watch: WatchResult | null;
       /** The usage counter's counts (windows applied, what they added, blocks behind), or null when the step didn't run (no deps, or switched off). */
       stats: StatsResult | null;
-      /** The position index's counts (windows applied, positions added, blocks behind), or null when the step didn't run (no deps, not mainnet, or switched off). */
+      /** The position index's counts (windows applied, positions and pool docs added, blocks behind), or null when the step didn't run (no deps, not mainnet, or switched off). */
       positions: PositionsResult | null;
       /**
        * The name of the error that cut the Watchdog step (one of its phases), the inspections, the feeds, Stats or the position index short, or
@@ -182,7 +182,8 @@ export function runLogFields(result: RunResult): Record<string, unknown> {
  * 6b. (Stats, when `deps.stats` is given and the console switch isn't off) counts ArcOS's usage on chain in windows of its
  *    own cursor, and refreshes the counts of its own data every 10 minutes, none started after 100 s (stats-run.ts); then
  * 6c. (the position index, mainnet only, when `deps.positions` is given and the console switch isn't off) records the
- *    positions the PoolManager's `ModifyLiquidity` logs name, in windows of its own cursor, none started after 104 s and
+ *    positions the PoolManager's `ModifyLiquidity` logs name, and a pool doc for each v4 pool its `Initialize` logs name
+ *    that has none, in windows of its own cursor up to this run's cursor, none started after 104 s and
  *    for at most 10 s (positions-run.ts); then the run ends, giving the lease back.
  * Steps 4b, 5, 6, 6b and 6c can't keep the run from ending: an error there is logged and named in the result.
  */
@@ -382,7 +383,7 @@ async function leased(
   let positions: PositionsResult | null = null;
   if (deps.positions && network === "mainnet" && state.positions !== false) {
     try {
-      positions = await runPositions({ db, network, chain, tip, now, started, elapsed, log, deps: deps.positions });
+      positions = await runPositions({ db, network, chain, tip, indexed: cursor, now, started, elapsed, log, deps: deps.positions });
       error ??= positions.error;
     } catch (e) {
       error ??= nameOf(e);

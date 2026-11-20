@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { DEX, UNISWAP_V4, UNISWAP_V4_FROM } from "@arcos/chain";
 import { INDEXED_POSITIONS_LIMIT, INDEXED_POSITIONS_TOTAL } from "@arcos/data";
 import { MAX_POSITIONS, MAX_POSITIONS_PER_POOL, TAIL_MAX_BLOCKS } from "@arcos/inspector";
-import { addr, modifyLiquidity } from "../../__emulator__/fakes";
+import { ZERO, addr, modifyLiquidity, v3Pool, v4Pool } from "../../__emulator__/fakes";
 import { POSITIONS_LIMITS } from "../positions-run";
-import { decodePositionLogs } from "../positions-store";
+import { decodePoolLogs, decodePositionLogs } from "../positions-store";
 import { LIMITS } from "../run";
 import { INDEXER_OPTIONS } from "../schedule";
 import { STATS_LIMITS } from "../stats-run";
@@ -54,6 +54,31 @@ describe("decodePositionLogs", () => {
     // A range that can't exist (lower not below upper) is nobody's position.
     expect(decodePositionLogs([modifyLiquidity(1_500, POOL, NFTS, 1n, 1n, 60, 60)], PM, window)).toEqual([]);
     expect(decodePositionLogs([good], PM.toLowerCase(), window)).toHaveLength(1);
+  });
+});
+
+describe("decodePoolLogs", () => {
+  const TOKEN = addr(0x70c3);
+  const HOOK = addr(0x2544);
+
+  it("reads each Initialize the pool index keeps as a pool doc: the key with its hook, the token and the quote", () => {
+    expect(decodePoolLogs([v4Pool(1_500, TOKEN, POOL, HOOK)], "mainnet", window)).toEqual([
+      {
+        network: "mainnet", poolId: POOL, version: "v4", token: TOKEN, quote: "USDC-native", fee: 10_000, createdBlock: 1_500,
+        key: { currency0: ZERO, currency1: TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK }, depthUsdc: null, sampledAt: null,
+      },
+    ]);
+  });
+
+  it("leaves out everything else: positions, other contracts' pools, other blocks, a removed log, a pool once", () => {
+    const init = v4Pool(1_500, TOKEN, POOL, HOOK);
+    expect(decodePoolLogs([modifyLiquidity(1_500, POOL, NFTS, 1n), v3Pool(1_500, TOKEN, addr(0xb001))], "mainnet", window)).toEqual([]);
+    expect(decodePoolLogs([v4Pool(999, TOKEN, POOL), v4Pool(2_000, TOKEN, OTHER)], "mainnet", window)).toEqual([]);
+    expect(decodePoolLogs([{ ...init, removed: true }], "mainnet", window)).toEqual([]);
+    expect(decodePoolLogs([{ ...init, address: addr(0xbad) }], "mainnet", window)).toEqual([]);
+    expect(decodePoolLogs([init, { ...init, logIndex: "0x5" }], "mainnet", window)).toHaveLength(1);
+    // The same logs give the positions and the pools, each from its own event.
+    expect(decodePositionLogs([init, modifyLiquidity(1_500, POOL, NFTS, 1n)], PM, window)).toHaveLength(1);
   });
 });
 

@@ -1,11 +1,14 @@
 import { Timestamp, type DocumentReference, type Firestore } from "firebase-admin/firestore";
 import type { NetworkId } from "@arcos/chain";
-import { COLLECTIONS, positionDoc, positionId, positionsIndexId, type PositionDoc, type PositionsIndexDoc } from "@arcos/data";
+import { COLLECTIONS, poolId, poolToDoc, positionDoc, positionId, positionsIndexId, type PoolDoc, type PositionDoc, type PositionsIndexDoc } from "@arcos/data";
 import { positionFromLog, type V4PositionKey } from "@arcos/inspector";
-import type { RawLog } from "./events";
+import { decodeLogs, sourcesFor, type RawLog } from "./events";
+import { selectPool } from "./pools";
 
 // Every Firestore read and write of the position index. A position is one doc under the PoolManager's own key for it
 // (positions/), written once; the cursor is one doc (positionsIndex/{network}), moved after a window's positions are in.
+// The step also completes pools/: a v4 pool created before the main indexer's first block has no doc there, and an
+// inspection finds a hooked or odd-fee pool only through one.
 
 export const positionsIndexRef = (db: Firestore, network: NetworkId) => db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId(network));
 
@@ -33,6 +36,21 @@ export function decodePositionLogs(logs: readonly RawLog[], poolManager: string,
 }
 
 /**
+ * The v4 pools `logs` announce (the PoolManager's `Initialize`) that the pool index keeps, as pool docs: the ones
+ * `selectPool` keeps for the main indexer too, a quote currency on exactly one side. Each once, and only from [from, to].
+ */
+export function decodePoolLogs(logs: readonly RawLog[], network: NetworkId, window: { from: number; to: number }): PoolDoc[] {
+  const sources = sourcesFor(network).filter((s) => s.kind === "v4");
+  const pools = new Map<string, PoolDoc>();
+  for (const sighting of decodeLogs(logs, sources)) {
+    if (sighting.kind !== "pool" || sighting.block < window.from || sighting.block > window.to) continue;
+    const selected = selectPool(sighting, network);
+    if (selected && !pools.has(selected.pool.poolId)) pools.set(selected.pool.poolId, poolToDoc(selected.pool));
+  }
+  return [...pools.values()];
+}
+
+/**
  * The index's cursor doc, created on the first run one block before `fromBlock` (so that block's logs are read) with
  * `head` at the run's `tip`. An existing doc's `head` is raised to `tip`. Two first runs can't both create it.
  */
@@ -54,13 +72,13 @@ export async function ensurePositionsIndex(db: Firestore, network: NetworkId, fr
 
 /**
  * What applying a window did:
- * - `applied`: its positions are stored (`written` of them were new) and the cursor is at its end;
+ * - `applied`: its positions and pools are stored (`written` positions and `pools` pool docs were new) and the cursor is at its end;
  * - `already`: the cursor was at or past the window's end;
  * - `moved`: the cursor is not where this window starts (another run moved it), and `block` is where it is;
  * - `missing`: there is no cursor doc.
  */
 export type PositionsApplyResult =
-  | { kind: "applied"; block: number; written: number }
+  | { kind: "applied"; block: number; written: number; pools: number }
   | { kind: "already"; block: number }
   | { kind: "moved"; block: number }
   | { kind: "missing" };
@@ -69,10 +87,15 @@ export type PositionsApplyResult =
 const CHUNK = 400;
 
 /**
- * Stores one window [from, to] of positions, then moves the cursor to its end:
+ * Stores one window [from, to] of positions and pools, then moves the cursor to its end:
  * 1. reads which of the window's positions the index already has, and writes only the new ones, each under its own key
  *    (`positionId`). A position already stored is left as it is, so its `firstBlock` stays the first, and running a
  *    window again writes nothing;
+ * 1b. the same for the window's v4 pools in pools/: a pool doc is created only where there is none, and one that exists
+ *    (the main indexer's, with its sampled depth) is never touched. Pool docs only: no token doc, no inspection queue,
+ *    no Radar feed. The caller never reads past the main indexer's cursor (positions-run.ts), so every pool here that
+ *    the main indexer is to record, it has recorded already: this step only adds the pools from before its first block,
+ *    and can't take a pool's doc (the main indexer's mark that the pool's token is handled) from under it;
  * 2. in one transaction, moves the cursor from `from - 1` to `to` (forward only), or reports that it wasn't there.
  * The positions go first: a run that dies between the two repeats the window, and never leaves the cursor past a
  * position that isn't stored. A reader that takes the cursor first and the positions after it therefore sees every
@@ -83,24 +106,34 @@ export async function applyPositionsWindow(
   network: NetworkId,
   window: { from: number; to: number },
   positions: readonly SeenPosition[],
-  options: { tip: number; now: number },
+  options: { tip: number; now: number; pools?: readonly PoolDoc[] },
 ): Promise<PositionsApplyResult> {
   const collection = db.collection(COLLECTIONS.positions);
   const entries: { ref: DocumentReference; doc: PositionDoc }[] = positions.map((p) => ({
     ref: collection.doc(positionId(network, p.poolId, p.key)),
     doc: positionDoc(network, p.poolId, p.key, p.block),
   }));
-  let written = 0;
-  for (let i = 0; i < entries.length; i += CHUNK) {
-    const chunk = entries.slice(i, i + CHUNK);
-    const stored = await db.getAll(...chunk.map((e) => e.ref));
-    const fresh = chunk.filter((_, n) => !stored[n]!.exists);
-    if (fresh.length === 0) continue;
-    const batch = db.batch();
-    for (const e of fresh) batch.set(e.ref, e.doc);
-    await batch.commit();
-    written += fresh.length;
-  }
+  const poolEntries: { ref: DocumentReference; doc: PoolDoc }[] = (options.pools ?? []).map((doc) => ({
+    ref: db.collection(COLLECTIONS.pools).doc(poolId(network, doc.poolId)),
+    doc,
+  }));
+  /** Writes the entries that have no doc yet, and says how many that was. */
+  const addMissing = async (all: readonly { ref: DocumentReference; doc: PositionDoc | PoolDoc }[]): Promise<number> => {
+    let added = 0;
+    for (let i = 0; i < all.length; i += CHUNK) {
+      const chunk = all.slice(i, i + CHUNK);
+      const stored = await db.getAll(...chunk.map((e) => e.ref));
+      const fresh = chunk.filter((_, n) => !stored[n]!.exists);
+      if (fresh.length === 0) continue;
+      const batch = db.batch();
+      for (const e of fresh) batch.set(e.ref, e.doc);
+      await batch.commit();
+      added += fresh.length;
+    }
+    return added;
+  };
+  const written = await addMissing(entries);
+  const pools = await addMissing(poolEntries);
   const ref = positionsIndexRef(db, network);
   return db.runTransaction(async (tx): Promise<PositionsApplyResult> => {
     const snap = await tx.get(ref);
@@ -109,6 +142,6 @@ export async function applyPositionsWindow(
     if (doc.block >= window.to) return { kind: "already", block: doc.block };
     if (doc.block !== window.from - 1) return { kind: "moved", block: doc.block };
     tx.update(ref, { block: window.to, head: Math.max(doc.head ?? 0, options.tip), updatedAt: Timestamp.fromMillis(options.now) });
-    return { kind: "applied", block: window.to, written };
+    return { kind: "applied", block: window.to, written, pools };
   });
 }

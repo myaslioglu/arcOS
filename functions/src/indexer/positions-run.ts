@@ -2,7 +2,8 @@ import type { Firestore } from "firebase-admin/firestore";
 import { DEX, UNISWAP_V4_FROM, type NetworkId } from "@arcos/chain";
 import { MODIFY_LIQUIDITY_TOPIC } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
-import { applyPositionsWindow, decodePositionLogs, ensurePositionsIndex } from "./positions-store";
+import { TOPICS } from "./events";
+import { applyPositionsWindow, decodePoolLogs, decodePositionLogs, ensurePositionsIndex } from "./positions-store";
 import { RangeRefused, type LogChain } from "./rpc";
 import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
 
@@ -28,27 +29,34 @@ export type PositionsDeps = {
 };
 
 /**
- * What the step did, as the run line logs it: counts only, no address. `positions` is how many new positions were stored;
- * `behind` is how many blocks the cursor is short of the run's head. `error` is the name of what cut the step short, or null.
+ * What the step did, as the run line logs it: counts only, no address. `positions` is how many new positions were stored
+ * and `pools` how many pool docs it added; `behind` is how many blocks the cursor is short of the run's head. `error` is the
+ * name of what cut the step short, or null.
  */
-export type PositionsResult = { windows: number; positions: number; behind: number; error: string | null };
+export type PositionsResult = { windows: number; positions: number; pools: number; behind: number; error: string | null };
 
 type Logger = { warn(message: string, data?: object): void; error(message: string, data?: object): void };
 
 /**
  * The position index's step of a run, within its limits:
  * 1. creates the cursor doc on the first run, at the PoolManager's deployment block;
- * 2. reads the PoolManager's `ModifyLiquidity` logs in windows of at most 10,000 blocks from the cursor up to the run's
- *    finalized head `tip`, one eth_getLogs each, halving a refused window, and stores each window's positions and then
- *    the cursor (applyPositionsWindow). A window that can't be read or stored ends the step; the next run repeats it.
- * Every `ModifyLiquidity` is recorded, whatever the pool: a pool older than the pool index has no doc in pools/, and its
- * positions are what an inspection of its token needs. Rejects only when the cursor doc can't be read or created.
+ * 2. reads the PoolManager's `ModifyLiquidity` and `Initialize` logs in windows of at most 10,000 blocks from the cursor
+ *    up to `indexed`, the main indexer's cursor (never past it: see applyPositionsWindow), which is the run's finalized
+ *    head `tip` unless the main indexer is behind; one eth_getLogs each, halving a refused window; and stores each
+ *    window's positions and pools and then the cursor (applyPositionsWindow). A window that can't be read or stored
+ *    ends the step; the next run repeats it.
+ * Every `ModifyLiquidity` is recorded, whatever the pool, and every v4 pool the pool index keeps gets its doc in pools/
+ * if it has none: a pool older than the main indexer's first block isn't there, and a hooked or odd-fee one is found
+ * by an inspection only through it. So pools and positions are complete together up to this step's cursor. Rejects
+ * only when the cursor doc can't be read or created.
  */
 export async function runPositions(args: {
   db: Firestore;
   network: NetworkId;
   chain: LogChain;
   tip: number;
+  /** The main indexer's cursor after this run's windows: the last block whose pools it has recorded. */
+  indexed: number;
   /** The run's clock, its start and the elapsed time since. */
   now: () => number;
   started: number;
@@ -60,7 +68,8 @@ export async function runPositions(args: {
   const limits = { ...POSITIONS_LIMITS, ...deps.limits };
   const fromBlock = deps.fromBlock ?? UNISWAP_V4_FROM[network];
   const poolManager = DEX[network]?.v4?.poolManager;
-  const result: PositionsResult = { windows: 0, positions: 0, behind: 0, error: null };
+  const result: PositionsResult = { windows: 0, positions: 0, pools: 0, behind: 0, error: null };
+  const until = Math.min(tip, args.indexed);
   if (fromBlock === null || fromBlock === undefined || !poolManager || elapsed() >= limits.untilMs) return result;
   const stepStarted = elapsed();
 
@@ -72,11 +81,11 @@ export async function runPositions(args: {
   // Every pass applies a window, finds one already applied, or follows a cursor another run moved; the bound keeps a
   // cursor that keeps moving from holding the run.
   for (let passes = 0; result.windows < limits.maxWindows && passes < limits.maxWindows * 2 && elapsed() < limits.untilMs && elapsed() - stepStarted < limits.stepMs; passes++) {
-    const window = nextWindow(cursor, tip, span);
+    const window = nextWindow(cursor, until, span);
     if (!window) break;
     let logs;
     try {
-      logs = await chain.logs({ addresses: [poolManager], topic0s: [MODIFY_LIQUIDITY_TOPIC], from: window.from, to: window.to, deadline });
+      logs = await chain.logs({ addresses: [poolManager], topic0s: [MODIFY_LIQUIDITY_TOPIC, TOPICS.initialize], from: window.from, to: window.to, deadline });
     } catch (e) {
       if (e instanceof RangeRefused) {
         const width = window.to - window.from + 1;
@@ -94,7 +103,7 @@ export async function runPositions(args: {
     }
     let applied;
     try {
-      applied = await applyPositionsWindow(db, network, window, decodePositionLogs(logs, poolManager, window), { tip, now: now() });
+      applied = await applyPositionsWindow(db, network, window, decodePositionLogs(logs, poolManager, window), { tip, now: now(), pools: decodePoolLogs(logs, network, window) });
     } catch (e) {
       result.error ??= nameOf(e);
       log.error("arcosIndexer positions window not applied", { from: window.from, to: window.to, ...errorFields(e) });
@@ -108,6 +117,7 @@ export async function runPositions(args: {
     if (applied.kind === "applied") {
       result.windows++;
       result.positions += applied.written;
+      result.pools += applied.pools;
       span = grow(span);
     }
     cursor = applied.block;
