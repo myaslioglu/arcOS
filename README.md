@@ -203,14 +203,18 @@ token. A Uniswap v4 pool is read position by position: the indexer records every
 PoolManager's `ModifyLiquidity` logs name, and Inspector reads each one's liquidity and, for a
 PositionManager NFT, its owner, live. Liquidity at a burn address is burned, in a known lock contract
 locked, in a wallet (an address with no code) withdrawable. The check passes when at least 95% is
-burned or locked ("98% of the token's liquidity can't be withdrawn") and fails when wallets can
-withdraw more than 5% ("62% of the token's liquidity, about 1,234 USDC of value, is in positions
-wallets can withdraw"), with a link to the largest such position. Everything else is "couldn't
+burned or locked ("98% of this token's liquidity, by value at the current price, can't be
+withdrawn") and fails when wallets can withdraw more than 5% ("62% of this token's liquidity, by
+value at the current price, is in positions wallets can withdraw; they hold 1,234 USDC and 5.2M
+tokens"), with a link to the largest such position. The share is by value; the amounts are what
+those positions hold right now, which is what pulling them takes out. Everything else is "couldn't
 check", with the reason: a position held by a contract (it may be a locker, and its terms aren't
 read), a wallet's position in a pool whose hook runs when liquidity is removed (it can block or tax a
 withdrawal), a Uniswap v3 or Aerodrome pool (their positions aren't read yet), a pool with more than
-500 positions, or an index that is still catching up. Values are spot values: each side of a position
-at the pool's current price, EURC counted 1:1 with USDC. On testnet, which has no index, only v2 LP
+500 positions, a v4 pool created in the last minutes that the index hasn't recorded, or an index
+that is still catching up. Values are spot values: each side of a position at the pool's current
+price, EURC counted 1:1 with USDC. Only pools against USDC, EURC or native USDC are looked for and
+counted, as in every other check: liquidity paired with any other currency is not in the total. On testnet, which has no index, only v2 LP
 tokens are counted and a v4 pool reads "couldn't check".
 
 ## What Inspector can and can't see
@@ -394,7 +398,11 @@ tokens are counted and a v4 pool reads "couldn't check".
   reads "unknown". So does liquidity held by any contract that isn't a known lock contract (a
   launchpad, a Safe, a hook, an unlisted locker), a wallet's position in a v4 pool whose hook runs
   on removal, a v4 pool with more than 500 positions, and any v4 pool while the index is more than
-  10,000 blocks behind. "Burned or locked" is about withdrawing liquidity only: it says nothing about
+  10,000 blocks behind. A v4 pool with a hook or a non-standard fee is found through the indexer's
+  list of every v4 pool since the PoolManager's deployment, and one created since the index's last
+  block reads "unknown" until it is listed. Pools against a currency other than USDC, EURC or native
+  USDC are never looked for, so liquidity there is never counted, whoever holds it. "Burned or
+  locked" is about withdrawing liquidity only: it says nothing about
   what a pool's hook does to swaps. Values are spot values at each pool's current price, so a position
   holding only tokens counts at what the pool prices them. Without the index (testnet, or a browser
   that couldn't fetch it) only v2 LP tokens are counted, a token with only other pools reads "unknown",
