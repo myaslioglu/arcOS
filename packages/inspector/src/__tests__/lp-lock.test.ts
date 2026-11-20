@@ -240,9 +240,14 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     it("adds nothing for a burned position there", async () => {
       await quiet([main([launch(7)], swapHooked)], { 7: DEAD });
     });
-    it("still fails a wallet's position there: a wallet can withdraw whatever the hook does", async () => {
-      expect(await verdict([main([launch(7)], swapHooked)], { 7: WALLET })).toMatchObject({ status: "fail", fixAppId: "vault" });
-      expect((await verdict([main([twoSided(7, 2_000n)], swapHooked)], { 7: WALLET })).status).toBe("fail");
+    it("warns on a wallet's position there, and no more: whether buyers reach it is the hook's to decide", async () => {
+      const f = await verdict([main([launch(7)], swapHooked)], { 7: WALLET });
+      expect(f).toMatchObject({ status: "warn", fixAppId: "vault" });
+      expect(f.detail).toBe(`Of the first 1,000 USDC buyers would pay for this token, 100% would go into positions wallets can withdraw and 0% into burned or locked ones, if the hooks and fees of the pools selling it let buyers through: none of those is a plain pool. ${ORDER}`);
+      // The USDC a wallet holds there is in the pool, hook or no hook; still no fail without a plain pool.
+      const held = await verdict([main([twoSided(7, 2_000n)], swapHooked)], { 7: WALLET });
+      expect(held.status).toBe("warn");
+      expect(held.detail).toMatch(/Of the 1,999 USDC in its pools now, wallets' positions hold 1,999 and burned or locked ones 0\./);
     });
   });
 
@@ -435,37 +440,35 @@ describe("earlier cases, under the price-ordered rule", () => {
   });
 });
 
-describe("tokens for sale beyond the window", () => {
-  // Burned liquidity from the price to twice it selling a million tokens, and a wall just past that.
-  const burnedWindow = nft(1, tokenOnlyL(T0, HI, 1_000_000n), T0, HI);
-  // The window ends at twice the price at which 1,000 USDC has been paid: for the million-token range, about 3.2x.
-  const wall = (tokens: bigint) => nft(2, tokenOnlyL(T0 + 13_020, T0 + 19_020, tokens), T0 + 13_020, T0 + 19_020);
-  const INFLATED: TokenFacts = { supply: 10n ** 12n * 10n ** 18n, decimals: 18 };
+describe("tokens wallets sell beyond the window", () => {
+  // Burned liquidity from the price to twice it selling 100 million tokens. The window ends at about 2.02x.
+  const burnedLaunch = launch(1);
+  const wall = (tokens: bigint, from = T0 + 13_020) => nft(2, tokenOnlyL(from, from + 6_000, tokens), from, from + 6_000);
 
-  it("a supply inflated a thousandfold doesn't hide a wallet's wall: 0.9% of it is 9,000 times what the window sells", async () => {
-    const f = await verdict([main([burnedWindow, wall(9_000_000_000n)])], { 1: DEAD, 2: WALLET }, {}, INFLATED);
-    expect(f.status).toBe("warn");
-    expect(f.detail).toMatch(/Wallets also hold (8\.9|9)B tokens in positions above twice that price/);
+  it("warn from a tenth of all the tokens for sale, counted and never priced", async () => {
+    // 12M beyond beside 100M: 10.7%.
+    const f = await verdict([main([burnedLaunch, wall(12_000_000n)])], { 1: DEAD, 2: WALLET });
+    expect(f).toMatchObject({ status: "warn", fixAppId: "vault", evidenceUrl: `https://explorer.test/token/${PM}/instance/2` });
+    expect(f.detail).toMatch(/Wallets also hold (11\.9|12)M tokens in positions above twice that price, which buyers would pay into if the price rises that far\./);
+    // 10M beside 100M: 9.1%.
+    await quiet([main([burnedLaunch, wall(10_000_000n)])], { 1: DEAD, 2: WALLET });
   });
 
-  it("is material from 1% of the supply or 10% of the tokens the window sells, whichever comes first", async () => {
-    // The window sells about a million tokens. 50,000 beyond it: 5% of that, and nothing of the supply.
-    await quiet([main([burnedWindow, wall(50_000n)])], { 1: DEAD, 2: WALLET }, {}, INFLATED);
-    expect((await verdict([main([burnedWindow, wall(150_000n)])], { 1: DEAD, 2: WALLET }, {}, INFLATED)).status).toBe("warn");
-    // 1% of a supply of ten million, though only 0.1% of what a larger window sells.
-    const big = nft(1, tokenOnlyL(T0, HI, 100_000_000n), T0, HI);
-    expect((await verdict([main([big, wall(101_000n)])], { 1: DEAD, 2: WALLET }, {}, { supply: 10n ** 25n, decimals: 18 })).status).toBe("warn");
-    await quiet([main([big, wall(101_000n)])], { 1: DEAD, 2: WALLET }, {}, FACTS);
+  it("G1. a holder's 1.1% of the supply parked at 50x to 100x in a new plain pool doesn't warn a burned launch", async () => {
+    const parked: PoolSetup = { key: v4PoolKey(TOKEN, USDC, 100, 1), listed: true, sqrtPriceX96: sqrtRatioAtTick(T0), tick: T0, positions: [nft(2, tokenOnlyL(T0 + 39_120, T0 + 46_050, 11_000_000n), T0 + 39_120, T0 + 46_050)] };
+    await quiet([main([burnedLaunch]), parked], { 1: DEAD, 2: WALLET_2 });
   });
 
-  it("is material at any amount when the supply isn't known", async () => {
-    expect((await verdict([main([burnedWindow, wall(10n)])], { 1: DEAD, 2: WALLET }, {}, { supply: null, decimals: null })).status).toBe("warn");
-    await quiet([main([burnedWindow])], { 1: DEAD }, {}, { supply: null, decimals: null });
+  it("doesn't depend on the supply, known or not, or on how it was padded", async () => {
+    for (const facts of [FACTS, { supply: null, decimals: null }, { supply: 10n ** 30n * 10n ** 18n, decimals: 18 }] as TokenFacts[]) {
+      expect((await verdict([main([burnedLaunch, wall(900_000_000n)])], { 1: DEAD, 2: WALLET }, {}, facts)).status).toBe("warn");
+      await quiet([main([burnedLaunch, wall(1_000_000n)])], { 1: DEAD, 2: WALLET }, {}, facts);
+    }
   });
 
   it("says nothing of a wall a contract holds, or a burned one: neither is a wallet's", async () => {
-    await quiet([main([burnedWindow, wall(9_000_000_000n)])], { 1: DEAD, 2: CONTRACT }, { chain: { code: { [CONTRACT]: "0x6080" } } }, INFLATED);
-    await quiet([main([burnedWindow, wall(9_000_000_000n)])], { 1: DEAD, 2: DEAD }, {}, INFLATED);
+    await quiet([main([burnedLaunch, wall(900_000_000n)])], { 1: DEAD, 2: CONTRACT }, { chain: { code: { [CONTRACT]: "0x6080" } } });
+    await quiet([main([burnedLaunch, wall(900_000_000n)])], { 1: DEAD, 2: DEAD });
   });
 });
 
@@ -514,8 +517,8 @@ describe("a fail holds in both readings: every pool, and the plain pools alone",
       await quiet([main([launch(1)]), grief], { 1: DEAD, 2: WALLET_2 });
       // At a fee of 0.05% now it is first in line where every pool is trusted, and absent where only plain ones are: no fail.
       await quiet([main([launch(1)]), { ...grief, lpFee: 500 }], { 1: DEAD, 2: WALLET_2 });
-      // A wallet's launch that lives there alone still fails: with no plain pool, the one reading decides.
-      expect((await verdict([at(dynamic, T0, [launch(1)], 3_000)], { 1: WALLET })).status).toBe("fail");
+      // A wallet's launch that lives there alone is a warning: with no plain pool, the one reading speaks, and can't say fail.
+      expect((await verdict([at(dynamic, T0, [launch(1)], 3_000)], { 1: WALLET })).status).toBe("warn");
     });
   });
 
@@ -531,10 +534,22 @@ describe("a fail holds in both readings: every pool, and the plain pools alone",
   });
 
   describe("a pool whose hook runs in swaps", () => {
-    it("a wallet's launch there fails when it is the only market, burned beside it or not", async () => {
-      expect(await verdict([main([launch(1)], swapHooked)], { 1: WALLET })).toMatchObject({ status: "fail", fixAppId: "vault" });
-      expect((await verdict([main([twoSided(1, 2_000n), launch(2, 1_000_000n)], swapHooked)], { 1: WALLET, 2: DEAD })).status).toBe("fail");
+    it("a wallet's launch there warns when it is the only market, burned beside it or not", async () => {
+      expect(await verdict([main([launch(1)], swapHooked)], { 1: WALLET })).toMatchObject({ status: "warn", fixAppId: "vault" });
+      expect((await verdict([main([twoSided(1, 2_000n), launch(2, 1_000_000n)], swapHooked)], { 1: WALLET, 2: DEAD })).status).toBe("warn");
       await quiet([main([launch(1)], swapHooked)], { 1: DEAD });
+    });
+
+    it("G2. a holder's tokens parked just under the market behind a hook that refuses swaps can't fail a launch burned behind a swap hook", async () => {
+      const launchpad = v4PoolKey(TOKEN, USDC, 3000, 60, hookWith("2080"));
+      const refuser = v4PoolKey(TOKEN, USDC, 3000, 60, hookWith("0080"));
+      const parked = at(refuser, T0 - 120, [nft(2, tokenOnlyL(T0 - 120, T0 - 60, 600_000n), T0 - 120, T0 - 60)]);
+      const f = await verdict([{ ...main([launch(1)], launchpad), listed: true }, parked], { 1: DEAD, 2: WALLET_2 });
+      expect(f.status).toBe("warn");
+      expect(f.detail).toMatch(/would go into positions wallets can withdraw and .* if the hooks and fees of the pools selling it let buyers through/);
+      // The same with USDC parked there instead of tokens: bids outside plain pools can't fail either.
+      const bids = at(refuser, T0, [nft(2, quoteOnlyL(T0 - 6_000, T0 - 60, 5_000n), T0 - 6_000, T0 - 60)]);
+      expect((await verdict([{ ...main([twoSided(1, 2_000n)], launchpad), listed: true }, bids], { 1: DEAD, 2: WALLET_2 })).status).toBe("warn");
     });
 
     it("a stranger can't fail a launch burned there with a plain pool of his own at a silly price", async () => {
@@ -551,11 +566,11 @@ describe("a fail holds in both readings: every pool, and the plain pools alone",
       await quiet([main([launch(1)]), behind], { 1: DEAD, 2: WALLET_2 });
     });
 
-    it("what that costs: a decoy behind a hook turns a wallet's plain launch into a warning, and a plain burned cover hides a wallet's launch behind a hook. Neither passes", async () => {
+    it("what that costs: a decoy behind a hook hides a wallet's plain launch, and a plain burned cover hides a wallet's launch behind a hook. Neither passes", async () => {
       const cheap = T0 - 46_080;
       const decoy = at(swapHooked, cheap, [nft(2, tokenOnlyL(cheap, cheap + 6_960, 100_000_000_000n), cheap, cheap + 6_960)]);
-      // Where every pool is trusted the wallet's launch lies beyond the window: its tokens are counted, a warning.
-      expect((await verdict([main([launch(1)]), decoy], { 1: WALLET, 2: DEAD })).status).toBe("warn");
+      // Where every pool is trusted the wallet's launch lies beyond the window, a thousandth of the tokens for sale.
+      await quiet([main([launch(1)]), decoy], { 1: WALLET, 2: DEAD });
       const high = T0 + 13_860;
       const cover: PoolSetup = { key: MAIN, sqrtPriceX96: sqrtRatioAtTick(high), tick: high, positions: [nft(2, tokenOnlyL(high, high + 6_960, 250_000n), high, high + 6_960)] };
       await quiet([main([launch(1)], swapHooked), cover], { 1: WALLET, 2: DEAD });
@@ -656,7 +671,8 @@ describe("pools the lookup may not have", () => {
 
   it("fails on the wallet's share once the index lists the hooked pool, where the burned pool alone would have passed", async () => {
     const f = await check([{ key, positions: [burned] }, { key: big, positions: [kept], listed: true }], { chain });
-    expect(f).toMatchObject({ status: "fail", evidenceUrl: `https://explorer.test/token/${PM}/instance/2` });
+    // The wallet's pool has a swap hook: a warning, since a fail needs a plain pool to say it.
+    expect(f).toMatchObject({ status: "warn", evidenceUrl: `https://explorer.test/token/${PM}/instance/2` });
     expect(f.detail).toMatch(/Of the 1,507,203 USDC in its pools now, wallets' positions hold 1,477,650 and burned or locked ones 29,553\./);
   });
 
@@ -695,7 +711,7 @@ describe("pools the lookup may not have", () => {
       const { input } = world([small, real, ...decoys.slice(1)], { chain });
       const scan = await findPools(input);
       expect(scan.truncated).toBeUndefined();
-      expect((await checkLpLock(input, scan)).status).toBe("fail");
+      expect((await checkLpLock(input, scan)).status).toBe("warn");
       const twice: InspectInput = { ...input, extraPools: [...input.extraPools!, ...input.extraPools!] };
       expect((await findPools(twice)).truncated).toBeUndefined();
     });
@@ -708,7 +724,7 @@ describe("pools the lookup may not have", () => {
 });
 
 describe("the inspection's deadline", () => {
-  it("makes lp-lock unknown when its reads would outlast it, and leaves the rest of the report standing", async () => {
+  it("leaves lp-lock to the old check when the new path's reads would outlast it, and the rest of the report standing", async () => {
     const { input, reader } = world([{ key, positions: [nft(7, L)] }], { chain: { nftOwners: { 7: DEAD }, code: { [TOKEN]: "0x63a9059cbb00" } } });
     // The position reads never answer.
     const read = reader.read;
@@ -718,9 +734,10 @@ describe("the inspection's deadline", () => {
       const pending = inspect({ ...input, deadlineAt: Date.now() + 5_000 });
       await vi.advanceTimersByTimeAsync(4_100);
       const report = await pending;
+      // The new path gave up; the finding is the old check's.
       expect(report.findings.find((f) => f.id === "lp-lock")).toEqual({
         id: "lp-lock", status: "unknown", title: "Couldn't check liquidity locks",
-        detail: "Reading who holds the liquidity took longer than this inspection had.", evidenceUrl: null, fixAppId: null,
+        detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.", evidenceUrl: null, fixAppId: null,
       });
       expect(report.findings.find((f) => f.id === "liquidity")?.status).toBe("pass");
       expect(report.findings).toHaveLength(9);
@@ -733,9 +750,53 @@ describe("the inspection's deadline", () => {
     const { input, reader } = world([{ key, positions: [nft(7, L)] }], { chain: owners({ 7: DEAD }) });
     const scan = await findPools(input);
     const before = reader.batches.length;
-    expect(await checkLpLock({ ...input, deadlineAt: Date.now() + 500 }, scan)).toMatchObject({ status: "unknown", detail: "Reading who holds the liquidity took longer than this inspection had." });
+    expect(await checkLpLock({ ...input, deadlineAt: Date.now() + 500 }, scan)).toMatchObject({ status: "unknown", detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet." });
     expect(reader.batches.length).toBe(before);
     expect(reader.logQueries).toEqual([]);
+  });
+});
+
+describe("whatever stops the new path, the old check answers: its fail included", () => {
+  // The old check fails this token: its v2 LP sits in a wallet. A burned v4 wall beside it, and a fresh index whose
+  // tail has to be read.
+  const lp = 10n ** 24n;
+  const reads = {
+    [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
+    ...v2PairReads(PAIR, USDC, TOKEN, 5_000n * 10n ** 6n, 5_000_000n * 10n ** 18n),
+    [readKey(PAIR, "totalSupply", [])]: lp,
+    [readKey(PAIR, "balanceOf", [NATIVE])]: 1000n,
+    [readKey(PAIR, "balanceOf", [DEAD])]: 0n,
+  };
+  const dex: DexConfig = { quoteTokens: [USD], v2Factory: V2, v4: UNISWAP_V4 };
+  const wall = launch(1);
+  const setUp = (chain: FakeChain = {}) => {
+    const mainId = v4PoolId(MAIN);
+    return world([main([wall])], { dex, chain: { reads, nftOwners: { 1: DEAD }, ...chain }, index: { cursor: Number(HEAD) - 100, pools: { [mainId]: { positions: [keyOf(wall)], truncated: false } } } });
+  };
+  const OLD = { status: "fail", detail: "100% of the v2 LP supply sits in wallets that can withdraw it.", fixAppId: "vault" };
+
+  it("the control: both run, and the fail stands", async () => {
+    const { input } = setUp();
+    expect((await checkLpLock(input, await findPools(input), FACTS)).status).toBe("fail");
+    expect(await checkLpLock({ ...input, v4Positions: undefined }, await findPools(input), FACTS)).toMatchObject(OLD);
+  });
+
+  it("the inspection's deadline has passed by the time lp-lock starts", async () => {
+    const { input } = setUp();
+    expect(await checkLpLock({ ...input, deadlineAt: Date.now() }, await findPools(input), FACTS)).toMatchObject(OLD);
+  });
+
+  it("the node refuses the index tail's eth_getLogs, as Arc does past 20,000 results", async () => {
+    const { input } = setUp({ logs: Object.assign(new Error("query exceeds max results 20000"), { code: -32012 }) });
+    expect(await checkLpLock(input, await findPools(input), FACTS)).toMatchObject(OLD);
+  });
+
+  it("the old check isn't held to the new path's deadline: it starts first, and is waited for", async () => {
+    const { input, reader } = setUp();
+    // The pair's LP reads answer only after the new path's deadline has passed.
+    const read = reader.read;
+    input.reader = { ...reader, read: (address, abi, fn, args, options) => (address === PAIR && fn === "balanceOf" ? new Promise((resolve) => setTimeout(resolve, 150)).then(() => read(address, abi, fn, args, options)) : read(address, abi, fn, args, options)) };
+    expect(await checkLpLock({ ...input, deadlineAt: Date.now() + 1_050 }, await findPools(input), FACTS)).toMatchObject(OLD);
   });
 });
 

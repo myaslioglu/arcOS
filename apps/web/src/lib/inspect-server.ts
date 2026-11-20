@@ -20,8 +20,8 @@ import { ttlCache } from "./ttl-cache";
 // such as EURC, 12 for a beacon proxy, and 13 at most (a clone of a beacon proxy). The lp-lock check over the position
 // index adds a chain of its own after the pool lookup, up to 6 steps (the head, the index's tail in two, two multicall
 // rounds, the holders' code), each a multicall or a few parallel calls. It is not held to a step count: it carries the
-// inspection's deadline itself (less a second), and when that passes lp-lock alone reads "unknown" and the rest of the
-// report stands (see `beforeDeadline` in @arcos/inspector). Each call tries the chain's URLs in
+// inspection's deadline itself (less a second), and when that passes lp-lock is what the check from before the index
+// says, which ran beside it, and the rest of the report stands (see `beforeDeadline` in @arcos/inspector). Each call tries the chain's URLs in
 // order, one 3 s attempt each, and every call in this server process skips a URL that failed for the next 60 s (see
 // rpc-transport.ts in @arcos/inspector). So a hung primary costs one 3 s timeout per process per minute, and an inspection meets it at
 // most once: after timing out, the primary is skipped for longer than any inspection runs. With a healthy secondary
