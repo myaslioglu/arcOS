@@ -141,7 +141,7 @@ export function fakeReport(address: Address, passes: number, liquid: boolean, ov
   };
 }
 
-export type InspectCall = { token: Address; extraPools: unknown[]; v4Positions: V4PositionIndex | undefined; budget: ExplorerBudget | null };
+export type InspectCall = { token: Address; extraPools: unknown[]; extraPoolsTruncated: boolean | undefined; v4Positions: V4PositionIndex | undefined; budget: ExplorerBudget | null };
 
 /** An inspector that answers from `answers` by token (lowercase), spending `explorerCalls` of the budget each time. */
 export function fakeInspector(
@@ -149,8 +149,8 @@ export function fakeInspector(
   explorerCalls = 0,
 ): InspectToken & { calls: InspectCall[] } {
   const calls: InspectCall[] = [];
-  const fn = (async (token, { extraPools, v4Positions }, budget) => {
-    calls.push({ token, extraPools, v4Positions, budget });
+  const fn = (async (token, { extraPools, extraPoolsTruncated, v4Positions }, budget) => {
+    calls.push({ token, extraPools, extraPoolsTruncated, v4Positions, budget });
     for (let i = 0; i < explorerCalls && budget; i++) budget.spend();
     const answer = answers[token.toLowerCase()];
     if (!answer) throw new Error("no fake answer");

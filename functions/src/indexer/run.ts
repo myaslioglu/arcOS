@@ -1,8 +1,8 @@
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
-import { arcInspectChain, type Address, type NetworkId } from "@arcos/chain";
+import type { Address, NetworkId } from "@arcos/chain";
 import { v4PoolKeys, type IndexerDoc, type TokenDoc } from "@arcos/data";
-import { indexedPools, indexedPositionsFor } from "@arcos/data/server";
-import { v4PoolIdsToIndex, type ChainReader, type ExtraPool, type PoolScan, type Report, type V4PositionIndex } from "@arcos/inspector";
+import { indexedPoolList, indexedPositionsFor } from "@arcos/data/server";
+import { type ChainReader, type ExtraPool, type PoolScan, type Report, type V4PositionIndex } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
 import { decodeLogs, sourcesFor } from "./events";
 import { afterFailure, expired, pickQueue } from "./queue";
@@ -37,27 +37,43 @@ export type ExplorerBudget = { remaining(): number; spend(): boolean; exhaust():
 /** What an inspection gives back: the report, and the pool lookup it was made from (null when that failed). */
 export type Inspected = { report: Report; scan: PoolScan | null };
 
-/** What the index adds to an inspection: the token's pools, and the positions of its v4 pools (absent when the index has none to give). */
-export type IndexedExtras = { extraPools: ExtraPool[]; v4Positions?: V4PositionIndex };
+/**
+ * What the index adds to an inspection: the token's v4 pools, whether it holds more of them than it listed, and the
+ * positions of those pools (absent when the index has none to give).
+ */
+export type IndexedExtras = { extraPools: ExtraPool[]; extraPoolsTruncated?: boolean; v4Positions?: V4PositionIndex };
 
 /** Inspects one token. `explorer` is null when the day's explorer budget is spent: the inspection runs on RPC only. */
 export type InspectToken = (token: Address, extras: IndexedExtras, explorer: ExplorerBudget | null) => Promise<Inspected>;
 
+/** How long the positions read for one inspection may take: past it the inspection goes on without them. */
+export const POSITIONS_READ_MS = 3_000;
+
 /**
- * The index's pools for `token` and the positions of its v4 pools: the pools the index recorded, and the standard hookless
- * keys the Inspector also asks about (`v4PoolIdsToIndex`). Mainnet only, as the index is. A positions read that fails
- * leaves them out, and the inspection's lp-lock then answers as it does without an index; it never fails the inspection.
+ * The index's pools for `token`, then the positions of its v4 pools: only of pools the index lists for the token (the
+ * position step gives every v4 pool a doc, and the check reads newer ones from the chain), so a token without pools
+ * costs no positions read. Mainnet only, as the index is. The positions read has `POSITIONS_READ_MS`; if it fails or
+ * takes longer they are left out, and the inspection's lp-lock then answers as it does without an index. It never
+ * fails the inspection.
  */
-export async function indexedExtras(db: Firestore, network: NetworkId, token: Address, log: Pick<Logger, "warn"> = silent): Promise<IndexedExtras> {
-  const extraPools: ExtraPool[] = v4PoolKeys(await indexedPools(db, network, token)).map((key) => ({ version: "v4", key }));
-  if (network !== "mainnet") return { extraPools };
+export async function indexedExtras(db: Firestore, network: NetworkId, token: Address, log: Pick<Logger, "warn"> = silent, readMs = POSITIONS_READ_MS): Promise<IndexedExtras> {
+  const { pools, truncated } = await indexedPoolList(db, network, token);
+  const keys = v4PoolKeys(pools);
+  const extras: IndexedExtras = { extraPools: keys.map((key) => ({ version: "v4", key })), ...(truncated ? { extraPoolsTruncated: true } : {}) };
+  if (network !== "mainnet") return extras;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { dex, nativeQuote } = arcInspectChain(network);
-    const v4Positions = await indexedPositionsFor(db, network, v4PoolIdsToIndex({ address: token, dex, nativeQuote, extraPools }));
-    return v4Positions ? { extraPools, v4Positions } : { extraPools };
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error("The positions read took too long."), { name: "PositionsReadTimeout" })), readMs);
+    });
+    const ids = pools.filter((pool) => pool.version === "v4").map((pool) => pool.poolId);
+    const v4Positions = await Promise.race([indexedPositionsFor(db, network, ids), late]);
+    return v4Positions ? { ...extras, v4Positions } : extras;
   } catch (e) {
     log.warn("arcosIndexer positions not read", errorFields(e));
-    return { extraPools };
+    return extras;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

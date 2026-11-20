@@ -355,13 +355,88 @@ describe("what the index hands an inspection", () => {
     const extras = await indexedExtras(db, "mainnet", TOKEN);
     expect(extras.extraPools).toEqual([{ version: "v4", key: { currency0: ZERO, currency1: TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK } }]);
     expect(extras.v4Positions?.cursor).toBe(1_999);
-    // The hooked pool from the index and the standard hookless keys the Inspector also probes: 5 tiers against USDC, EURC
-    // and native USDC, each with an entry, an empty one where the index holds nothing.
-    expect(Object.keys(extras.v4Positions!.pools)).toHaveLength(16);
+    // Only the pools the index lists for the token are looked up: a standard key nobody recorded a pool for is not.
+    expect(Object.keys(extras.v4Positions!.pools)).toEqual([hookedId]);
     expect(extras.v4Positions!.pools[hookedId]).toEqual({ positions: [{ owner: HOOK, tickLower: -600, tickUpper: 600, salt: `0x${"0".repeat(64)}` }], truncated: false });
-    expect(extras.v4Positions!.pools[standard]!.positions).toHaveLength(1);
+    expect(extras.v4Positions!.pools[standard]).toBeUndefined();
     expect(extras.v4Positions!.pools[POOL]).toBeUndefined();
+    expect(extras).not.toHaveProperty("extraPoolsTruncated");
     expect(await indexedPositionsFor(db, "mainnet", [hookedId])).toMatchObject({ cursor: 1_999 });
+  });
+
+  const reads = () => {
+    const asked: string[] = [];
+    const counting = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "collection") return (name: string) => (asked.push(name), target.collection(name));
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    });
+    return { asked, counting };
+  };
+
+  it("asks for no positions of a token the index lists no pool for: an address nobody indexed costs one pools query", async () => {
+    await ensurePositionsIndex(db, "mainnet", 1_000, NOW, 5_000);
+    const { asked, counting } = reads();
+    expect(await indexedExtras(counting, "mainnet", addr(0xdead_beef))).toEqual({ extraPools: [], v4Positions: { cursor: 999, pools: {} } });
+    expect(asked.filter((name) => name === COLLECTIONS.positions)).toEqual([]);
+  });
+
+  it("says when the token has more pools than it lists", async () => {
+    await ensurePositionsIndex(db, "mainnet", 1_000, NOW, 5_000);
+    const MANY = addr(0x3a17);
+    for (let i = 0; i < 51; i++) {
+      const id = `0x${i.toString(16).padStart(64, "0")}`;
+      await db.collection(COLLECTIONS.pools).doc(`mainnet:${id}`).set({
+        network: "mainnet", poolId: id, version: "v4", token: MANY, quote: "USDC-native", fee: 3_000 + i, createdBlock: 900,
+        key: { currency0: ZERO, currency1: MANY, fee: 3_000 + i, tickSpacing: 60, hooks: ZERO }, depthUsdc: null, sampledAt: null,
+      });
+    }
+    const extras = await indexedExtras(db, "mainnet", MANY);
+    expect(extras.extraPools).toHaveLength(50);
+    expect(extras.extraPoolsTruncated).toBe(true);
+  });
+
+  it("goes on without the positions when their read fails or outlasts its time, and says so once", async () => {
+    await db.collection(COLLECTIONS.pools).doc(`mainnet:${hookedId}`).set({
+      network: "mainnet", poolId: hookedId, version: "v4", token: TOKEN, quote: "USDC-native", fee: 10_000, createdBlock: 900,
+      key: { currency0: ZERO, currency1: TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK }, depthUsdc: null, sampledAt: null,
+    });
+    await ensurePositionsIndex(db, "mainnet", 1_000, NOW, 5_000);
+    const warned: object[] = [];
+    const log = { warn: (_m: string, data?: object) => void warned.push(data ?? {}) };
+    // A read that never answers: the extras come back after the read's own time, pools and all.
+    const hung = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "getAll") return () => new Promise(() => {});
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    });
+    const started = Date.now();
+    const slow = await indexedExtras(hung, "mainnet", TOKEN, log, 200);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(slow.extraPools).toHaveLength(1);
+    expect(slow).not.toHaveProperty("v4Positions");
+    expect(warned).toEqual([expect.objectContaining({ error: "PositionsReadTimeout" })]);
+    const failing = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "getAll") return () => Promise.reject(Object.assign(new Error("7 PERMISSION_DENIED"), { code: 7 }));
+        return Reflect.get(target, prop, receiver) as unknown;
+      },
+    });
+    expect(await indexedExtras(failing, "mainnet", TOKEN, log, 200)).toEqual({ extraPools: slow.extraPools });
+  });
+
+  it("hands over no positions while the switch is off, so the inspection runs the old check at once", async () => {
+    await db.collection(COLLECTIONS.pools).doc(`mainnet:${hookedId}`).set({
+      network: "mainnet", poolId: hookedId, version: "v4", token: TOKEN, quote: "USDC-native", fee: 10_000, createdBlock: 900,
+      key: { currency0: ZERO, currency1: TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK }, depthUsdc: null, sampledAt: null,
+    });
+    await ensurePositionsIndex(db, "mainnet", 1_000, NOW, 5_000);
+    await db.collection(COLLECTIONS.indexer).doc("mainnet").set({ network: "mainnet", block: 1, positions: false });
+    expect(await indexedExtras(db, "mainnet", TOKEN)).toEqual({ extraPools: [{ version: "v4", key: { currency0: ZERO, currency1: TOKEN, fee: 10_000, tickSpacing: 200, hooks: HOOK } }] });
+    await db.collection(COLLECTIONS.indexer).doc("mainnet").update({ positions: true });
+    expect((await indexedExtras(db, "mainnet", TOKEN)).v4Positions?.cursor).toBe(999);
   });
 
   it("is the pools alone before the position index's first run, and on testnet", async () => {
