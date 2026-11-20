@@ -73,12 +73,15 @@ export async function ensurePositionsIndex(db: Firestore, network: NetworkId, fr
 /**
  * What applying a window did:
  * - `applied`: its positions and pools are stored (`written` positions and `pools` pool docs were new) and the cursor is at its end;
+ * - `unfinished`: the time given ran out while its docs were being stored. `written` and `pools` are what this call
+ *   added; the cursor has not moved, and applying the window again goes on from there;
  * - `already`: the cursor was at or past the window's end;
  * - `moved`: the cursor is not where this window starts (another run moved it), and `block` is where it is;
  * - `missing`: there is no cursor doc.
  */
 export type PositionsApplyResult =
   | { kind: "applied"; block: number; written: number; pools: number }
+  | { kind: "unfinished"; written: number; pools: number }
   | { kind: "already"; block: number }
   | { kind: "moved"; block: number }
   | { kind: "missing" };
@@ -88,6 +91,10 @@ const alreadyExists = (e: unknown): boolean => typeof e === "object" && e !== nu
 
 /** Firestore takes at most 500 writes in a batch; reads are chunked the same way. */
 const CHUNK = 400;
+/** How many chunks are read and written at once. A window of 20,000 logs is 50 chunks or more. */
+const CHUNKS_AT_ONCE = 6;
+/** How often a chunk of pool docs is read again after a create was refused, before the refusal is passed on. */
+const CREATE_RETRIES = 3;
 
 /**
  * Stores one window [from, to] of positions and pools, then moves the cursor to its end:
@@ -95,22 +102,29 @@ const CHUNK = 400;
  *    (`positionId`). A position already stored is left as it is, so its `firstBlock` stays the first, and running a
  *    window again writes nothing;
  * 1b. the same for the window's v4 pools in pools/, but written with `create`: a pool doc is created only where there is
- *    none, and one that exists (the main indexer's, with its sampled depth) can't be written over, even one that
- *    appeared after this step looked. Pool docs only: no token doc, no inspection queue,
- *    no Radar feed. The caller never reads past the main indexer's cursor (positions-run.ts), so every pool here that
+ *    none, and one that exists (the main indexer's, with its sampled depth) can't be written over. A batch one of whose
+ *    creates is refused (ALREADY_EXISTS: the doc appeared after this step looked) writes nothing; its chunk is read
+ *    again and what is still missing is written. Pool docs only: no token doc, no inspection queue, no Radar feed.
+ *    The caller never reads past the main indexer's cursor (positions-run.ts), so every pool here that
  *    the main indexer is to record, it has recorded already: this step only adds the pools from before its first block,
  *    and can't take a pool's doc (the main indexer's mark that the pool's token is handled) from under it;
  * 2. in one transaction, moves the cursor from `from - 1` to `to` (forward only), or reports that it wasn't there.
  * The positions go first: a run that dies between the two repeats the window, and never leaves the cursor past a
  * position that isn't stored. A reader that takes the cursor first and the positions after it therefore sees every
  * position opened up to that cursor.
+ *
+ * How long it takes: the docs go in chunks of 400, six chunks at a time, each one read and one batch. The backfill's
+ * densest window (mainnet blocks 21,185,000 to 21,194,472: 19,996 logs, 7,678 of them new pools) is about 50 chunks,
+ * nine rounds. `options.until` (ms on `options.clock`) bounds it all the same: no round starts at or after it, and the
+ * call then answers `unfinished` with the cursor where it was. What it wrote stays, so the next call reads those
+ * chunks, finds them stored and goes on with the rest: a window too large for one run is finished over several.
  */
 export async function applyPositionsWindow(
   db: Firestore,
   network: NetworkId,
   window: { from: number; to: number },
   positions: readonly SeenPosition[],
-  options: { tip: number; now: number; pools?: readonly PoolDoc[] },
+  options: { tip: number; now: number; pools?: readonly PoolDoc[]; until?: number; clock?: () => number },
 ): Promise<PositionsApplyResult> {
   const collection = db.collection(COLLECTIONS.positions);
   const entries: { ref: DocumentReference; doc: PositionDoc }[] = positions.map((p) => ({
@@ -121,44 +135,42 @@ export async function applyPositionsWindow(
     ref: db.collection(COLLECTIONS.pools).doc(poolId(network, doc.poolId)),
     doc,
   }));
-  /** Writes the entries that have no doc yet, and says how many that was. */
-  const addMissing = async (all: readonly { ref: DocumentReference; doc: PositionDoc }[]): Promise<number> => {
-    let added = 0;
-    for (let i = 0; i < all.length; i += CHUNK) {
-      const chunk = all.slice(i, i + CHUNK);
-      const stored = await db.getAll(...chunk.map((e) => e.ref));
-      const fresh = chunk.filter((_, n) => !stored[n]!.exists);
-      if (fresh.length === 0) continue;
-      const batch = db.batch();
-      for (const e of fresh) batch.set(e.ref, e.doc);
+  const clock = options.clock ?? Date.now;
+  const outOfTime = () => options.until !== undefined && clock() >= options.until;
+  /** Writes the chunk's entries that have no doc yet, and says how many that was. */
+  const addChunk = async (chunk: readonly { ref: DocumentReference; doc: PositionDoc | PoolDoc }[], create: boolean, tries = 0): Promise<number> => {
+    const stored = await db.getAll(...chunk.map((e) => e.ref));
+    const fresh = chunk.filter((_, n) => !stored[n]!.exists);
+    if (fresh.length === 0) return 0;
+    const batch = db.batch();
+    for (const e of fresh) {
+      if (create) batch.create(e.ref, e.doc);
+      else batch.set(e.ref, e.doc);
+    }
+    try {
       await batch.commit();
-      added += fresh.length;
+    } catch (e) {
+      // Another writer created one of these docs between the read and the write: nothing of the batch was written.
+      if (!create || !alreadyExists(e) || tries >= CREATE_RETRIES) throw e;
+      return addChunk(chunk, create, tries + 1);
     }
-    return added;
+    return fresh.length;
   };
-  /**
-   * Pool docs are shared with the main indexer, so they are written with `create`, which Firestore refuses over a doc
-   * that exists (ALREADY_EXISTS, gRPC code 6): whatever was written between the read above and this write stays as it
-   * is. One write a pool, since one refusal would fail a whole batch; a window has few new pools.
-   */
-  const createMissing = async (all: readonly { ref: DocumentReference; doc: PoolDoc }[]): Promise<number> => {
+  /** Every chunk of `all`, a few at a time, until done or out of time. `done` is false when it stopped short. */
+  const addAll = async (all: readonly { ref: DocumentReference; doc: PositionDoc | PoolDoc }[], create: boolean): Promise<{ added: number; done: boolean }> => {
     let added = 0;
-    for (let i = 0; i < all.length; i += CHUNK) {
-      const chunk = all.slice(i, i + CHUNK);
-      const stored = await db.getAll(...chunk.map((e) => e.ref));
-      for (const e of chunk.filter((_, n) => !stored[n]!.exists)) {
-        try {
-          await e.ref.create(e.doc);
-          added++;
-        } catch (error) {
-          if (!alreadyExists(error)) throw error;
-        }
-      }
+    for (let i = 0; i < all.length; i += CHUNK * CHUNKS_AT_ONCE) {
+      if (outOfTime()) return { added, done: false };
+      const round = Array.from({ length: CHUNKS_AT_ONCE }, (_, n) => all.slice(i + n * CHUNK, i + (n + 1) * CHUNK)).filter((chunk) => chunk.length > 0);
+      for (const count of await Promise.all(round.map((chunk) => addChunk(chunk, create)))) added += count;
     }
-    return added;
+    return { added, done: true };
   };
-  const written = await addMissing(entries);
-  const pools = await createMissing(poolEntries);
+  // Position docs are this step's alone, so a plain write is enough; pool docs are shared with the main indexer.
+  const positionsAdded = await addAll(entries, false);
+  const poolsAdded = positionsAdded.done ? await addAll(poolEntries, true) : { added: 0, done: false };
+  const [written, pools] = [positionsAdded.added, poolsAdded.added];
+  if (!poolsAdded.done || outOfTime()) return { kind: "unfinished", written, pools };
   const ref = positionsIndexRef(db, network);
   return db.runTransaction(async (tx): Promise<PositionsApplyResult> => {
     const snap = await tx.get(ref);

@@ -9,15 +9,19 @@ import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
 
 /**
  * The position index's bounds in a run (step 6c), after Stats: no window of it starts after `untilMs`, no RPC call is
- * waited for past `deadlineMs`, at most `maxWindows` windows are applied, and none starts more than `stepMs` after the
- * step began. Stats may run until about 108 s of the function's 120; this step starts only before 104 s and waits for no
- * RPC answer past 110 s, which leaves the last window's writes and the run's end their seconds. A caught-up run reads
- * one window (about 120 blocks). The backfill from the PoolManager's deployment (mainnet block 1,948,056; about 3,030
- * windows of 10,000 blocks on 2026-11-20) takes a few hundred runs: a window is one eth_getLogs, 400 ms after the last
- * call, and its writes, so a run fits about 8 into its 10 s.
+ * waited for past `deadlineMs`, no round of a window's writes starts past `writeUntilMs`, at most `maxWindows` windows
+ * are applied, and none starts more than `stepMs` after the step began. Stats may run until about 108 s of the
+ * function's 120; this step starts a window only before 104 s, waits for no RPC answer past 110 s and starts no round
+ * of writes past 112 s, which leaves the last round, the cursor's transaction and the run's end their seconds. A
+ * caught-up run reads one window (about 120 blocks). The backfill from the PoolManager's deployment (mainnet block
+ * 1,948,056; about 3,030 windows of 10,000 blocks on 2026-11-20) takes a few hundred runs: a window is one
+ * eth_getLogs, 400 ms after the last call, and its writes. A sparse window is done in about a second, so a run fits
+ * about 8 into its 10 s; a dense one (the densest has 19,996 logs and 7,678 new pools) takes 10 to 20 s of writes, so
+ * the step can end up to about 20 s after it began, never past 112 s plus a round. A window the run's time doesn't
+ * cover is left `unfinished`: what was written stays, the cursor doesn't move, and the next run goes on with it.
  */
-export type PositionsLimits = { untilMs: number; deadlineMs: number; maxWindows: number; stepMs: number };
-export const POSITIONS_LIMITS: PositionsLimits = { untilMs: 104_000, deadlineMs: 110_000, maxWindows: 12, stepMs: 10_000 };
+export type PositionsLimits = { untilMs: number; deadlineMs: number; writeUntilMs: number; maxWindows: number; stepMs: number };
+export const POSITIONS_LIMITS: PositionsLimits = { untilMs: 104_000, deadlineMs: 110_000, writeUntilMs: 112_000, maxWindows: 12, stepMs: 10_000 };
 
 /** Refused windows one run may halve through; as in run.ts: more than this means the node refuses whatever it is asked. */
 const MAX_REFUSALS = 24;
@@ -103,7 +107,9 @@ export async function runPositions(args: {
     }
     let applied;
     try {
-      applied = await applyPositionsWindow(db, network, window, decodePositionLogs(logs, poolManager, window), { tip, now: now(), pools: decodePoolLogs(logs, network, window) });
+      applied = await applyPositionsWindow(db, network, window, decodePositionLogs(logs, poolManager, window), {
+        tip, now: now(), pools: decodePoolLogs(logs, network, window), until: started + limits.writeUntilMs, clock: now,
+      });
     } catch (e) {
       result.error ??= nameOf(e);
       log.error("arcosIndexer positions window not applied", { from: window.from, to: window.to, ...errorFields(e) });
@@ -112,6 +118,13 @@ export async function runPositions(args: {
     if (applied.kind === "missing") {
       result.error ??= "PositionsIndexMissing";
       log.error("arcosIndexer positions cursor missing");
+      break;
+    }
+    if (applied.kind === "unfinished") {
+      // Not an error: the window is larger than what was left of the run. Its docs so far are stored; the next run goes on.
+      result.positions += applied.written;
+      result.pools += applied.pools;
+      log.warn("arcosIndexer positions window unfinished", { from: window.from, to: window.to, positions: applied.written, pools: applied.pools });
       break;
     }
     if (applied.kind === "applied") {

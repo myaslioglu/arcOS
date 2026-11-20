@@ -326,7 +326,7 @@ describe("the pools the position index's step completes", () => {
     expect(await pool(newerPool)).toMatchObject({ token: NEWER, createdBlock: MAIN_START + 15_000 });
   });
 
-  it("can't write over a pool doc that appeared after it looked: the write is a create, and a refusal is skipped", async () => {
+  it("can't write over a pool doc that appeared after it looked: the write is a create, and after a refusal it looks again", async () => {
     await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
     const window = { from: START, to: START + 9_999 };
     const logs = [v4Pool(START + 10, OLD, oldHooked, HOOK)];
@@ -334,15 +334,58 @@ describe("the pools the position index's step completes", () => {
     const mine = { ...pools[0]!, quoteDepth: "77" };
     await db.collection(COLLECTIONS.pools).doc(poolId("mainnet", oldHooked)).set(mine);
     // The step's own read misses the doc, as when the main indexer writes it between that read and the write.
+    let looks = 0;
     const blind = new Proxy(db, {
       get(target, prop, receiver) {
         if (prop !== "getAll") return Reflect.get(target, prop, receiver) as unknown;
-        return async (...refs: Parameters<typeof target.getAll>) => (await target.getAll(...refs)).map((snap) => new Proxy(snap, { get: (t, p, r) => (p === "exists" ? false : (Reflect.get(t, p, r) as unknown)) }));
+        return async (...refs: Parameters<typeof target.getAll>) => {
+          const snaps = await target.getAll(...refs);
+          return looks++ > 0 ? snaps : snaps.map((snap) => new Proxy(snap, { get: (t, p, r) => (p === "exists" ? false : (Reflect.get(t, p, r) as unknown)) }));
+        };
       },
     });
     expect(await applyPositionsWindow(blind, "mainnet", window, [], { tip: HEAD, now: NOW, pools })).toEqual({ kind: "applied", block: START + 9_999, written: 0, pools: 0 });
     expect(await pool(oldHooked)).toEqual(mine);
   });
+
+  it("stores a window of thousands of new pools in rounds, stops when its time is up, and goes on from there the next time", async () => {
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    const window = { from: START, to: START + 9_999 };
+    // 5,000 pools and 5,000 positions in one window: 13 chunks of each, three rounds of each.
+    const ids = Array.from({ length: 5_000 }, (_, i) => `0x${(i + 1).toString(16).padStart(64, "0")}` as const);
+    const logs = ids.flatMap((poolIdOf, i) => [v4Pool(START + 10, addr(0x10_0000 + i), poolIdOf, HOOK), modifyLiquidity(START + 11, poolIdOf, NFTS, BigInt(i + 1))]);
+    const pools = decodePoolLogs(logs, "mainnet", window);
+    const positions = decodePositionLogs(logs, UNISWAP_V4.poolManager, window);
+    expect([pools.length, positions.length]).toEqual([5_000, 5_000]);
+    // A clock that moves a second each time it is asked, and a budget of four rounds: the positions' three and one of the pools'.
+    let ticks = 0;
+    const clock = () => NOW + 1_000 * ticks++;
+    const began = Date.now();
+    const first = await applyPositionsWindow(db, "mainnet", window, positions, { tip: HEAD, now: NOW, pools, until: NOW + 4_000, clock });
+    expect(first).toEqual({ kind: "unfinished", written: 5_000, pools: 2_400 });
+    expect((await db.collection(COLLECTIONS.positionsIndex).doc("mainnet").get()).data()).toMatchObject({ block: START - 1 });
+    // The next run: nothing is written twice, the rest is, and the cursor moves.
+    const second = await applyPositionsWindow(db, "mainnet", window, positions, { tip: HEAD, now: NOW, pools });
+    expect(second).toEqual({ kind: "applied", block: START + 9_999, written: 0, pools: 2_600 });
+    expect(await count(COLLECTIONS.pools)).toBe(5_000);
+    expect(await count(COLLECTIONS.positions)).toBe(5_000);
+    // 10,000 docs, most of them twice over, in well under a run's budget even here.
+    expect(Date.now() - began).toBeLessThan(60_000);
+  }, 90_000);
+
+  it("runPositions leaves an unfinished window to the next run, without an error", async () => {
+    await stateAt(HEAD);
+    const ids = Array.from({ length: 1_000 }, (_, i) => `0x${(i + 1).toString(16).padStart(64, "0")}` as const);
+    const logs = ids.map((poolIdOf, i) => v4Pool(START + 10, addr(0x10_0000 + i), poolIdOf, HOOK));
+    // No round of writes may start: the budget for them is already spent.
+    const first = (await runIndexer({
+      db, network: "mainnet", chain: fakeChain({ head: HEAD, logs }), inspectToken: fakeInspector({}), settings: { inspectPerTick: 0, explorerDailyBudget: 0 }, now: clock.now,
+      positions: { fromBlock: START, limits: { writeUntilMs: 0 } },
+    })) as Ran;
+    expect(first.positions).toEqual({ windows: 0, positions: 0, pools: 0, behind: HEAD - START + 1, error: null });
+    const second = await go(fakeChain({ head: HEAD, logs }));
+    expect(second.positions).toMatchObject({ pools: 1_000, behind: 0, error: null });
+  }, 60_000);
 
   it("stores a window's pools before its cursor moves: a run that died in between adds nothing twice", async () => {
     await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
