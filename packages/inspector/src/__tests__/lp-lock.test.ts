@@ -542,6 +542,12 @@ describe("a pool whose hook runs in swaps can't move the window", () => {
     const hooked = v4PoolKey(TOKEN, USDC, 100, 60, hookWith("0080"));
     expect((await verdict([main([launch(1)], hooked)], { 1: WALLET })).status).toBe("fail");
     expect((await verdict([main([launch(1)], hooked)], { 1: DEAD })).status).toBe("unknown");
+    // A burned launchpad range reaching far past the window: its tokens up there are said to be burned behind the hook.
+    const wide = nft(1, tokenOnlyL(T0, T0 + 60_000, 800_000_000n), T0, T0 + 60_000);
+    const f = await verdict([main([wide], hooked)], { 1: DEAD });
+    expect(f.status).toBe("unknown");
+    expect(f.detail).toMatch(/M tokens are for sale above twice that price from burned or locked positions in a pool whose hook runs in every swap\./);
+    expect(f.detail).not.toMatch(/neither burned/);
   });
 
   it("counts a swap-hooked pool's positions inside the window, by their class there", async () => {

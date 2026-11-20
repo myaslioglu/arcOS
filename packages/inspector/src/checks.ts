@@ -1343,7 +1343,12 @@ function lpLockByPath(input: InspectInput, scan: PoolScan, dex: DexConfig, tally
   if (path === null) notes.push("No tokens are for sale in its pools now, so where buyers' money would go can't be read.");
   else if (!path.reached) notes.push(`Its pools would take under ${MIN_UNITS} ${symbol} from buyers: too little to call locked liquidity.`);
   if (!bidsMaterial && !smallBidsClean) notes.push(`${units(bidTotal - safe(bids))} of the ${units(bidTotal)} ${symbol} in its pools now is outside burned or locked positions.`);
-  if (material(beyondUnknown)) notes.push(`${capitalized(tokenAmount(beyondUnknown, token.decimals))} are for sale above twice that price from positions that are neither burned, locked nor a wallet's.`);
+  if (material(beyondUnknown)) {
+    // Burned or locked behind a swap hook is said as that: "neither burned nor locked" would be wrong of it.
+    const hooked = beyond.swapHook;
+    if (material(beyondUnknown - hooked) || !material(hooked)) notes.push(`${capitalized(tokenAmount(beyondUnknown - (material(hooked) ? hooked : 0n), token.decimals))} are for sale above twice that price from positions that are neither burned, locked nor a wallet's.`);
+    if (material(hooked)) notes.push(`${capitalized(tokenAmount(hooked, token.decimals))} are for sale above twice that price from burned or locked positions in a pool whose hook runs in every swap.`);
+  }
   if (venueBlocks) notes.push(tally.venueUnread ? `${capitalized(venues)} pools' token balances couldn't be read.` : `${capitalized(venues)} pools hold ${tokenAmount(tally.venueTokens, token.decimals)}, and whose they are can't be read yet.`);
   return unknown(lines(...notes, "Burned or locked needs 95% throughout to pass.", order), openUrl);
 }
