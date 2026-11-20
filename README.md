@@ -217,15 +217,16 @@ It asks two questions.
   order of what a buyer pays per token there, the pool's LP fee included. The check starts at the
   cheapest, finds the price at which buyers have paid 1,000 USDC, and looks at every point from
   there to twice that price: wallets taking half or more of the money paid in so far is a fail, more
-  than 5% a warning. Tokens wallets offer beyond that window are counted, never priced: from 1% of
-  the supply, or a tenth of what the window sells, they are a warning.
+  than 5% a warning. Tokens wallets offer beyond that window are counted, never priced: when they
+  are a tenth or more of all the tokens for sale in the pools, they are a warning.
 
-Tokens for sale cost their deployer nothing, and a pool's price is whatever its creator chose, so the
-second question is asked twice and the milder answer counts: once over every pool, and once over the
+Tokens for sale cost their deployer nothing, a pool's price is whatever its creator chose, and a
+pool's hook can refuse every swap. So both questions are asked twice: over every pool, and over the
 plain pools alone (Uniswap v2 pairs, and v4 pools against USDC with a fixed LP fee of at most 1% and
-no hook that runs in swaps). A pool behind a swap hook, with a dynamic or very high fee, or quoted in
-EURC can show tokens nobody will buy at the price shown, and on its own it can neither make a fail
-nor undo one that the plain pools and all the pools agree on.
+no hook that runs in swaps). A fail needs the plain pools to say it. What only the other pools show
+(a pool behind a swap hook, with a dynamic or very high fee, or quoted in EURC) is a warning at
+most, and it says so: "would go into positions wallets can withdraw, if the hooks and fees of the
+pools selling it let buyers through".
 
 A fail or a warning says where the money goes and what wallets hold ("Of the first 1,000 USDC
 buyers would pay for this token, 62% goes into positions wallets can withdraw and 38% into burned or
@@ -236,7 +237,9 @@ other check.
 The v4 reading is left out, and the v2 check answers alone, on testnet, which has no index; when the
 index couldn't be fetched, is switched off or is more than 10,000 blocks behind the chain; when the
 token has more than 50 v4 pools or a pool with more than 500 positions; when a pool was created in
-the last minutes and isn't indexed yet; and for a token with no Uniswap v4 pool.
+the last minutes and isn't indexed yet; when reading the positions fails or takes longer than the
+inspection has; and for a token with no Uniswap v4 pool. In every one of those cases the answer is
+exactly the v2 check's, a fail included.
 
 ## What Inspector can and can't see
 
@@ -419,17 +422,22 @@ the last minutes and isn't indexed yet; and for a token with no Uniswap v4 pool.
   Uniswap v3 and Aerodrome pools aren't read at all. One consequence is as old as the check: a burned
   v2 pair passes even when a wallet holds a token-only range in a v3 or Aerodrome pool beside it,
   which holds no USDC to compare.
-- A v4 fail can be dodged by someone who sets out to: free tokens burned into a pool behind a swap
-  hook or against EURC, priced under a wallet's launch, turn the fail into a warning or "couldn't
-  check". That never produces a pass. The other way round, a stranger can make a token fail or warn
-  only by putting money or tokens in: about 500 USDC worth of tokens offered below the market from a
-  wallet, or USDC parked in a wallet's position to half of what the pools hold (and at least 1,000).
-  For a token with no plain pool selling anything, tokens offered behind a hook that refuses swaps
-  do it too, which takes holding the tokens. About 50 USDC worth of tokens offered below the market
-  makes a warning. A third party's position counts like the deployer's.
+- A v4 fail or warning can be dodged by someone who sets out to, for the cost of gas: free tokens
+  burned into a pool behind a swap hook or against EURC (which is counted 1:1 with USDC, though it
+  trades above it), priced under a wallet's launch; free burned tokens far above the price, which
+  make a wallet's wall up there less than a tenth of what is for sale; or making the positions
+  unreadable (51 empty pools, a flood of position changes in the last blocks). All of these lead to
+  a warning or to the v2 check's answer, never to a pass.
+- The other way round, a stranger can make a token fail only with money in a plain pool: about 500
+  USDC worth of tokens offered below the market from a wallet, or USDC parked in a wallet's position
+  to half of what the plain pools hold (and at least 1,000). About 50 USDC worth of tokens offered
+  below the market makes a warning. A warning, never a fail, can be made at no risk on a token none
+  of whose plain pools sells anything (a launch burned behind a launchpad's hook), by a holder who
+  parks tokens under the market behind a hook that refuses swaps; the warning says it depends on the
+  hook. A third party's position counts like the deployer's.
 - The v4 reading is as of the block it was read at: nothing re-inspects a token when its price moves,
   and the window moves with the price. Past the window, a wallet's tokens for sale are reported only
-  from 1% of the supply or a tenth of what the window sells. It says nothing about tokens a wallet
+  from a tenth of all the tokens for sale in the pools. It says nothing about tokens a wallet
   holds outside any pool, which is what the holders check looks at. EURC counts 1:1 with USDC where
   amounts are added up. Up to 500 holders are classified; what the rest hold is not counted as a
   wallet's, and a warning says so when it could matter.

@@ -318,7 +318,8 @@ liquidity. With that it does one thing: it detects liquidity a wallet can withdr
 warning. It never makes a pass: when it finds no wallet in the way, or can't read the whole picture, lp-lock is what
 the check from before the index says (v2 LP tokens only), word for word, so no token passes with the index that
 wouldn't pass without it. A launch burned into a v4 pool, behind a launchpad's hook or not, reads "couldn't check". The
-rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the header of
+A fail needs a plain pool to say it (v2, or v4 against USDC with a fixed fee of at most 1% and no swap hook); what only
+other pools show is a warning at most. The rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the header of
 `packages/inspector/src/checks.ts`: who holds the USDC in the pools, and who the next buyers would pay, in order of
 what a buyer pays per token (LP fee included), read over every pool and over the plain pools alone.
 
@@ -327,7 +328,8 @@ more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 5
 50 v4 pools, the positions don't add up (a gap in the index), or a pool of the token was created since the cursor and
 the inspection wasn't given it. A pool created since the cursor that the inspection does have is read from those
 blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never counted.
-When the inspection's deadline passes before the reads are done, lp-lock is "couldn't check". Holders are classified
+The same when the v4 reads fail or outlast the inspection's deadline (a node refusing the tail's `eth_getLogs`, which
+Arc does past 20,000 results, is one way): the old check is started first, runs beside them, and answers. Holders are classified
 by their code, up to 500 of them, in one state-overridden `eth_call` per 250 (40 single `eth_getCode` reads when a
 node refuses the override).
 
@@ -357,7 +359,9 @@ directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions
 one block before 1,948,056 and starts reading. From there to the head on 2026-11-20 (block 32.2 million) is about
 3,030 windows of 10,000 blocks. The step has its own budgets: no window starts after 104 s of the run or more than
 10 s after the step began, at most 12 windows a run, no RPC answer is waited for past 110 s, and no round of a window's
-writes starts past 112 s. It runs after every other step, so it never moves them.
+writes starts past 112 s. It runs after every other step, so it never moves them. When the node refuses a window it is
+retried at the width the node suggests (9,473 blocks, say), or at half when it suggests none; nothing that wide is tried
+again in that run, and the width that worked is stored on `positionsIndex/mainnet` (`span`), where the next run starts.
 
 A window is one `eth_getLogs` (400 ms after the previous call) and its writes. The writes go in chunks of 400 docs,
 six chunks at a time, each chunk one read of which docs exist and one batch of the new ones. Most windows are sparse
