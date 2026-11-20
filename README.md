@@ -111,8 +111,8 @@ rest of the site runs as before and sign-in answers "Sign-in isn't available rig
 
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
-and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), so it needs the
-network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
+and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), and runs the
+liquidity-lock check over the positions of the newest v4 tokens on Radar, so it needs the network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
 test:emulator -w @arcos/data` runs the Firestore suite against the local emulator; it needs Java 21
 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase CLI in
 `tools/firebase`, which the root install leaves out: install it once with
@@ -196,6 +196,22 @@ folding an unknown into either a pass or a fail. A missing or unreadable owner n
 privileged function into a "can't be called" pass: if the contract has no `owner()`/`getOwner()`
 but does have privileged functions, both the ownership and privileges findings read "unknown", not
 "pass" — the same rule that applies to any other failed or missing read.
+
+The liquidity lock check adds up the liquidity of every pool it found, valued in USDC or EURC at each
+pool's current price, by who can withdraw it. A Uniswap v2 pair's reserves are split by who holds its LP
+token. A Uniswap v4 pool is read position by position: the indexer records every position the v4
+PoolManager's `ModifyLiquidity` logs name, and Inspector reads each one's liquidity and, for a
+PositionManager NFT, its owner, live. Liquidity at a burn address is burned, in a known lock contract
+locked, in a wallet (an address with no code) withdrawable. The check passes when at least 95% is
+burned or locked ("98% of the token's liquidity can't be withdrawn") and fails when wallets can
+withdraw more than 5% ("62% of the token's liquidity, about 1,234 USDC of value, is in positions
+wallets can withdraw"), with a link to the largest such position. Everything else is "couldn't
+check", with the reason: a position held by a contract (it may be a locker, and its terms aren't
+read), a wallet's position in a pool whose hook runs when liquidity is removed (it can block or tax a
+withdrawal), a Uniswap v3 or Aerodrome pool (their positions aren't read yet), a pool with more than
+500 positions, or an index that is still catching up. Values are spot values: each side of a position
+at the pool's current price, EURC counted 1:1 with USDC. On testnet, which has no index, only v2 LP
+tokens are counted and a v4 pool reads "couldn't check".
 
 ## What Inspector can and can't see
 
@@ -372,8 +388,16 @@ but does have privileged functions, both the ownership and privileges findings r
   against contract callers reverts the simulated sell although a later sell from a wallet might go
   through; the finding then says "Selling straight back, in the same transaction and from a contract,
   reverted" rather than that no sell can ever succeed.
-- Liquidity lock detection only reads Uniswap v2 LP token balances. Positions in v3, v4 and Aerodrome
-  pools can't be read without an index yet, so a token with only those pools reads "unknown" for it,
+- Liquidity lock detection reads Uniswap v2 LP token balances and, on mainnet, Uniswap v4 positions
+  from the indexer's position index. Positions in Uniswap v3 and Aerodrome pools aren't read yet:
+  such a pool counts as "unknown" at its balances' value, so a token whose liquidity is mostly there
+  reads "unknown". So does liquidity held by any contract that isn't a known lock contract (a
+  launchpad, a Safe, a hook, an unlisted locker), a wallet's position in a v4 pool whose hook runs
+  on removal, a v4 pool with more than 500 positions, and any v4 pool while the index is more than
+  10,000 blocks behind. "Burned or locked" is about withdrawing liquidity only: it says nothing about
+  what a pool's hook does to swaps. Values are spot values at each pool's current price, so a position
+  holding only tokens counts at what the pool prices them. Without the index (testnet, or a browser
+  that couldn't fetch it) only v2 LP tokens are counted, a token with only other pools reads "unknown",
   and so does a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
   Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
