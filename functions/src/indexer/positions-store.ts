@@ -83,6 +83,9 @@ export type PositionsApplyResult =
   | { kind: "moved"; block: number }
   | { kind: "missing" };
 
+/** Firestore's ALREADY_EXISTS (gRPC code 6), which a create of an existing doc fails with. */
+const alreadyExists = (e: unknown): boolean => typeof e === "object" && e !== null && (e as { code?: unknown }).code === 6;
+
 /** Firestore takes at most 500 writes in a batch; reads are chunked the same way. */
 const CHUNK = 400;
 
@@ -91,8 +94,9 @@ const CHUNK = 400;
  * 1. reads which of the window's positions the index already has, and writes only the new ones, each under its own key
  *    (`positionId`). A position already stored is left as it is, so its `firstBlock` stays the first, and running a
  *    window again writes nothing;
- * 1b. the same for the window's v4 pools in pools/: a pool doc is created only where there is none, and one that exists
- *    (the main indexer's, with its sampled depth) is never touched. Pool docs only: no token doc, no inspection queue,
+ * 1b. the same for the window's v4 pools in pools/, but written with `create`: a pool doc is created only where there is
+ *    none, and one that exists (the main indexer's, with its sampled depth) can't be written over, even one that
+ *    appeared after this step looked. Pool docs only: no token doc, no inspection queue,
  *    no Radar feed. The caller never reads past the main indexer's cursor (positions-run.ts), so every pool here that
  *    the main indexer is to record, it has recorded already: this step only adds the pools from before its first block,
  *    and can't take a pool's doc (the main indexer's mark that the pool's token is handled) from under it;
@@ -118,7 +122,7 @@ export async function applyPositionsWindow(
     doc,
   }));
   /** Writes the entries that have no doc yet, and says how many that was. */
-  const addMissing = async (all: readonly { ref: DocumentReference; doc: PositionDoc | PoolDoc }[]): Promise<number> => {
+  const addMissing = async (all: readonly { ref: DocumentReference; doc: PositionDoc }[]): Promise<number> => {
     let added = 0;
     for (let i = 0; i < all.length; i += CHUNK) {
       const chunk = all.slice(i, i + CHUNK);
@@ -132,8 +136,29 @@ export async function applyPositionsWindow(
     }
     return added;
   };
+  /**
+   * Pool docs are shared with the main indexer, so they are written with `create`, which Firestore refuses over a doc
+   * that exists (ALREADY_EXISTS, gRPC code 6): whatever was written between the read above and this write stays as it
+   * is. One write a pool, since one refusal would fail a whole batch; a window has few new pools.
+   */
+  const createMissing = async (all: readonly { ref: DocumentReference; doc: PoolDoc }[]): Promise<number> => {
+    let added = 0;
+    for (let i = 0; i < all.length; i += CHUNK) {
+      const chunk = all.slice(i, i + CHUNK);
+      const stored = await db.getAll(...chunk.map((e) => e.ref));
+      for (const e of chunk.filter((_, n) => !stored[n]!.exists)) {
+        try {
+          await e.ref.create(e.doc);
+          added++;
+        } catch (error) {
+          if (!alreadyExists(error)) throw error;
+        }
+      }
+    }
+    return added;
+  };
   const written = await addMissing(entries);
-  const pools = await addMissing(poolEntries);
+  const pools = await createMissing(poolEntries);
   const ref = positionsIndexRef(db, network);
   return db.runTransaction(async (tx): Promise<PositionsApplyResult> => {
     const snap = await tx.get(ref);

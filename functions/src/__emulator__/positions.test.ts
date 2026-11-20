@@ -326,6 +326,24 @@ describe("the pools the position index's step completes", () => {
     expect(await pool(newerPool)).toMatchObject({ token: NEWER, createdBlock: MAIN_START + 15_000 });
   });
 
+  it("can't write over a pool doc that appeared after it looked: the write is a create, and a refusal is skipped", async () => {
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    const window = { from: START, to: START + 9_999 };
+    const logs = [v4Pool(START + 10, OLD, oldHooked, HOOK)];
+    const pools = decodePoolLogs(logs, "mainnet", window);
+    const mine = { ...pools[0]!, quoteDepth: "77" };
+    await db.collection(COLLECTIONS.pools).doc(poolId("mainnet", oldHooked)).set(mine);
+    // The step's own read misses the doc, as when the main indexer writes it between that read and the write.
+    const blind = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop !== "getAll") return Reflect.get(target, prop, receiver) as unknown;
+        return async (...refs: Parameters<typeof target.getAll>) => (await target.getAll(...refs)).map((snap) => new Proxy(snap, { get: (t, p, r) => (p === "exists" ? false : (Reflect.get(t, p, r) as unknown)) }));
+      },
+    });
+    expect(await applyPositionsWindow(blind, "mainnet", window, [], { tip: HEAD, now: NOW, pools })).toEqual({ kind: "applied", block: START + 9_999, written: 0, pools: 0 });
+    expect(await pool(oldHooked)).toEqual(mine);
+  });
+
   it("stores a window's pools before its cursor moves: a run that died in between adds nothing twice", async () => {
     await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
     const window = { from: START, to: START + 9_999 };
