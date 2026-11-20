@@ -30,7 +30,7 @@ describe("GET /api/pools/[token]", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("answers the token's indexed pools, v4 keys included, kept a minute at the CDN", async () => {
-    indexedToken.mockResolvedValue({ pools: [pool], positions: null });
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: false, positions: null });
     const res = await get(TOKEN);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, s-maxage=60");
@@ -45,10 +45,17 @@ describe("GET /api/pools/[token]", () => {
       cursor: 32_211_901,
       pools: { [pool.poolId]: { positions: [{ owner: "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b", tickLower: -887_250, tickUpper: 887_250, salt: `0x${"0".repeat(59)}51137` }], truncated: false } },
     } satisfies IndexedToken["positions"];
-    indexedToken.mockResolvedValue({ pools: [pool], positions });
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: false, positions });
     const body = (await (await get(TOKEN)).json()) as { positions: unknown; pools: unknown[] };
     expect(body.positions).toEqual(positions);
     expect(body.pools).toHaveLength(1);
+  });
+
+  it("says when the index holds more pools than it answered, and says nothing of it otherwise", async () => {
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: true, positions: null });
+    expect(await (await get(TOKEN)).json()).toMatchObject({ truncated: true });
+    indexedToken.mockResolvedValue({ pools: [pool], truncated: false, positions: null });
+    expect(await (await get(TOKEN)).json()).not.toHaveProperty("truncated");
   });
 
   it("refuses what isn't an address, without reading the index", async () => {
@@ -86,7 +93,7 @@ describe("GET /api/pools/[token]", () => {
   });
 
   it("limits each client to 30 requests a minute", async () => {
-    indexedToken.mockResolvedValue({ pools: [], positions: null });
+    indexedToken.mockResolvedValue({ pools: [], truncated: false, positions: null });
     const req = () => GET(new Request(`https://4rcos.test/api/pools/${TOKEN}`, { headers: { "x-forwarded-for": "203.0.113.9" } }), { params: Promise.resolve({ token: TOKEN }) });
     for (let i = 0; i < 30; i++) expect((await req()).status).toBe(200);
     expect((await req()).status).toBe(429);

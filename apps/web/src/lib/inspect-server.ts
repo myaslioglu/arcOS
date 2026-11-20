@@ -18,8 +18,10 @@ import { ttlCache } from "./ttl-cache";
 // step in parallel. Measured by timing the engine over a reader whose every call takes 1 s: 5 steps for a plain token
 // on testnet, 7 on mainnet (with a v2 pool to check), 8 through getOwner(), 10 for an EIP-1967 or ZeppelinOS proxy
 // such as EURC, 12 for a beacon proxy, and 13 at most (a clone of a beacon proxy). The lp-lock check over the position
-// index adds its own chain after the pool lookup (the head, the index's tail, two multicall rounds, the holders' code),
-// which ends within those 13. Each call tries the chain's URLs in
+// index adds a chain of its own after the pool lookup, up to 6 steps (the head, the index's tail in two, two multicall
+// rounds, the holders' code), each a multicall or a few parallel calls. It is not held to a step count: it carries the
+// inspection's deadline itself (less a second), and when that passes lp-lock alone reads "unknown" and the rest of the
+// report stands (see `beforeDeadline` in @arcos/inspector). Each call tries the chain's URLs in
 // order, one 3 s attempt each, and every call in this server process skips a URL that failed for the next 60 s (see
 // rpc-transport.ts in @arcos/inspector). So a hung primary costs one 3 s timeout per process per minute, and an inspection meets it at
 // most once: after timing out, the primary is skipped for longer than any inspection runs. With a healthy secondary
@@ -62,14 +64,15 @@ export function cachedInspection(address: Address): Promise<Report> {
   // and no other inspection's do.
   return cache.get(address.toLowerCase(), () =>
     gate.run(async () => {
-      // The index's pools for this token, hooked v4 pools among them, and its v4 pools' positions (at most 1.5 s, none
-      // when the index can't be read; see indexed-pools.ts). The 15 s deadline starts after it.
-      const { extraPools, v4Positions } = await indexedExtrasFor(address);
+      // The index's pools for this token, hooked v4 pools among them (at most 1.5 s, none when the index can't be read),
+      // then its v4 pools' positions (1.5 s of their own, left out when they can't be read; see indexed-pools.ts). The
+      // 15 s deadline starts after them.
+      const { extraPools, extraPoolsTruncated, v4Positions } = await indexedExtrasFor(address);
       const controller = new AbortController();
       const fetchFn = explorerFetch(explorerTurn, controller.signal);
       // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
       const deadlineAt = Date.now() + DEADLINE_MS;
-      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt, v4Positions)), controller, DEADLINE_MS);
+      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt, v4Positions, extraPoolsTruncated)), controller, DEADLINE_MS);
     }),
   );
 }

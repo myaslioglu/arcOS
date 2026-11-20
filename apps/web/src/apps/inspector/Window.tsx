@@ -33,8 +33,8 @@ export default function InspectorWindow({ winId, params }: AppProps) {
     queryFn: async () => {
       // The index's pools for the token (hooked v4 pools among them) and its v4 pools' positions, from the site; only
       // mainnet has an index.
-      const { extraPools, v4Positions } = activeNetwork() === "mainnet" ? await fetchIndexedExtras(token!) : { extraPools: [] };
-      const r = await inspect(inspectInput(token!, client!, undefined, undefined, extraPools, undefined, v4Positions));
+      const { extraPools, extraPoolsTruncated, v4Positions } = activeNetwork() === "mainnet" ? await fetchIndexedExtras(token!) : { extraPools: [] };
+      const r = await inspect(inspectInput(token!, client!, undefined, undefined, extraPools, undefined, v4Positions, extraPoolsTruncated));
       trackEvent("inspect_run", { passed: r.passed, total: r.total });
       return r;
     },

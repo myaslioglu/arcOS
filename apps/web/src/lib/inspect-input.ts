@@ -19,6 +19,8 @@ export function inspectInput(
   deadlineAt?: number,
   /** The index's positions for the token's v4 pools (indexed-pools.ts): what lp-lock reads who holds the liquidity from. */
   v4Positions?: V4PositionIndex,
+  /** The index holds more pools for the token than `extraPools` lists: lp-lock then can't add its liquidity up. */
+  extraPoolsTruncated?: boolean,
 ): InspectInput {
   const network = activeNetwork();
   const chain = arcInspectChain(network);
@@ -34,5 +36,6 @@ export function inspectInput(
     ...(extraPools && extraPools.length > 0 ? { extraPools } : {}),
     ...(deadlineAt === undefined ? {} : { deadlineAt }),
     ...(v4Positions ? { v4Positions } : {}),
+    ...(extraPoolsTruncated ? { extraPoolsTruncated } : {}),
   };
 }

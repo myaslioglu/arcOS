@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PoolDoc } from "@arcos/data";
-import { IndexUnavailable, extraPoolsFrom, extrasFrom, fetchExtraPools, fetchIndexedExtras, indexEnabled, indexedPoolsSource, poolsAnswer, positionsFrom, type IndexedToken } from "../indexed-pools";
+import { IndexUnavailable, extraPoolsFrom, extrasFrom, fetchExtraPools, fetchIndexedExtras, indexEnabled, indexedPoolsSource, indexedPositionsSource, poolsAnswer, positionsFrom, type IndexedPools } from "../indexed-pools";
 
 const TOKEN = "0x470f09ae20163d5e243f6530fb328912a8fcb099";
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -69,43 +69,43 @@ describe("indexedPoolsSource", () => {
   afterEach(() => vi.useRealTimers());
 
   it("keeps an answer a minute per token, whatever the address's case", async () => {
-    const load = vi.fn(async () => ({ pools: [doc({})], positions: null }));
+    const load = vi.fn(async () => ({ pools: [doc({})], truncated: false }));
     let t = 0;
     const source = indexedPoolsSource({ load, now: () => t });
-    await source.token(TOKEN);
-    await source.token(TOKEN.toUpperCase().replace("0X", "0x"));
+    await source.pools(TOKEN);
+    await source.pools(TOKEN.toUpperCase().replace("0X", "0x"));
     expect(load).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledWith(TOKEN);
     t = 60_001;
-    await source.token(TOKEN);
+    await source.pools(TOKEN);
     expect(load).toHaveBeenCalledTimes(2);
   });
 
   it("gives up on a slow read after the deadline, then reads nothing for a minute", async () => {
     let t = 0;
-    const load = vi.fn(() => new Promise<IndexedToken>(() => {}));
+    const load = vi.fn(() => new Promise<IndexedPools>(() => {}));
     const source = indexedPoolsSource({ load, now: () => t, deadlineMs: 1_500 });
-    const slow = source.token(TOKEN);
+    const slow = source.pools(TOKEN);
     const settled = expect(slow).rejects.toBeInstanceOf(IndexUnavailable);
     await vi.advanceTimersByTimeAsync(1_500);
     await settled;
     t = 1_500;
-    await expect(source.token("0x1111111111111111111111111111111111111111")).rejects.toBeInstanceOf(IndexUnavailable);
+    await expect(source.pools("0x1111111111111111111111111111111111111111")).rejects.toBeInstanceOf(IndexUnavailable);
     expect(load).toHaveBeenCalledTimes(1);
     t = 61_501;
-    load.mockResolvedValueOnce({ pools: [], positions: null });
-    await expect(source.token(TOKEN)).resolves.toEqual({ pools: [], positions: null });
+    load.mockResolvedValueOnce({ pools: [], truncated: false });
+    await expect(source.pools(TOKEN)).resolves.toEqual({ pools: [], truncated: false });
   });
 
   it("never caches a failure as an answer", async () => {
     let t = 0;
-    const load = vi.fn().mockRejectedValueOnce(new Error("PERMISSION_DENIED")).mockResolvedValue({ pools: [doc({})], positions: null });
+    const load = vi.fn().mockRejectedValueOnce(new Error("PERMISSION_DENIED")).mockResolvedValue({ pools: [doc({})], truncated: false });
     const source = indexedPoolsSource({ load, now: () => t, cooldownMs: 10 });
-    await expect(source.token(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
+    await expect(source.pools(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
     t = 9;
-    await expect(source.token(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
+    await expect(source.pools(TOKEN)).rejects.toMatchObject({ name: "IndexUnavailable", message: "The pool index can't be read right now." });
     t = 11;
-    await expect(source.token(TOKEN)).resolves.toMatchObject({ pools: [{}] });
+    await expect(source.pools(TOKEN)).resolves.toMatchObject({ pools: [{}] });
   });
 });
 
@@ -190,5 +190,52 @@ describe("fetchIndexedExtras", () => {
       throw new TypeError("fetch failed");
     }) as typeof fetch;
     expect(await fetchIndexedExtras(TOKEN, down)).toEqual({ extraPools: [] });
+  });
+});
+
+describe("indexedPositionsSource", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const index = { cursor: 9, pools: {} };
+
+  it("keeps an answer a minute per token, and gives up on a slow read after its own deadline", async () => {
+    let t = 0;
+    const load = vi.fn(async (token: string) => (token === "0xslow" ? new Promise<never>(() => {}) : index));
+    const source = indexedPositionsSource({ load, now: () => t, deadlineMs: 1_500 });
+    expect(await source.positions(TOKEN)).toEqual(index);
+    expect(await source.positions(TOKEN.toUpperCase().replace("0X", "0x"))).toEqual(index);
+    expect(load).toHaveBeenCalledTimes(1);
+    const slow = expect(source.positions("0xslow")).rejects.toBeInstanceOf(IndexUnavailable);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await slow;
+    t = 1_500;
+  });
+
+  it("has no cooldown: one token's slow or failed positions never stop the next token's", async () => {
+    const load = vi.fn(async (token: string) => {
+      if (token === "0xheavy") return new Promise<never>(() => {});
+      if (token === "0xbroken") throw new Error("RESOURCE_EXHAUSTED");
+      return index;
+    });
+    const source = indexedPositionsSource({ load, deadlineMs: 300 });
+    const heavy = expect(source.positions("0xheavy")).rejects.toBeInstanceOf(IndexUnavailable);
+    await vi.advanceTimersByTimeAsync(300);
+    await heavy;
+    await expect(source.positions("0xbroken")).rejects.toBeInstanceOf(IndexUnavailable);
+    // Straight after both failures, with no time passed.
+    await expect(source.positions("0xother")).resolves.toEqual(index);
+    await expect(source.positions("0xthird")).resolves.toEqual(index);
+    // And the token that failed is tried again, not answered from a kept failure.
+    load.mockResolvedValueOnce(index);
+    await expect(source.positions("0xbroken")).resolves.toEqual(index);
+  });
+});
+
+describe("a truncated pool list in an answer", () => {
+  it("goes into the answer only when true, and comes out as the Inspector's extraPoolsTruncated", () => {
+    expect(poolsAnswer([doc({ version: "v4", key })], null, true)).toMatchObject({ truncated: true });
+    expect(poolsAnswer([doc({ version: "v4", key })], null, false)).not.toHaveProperty("truncated");
+    expect(extrasFrom(JSON.parse(JSON.stringify(poolsAnswer([doc({ version: "v4", key })], null, true))))).toEqual({ extraPools: [{ version: "v4", key }], extraPoolsTruncated: true });
+    expect(extrasFrom({ pools: [], truncated: "yes" })).toEqual({ extraPools: [] });
   });
 });

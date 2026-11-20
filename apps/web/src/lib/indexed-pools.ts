@@ -22,18 +22,23 @@ export type IndexedPool = {
 };
 
 /**
+ * `truncated`: the index holds more pools for the token than `pools` lists (it reads 50); present only when true.
  * `positions`: the position index for the token's v4 pools (the Inspector's `V4PositionIndex`): its cursor, and for each
  * pool id the position keys it holds, at most 500 a pool and 2,000 in all, else `truncated`. Absent before the position
- * index's first run, or when it couldn't be read.
+ * index's first run, while it is switched off, or when it couldn't be read.
  */
-export type PoolsAnswer = { pools: IndexedPool[]; positions?: V4PositionIndex };
+export type PoolsAnswer = { pools: IndexedPool[]; truncated?: true; positions?: V4PositionIndex };
+
+/** A token's pools as the index lists them, and whether it holds more than it listed. */
+export type IndexedPools = { pools: PoolDoc[]; truncated: boolean };
 
 /** What the index holds for a token: its pools, and its v4 pools' positions (null when there are none to give). */
-export type IndexedToken = { pools: PoolDoc[]; positions: V4PositionIndex | null };
+export type IndexedToken = IndexedPools & { positions: V4PositionIndex | null };
 
 /** The route's answer from the stored docs, newest pool first, with the positions when there are any to give. */
-export function poolsAnswer(docs: readonly PoolDoc[], positions: V4PositionIndex | null = null): PoolsAnswer {
+export function poolsAnswer(docs: readonly PoolDoc[], positions: V4PositionIndex | null = null, truncated = false): PoolsAnswer {
   return {
+    ...(truncated ? { truncated: true as const } : {}),
     ...(positions ? { positions } : {}),
     pools: [...docs]
       .sort((a, b) => b.createdBlock - a.createdBlock)
@@ -100,26 +105,45 @@ export function positionsFrom(answer: unknown): V4PositionIndex | undefined {
 export { IndexUnavailable, causeCode, indexEnabled } from "./index-source";
 
 /**
- * What the index holds for a token through `load`, with the guards of `indexSource` (index-source.ts): a 1.5 s deadline,
- * a 60 s cooldown after a failure, and an answer kept 60 s per token, whatever the case of its address. The positions'
- * cursor is then up to 60 s (about 120 blocks) old, which costs nothing: the lp-lock check reads the blocks after it.
+ * A token's indexed pools through `load`, with the guards of `indexSource` (index-source.ts): a 1.5 s deadline, a 60 s
+ * cooldown after a failure, and an answer kept 60 s per token, whatever the case of its address.
  */
-export function indexedPoolsSource(opts: Omit<IndexSourceOptions<IndexedToken>, "timeoutMessage" | "unavailableMessage">) {
-  const s = indexSource<IndexedToken>({
+export function indexedPoolsSource(opts: Omit<IndexSourceOptions<IndexedPools>, "timeoutMessage" | "unavailableMessage">) {
+  const s = indexSource<IndexedPools>({
     ...opts,
     timeoutMessage: "The pool index took too long.",
     unavailableMessage: "The pool index can't be read right now.",
   });
-  return { token: (token: string) => s.get(token.toLowerCase()) };
+  return { pools: (token: string) => s.get(token.toLowerCase()) };
 }
 
-/** What the index adds to an inspection: the token's v4 pools, and their positions when the index has them. */
-export type IndexedExtras = { extraPools: ExtraPool[]; v4Positions?: V4PositionIndex };
+/**
+ * The positions of a token's v4 pools through `load`, apart from the pools: a deadline of its own (1.5 s) and an answer
+ * kept 60 s per token, but NO cooldown. A token with many positions can be slow or fail where every other token is
+ * fine, and one token's slow positions must never stop the next token's pools from being read. A failure here is that
+ * token's alone: the caller answers the pools without positions.
+ */
+export function indexedPositionsSource(opts: Omit<IndexSourceOptions<V4PositionIndex | null>, "timeoutMessage" | "unavailableMessage" | "cooldownMs">) {
+  const s = indexSource<V4PositionIndex | null>({
+    ...opts,
+    cooldownMs: 0,
+    timeoutMessage: "The position index took too long.",
+    unavailableMessage: "The position index can't be read right now.",
+  });
+  return { positions: (token: string) => s.get(token.toLowerCase()) };
+}
+
+/**
+ * What the index adds to an inspection: the token's v4 pools, whether the index holds more of them than it listed, and
+ * their positions when the index has them.
+ */
+export type IndexedExtras = { extraPools: ExtraPool[]; extraPoolsTruncated?: boolean; v4Positions?: V4PositionIndex };
 
 /** An answer of the route as an inspection's extras. */
 export function extrasFrom(answer: unknown): IndexedExtras {
   const v4Positions = positionsFrom(answer);
-  return { extraPools: extraPoolsFrom(answer), ...(v4Positions ? { v4Positions } : {}) };
+  const truncated = isRecord(answer) && answer.truncated === true;
+  return { extraPools: extraPoolsFrom(answer), ...(truncated ? { extraPoolsTruncated: true } : {}), ...(v4Positions ? { v4Positions } : {}) };
 }
 
 /**
