@@ -8,8 +8,8 @@
  * token's pools are found by their `Initialize` logs, looked for in the last LP_LOCK_LOOKBACK windows of 10,000 blocks (6
  * unless set: about 8 hours), so an older token needs a larger number and takes two requests a window.
  * What it prints is the result table; what it asserts is what must hold of any token: the finding is one of the four
- * the check can give, a pass rests on a path that reached 1,000 USDC with at least 95% of it burned or locked at every
- * point checked, and a fail or a warning offers Vault.
+ * the check can give, a pass or an unknown is word for word what the check says without the index (the index only adds
+ * fails and warnings), and a fail or a warning offers Vault.
  */
 import { decodeEventLog, erc20Abi, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
@@ -97,12 +97,8 @@ describe("lp-lock over real v4 pools, read-only", () => {
       const units = (scaled: bigint) => Number(scaled / SHARE_SCALE) / 1e6;
       const tokens = (raw: bigint) => Number(raw / 10n ** BigInt(decimals ?? 18));
       const sums = (m: ClassSums, as: (v: bigint) => number = units) => Object.fromEntries(HOLDER_CLASSES.filter((k) => m[k] > 0n).map((k) => [k, as(m[k])]));
-      const all = (m: ClassSums) => HOLDER_CLASSES.reduce((t, k) => t + m[k], 0n);
       expect(["pass", "warn", "fail", "unknown"]).toContain(finding.status);
-      if (finding.status === "pass") {
-        expect(tally?.path?.reached).toBe(true);
-        for (const m of tally!.path!.prefixes) expect((m.burned + m.locked) * 100n + all(m) / 1_000_000n).toBeGreaterThanOrEqual(all(m) * 95n);
-      }
+      if (finding.status === "pass" || finding.status === "unknown") expect(finding).toEqual(await checkLpLock({ ...input, v4Positions: undefined }, scan));
       if (finding.status === "fail" || finding.status === "warn") expect(finding).toMatchObject({ fixAppId: "vault" });
       rows.push({
         token: address,
@@ -112,7 +108,7 @@ describe("lp-lock over real v4 pools, read-only", () => {
         path: tally?.path && { reached: tally.path.reached, first: sums(tally.path.prefixes[0]!), last: sums(tally.path.prefixes[tally.path.prefixes.length - 1]!), points: tally.path.prefixes.length },
         windowTokens: tally?.path && tokens(tally.path.windowTokens),
         beyond: tally?.path && sums(tally.path.beyond, tokens),
-        venueTokens: tally && tokens(tally.venueTokens),
+plain: tally?.plainPath && { reached: tally.plainPath.reached, first: sums(tally.plainPath.prefixes[0]!), points: tally.plainPath.prefixes.length },
         unclassified: tally?.unclassifiedHolders,
         blockers: tally?.blockers,
         status: finding.status,

@@ -32,6 +32,8 @@ const plainAbi = parseAbi([
 /** A v4 pool as the fake chain holds it. */
 export type FakePool = {
   sqrtPriceX96: bigint;
+  /** slot0's lpFee, in pips. 500 unless given. */
+  lpFee?: number;
   tick: number;
   liquidity: bigint;
   /**
@@ -180,7 +182,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
         success: true,
         returnData:
           functionName === "getSlot0"
-            ? encodeFunctionResult({ abi: stateViewAbi, functionName: "getSlot0", result: [pool?.sqrtPriceX96 ?? 0n, pool?.tick ?? 0, 0, pool ? 500 : 0] })
+            ? encodeFunctionResult({ abi: stateViewAbi, functionName: "getSlot0", result: [pool?.sqrtPriceX96 ?? 0n, pool?.tick ?? 0, 0, pool ? (pool.lpFee ?? 500) : 0] })
             : encodeFunctionResult({ abi: stateViewAbi, functionName: "getLiquidity", result: pool?.liquidity ?? 0n }),
       };
     }

@@ -211,8 +211,8 @@ export type SizedPosition = {
   liquidity: bigint;
 };
 
-/** A pool's positions, with the raw price they were read at. */
-export type V4PoolRead = { pool: V4PoolRef } & ({ gap: PoolGap } | { gap: null; sqrtPriceX96: bigint; positions: SizedPosition[] });
+/** A pool's positions, with the raw price they were read at and the pool's LP fee then (slot0's `lpFee`, in pips: for a dynamic-fee pool, the fee now). */
+export type V4PoolRead = { pool: V4PoolRef } & ({ gap: PoolGap } | { gap: null; sqrtPriceX96: bigint; lpFee: number; positions: SizedPosition[] });
 
 /**
  * What `readV4Positions` found. `stale`: the index's cursor is too far behind for its tail to be read, so neither the
@@ -370,7 +370,7 @@ export async function readV4Positions(a: {
   ]);
   const state = await beforeDeadline(deadlineAt, () => batched(reader, stateCalls, head));
   type Live = { key: V4PositionKey; quote: bigint; liquidity: bigint; tokenId: bigint | null };
-  const live = new Map<string, { sqrtPriceX96: bigint; held: Live[] }>();
+  const live = new Map<string, { sqrtPriceX96: bigint; lpFee: number; held: Live[] }>();
   const positionManager = lower(v4.positionManager);
   let at = 0;
   for (const { pool, keys } of askedOf) {
@@ -381,7 +381,7 @@ export async function readV4Positions(a: {
       gaps.set(id, "unreadable");
       continue;
     }
-    const [sqrtPriceX96, tick] = slot0.value as readonly [bigint, number, number, number];
+    const [sqrtPriceX96, tick, , lpFee] = slot0.value as readonly [bigint, number, number, number];
     let inRange = 0n;
     const held: Live[] = [];
     keys.forEach((key, i) => {
@@ -399,7 +399,7 @@ export async function readV4Positions(a: {
     // The pool's active liquidity is exactly the sum of the positions whose range holds the current tick. Anything else
     // means a position that isn't in the list (or one in it that isn't the pool's).
     if (sqrtPriceX96 <= 0n || inRange !== (active.value as bigint)) gaps.set(id, "mismatch");
-    else live.set(id, { sqrtPriceX96, held });
+    else live.set(id, { sqrtPriceX96, lpFee: Number(lpFee), held });
   }
 
   // Round two: who owns each NFT position that holds liquidity, at the same block.
@@ -424,7 +424,7 @@ export async function readV4Positions(a: {
       if (!holder) return { pool, gap: "unreadable" };
       positions.push({ holder, tokenId: p.tokenId, quote: p.quote, tickLower: p.key.tickLower, tickUpper: p.key.tickUpper, liquidity: p.liquidity });
     }
-    return { pool, gap: null, sqrtPriceX96: state.sqrtPriceX96, positions };
+    return { pool, gap: null, sqrtPriceX96: state.sqrtPriceX96, lpFee: state.lpFee, positions };
   });
   return { pools: read, stale: false, unlisted };
 }

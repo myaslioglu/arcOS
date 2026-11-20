@@ -411,6 +411,7 @@ describe("readV4Positions", () => {
       pool,
       gap: null,
       sqrtPriceX96: Q96,
+      lpFee: 500,
       positions: [
         { holder: WALLET, tokenId: 1n, ...held(L, -600, 600) },
         { holder: "0x000000000000000000000000000000000000dEaD", tokenId: 2n, ...held(3n * L, -600, 600) },
@@ -522,7 +523,7 @@ describe("readV4Positions", () => {
   it("says missing for a pool the index didn't look up, which an empty list is not", async () => {
     const reader = chain([]);
     expect(await read(reader, index([], { pools: {} }))).toEqual([{ pool, gap: "missing" }]);
-    expect(await read(chain([]), index([]))).toEqual([{ pool, gap: null, sqrtPriceX96: Q96, positions: [] }]);
+    expect(await read(chain([]), index([]))).toEqual([{ pool, gap: null, sqrtPriceX96: Q96, lpFee: 500, positions: [] }]);
     // An entry under an inherited name is no entry.
     expect(await read(chain([]), index([], { pools: Object.create({ [id]: { positions: [], truncated: false } }) as V4PositionIndex["pools"] }))).toEqual([{ pool, gap: "missing" }]);
   });
@@ -578,7 +579,7 @@ describe("readV4Positions", () => {
   it("splits a long list over several multicalls", async () => {
     const positions = Array.from({ length: 450 }, (_, i) => nft(i + 1, 0n));
     const reader = chain(positions);
-    expect(await read(reader, index(positions))).toEqual([{ pool, gap: null, sqrtPriceX96: Q96, positions: [] }]);
+    expect(await read(reader, index(positions))).toEqual([{ pool, gap: null, sqrtPriceX96: Q96, lpFee: 500, positions: [] }]);
     expect(reader.batches.map((b) => b.calls.length)).toEqual([200, 200, 52]);
   });
 });
