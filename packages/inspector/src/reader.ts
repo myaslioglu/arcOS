@@ -1,5 +1,6 @@
 import { BaseError, ContractFunctionZeroDataError, type Abi, type PublicClient } from "viem";
 import type { OutOfGasShape } from "@arcos/chain";
+import type { Hex } from "./bytecode";
 import { isOutOfGas, isRevert, revertPayload } from "./rpc-errors";
 import { CallReverted, type ChainReader } from "./types";
 
@@ -55,6 +56,15 @@ export function viemReader(client: PublicClient, chain: { outOfGas: readonly Out
         .catch(options?.gas === undefined ? mapReadError : capped),
     blockNumber: () => client.getBlockNumber(),
     gasPrice: () => client.getGasPrice(),
+    // Raw, since viem's getLogs takes one event's typed arguments and this filter is the RPC's own.
+    logs: async ({ address, topics, fromBlock, toBlock }) => {
+      const request = client.request as unknown as (args: { method: string; params: unknown[] }) => Promise<unknown>;
+      const logs = (await request({
+        method: "eth_getLogs",
+        params: [{ address, topics, fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}` }],
+      })) as readonly { topics: readonly Hex[]; data: Hex; blockNumber: Hex; removed?: boolean }[];
+      return logs.filter((log) => !log.removed).map((log) => ({ topics: log.topics, data: log.data, blockNumber: BigInt(log.blockNumber) }));
+    },
     // With `account` and `gas` set, viem never folds this call into a multicall batch. A storage write (`stateDiff`) goes
     // with its account only when there is one.
     callWithOverride: async (call, overrides) => {

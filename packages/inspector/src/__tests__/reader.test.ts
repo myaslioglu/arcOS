@@ -332,3 +332,26 @@ describe("viemReader().callWithOverride: storage writes", () => {
     expect(state).toEqual({ [S]: { code: "0x6001600055", balance: "0xa" }, [TOKEN]: { stateDiff: { [slot]: value } } });
   });
 });
+
+describe("viemReader().logs", () => {
+  const TOPIC = `0x${"f2".repeat(32)}` as const;
+  const POOL = `0x${"ab".repeat(32)}` as const;
+  const log = { topics: [TOPIC, POOL], data: "0x1234", blockNumber: "0x1eb83bd", logIndex: "0x0", transactionHash: `0x${"00".repeat(32)}` };
+
+  it("sends one eth_getLogs with the filter as given, the blocks in hex, and reads back what the checks use", async () => {
+    const request = vi.fn(async () => [log, { ...log, blockNumber: "0x1eb83be", removed: true }]);
+    const logs = await viemReader({ request } as unknown as PublicClient, ARC).logs({ address: ADDRESS, topics: [TOPIC, [POOL], null], fromBlock: 32_211_901n, toBlock: 32_211_999n });
+    expect(request).toHaveBeenCalledWith({
+      method: "eth_getLogs",
+      params: [{ address: ADDRESS, topics: [TOPIC, [POOL], null], fromBlock: "0x1eb83bd", toBlock: "0x1eb841f" }],
+    });
+    // A log the node marks removed isn't on the chain.
+    expect(logs).toEqual([{ topics: [TOPIC, POOL], data: "0x1234", blockNumber: 32_211_901n }]);
+  });
+
+  it("passes a refusal or a failure on as it came: it says nothing about the logs", async () => {
+    const refused = Object.assign(new Error("range too large"), { code: -32012 });
+    const request = vi.fn(async () => Promise.reject(refused));
+    await expect(viemReader({ request } as unknown as PublicClient, ARC).logs({ address: ADDRESS, topics: [TOPIC], fromBlock: 1n, toBlock: 20_000n })).rejects.toBe(refused);
+  });
+});

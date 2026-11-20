@@ -82,7 +82,17 @@ export interface ChainReader {
    * answer; anything else, a node refusing the override included, is passed on as it came.
    */
   callWithOverride(call: OverrideCall, overrides: readonly StateOverride[]): Promise<Hex>;
+  /**
+   * One eth_getLogs over [fromBlock, toBlock], inclusive, for one contract. `topics` is the RPC's own filter: a position is
+   * one topic, a list of them (any matches), or null (anything). The lp-lock check reads the tail of the position index
+   * with it, over at most 10,000 blocks. Rejects when the node refuses the range or doesn't answer.
+   */
+  logs(filter: LogFilter): Promise<ChainLog[]>;
 }
+
+export type LogFilter = { address: Address; topics: readonly (Hex | readonly Hex[] | null)[]; fromBlock: bigint; toBlock: bigint };
+/** One log, as far as the checks read it. */
+export type ChainLog = { topics: readonly Hex[]; data: Hex; blockNumber: bigint };
 
 /** The call `ChainReader.callWithOverride` makes, at `gasPrice` (wei per gas), which `from` must hold enough to prepay. */
 export type OverrideCall = { from: Address; to: Address; data: Hex; gas: bigint; gasPrice: bigint };
@@ -103,6 +113,24 @@ export type PoolKey = { currency0: Address; currency1: Address; fee: number; tic
  * how a v4 pool with hooks, or a fee outside the standard five, gets seen.
  */
 export type ExtraPool = { version: "v4"; key: PoolKey };
+
+/**
+ * One liquidity position in a Uniswap v4 pool, as the PoolManager keys it: the address that called `modifyLiquidity`
+ * (`owner`: the PositionManager for an NFT position, whose `salt` is then `bytes32(tokenId)`), the tick range and the salt.
+ */
+export type V4PositionKey = { owner: Address; tickLower: number; tickUpper: number; salt: Hex };
+
+/** The positions the index holds for one pool. `truncated`: there are more than the list carries. */
+export type V4PoolPositions = { positions: V4PositionKey[]; truncated: boolean };
+
+/**
+ * The position index for a token's Uniswap v4 pools (`positions/` in Firestore, filled by the indexer from the PoolManager's
+ * `ModifyLiquidity` logs). `cursor` is the last block whose logs the index has handled: a position opened after it isn't in
+ * the lists, and the lp-lock check reads those blocks itself. `pools` is keyed by pool id, lowercase; a pool with no
+ * entry was not looked up, which is not the same as having no positions (an empty list). Plain JSON, so it crosses the
+ * network as it is.
+ */
+export type V4PositionIndex = { cursor: number; pools: Record<string, V4PoolPositions> };
 
 export type PoolVersion = "v2" | "v3" | "v4" | "aero";
 
@@ -205,6 +233,12 @@ export type InspectInput = {
   prevrandao: PrevrandaoCopy;
   /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */
   extraPools?: ExtraPool[];
+  /**
+   * The index's positions for this token's Uniswap v4 pools (see `V4PositionIndex`; `v4PoolIdsToIndex` names the pools to
+   * look up). With it, lp-lock reads who holds the liquidity of v4 pools. Without it, a v4 pool's positions can't be read
+   * and lp-lock answers as it did before there was an index.
+   */
+  v4Positions?: V4PositionIndex;
   /**
    * Called once with what the pool lookup found, or null when it failed, before the findings are made from it. The indexer
    * stores the best pool from it (`bestPool`), so it needs no second lookup. A hook that throws changes nothing.

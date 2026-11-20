@@ -41,6 +41,7 @@ export function fakeWatchReader(options: FakeWatchReaderOptions): ChainReader & 
     getCode: async () => null,
     blockNumber: async () => 0n,
     gasPrice: async () => 0n,
+    logs: async () => [],
     callWithOverride: async () => {
       throw new Error("the watch reader never simulates");
     },

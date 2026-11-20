@@ -133,6 +133,7 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
     blockNumber: () => watch(() => reader.blockNumber()),
     gasPrice: () => watch(() => reader.gasPrice()),
     callWithOverride: (call, overrides) => watch(() => reader.callWithOverride(call, overrides)),
+    logs: (filter) => watch(() => reader.logs(filter)),
   };
 }
 

@@ -157,6 +157,12 @@ function candidates(token: Address, quotes: readonly V4Quote[], extra: readonly 
   return out;
 }
 
+/**
+ * The ids of every v4 pool an inspection of `token` asks StateView about: the standard hookless keys and the index's usable
+ * pools. The position index is looked up for exactly these (`InspectInput.v4Positions`).
+ */
+export const v4CandidateIds = (token: Address, quotes: readonly V4Quote[], extra: readonly ExtraPool[]): Hex[] => candidates(token, quotes, extra).map((c) => c.id);
+
 /** A raw amount of a currency with `decimals` decimals, in 6 decimals (cut, not rounded). */
 export const toSixDecimals = (raw: bigint, decimals: number): bigint =>
   decimals >= 6 ? raw / 10n ** BigInt(decimals - 6) : raw * 10n ** BigInt(6 - decimals);

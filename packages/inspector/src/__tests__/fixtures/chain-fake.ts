@@ -1,13 +1,15 @@
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, keccak256, parseAbi, type Hex } from "viem";
 import { MULTICALL3, UNISWAP_V4 } from "@arcos/chain";
-import { CallReverted, type ChainReader, type OverrideCall, type StateOverride } from "../../types";
+import { CallReverted, type ChainLog, type ChainReader, type LogFilter, type OverrideCall, type StateOverride } from "../../types";
 
 // The fake answers with its own copies of the ABIs, written out separately from the ones the engine uses: a wrong function
 // signature in the engine then fails a test instead of agreeing with itself.
 const stateViewAbi = parseAbi([
   "function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
   "function getLiquidity(bytes32) view returns (uint128)",
+  "function getPositionInfo(bytes32, address, int24, int24, bytes32) view returns (uint128, uint256, uint256)",
 ]);
+const nftAbi = parseAbi(["function ownerOf(uint256) view returns (address)"]);
 const quoterAbi = parseAbi([
   "struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }",
   "struct QuoteExactSingleParams { PoolKey poolKey; bool zeroForOne; uint128 exactAmount; bytes hookData; }",
@@ -22,6 +24,7 @@ const simulatorAbi = parseAbi([
 const plainAbi = parseAbi([
   "function getPool(address,address,int24) view returns (address)",
   "function balanceOf(address) view returns (uint256)",
+  "function slot0() view returns (uint160, int24)",
 ]);
 
 /** A v4 pool as the fake chain holds it. */
@@ -34,7 +37,10 @@ export type FakePool = {
    * `{ fails }` is a transport failure. Absent: it reverts with "not enough liquidity" for this pool, as for a pool that can't pay.
    */
   quote?: { amountIn: bigint } | { reverts: `0x${string}` } | { fails: Error };
+  /** The pool's positions in the PoolManager, by key. One that isn't listed answers no liquidity, as on chain. */
+  positions?: FakePosition[];
 };
+export type FakePosition = { owner: string; tickLower: number; tickUpper: number; salt: string; liquidity: bigint };
 
 /**
  * A fake chain for the pool tests. Plain reads are keyed like the ones in inspect.test.ts: `"<address>.<fn>(<args>)"`, all
@@ -49,6 +55,14 @@ export type FakeChain = {
   v4?: Record<string, FakePool>;
   /** Targets (lowercase) that answer `0x` inside a multicall, as an address with no code does. */
   silent?: string[];
+  /** PositionManager NFT owners by token id (decimal). One that isn't listed reverts, as a token that was never minted does. */
+  nftOwners?: Record<string, string>;
+  /** What eth_getLogs answers (default: nothing), or the error it fails with. */
+  logs?: ChainLog[] | Error;
+  /** The head block (default 123). */
+  head?: bigint;
+  /** StateView's getPositionInfo fails inside the multicall, for every position. */
+  positionInfoFails?: boolean;
   /** StateView's getLiquidity fails inside the multicall, for every pool. */
   liquidityFails?: boolean;
   /** Multicall3 itself reverts. */
@@ -88,7 +102,7 @@ export type ReadRecord = { address: string; fn: string; args: readonly unknown[]
 export type BatchRecord = { calls: { target: string; fn: string; args: readonly unknown[] }[] };
 /** One quote request the fake's V4Quoter received. */
 export type QuoteRecord = { poolId: string; zeroForOne: boolean; exactAmount: bigint; gas: bigint | undefined };
-export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[]; simulations: SimRecord[] };
+export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[]; simulations: SimRecord[]; logQueries: LogFilter[]; batchBlocks: (bigint | undefined)[] };
 
 const lower = (a: string) => a.toLowerCase();
 /** UnexpectedRevertBytes(NotEnoughLiquidity(poolId)), laid out like the bytes read live (fixtures/quoter-reverts.ts). */
@@ -124,6 +138,9 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
   const batches: BatchRecord[] = [];
   const quotes: QuoteRecord[] = [];
   const simulations: SimRecord[] = [];
+  const logQueries: LogFilter[] = [];
+  const batchBlocks: (bigint | undefined)[] = [];
+  const positionManager = lower(UNISWAP_V4.positionManager);
   const silent = new Set((f.silent ?? []).map(lower));
   const stateView = lower(UNISWAP_V4.stateView);
   const quoter = lower(UNISWAP_V4.quoter);
@@ -137,7 +154,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
   };
 
   const decode = (target: string, data: `0x${string}`) => {
-    const abi = lower(target) === stateView ? stateViewAbi : lower(target) === quoter ? quoterAbi : plainAbi;
+    const abi = lower(target) === stateView ? stateViewAbi : lower(target) === quoter ? quoterAbi : lower(target) === positionManager ? nftAbi : plainAbi;
     const { functionName, args } = decodeFunctionData({ abi, data } as never) as { functionName: string; args: readonly unknown[] };
     return { functionName, args: args ?? [] };
   };
@@ -148,6 +165,12 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
     if (lower(target) === stateView) {
       if (functionName === "getLiquidity" && f.liquidityFails) return { success: false, returnData: "0x" };
       const pool = f.v4?.[lower(String(args[0]))];
+      if (functionName === "getPositionInfo") {
+        if (f.positionInfoFails) return { success: false, returnData: "0x" };
+        const [, owner, tickLower, tickUpper, salt] = args as [string, string, number, number, string];
+        const held = pool?.positions?.find((p) => lower(p.owner) === lower(owner) && p.tickLower === tickLower && p.tickUpper === tickUpper && lower(p.salt) === lower(salt));
+        return { success: true, returnData: encodeFunctionResult({ abi: stateViewAbi, functionName: "getPositionInfo", result: [held?.liquidity ?? 0n, 0n, 0n] }) };
+      }
       return {
         success: true,
         returnData:
@@ -155,6 +178,10 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
             ? encodeFunctionResult({ abi: stateViewAbi, functionName: "getSlot0", result: [pool?.sqrtPriceX96 ?? 0n, pool?.tick ?? 0, 0, pool ? 500 : 0] })
             : encodeFunctionResult({ abi: stateViewAbi, functionName: "getLiquidity", result: pool?.liquidity ?? 0n }),
       };
+    }
+    if (lower(target) === positionManager) {
+      const owner = f.nftOwners?.[String(args[0])];
+      return owner ? { success: true, returnData: encodeFunctionResult({ abi: nftAbi, functionName: "ownerOf", result: owner as `0x${string}` }) } : { success: false, returnData: "0x" };
     }
     // A quote runs the pool's hooks and can burn a lot of gas, so it is never sent inside a multicall.
     if (lower(target) === quoter) throw new Error("a quote must be its own eth_call, not part of a multicall");
@@ -171,6 +198,13 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
     batches,
     quotes,
     simulations,
+    logQueries,
+    batchBlocks,
+    logs: async (filter) => {
+      logQueries.push(filter);
+      if (f.logs instanceof Error) throw f.logs;
+      return f.logs ?? [];
+    },
     getCode: async (a) => (f.code?.[lower(a)] as `0x${string}` | undefined) ?? null,
     getStorageAt: async () => null,
     read: async (address, _abi, fn, args = [], options) => {
@@ -188,6 +222,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
         if (f.multicallError) throw f.multicallError;
         if (f.multicallReverts) throw new CallReverted();
         const calls = args[0] as { target: `0x${string}`; allowFailure: boolean; callData: `0x${string}` }[];
+        batchBlocks.push(options?.blockNumber);
         batches.push({
           calls: calls.map((c) => {
             const { functionName, args: callArgs } = decode(c.target, c.callData);
@@ -198,7 +233,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
       }
       return plain(address, fn, args);
     },
-    blockNumber: async () => 123n,
+    blockNumber: async () => f.head ?? 123n,
     gasPrice: async () => {
       if (f.gasPrice instanceof Error) throw f.gasPrice;
       return f.gasPrice ?? 20_000_000_000n;

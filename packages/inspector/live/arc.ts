@@ -43,4 +43,5 @@ export const reader: ChainReader = {
   blockNumber: () => paced(() => inner.blockNumber()),
   gasPrice: () => paced(() => inner.gasPrice()),
   callWithOverride: (call, overrides) => paced(() => inner.callWithOverride(call, overrides)),
+  logs: (filter) => paced(() => inner.logs(filter)),
 };

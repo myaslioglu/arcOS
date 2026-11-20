@@ -7,7 +7,9 @@ export * from "./reader";
 export * from "./rpc-errors";
 export * from "./label";
 export * from "./inspect";
-export { IMPL_SLOT, ZEPPELINOS_IMPL_SLOT, addressFromSlot, bestPool, erc20Abi, slotReadable } from "./checks";
+export { IMPL_SLOT, ZEPPELINOS_IMPL_SLOT, addressFromSlot, bestPool, erc20Abi, slotReadable, v4PoolIdsToIndex } from "./checks";
+// The position index's vocabulary: the event the indexer reads, a log as a position key, and the caps the check reads within.
+export { MAX_POSITIONS, MAX_POSITIONS_PER_POOL, MODIFY_LIQUIDITY_TOPIC, TAIL_MAX_BLOCKS, isPositionKey, positionFromLog } from "./v4-positions";
 export { NATIVE, quoteInRange, stateViewAbi, v4PoolId, v4PoolKey } from "./v4";
 // What Watchdog's reader batches with: one aggregate3 per token, pinned to the run's block.
 export { multicall, type BatchCall, type BatchResult, type MulticallOptions } from "./multicall";
