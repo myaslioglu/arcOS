@@ -57,7 +57,7 @@ export type FakeChain = {
   silent?: string[];
   /** PositionManager NFT owners by token id (decimal). One that isn't listed reverts, as a token that was never minted does. */
   nftOwners?: Record<string, string>;
-  /** What eth_getLogs answers (default: nothing), or the error it fails with. */
+  /** The chain's logs (default: none), which eth_getLogs answers by block range and topics, or the error it fails with. */
   logs?: ChainLog[] | Error;
   /** The head block (default 123). */
   head?: bigint;
@@ -203,7 +203,11 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
     logs: async (filter) => {
       logQueries.push(filter);
       if (f.logs instanceof Error) throw f.logs;
-      return f.logs ?? [];
+      // The RPC's own matching: each topic position is one topic, any of a list, or anything.
+      const matches = (log: ChainLog) =>
+        log.blockNumber >= filter.fromBlock && log.blockNumber <= filter.toBlock &&
+        filter.topics.every((want, i) => want === null || (typeof want === "string" ? [want] : want).some((t) => lower(t) === lower(log.topics[i] ?? "")));
+      return (f.logs ?? []).filter(matches);
     },
     getCode: async (a) => (f.code?.[lower(a)] as `0x${string}` | undefined) ?? null,
     getStorageAt: async () => null,

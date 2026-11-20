@@ -6,6 +6,7 @@ import {
   HEAD_MARGIN,
   MAX_HOLDER_CODE_READS,
   MAX_POSITIONS,
+  INITIALIZE_TOPIC,
   MAX_POSITIONS_PER_POOL,
   MODIFY_LIQUIDITY_TOPIC,
   TAIL_MAX_BLOCKS,
@@ -15,6 +16,7 @@ import {
   hookCanChangeRemoval,
   isPositionKey,
   positionFromLog,
+  positionHoldings,
   positionValue,
   readHolderCode,
   readV4Positions,
@@ -149,6 +151,7 @@ describe("the hook's remove-liquidity permissions", () => {
 });
 
 const POOL_ID = `0x${"ab".repeat(32)}` as const;
+const ZERO = "0x0000000000000000000000000000000000000000";
 const SENDER = "0x00000000000000000000000000000000000a11ce";
 const salt = (n: number): `0x${string}` => `0x${n.toString(16).padStart(64, "0")}`;
 const modifyLog = (poolId: string, sender: string, tickLower: number, tickUpper: number, delta: bigint, s: `0x${string}`, block = 100n): ChainLog => ({
@@ -257,22 +260,33 @@ describe("readV4Positions", () => {
       nftOwners: { 1: WALLET, 2: "0x000000000000000000000000000000000000dEaD" },
       ...over,
     });
-  const read = (reader: ReturnType<typeof fakeChain>, idx: V4PositionIndex, pools = [pool]) => readV4Positions({ reader, v4: UNISWAP_V4, pools, index: idx });
+  const readAll = (reader: ReturnType<typeof fakeChain>, idx: V4PositionIndex, pools = [pool]) => readV4Positions({ reader, v4: UNISWAP_V4, pools, index: idx, token: TOKEN, quotes: [USDC, ZERO] });
+  const read = async (...args: Parameters<typeof readAll>) => (await readAll(...args)).pools;
+  const topic = (address: string): `0x${string}` => `0x${address.slice(2).toLowerCase().padStart(64, "0")}`;
+  /** An Initialize of a pool `poolId` between two currencies, sorted as v4 sorts them. */
+  const initialize = (poolId: string, a: string, b: string, block = 950n): ChainLog => {
+    const [c0, c1] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+    return { topics: [INITIALIZE_TOPIC, poolId as `0x${string}`, topic(c0), topic(c1)], data: "0x", blockNumber: block };
+  };
 
   it("sizes each position that holds liquidity and names who can act on it: the NFT's owner, or the sender itself", async () => {
     const positions = [nft(1, L), nft(2, 3n * L), { owner: SENDER, tickLower: -60, tickUpper: 60, salt: salt(0), liquidity: L }, nft(3, 0n)];
     const reader = chain(positions);
     const [got] = await read(reader, index(positions));
-    const value = (liquidity: bigint, lower: number, upper: number) => positionValue({ sqrtPriceX96: Q96, tickLower: lower, tickUpper: upper, liquidity, quoteIsCurrency0: false });
+    const held = (liquidity: bigint, lower: number, upper: number) => positionHoldings({ sqrtPriceX96: Q96, tickLower: lower, tickUpper: upper, liquidity, quoteIsCurrency0: false });
     expect(got).toEqual({
       pool,
       gap: null,
       positions: [
-        { holder: WALLET, tokenId: 1n, value: value(L, -600, 600) },
-        { holder: "0x000000000000000000000000000000000000dEaD", tokenId: 2n, value: value(3n * L, -600, 600) },
-        { holder: SENDER, tokenId: null, value: value(L, -60, 60) },
+        { holder: WALLET, tokenId: 1n, ...held(L, -600, 600) },
+        { holder: "0x000000000000000000000000000000000000dEaD", tokenId: 2n, ...held(3n * L, -600, 600) },
+        { holder: SENDER, tokenId: null, ...held(L, -60, 60) },
       ],
     });
+    // The value is the two amounts together at the price: here price 1, so their sum.
+    const one = held(L, -600, 600);
+    expect(one.quote + one.token).toBe(one.value);
+    expect(one.quote).toBeGreaterThan(0n);
     // Everything at one block, a little behind the tip; and ownerOf only for the NFTs that hold liquidity.
     expect(new Set(reader.batchBlocks)).toEqual(new Set([HEAD - HEAD_MARGIN]));
     expect(reader.batches.flatMap((b) => b.calls).filter((c) => c.fn === "ownerOf").map((c) => c.args[0])).toEqual([1n, 2n]);
@@ -283,16 +297,53 @@ describe("readV4Positions", () => {
     const positions = [{ owner: SENDER, tickLower: -600, tickUpper: 600, salt: salt(0), liquidity: 10n ** 24n }];
     const [got] = await read(chain(positions), index(positions), [{ ...pool, quoteDecimals: 18 }]);
     const raw = positionValue({ sqrtPriceX96: Q96, tickLower: -600, tickUpper: 600, liquidity: 10n ** 24n, quoteIsCurrency0: false });
-    expect(got).toMatchObject({ gap: null, positions: [{ value: raw / 10n ** 12n }] });
+    expect(got).toMatchObject({ gap: null, positions: [{ value: raw / 10n ** 12n, quote: positionHoldings({ sqrtPriceX96: Q96, tickLower: -600, tickUpper: 600, liquidity: 10n ** 24n, quoteIsCurrency0: false }).quote / 10n ** 12n }] });
   });
 
   it("reads the blocks after the index's cursor itself, and adds the positions they opened", async () => {
     const indexed = [nft(1, L)];
     const fresh = nft(2, 2n * L);
-    const reader = chain([...indexed, fresh], { logs: [modifyLog(id, PM, -600, 600, 2n * L, salt(2)), modifyLog(id, PM, -600, 600, 1n, salt(1)), modifyLog(POOL_ID, PM, -600, 600, 1n, salt(9))] });
+    const reader = chain([...indexed, fresh], { logs: [modifyLog(id, PM, -600, 600, 2n * L, salt(2), 950n), modifyLog(id, PM, -600, 600, 1n, salt(1), 950n), modifyLog(POOL_ID, PM, -600, 600, 1n, salt(9), 950n), modifyLog(id, PM, -600, 600, 1n, salt(77), 900n)] });
     const [got] = await read(reader, index(indexed, { cursor: 900 }));
     expect(got).toMatchObject({ gap: null, positions: [{ tokenId: 1n }, { tokenId: 2n }] });
-    expect(reader.logQueries).toEqual([{ address: UNISWAP_V4.poolManager, topics: [MODIFY_LIQUIDITY_TOPIC, [id]], fromBlock: 901n, toBlock: HEAD - HEAD_MARGIN }]);
+    // Three questions of the same blocks: the pools' positions, and pools created with the token on either side.
+    const tail = { address: UNISWAP_V4.poolManager, fromBlock: 901n, toBlock: HEAD - HEAD_MARGIN };
+    expect(reader.logQueries).toEqual([
+      { ...tail, topics: [MODIFY_LIQUIDITY_TOPIC, [id]] },
+      { ...tail, topics: [INITIALIZE_TOPIC, null, topic(TOKEN)] },
+      { ...tail, topics: [INITIALIZE_TOPIC, null, null, topic(TOKEN)] },
+    ]);
+  });
+
+  it("names a pool of the token created since the cursor that it wasn't asked about, on either side of the pair", async () => {
+    const HIGH = "0x9999999999999999999999999999999999999999"; // sorts above USDC: the token is then currency1
+    const hookedId = `0x${"c1".repeat(32)}`;
+    const logs = [
+      initialize(hookedId, TOKEN, USDC),
+      initialize(`0x${"c2".repeat(32)}`, TOKEN, ZERO),
+      // Not against a quote currency: never counted, as before.
+      initialize(`0x${"c3".repeat(32)}`, TOKEN, "0x128cC466B61f542da60c70e3aA11c10e19B84EDB"),
+      // Asked about: nothing to say.
+      initialize(id, TOKEN, USDC),
+      // Before the tail: the index's business.
+      initialize(`0x${"c4".repeat(32)}`, TOKEN, USDC, 900n),
+      // Another token's pool.
+      initialize(`0x${"c5".repeat(32)}`, HIGH, USDC),
+    ];
+    const got = await readAll(chain([nft(1, L)], { logs }), index([nft(1, L)], { cursor: 900 }));
+    expect(got).toMatchObject({ stale: false, unlisted: [`0x${"c2".repeat(32)}`, hookedId].sort(), pools: [{ gap: null }] });
+    const high = await readV4Positions({ reader: chain([], { logs }), v4: UNISWAP_V4, pools: [], index: { cursor: 900, pools: {} }, token: HIGH, quotes: [USDC, ZERO] });
+    expect(high).toEqual({ pools: [], stale: false, unlisted: [`0x${"c5".repeat(32)}`] });
+  });
+
+  it("asks about new pools even with no pool to read, and nothing at all when the index is at the head", async () => {
+    const reader = chain([]);
+    expect(await readV4Positions({ reader, v4: UNISWAP_V4, pools: [], index: { cursor: 900, pools: {} }, token: TOKEN, quotes: [USDC] })).toEqual({ pools: [], stale: false, unlisted: [] });
+    expect(reader.logQueries.map((q) => q.topics[0])).toEqual([INITIALIZE_TOPIC, INITIALIZE_TOPIC]);
+    const caught = chain([]);
+    await readV4Positions({ reader: caught, v4: UNISWAP_V4, pools: [], index: { cursor: Number(HEAD), pools: {} }, token: TOKEN, quotes: [USDC] });
+    expect(caught.logQueries).toEqual([]);
+    expect(await readV4Positions({ reader: chain([], { head: 50_000n }), v4: UNISWAP_V4, pools: [], index: { cursor: 0, pools: {} }, token: TOKEN, quotes: [USDC] })).toEqual({ pools: [], stale: true, unlisted: [] });
   });
 
   it("is stale when the cursor is more than 10,000 blocks behind, and reads nothing", async () => {
@@ -328,7 +379,7 @@ describe("readV4Positions", () => {
     expect(await read(chain(many), index(many))).toEqual([{ pool, gap: "truncated" }]);
     // The tail can push a full list over the cap.
     const full = many.slice(0, MAX_POSITIONS_PER_POOL);
-    const over = chain(full, { logs: [modifyLog(id, PM, -600, 600, 1n, salt(9_999))] });
+    const over = chain(full, { logs: [modifyLog(id, PM, -600, 600, 1n, salt(9_999), 950n)] });
     expect(await read(over, index(full, { cursor: 900 }))).toEqual([{ pool, gap: "truncated" }]);
   });
 

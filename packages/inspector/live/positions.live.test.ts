@@ -13,7 +13,7 @@
 import { decodeEventLog, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import { DEX, UNISWAP_V4, type Address } from "@arcos/chain";
-import { SHARE_SCALE, checkLpLock, findPools, tallyLiquidity } from "../src/checks";
+import { SHARE_SCALE, checkLpLock, erc20Abi, findPools, tallyLiquidity } from "../src/checks";
 import type { ExtraPool, InspectInput, V4PositionIndex } from "../src/types";
 import { MODIFY_LIQUIDITY_TOPIC, positionFromLog } from "../src/v4-positions";
 import { v4PoolId } from "../src/v4";
@@ -87,7 +87,8 @@ describe("lp-lock over real v4 pools, read-only", () => {
       // The standard hookless keys the scan also probes have no entry above; one that exists reads as "missing".
       const scan = await findPools(input);
       for (const p of scan.pools) if (p.version === "v4" && p.poolId && !index.pools[p.poolId.toLowerCase()]) index.pools[p.poolId.toLowerCase()] = { positions: [], truncated: false };
-      const finding = await checkLpLock(input, scan);
+      const decimals = Number(await reader.read(address, erc20Abi, "decimals").catch(() => 18));
+      const finding = await checkLpLock(input, scan, decimals);
       const tally = await tallyLiquidity(input, scan, DEX.mainnet!);
       const units = (scaled: bigint) => Number(scaled / SHARE_SCALE) / 1e6;
       expect(["pass", "fail", "unknown"]).toContain(finding.status);
@@ -98,6 +99,7 @@ describe("lp-lock over real v4 pools, read-only", () => {
         token: address,
         pools: scan.pools.map((p) => `${p.version}${p.key && BigInt(p.key.hooks) !== 0n ? `+hook ${p.key.hooks}` : ""} ${p.poolId ?? p.address}`),
         positions: Object.fromEntries(Object.entries(index.pools).map(([id, v]) => [id.slice(0, 10), v.positions.length])),
+        withdrawableHolds: { quote: Number(tally.withdrawableHolds.quote) / 1e6, tokenRaw: tally.withdrawableHolds.token.toString() },
         value: { burned: units(tally.burned), locked: units(tally.locked), withdrawable: units(tally.withdrawable), unknown: Object.fromEntries(Object.entries(tally.unknown).filter(([, v]) => v > 0n).map(([k, v]) => [k, units(v)])) },
         status: finding.status,
         title: finding.title,

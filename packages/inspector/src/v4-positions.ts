@@ -8,7 +8,9 @@ import { sqrtRatioAtTick, toSixDecimals } from "./v4";
 // Who holds the liquidity of a Uniswap v4 pool. A v4 position has no token of its own: it is an entry in the PoolManager
 // keyed by (pool id, owner, tickLower, tickUpper, salt), and only the `ModifyLiquidity` logs say which entries exist. The
 // index (`InspectInput.v4Positions`) lists them; everything else is read live here, at one block:
-// 1. the blocks after the index's cursor, with one eth_getLogs (at most `TAIL_MAX_BLOCKS` of them);
+// 1. the blocks after the index's cursor (at most `TAIL_MAX_BLOCKS` of them), with three eth_getLogs: the pools'
+//    `ModifyLiquidity`, and `Initialize` with the token as currency0 and as currency1, which names a pool of the token
+//    created since the cursor that the pool lookup may not have (a hooked one the pool index hasn't recorded yet);
 // 2. each position's liquidity (`StateView.getPositionInfo`), the pool's price and tick (`getSlot0`) and its active
 //    liquidity (`getLiquidity`), in multicalls pinned to one block, `HEAD_MARGIN` behind the latest;
 // 3. for a PositionManager position, whose salt is its NFT's token id, the NFT's owner (`ownerOf`), at the same block.
@@ -20,6 +22,12 @@ const modifyLiquidityEvent = parseAbi([
 ]);
 /** topic0 of the PoolManager's `ModifyLiquidity`: every change to a position's liquidity emits one. */
 export const MODIFY_LIQUIDITY_TOPIC: Hex = toEventSelector(modifyLiquidityEvent[0]);
+
+const initializeEvent = parseAbi([
+  "event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)",
+]);
+/** topic0 of the PoolManager's `Initialize`: one per pool, with its two currencies as topics 2 and 3. */
+export const INITIALIZE_TOPIC: Hex = toEventSelector(initializeEvent[0]);
 
 const positionInfoAbi = parseAbi([
   "function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
@@ -72,6 +80,8 @@ export function isPositionKey(key: unknown): key is V4PositionKey {
   );
 }
 
+/** An address as an indexed event topic: left-padded to 32 bytes, lowercase. */
+const topicOf = (address: string): Hex => `0x${lower(address).slice(2).padStart(64, "0")}`;
 const keyId = (k: V4PositionKey): string => `${lower(k.owner)}:${k.tickLower}:${k.tickUpper}:${lower(k.salt)}`;
 
 /**
@@ -100,10 +110,21 @@ export function amountsForLiquidity(sqrtP: bigint, sqrtA: bigint, sqrtB: bigint,
  * still valued at the current price, not at the range's.
  */
 export function positionValue(p: { sqrtPriceX96: bigint; tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean }): bigint {
-  if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return 0n;
+  return positionHoldings(p).value;
+}
+
+/**
+ * What a position holds now, in raw units: `quote` of the quote currency and `token` of the other one, and `value`, the
+ * two together in the quote currency at the pool's price (see `positionValue`). `quote` is what removing the position
+ * takes out of the pool in the quote currency; the token side is worth `value - quote` only at the current price.
+ */
+export function positionHoldings(p: { sqrtPriceX96: bigint; tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean }): { quote: bigint; token: bigint; value: bigint } {
+  if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return { quote: 0n, token: 0n, value: 0n };
   const { amount0, amount1 } = amountsForLiquidity(p.sqrtPriceX96, sqrtRatioAtTick(p.tickLower), sqrtRatioAtTick(p.tickUpper), p.liquidity);
   const priceX192 = p.sqrtPriceX96 * p.sqrtPriceX96;
-  return p.quoteIsCurrency0 ? amount0 + (amount1 << 192n) / priceX192 : amount1 + ((amount0 * priceX192) >> 192n);
+  return p.quoteIsCurrency0
+    ? { quote: amount0, token: amount1, value: amount0 + (amount1 << 192n) / priceX192 }
+    : { quote: amount1, token: amount0, value: amount1 + ((amount0 * priceX192) >> 192n) };
 }
 
 /** A Uniswap v3 or Aerodrome pool's two balances as one value in the quote token's raw units: the quote balance plus the token balance at the pool's price. */
@@ -142,9 +163,20 @@ export type SizedPosition = {
   /** The PositionManager NFT, when it is one. */
   tokenId: bigint | null;
   value: bigint;
+  /** What it holds of the quote currency (6 decimals) and of the token (raw units): the two amounts `value` adds up. */
+  quote: bigint;
+  token: bigint;
 };
 
 export type V4PoolRead = { pool: V4PoolRef } & ({ gap: PoolGap } | { gap: null; positions: SizedPosition[] });
+
+/**
+ * What `readV4Positions` found. `stale`: the index's cursor is too far behind for its tail to be read, so neither the
+ * positions nor the list of the token's pools can be relied on. `unlisted`: v4 pools of the token against a quote
+ * currency that were created after the cursor and that the caller didn't ask about: pools the lookup missed, whose
+ * liquidity nothing here has read.
+ */
+export type V4PositionsRead = { pools: V4PoolRead[]; stale: boolean; unlisted: Hex[] };
 
 async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -173,22 +205,32 @@ async function batched(reader: ChainReader, calls: readonly BatchCall[], blockNu
 
 /**
  * The positions that hold liquidity in each of `pools`, sized at the pool's current price, or why they can't be read
- * (`PoolGap`). Rejects only on a transport failure. The steps are in the header comment; the numbers:
+ * (`PoolGap`), and the token's pools created since the index's cursor that aren't among them. Rejects only on a
+ * transport failure. The steps are in the header comment; the numbers:
  * - the index's lists, then the positions `ModifyLiquidity` named between its cursor and the head (one eth_getLogs for all
  *   the pools, topic1 any of their ids), each key once;
+ * - `Initialize` over the same blocks with `token` as currency0 and as currency1 (two eth_getLogs, whether or not there
+ *   is a pool to read): a pool there against one of `quotes` that isn't in `pools` is `unlisted`;
  * - one round of multicalls at the head block for every pool's slot0 and active liquidity and every position's
  *   liquidity, then one more for `ownerOf` of the PositionManager positions that hold any;
  * - a position with no liquidity is dropped; one whose NFT has no owner while it holds liquidity makes the pool unreadable.
  */
-export async function readV4Positions(a: { reader: ChainReader; v4: UniswapV4Config; pools: readonly V4PoolRef[]; index: V4PositionIndex }): Promise<V4PoolRead[]> {
+export async function readV4Positions(a: {
+  reader: ChainReader;
+  v4: UniswapV4Config;
+  pools: readonly V4PoolRef[];
+  index: V4PositionIndex;
+  /** The token inspected, and the currencies its pools are counted against (address(0) for the native one). */
+  token: Address;
+  quotes: readonly Address[];
+}): Promise<V4PositionsRead> {
   const { reader, v4, pools, index } = a;
-  if (pools.length === 0) return [];
   // A little behind the tip: the RPC sits behind a load balancer whose nodes can be a block apart, and a read pinned to a
   // block one of them doesn't have yet fails.
   const tip = await reader.blockNumber();
   const head = tip > HEAD_MARGIN ? tip - HEAD_MARGIN : tip;
   const cursor = Number.isSafeInteger(index.cursor) && index.cursor >= 0 ? BigInt(index.cursor) : null;
-  if (cursor === null || head - cursor > BigInt(TAIL_MAX_BLOCKS)) return pools.map((pool) => ({ pool, gap: "stale" }));
+  if (cursor === null || head - cursor > BigInt(TAIL_MAX_BLOCKS)) return { pools: pools.map((pool) => ({ pool, gap: "stale" })), stale: true, unlisted: [] };
 
   // The lists, by pool. A pool the index didn't look up stays missing whatever the tail says: the tail is only the blocks
   // after the cursor.
@@ -206,12 +248,27 @@ export async function readV4Positions(a: { reader: ChainReader; v4: UniswapV4Con
     lists.set(id, new Map(entry.positions.filter(isPositionKey).map((key) => [keyId(key), key])));
   }
   const open = () => pools.filter((pool) => !gaps.has(lower(pool.poolId)));
-  if (cursor < head && open().length > 0) {
-    const logs = await reader.logs({ address: v4.poolManager, topics: [MODIFY_LIQUIDITY_TOPIC, open().map((pool) => pool.poolId)], fromBlock: cursor + 1n, toBlock: head });
+  const unlisted: Hex[] = [];
+  if (cursor < head) {
+    const tail = { address: v4.poolManager, fromBlock: cursor + 1n, toBlock: head };
+    const token = topicOf(a.token);
+    const [logs, as0, as1] = await Promise.all([
+      open().length > 0 ? reader.logs({ ...tail, topics: [MODIFY_LIQUIDITY_TOPIC, open().map((pool) => pool.poolId)] }) : [],
+      reader.logs({ ...tail, topics: [INITIALIZE_TOPIC, null, token] }),
+      reader.logs({ ...tail, topics: [INITIALIZE_TOPIC, null, null, token] }),
+    ]);
     for (const log of logs) {
       const found = positionFromLog(log);
       const list = found && lists.get(found.poolId);
       if (found && list && isPositionKey(found.key)) list.set(keyId(found.key), found.key);
+    }
+    // A pool of the token against a quote currency, created since the cursor, that nobody asked about.
+    const asked = new Set(pools.map((pool) => lower(pool.poolId)));
+    const quotes = new Set(a.quotes.map(topicOf));
+    for (const [log, other] of [...as0.map((l) => [l, 3] as const), ...as1.map((l) => [l, 2] as const)]) {
+      if (log.topics.length !== 4 || lower(log.topics[0]!) !== INITIALIZE_TOPIC || !quotes.has(lower(log.topics[other]!) as Hex)) continue;
+      const id = lower(log.topics[1]!) as Hex;
+      if (!asked.has(id) && !unlisted.includes(id)) unlisted.push(id);
     }
   }
   let budget = MAX_POSITIONS;
@@ -230,7 +287,7 @@ export async function readV4Positions(a: { reader: ChainReader; v4: UniswapV4Con
     ...keys.map((k): BatchCall => ({ target: v4.stateView, abi: positionInfoAbi, functionName: "getPositionInfo", args: [pool.poolId, k.owner, k.tickLower, k.tickUpper, k.salt] })),
   ]);
   const state = await batched(reader, stateCalls, head);
-  type Live = { key: V4PositionKey; liquidity: bigint; value: bigint; tokenId: bigint | null };
+  type Live = { key: V4PositionKey; liquidity: bigint; value: bigint; quote: bigint; token: bigint; tokenId: bigint | null };
   const live = new Map<string, Live[]>();
   const positionManager = lower(v4.positionManager);
   let at = 0;
@@ -249,8 +306,15 @@ export async function readV4Positions(a: { reader: ChainReader; v4: UniswapV4Con
       const [liquidity] = (infos[i] as { ok: true; value: unknown }).value as readonly [bigint, bigint, bigint];
       if (liquidity <= 0n) return;
       if (key.tickLower <= tick && tick < key.tickUpper) inRange += liquidity;
-      const raw = positionValue({ sqrtPriceX96, tickLower: key.tickLower, tickUpper: key.tickUpper, liquidity, quoteIsCurrency0: pool.quoteIsCurrency0 });
-      held.push({ key, liquidity, value: toSixDecimals(raw, pool.quoteDecimals), tokenId: lower(key.owner) === positionManager ? BigInt(key.salt) : null });
+      const raw = positionHoldings({ sqrtPriceX96, tickLower: key.tickLower, tickUpper: key.tickUpper, liquidity, quoteIsCurrency0: pool.quoteIsCurrency0 });
+      held.push({
+        key,
+        liquidity,
+        value: toSixDecimals(raw.value, pool.quoteDecimals),
+        quote: toSixDecimals(raw.quote, pool.quoteDecimals),
+        token: raw.token,
+        tokenId: lower(key.owner) === positionManager ? BigInt(key.salt) : null,
+      });
     });
     // The pool's active liquidity is exactly the sum of the positions whose range holds the current tick. Anything else
     // means a position that isn't in the list (or one in it that isn't the pool's).
@@ -268,7 +332,7 @@ export async function readV4Positions(a: { reader: ChainReader; v4: UniswapV4Con
     }),
   );
 
-  return pools.map((pool): V4PoolRead => {
+  const read = pools.map((pool): V4PoolRead => {
     const id = lower(pool.poolId);
     const gap = gaps.get(id);
     if (gap) return { pool, gap };
@@ -276,10 +340,11 @@ export async function readV4Positions(a: { reader: ChainReader; v4: UniswapV4Con
     for (const p of live.get(id) ?? []) {
       const holder = p.tokenId === null ? p.key.owner : ownerOf.get(p.tokenId);
       if (!holder) return { pool, gap: "unreadable" };
-      positions.push({ holder, tokenId: p.tokenId, value: p.value });
+      positions.push({ holder, tokenId: p.tokenId, value: p.value, quote: p.quote, token: p.token });
     }
     return { pool, gap: null, positions };
   });
+  return { pools: read, stale: false, unlisted };
 }
 
 /**

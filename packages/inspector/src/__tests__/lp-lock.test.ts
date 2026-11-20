@@ -57,7 +57,7 @@ function setup(positions: FakePosition[], over: { chain?: FakeChain; dex?: DexCo
   const poolId = v4PoolId(poolKey);
   const reader = fakeChain({
     head: HEAD,
-    v4: { [poolId]: { sqrtPriceX96: Q96, tick: 0, liquidity: positions.reduce((s, p) => s + p.liquidity, 0n), quote: { amountIn: 1n }, positions } },
+    v4: { [poolId]: { sqrtPriceX96: Q96, tick: 0, liquidity: positions.filter((p) => p.tickLower <= 0 && 0 < p.tickUpper).reduce((s, p) => s + p.liquidity, 0n), quote: { amountIn: 1n }, positions } },
     ...over.chain,
   });
   const index = over.index === undefined ? { cursor: Number(HEAD - HEAD_MARGIN), pools: { [poolId]: { positions: positions.map(keyOf), truncated: false } } } : over.index;
@@ -70,23 +70,45 @@ function setup(positions: FakePosition[], over: { chain?: FakeChain; dex?: DexCo
   };
   return { reader, input };
 }
-async function lpLock(positions: FakePosition[], over: Parameters<typeof setup>[1] = {}): Promise<Finding> {
+async function lpLock(positions: FakePosition[], over: Parameters<typeof setup>[1] = {}, decimals: number | null = null): Promise<Finding> {
   const { input } = setup(positions, over);
-  return checkLpLock(input, await findPools(input));
+  return checkLpLock(input, await findPools(input), decimals);
 }
 const owners = (map: Record<number, string>): FakeChain => ({ nftOwners: map });
 
 describe("lp-lock over a Uniswap v4 pool's positions", () => {
-  it("fails when a wallet holds the position: the share, its value, a Vault fix and the NFT's page", async () => {
-    const f = await lpLock([nft(7, L)], { chain: owners({ 7: WALLET }) });
+  it("fails when a wallet holds the position: the share, what it holds, a Vault fix and the NFT's page", async () => {
+    // The position is worth 59,106.021758 USDC at price 1: half of it is USDC, half is 29,553,010,879 raw tokens.
+    const f = await lpLock([nft(7, L)], { chain: owners({ 7: WALLET }) }, 6);
     expect(f).toEqual({
       id: "lp-lock",
       status: "fail",
       title: "Liquidity isn't locked",
-      detail: "100% of the token's liquidity, about 59,106 USDC of value, is in positions wallets can withdraw. 0% is burned or locked.",
+      detail: "100% of this token's liquidity, by value at the current price, is in positions wallets can withdraw; they hold 29,553 USDC and 29.5K tokens. 0% is burned or locked.",
       evidenceUrl: `https://explorer.test/token/${PM}/instance/7`,
       fixAppId: "vault",
     });
+  });
+
+  it("never calls the token side USDC: a position that holds only tokens is said to hold 0 USDC", async () => {
+    // A range the price has not reached: [600, 1200] at tick 0 is all currency0, the token.
+    const above: FakePosition = { owner: PM, tickLower: 600, tickUpper: 1200, salt: salt(7), liquidity: L };
+    const f = await lpLock([above], { chain: { nftOwners: { 7: WALLET } } }, 6);
+    expect(f.status).toBe("fail");
+    expect(f.detail).toMatch(/^100% of this token's liquidity, by value at the current price, is in positions wallets can withdraw; they hold 0 USDC and 28\.6K tokens\./);
+    expect(f.detail).not.toMatch(/of value/);
+  });
+
+  it("writes the token amount short, whatever the token's decimals, and without its symbol", async () => {
+    const detail = async (decimals: number | null) => (await lpLock([nft(7, L)], { chain: owners({ 7: WALLET }) }, decimals)).detail;
+    // 29,553,010,879 raw units.
+    expect(await detail(0)).toMatch(/29,553 USDC and 29\.5B tokens\./);
+    expect(await detail(3)).toMatch(/and 29\.5M tokens\./);
+    expect(await detail(8)).toMatch(/and 295 tokens\./);
+    expect(await detail(18)).toMatch(/and 0 tokens\./);
+    expect(await detail(null)).toMatch(/29,553 USDC and tokens\./);
+    const huge = await lpLock([nft(7, 10n ** 30n)], { chain: owners({ 7: WALLET }) }, 0);
+    expect(huge.detail).toMatch(/and 29,553,010,879,137,169,680,827,419,253 tokens\./);
   });
 
   it("passes when the NFT sits at a burn address", async () => {
@@ -95,7 +117,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       id: "lp-lock",
       status: "pass",
       title: "Liquidity is burned or locked",
-      detail: "100% of the token's liquidity can't be withdrawn (burned: 100%, locked: 0%), counted over 1 pool(s) at the current price.",
+      detail: "100% of this token's liquidity, by value at the current price, can't be withdrawn (burned: 100%, locked: 0%), counted over 1 pool(s).",
       evidenceUrl: `https://explorer.test/token/${PM}/instance/7`,
       fixAppId: null,
     });
@@ -103,7 +125,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
 
   it("passes when a known locker holds it, and says which share is locked", async () => {
     const f = await lpLock([nft(1, 3n * L), nft(2, L)], { chain: owners({ 1: LOCKER, 2: NATIVE }), input: { knownLockers: [LOCKER] } });
-    expect(f).toMatchObject({ status: "pass", detail: "100% of the token's liquidity can't be withdrawn (burned: 25%, locked: 75%), counted over 1 pool(s) at the current price." });
+    expect(f).toMatchObject({ status: "pass", detail: "100% of this token's liquidity, by value at the current price, can't be withdrawn (burned: 25%, locked: 75%), counted over 1 pool(s)." });
   });
 
   it("is unknown, never a fail, when a contract holds it: the contract may be a locker", async () => {
@@ -111,7 +133,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     expect(f).toMatchObject({
       status: "unknown",
       title: "Couldn't check liquidity locks",
-      detail: "Of the token's liquidity, 100% is held by contracts whose lock terms can't be read. Burned or locked needs 95% to pass.",
+      detail: "Of this token's liquidity, by value at the current price, 100% is held by contracts whose lock terms can't be read. Burned or locked needs 95% to pass.",
       evidenceUrl: `https://explorer.test/token/${PM}/instance/7`,
       fixAppId: null,
     });
@@ -134,12 +156,12 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       lpLock([nft(1, burned * L), nft(2, wallet * L), ...(contract > 0n ? [nft(3, contract * L)] : [])], {
         chain: { ...owners({ 1: DEAD, 2: WALLET, 3: CONTRACT }), code: { [CONTRACT.toLowerCase()]: "0x6080" } },
       });
-    expect(await split(95n, 5n)).toMatchObject({ status: "pass", detail: expect.stringMatching(/^95% of the token's liquidity can't be withdrawn/) as string });
-    expect(await split(94n, 6n)).toMatchObject({ status: "fail", detail: expect.stringMatching(/^6% of the token's liquidity, about 354,636 USDC of value/) as string });
+    expect(await split(95n, 5n)).toMatchObject({ status: "pass", detail: expect.stringMatching(/^95% of this token's liquidity, by value at the current price, can't be withdrawn/) as string });
+    expect(await split(94n, 6n)).toMatchObject({ status: "fail", detail: expect.stringMatching(/^6% of this token's liquidity, by value at the current price, is in positions wallets can withdraw; they hold 177,318 USDC and tokens\. 94% is burned or locked\.$/) as string });
     // 90% burned, 5% in a wallet, 5% in a contract: not enough to pass, not enough withdrawable to fail.
     expect(await split(90n, 5n, 5n)).toMatchObject({
       status: "unknown",
-      detail: "Of the token's liquidity, 5% is held by contracts whose lock terms can't be read; 5% is in positions wallets can withdraw; 90% is burned or locked. Burned or locked needs 95% to pass.",
+      detail: "Of this token's liquidity, by value at the current price, 5% is held by contracts whose lock terms can't be read; 5% is in positions wallets can withdraw; 90% is burned or locked. Burned or locked needs 95% to pass.",
     });
     // More than 5% in wallets fails whatever the rest is.
     expect((await split(50n, 6n, 44n)).status).toBe("fail");
@@ -164,7 +186,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       const f = await lpLock([nft(7, L)], { ...hooked(flags), chain: owners({ 7: WALLET }) });
       expect(f).toMatchObject({
         status: "unknown",
-        detail: "Of the token's liquidity, 100% is in wallets' positions in a pool whose hook runs when liquidity is removed, so it can block or tax a withdrawal. Burned or locked needs 95% to pass.",
+        detail: "Of this token's liquidity, by value at the current price, 100% is in wallets' positions in a pool whose hook runs when liquidity is removed, so it can block or tax a withdrawal. Burned or locked needs 95% to pass.",
         fixAppId: null,
       });
     });
@@ -210,7 +232,8 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     });
     const f = await checkLpLock(input, await findPools(input));
     expect(f).toMatchObject({ status: "fail", evidenceUrl: `https://explorer.test/token/${PM}/instance/8` });
-    expect(reader.logQueries).toHaveLength(1);
+    // The pools' positions, and the token's new pools on either side of a pair.
+    expect(reader.logQueries).toHaveLength(3);
   });
 
   it("answers as before the index when no index is given", async () => {
@@ -230,6 +253,80 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     expect(tally.withdrawable).toBe(40n * worth(L) * SHARE_SCALE);
     expect(tally.unknown.unclassified).toBe(20n * worth(L) * SHARE_SCALE);
     expect((await checkLpLock(input, await findPools(input))).status).toBe("fail");
+  });
+});
+
+describe("a pool the pool lookup can only find through the index", () => {
+  // The case: a small hookless pool whose NFT is burned, beside an old pool with a hook (or an odd fee) that holds most of
+  // the liquidity in a wallet's position. Discovery probes the standard hookless keys only, so the big pool is seen only
+  // when the index lists it (`extraPools`), which is why the position index's step records every v4 pool as well.
+  const small = v4PoolKey(TOKEN, USDC, 500, 10);
+  const big = v4PoolKey(TOKEN, USDC, 7_777, 200, hookWith("00c0"));
+  const [smallId, bigId] = [v4PoolId(small), v4PoolId(big)];
+  const burned = nft(1, L);
+  const held = nft(2, 50n * L);
+  const INITIALIZE = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438";
+  const MODIFY = "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec";
+  const topic = (address: string): `0x${string}` => `0x${address.slice(2).toLowerCase().padStart(64, "0")}`;
+  const chain = (logs: FakeChain["logs"] = []): FakeChain => ({
+    head: HEAD,
+    nftOwners: { 1: DEAD, 2: WALLET },
+    logs,
+    v4: {
+      [smallId]: { sqrtPriceX96: Q96, tick: 0, liquidity: burned.liquidity, quote: { amountIn: 1n }, positions: [burned] },
+      [bigId]: { sqrtPriceX96: Q96, tick: 0, liquidity: held.liquidity, positions: [held] },
+    },
+  });
+  const run = async (f: FakeChain, index: V4PositionIndex, extraPools?: ExtraPool[]) => {
+    const input: InspectInput = {
+      ...arcFields("mainnet"),
+      address: TOKEN, network: "mainnet", reader: fakeChain(f), explorer: null, dex: v4Only, knownLockers: [], explorerBase: "https://explorer.test", v4Positions: index,
+      ...(extraPools ? { extraPools } : {}),
+    };
+    return checkLpLock(input, await findPools(input), 18);
+  };
+  const entry = (p: FakePosition) => ({ positions: [keyOf(p)], truncated: false });
+
+  it("fails on the wallet's share once the index lists the hooked pool, where the burned pool alone would have passed", async () => {
+    const f = await run(chain(), { cursor: Number(HEAD), pools: { [smallId]: entry(burned), [bigId]: entry(held) } }, [{ version: "v4", key: big }]);
+    expect(f).toMatchObject({ status: "fail", evidenceUrl: `https://explorer.test/token/${PM}/instance/2` });
+    expect(f.detail).toMatch(/^98% of this token's liquidity, by value at the current price, is in positions wallets can withdraw/);
+  });
+
+  it("can't pass when the hooked pool was created after the index's cursor and the lookup doesn't have it", async () => {
+    const created = { topics: [INITIALIZE, bigId, topic(TOKEN), topic(USDC)], data: "0x", blockNumber: 950n } as const;
+    const f = await run(chain([created]), { cursor: 900, pools: { [smallId]: entry(burned) } });
+    expect(f).toMatchObject({
+      status: "unknown",
+      detail: "A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.",
+      fixAppId: null,
+    });
+    // The same pool, once the lookup has it, is read from the tail like any other: no blocker, and the wallet's share fails.
+    const opened = { topics: [MODIFY, bigId, topic(PM)], data: `0x${"f".repeat(58)}fffda8${"0".repeat(58)}000258${"0".repeat(63)}1${salt(2).slice(2)}`, blockNumber: 951n } as const;
+    const known = await run(chain([created, opened]), { cursor: 900, pools: { [smallId]: entry(burned), [bigId]: { positions: [], truncated: false } } }, [{ version: "v4", key: big }]);
+    expect(known.status).toBe("fail");
+  });
+
+  it("ignores a new pool against a currency that isn't a quote: such pools are never counted", async () => {
+    const other = { topics: [INITIALIZE, bigId, topic(TOKEN), topic("0x128cC466B61f542da60c70e3aA11c10e19B84EDB")], data: "0x", blockNumber: 950n } as const;
+    expect((await run(chain([other]), { cursor: 900, pools: { [smallId]: entry(burned) } })).status).toBe("pass");
+  });
+
+  it("is unknown while the index is too far behind to say which pools the token has, even for a burned v2 pair alone", async () => {
+    const reads = {
+      [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
+      ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
+      [readKey(PAIR, "totalSupply", [])]: 100n,
+      [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
+      [readKey(PAIR, "balanceOf", [DEAD])]: 100n,
+    };
+    const input: InspectInput = {
+      ...arcFields("mainnet"),
+      address: TOKEN, network: "mainnet", reader: fakeChain({ head: 50_000n, reads }), explorer: null, dex: { quoteTokens: [USD], v2Factory: V2, v4: UNISWAP_V4 }, knownLockers: [], explorerBase: "https://explorer.test",
+      v4Positions: { cursor: 30_000, pools: {} },
+    };
+    expect(await checkLpLock(input, await findPools(input))).toMatchObject({ status: "unknown", detail: "The position index is catching up: it is more than 10,000 blocks behind the chain." });
+    expect(await checkLpLock({ ...input, v4Positions: { cursor: 49_990, pools: {} } }, await findPools(input))).toMatchObject({ status: "pass", detail: "100% of the v2 LP supply can't be withdrawn." });
   });
 });
 
@@ -272,13 +369,13 @@ describe("lp-lock over pools of several kinds", () => {
     ...(sqrtPriceX96 === null ? {} : { [readKey(V3_POOL, "slot0", [])]: [sqrtPriceX96, 0] }),
   });
   const empty: V4PositionIndex = { cursor: Number(HEAD), pools: {} };
-  const noV4 = async (reads: Record<string, unknown>, input: Partial<InspectInput> = {}) => {
+  const noV4 = async (reads: Record<string, unknown>, input: Partial<InspectInput> = {}, decimals: number | null = null) => {
     const reader = fakeChain({ head: HEAD, reads });
     const full: InspectInput = {
       ...arcFields("mainnet"),
       address: TOKEN, network: "mainnet", reader, explorer: null, dex: everything, knownLockers: [], explorerBase: "https://explorer.test", v4Positions: empty, ...input,
     };
-    return checkLpLock(full, await findPools(full));
+    return checkLpLock(full, await findPools(full), decimals);
   };
 
   it("reads a lone v2 pair as it always did: by its LP supply", async () => {
@@ -300,14 +397,14 @@ describe("lp-lock over pools of several kinds", () => {
   it("sizes a v3 pool it can't read into as unknown: a small one beside a burned pair still passes", async () => {
     // The pair is worth 10,000 (both reserves); the v3 pool 400 USDC and 100 tokens at price 1.
     const f = await noV4({ ...pair(100n, 5_000_000_000n), ...v3(400_000_000n, 100_000_000n) });
-    expect(f).toMatchObject({ status: "pass", detail: "95.2% of the token's liquidity can't be withdrawn (burned: 95.2%, locked: 0%), counted over 2 pool(s) at the current price." });
+    expect(f).toMatchObject({ status: "pass", detail: "95.2% of this token's liquidity, by value at the current price, can't be withdrawn (burned: 95.2%, locked: 0%), counted over 2 pool(s)." });
   });
 
   it("can't pass beside a v3 pool that holds more than 5% of the liquidity, and says what share is unread", async () => {
     const f = await noV4({ ...pair(100n, 5_000_000_000n), ...v3(5_000_000_000n, 5_000_000_000n) });
     expect(f).toMatchObject({
       status: "unknown",
-      detail: "Of the token's liquidity, 50% is in Uniswap v3 pools, whose positions can't be read yet; 50% is burned or locked. Burned or locked needs 95% to pass.",
+      detail: "Of this token's liquidity, by value at the current price, 50% is in Uniswap v3 pools, whose positions can't be read yet; 50% is burned or locked. Burned or locked needs 95% to pass.",
       evidenceUrl: `https://explorer.test/address/${V3_POOL}`,
       fixAppId: null,
     });
@@ -336,17 +433,18 @@ describe("lp-lock over pools of several kinds", () => {
     // The pair: 2 × 29,553.010879 USDC burned. The v4 position: worth(10^12) = 59,106.021758 USDC, in a wallet.
     const over = { dex: everything, chain: { nftOwners: { 7: WALLET }, reads: pair(100n, worth(L) / 2n) } };
     const f = await lpLock([nft(7, L)], over);
-    expect(f).toMatchObject({ status: "fail", detail: "50% of the token's liquidity, about 59,106 USDC of value, is in positions wallets can withdraw. 50% is burned or locked." });
+    expect(f).toMatchObject({ status: "fail", detail: "50% of this token's liquidity, by value at the current price, is in positions wallets can withdraw; they hold 29,553 USDC and tokens. 50% is burned or locked." });
     const burned = await lpLock([nft(7, L)], { ...over, chain: { ...over.chain, nftOwners: { 7: DEAD } } });
-    expect(burned).toMatchObject({ status: "pass", detail: "100% of the token's liquidity can't be withdrawn (burned: 100%, locked: 0%), counted over 2 pool(s) at the current price." });
+    expect(burned).toMatchObject({ status: "pass", detail: "100% of this token's liquidity, by value at the current price, can't be withdrawn (burned: 100%, locked: 0%), counted over 2 pool(s)." });
   });
 
-  it("names USDC when the pools quote in more than one currency, and the one currency when they agree", async () => {
-    const eur = await noV4({ ...pair(10n, 5_000_000_000n, EURC.mainnet), ...v3(1n) });
-    expect(eur.detail).toMatch(/about 9,000 USDC of value/);
+  it("says what a v2 pair's unlocked LP holds of each reserve, in the pools' quote currencies", async () => {
+    // 90% of a pair holding 5,000 EURC and 10^24 raw tokens; a USDC pool sits beside it, so the amount is in either.
+    const eur = await noV4({ ...pair(10n, 5_000_000_000n, EURC.mainnet), ...v3(1n) }, {}, 18);
+    expect(eur.detail).toBe("90% of this token's liquidity, by value at the current price, is in positions wallets can withdraw; they hold 4,500 USDC/EURC and 900K tokens. 10% is burned or locked.");
     const reader = fakeChain({ head: HEAD, reads: { ...pair(10n, 5_000_000_000n, EURC.mainnet), [readKey(V3, "getPool", [TOKEN, EURC.mainnet, 3000])]: V3_POOL, [readKey(EURC.mainnet, "balanceOf", [V3_POOL])]: 1n, [readKey(TOKEN, "balanceOf", [V3_POOL])]: 0n } });
     const input: InspectInput = { ...arcFields("mainnet"), address: TOKEN, network: "mainnet", reader, explorer: null, dex: everything, knownLockers: [], explorerBase: "https://explorer.test", v4Positions: empty };
-    expect((await checkLpLock(input, await findPools(input))).detail).toMatch(/about 9,000 EURC of value/);
+    expect((await checkLpLock(input, await findPools(input))).detail).toMatch(/they hold 4,500 EURC and tokens/);
   });
 });
 

@@ -47,7 +47,9 @@
  *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing.
  * - lp-lock, with the position index (`input.v4Positions`: mainnet, when the index could be read): the
  *   liquidity of every pool found is valued in its quote currency at the pool's current price and
- *   added up by who can withdraw it (`tallyLiquidity`). A v2 pair's two reserves are split by LP-token
+ *   added up by who can withdraw it (`tallyLiquidity`): every share in a finding is "by value at the
+ *   current price", and a fail names what the withdrawable positions hold of the quote currency and
+ *   of the token, never the token side as an amount of USDC. A v2 pair's two reserves are split by LP-token
  *   holder; a v4 pool is its positions, each read live (`StateView.getPositionInfo`) and classified by
  *   its holder, the PositionManager NFT's owner or else the address that holds the position in the
  *   PoolManager (`classifyHolder`: burned, a known locker, a wallet, or a contract); a v3 or Aerodrome
@@ -55,15 +57,26 @@
  *   of the total, fails when wallets can withdraw more than 5%, and is unknown between the two. It is
  *   also unknown when: no DEX is configured; pool discovery failed; a family of pool contracts never
  *   answered; the total is zero; a v2 LP token's totalSupply is zero; a v3 or Aerodrome pool can't be
- *   sized; or a v4 pool's positions can't be relied on: the index has no entry for it, lists more than
- *   500 positions for it (or 2,000 over the token's pools), is more than 10,000 blocks behind the head,
- *   or lists positions whose in-range liquidity doesn't add up to the pool's active liquidity exactly,
- *   or a position or an NFT's owner doesn't answer. Unknown, never withdrawable: what a contract holds
+ *   sized; the index is more than 10,000 blocks behind the head (whatever pools were found: the same
+ *   indexer step fills the list of the token's v4 pools, so while it is behind a pool may be missing
+ *   from the lookup); a v4 pool of the token against a quote currency was created after the index's
+ *   cursor and isn't among the pools found (see "Which pools" below); or a v4 pool's positions can't
+ *   be relied on: the index has no entry for it, lists more than 500 positions for it (or 2,000 over
+ *   the token's pools), or lists positions whose in-range liquidity doesn't add up to the pool's
+ *   active liquidity exactly, or a position or an NFT's owner doesn't answer. Unknown, never withdrawable: what a contract holds
  *   (it may be a locker with terms of its own, a Safe, a launchpad or the pool's hook), what a wallet
  *   holds in a pool whose hook runs on removal (the hook-address bits BEFORE_REMOVE_LIQUIDITY 1 << 9,
  *   AFTER_REMOVE_LIQUIDITY 1 << 8 and AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA 1 << 0: it can block or tax
  *   a withdrawal), v2 LP outside burn addresses and known lockers on a chain whose lock contracts aren't
  *   vetted (`lockersVetted`), and what the holders past the 40 largest hold (their code isn't read).
+ *   Which pools: discovery probes a token's standard hookless v4 keys; a pool with a hook or another
+ *   fee is found only through the index (`extraPools`). The indexer's position step therefore records
+ *   every v4 pool the PoolManager initialised since its deployment, on the same cursor as the
+ *   positions, and the check reads `Initialize` over the blocks after that cursor with the token as
+ *   currency0 and as currency1: a pool there that the lookup didn't include makes the answer unknown.
+ *   So a burned small pool can't pass beside a larger pool the lookup never saw. Pools against a
+ *   currency other than USDC, EURC or native USDC are not looked for and never counted, here as in
+ *   every other check.
  *   Freshness: the index lists the positions opened up to its cursor; the blocks after it, up to the
  *   block everything is read at (two behind the node's latest), are read with one eth_getLogs for the
  *   token's pools. What that leaves open: a position opened in the last two blocks, or after the
@@ -885,12 +898,12 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
  *   token with neither a v2 nor a v4 pool: `lpLockWithoutIndex`, the check as it was before there was an index;
  * - with it, the liquidity of every pool the scan found is added up by who can withdraw it (`lpLockByValue`).
  */
-export async function checkLpLock(input: InspectInput, scan: PoolScan | null): Promise<Finding> {
+export async function checkLpLock(input: InspectInput, scan: PoolScan | null, tokenDecimals: number | null = null): Promise<Finding> {
   if (!input.dex) return finding("lp-lock", "unknown", "Locks aren't checked on this network", "No DEX registry is configured here.");
   if (scan === null) return finding("lp-lock", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
   const readable = scan.pools.some((p) => p.version === "v2" || p.version === "v4");
   if (!input.v4Positions || !readable) return lpLockWithoutIndex(input, scan);
-  return lpLockByValue(input, scan, input.dex);
+  return lpLockByValue(input, scan, input.dex, tokenDecimals);
 }
 
 /** Why a share of the liquidity is neither safe nor withdrawable. */
@@ -905,6 +918,11 @@ export type LiquidityTally = {
   burned: bigint;
   locked: bigint;
   withdrawable: bigint;
+  /**
+   * What the withdrawable share actually holds: the quote currency (6 decimals, unscaled) and the token (raw units).
+   * `withdrawable` adds the two up at the current price; this is what removing those positions takes out.
+   */
+  withdrawableHolds: { quote: bigint; token: bigint };
   unknown: Record<UnknownWhy, bigint>;
   blockers: string[];
   openUrl: string | null;
@@ -941,12 +959,15 @@ const slot0Abi = parseAbi(["function slot0() view returns (uint160 sqrtPriceX96,
  * EURC counts 1:1 with USDC when pools quoted in both are added up: the shares are of value in "quote units", close
  * enough for a 95% and a 5% line, and no price feed is read for it.
  * pass: burned + locked is at least 95% of the total. fail: more than 5% is withdrawable, which alone rules a pass out.
- * unknown: anything between, a total of zero, a pool family that never answered, or a pool that couldn't be read or sized
- * (a v4 pool whose positions are missing from the index, truncated, stale, don't add up, or didn't answer).
+ * unknown: anything between, a total of zero, a pool family that never answered, a pool that couldn't be read or sized
+ * (a v4 pool whose positions are missing from the index, truncated, don't add up, or didn't answer), an index too far
+ * behind (the pool index is filled by the same step, so the token's pools may not all be known), or a v4 pool of the
+ * token created since the index's cursor that the lookup didn't find.
  */
 export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: DexConfig): Promise<LiquidityTally> {
   const { reader, explorerBase } = input;
   const tally = { burned: 0n, locked: 0n, withdrawable: 0n };
+  const withdrawableHolds = { quote: 0n, token: 0n };
   const unknowns: Record<UnknownWhy, bigint> = { contract: 0n, hook: 0n, venue: 0n, unclassified: 0n, unvetted: 0n };
   // What keeps the total itself from being known. Any one of them makes the answer unknown.
   const blockers = new Set<string>();
@@ -985,8 +1006,11 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
     safe(safeValue, url);
     // "Withdrawable" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
     // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
-    if (input.lockersVetted) tally.withdrawable += value - safeValue;
-    else unknowns.unvetted += value - safeValue;
+    if (input.lockersVetted) {
+      tally.withdrawable += value - safeValue;
+      withdrawableHolds.quote += pair.depth - (pair.depth * kept) / supply;
+      withdrawableHolds.token += (pair.tokenReserve ?? 0n) - ((pair.tokenReserve ?? 0n) * kept) / supply;
+    } else unknowns.unvetted += value - safeValue;
     open(value - safeValue, url);
   }
 
@@ -1032,9 +1056,14 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
     blockers.add(GAP_REASON.unreadable);
     return [];
   });
-  if (refs.length > 0 && dex.v4 && input.v4Positions) {
+  // Asked even with no v4 pool to read: the index's tail also says whether the token gained a v4 pool the lookup missed.
+  if (dex.v4 && input.v4Positions) {
     const { positionManager } = dex.v4;
-    const reads = await readV4Positions({ reader, v4: dex.v4, pools: refs, index: input.v4Positions });
+    const { pools: reads, stale, unlisted } = await readV4Positions({ reader, v4: dex.v4, pools: refs, index: input.v4Positions, token: input.address, quotes: quotes.map((q) => q.address) });
+    // The pool index is filled by the same step as the positions, so while that step is behind, a pool of this token
+    // may be missing from the lookup altogether: nothing can be called the token's whole liquidity.
+    if (stale) blockers.add(GAP_REASON.stale);
+    if (unlisted.length > 0) blockers.add("A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.");
     const code = await readHolderCode(reader, reads.flatMap((r) => (r.gap === null ? r.positions : [])), input.knownLockers);
     for (const r of reads) {
       if (r.gap !== null) {
@@ -1052,8 +1081,11 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
           safe(value, url);
           continue;
         }
-        if (kind === "wallet" && !hooked) tally.withdrawable += value;
-        else unknowns[kind === "wallet" ? "hook" : kind] += value;
+        if (kind === "wallet" && !hooked) {
+          tally.withdrawable += value;
+          withdrawableHolds.quote += position.quote;
+          withdrawableHolds.token += position.token;
+        } else unknowns[kind === "wallet" ? "hook" : kind] += value;
         open(value, url);
       }
     }
@@ -1061,6 +1093,7 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
 
   return {
     ...tally,
+    withdrawableHolds,
     unknown: unknowns,
     blockers: [...blockers],
     openUrl: (largestOpen as { url: string } | null)?.url ?? null,
@@ -1068,8 +1101,27 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
   };
 }
 
+/** How every share in an lp-lock finding is measured, said once in each: both sides of a position at the pool's spot price. */
+const BY_VALUE = "by value at the current price";
+
+/**
+ * A raw token amount as a finding says it: "5.2M tokens", cut to one decimal, or "tokens" when the token's decimals aren't
+ * known. Never the token's symbol: the deployer chose it, and it has no place in a sentence about what a wallet holds.
+ */
+function tokenAmount(raw: bigint, decimals: number | null): string {
+  if (decimals === null || !Number.isInteger(decimals) || decimals < 0 || decimals > 77) return "tokens";
+  const whole = raw / 10n ** BigInt(decimals);
+  if (whole < 1_000n) return `${whole} tokens`;
+  const steps: [bigint, string][] = [[10n ** 12n, "T"], [10n ** 9n, "B"], [10n ** 6n, "M"], [10n ** 3n, "K"]];
+  const [unit, letter] = steps.find(([size]) => whole >= size)!;
+  const tenths = (whole * 10n) / unit;
+  // Past the trillions the figure is written out: "1,234T" would be harder to read than the number.
+  if (letter === "T" && tenths >= 10_000n) return `${whole.toLocaleString("en-US")} tokens`;
+  return `${tenths / 10n}${tenths % 10n === 0n ? "" : `.${tenths % 10n}`}${letter} tokens`;
+}
+
 /** The verdict over `tallyLiquidity`'s sums: the thresholds and the words. */
-async function lpLockByValue(input: InspectInput, scan: PoolScan, dex: DexConfig): Promise<Finding> {
+async function lpLockByValue(input: InspectInput, scan: PoolScan, dex: DexConfig, tokenDecimals: number | null): Promise<Finding> {
   const unknown = (detail: string, evidenceUrl: string | null = null) => finding("lp-lock", "unknown", "Couldn't check liquidity locks", detail, { evidenceUrl, fixAppId: null });
   const tally = await tallyLiquidity(input, scan, dex);
   const { unknown: unknowns, blockers, openUrl } = tally;
@@ -1085,14 +1137,14 @@ async function lpLockByValue(input: InspectInput, scan: PoolScan, dex: DexConfig
   if (kept * 100n >= total * 95n) {
     const detail = loneV2
       ? `${formatPct(pct(kept))} of the v2 LP supply can't be withdrawn.`
-      : `${formatPct(pct(kept))} of the token's liquidity can't be withdrawn (burned: ${formatPct(pct(tally.burned))}, locked: ${formatPct(pct(tally.locked))}), counted over ${scan.pools.length} pool(s) at the current price.`;
+      : `${formatPct(pct(kept))} of this token's liquidity, ${BY_VALUE}, can't be withdrawn (burned: ${formatPct(pct(tally.burned))}, locked: ${formatPct(pct(tally.locked))}), counted over ${scan.pools.length} pool(s).`;
     return finding("lp-lock", "pass", "Liquidity is burned or locked", detail, { evidenceUrl: tally.safeUrl });
   }
   if (tally.withdrawable * 100n > total * 5n) {
     const symbols = [...new Set(scan.pools.map((p) => p.quote))];
     const detail = loneV2
       ? `${formatPct(100 - pct(kept))} of the v2 LP supply sits in wallets that can withdraw it.`
-      : `${formatPct(pct(tally.withdrawable))} of the token's liquidity, about ${wholeUnits(tally.withdrawable / SHARE_SCALE)} ${symbols.length === 1 ? symbols[0] : "USDC"} of value, is in positions wallets can withdraw. ${formatPct(pct(kept))} is burned or locked.`;
+      : `${formatPct(pct(tally.withdrawable))} of this token's liquidity, ${BY_VALUE}, is in positions wallets can withdraw; they hold ${wholeUnits(tally.withdrawableHolds.quote)} ${symbols.join("/")} and ${tokenAmount(tally.withdrawableHolds.token, tokenDecimals)}. ${formatPct(pct(kept))} is burned or locked.`;
     return finding("lp-lock", "fail", "Liquidity isn't locked", detail, { evidenceUrl: openUrl, fixAppId: "vault" });
   }
   if (loneV2) {
@@ -1112,7 +1164,7 @@ async function lpLockByValue(input: InspectInput, scan: PoolScan, dex: DexConfig
     [kept, "is burned or locked"],
   ];
   const parts = reasons.filter(([value]) => value > 0n).map(([value, text]) => `${formatPct(pct(value))} ${text}`);
-  return unknown(`Of the token's liquidity, ${parts.join("; ")}. Burned or locked needs 95% to pass.`, openUrl);
+  return unknown(`Of this token's liquidity, ${BY_VALUE}, ${parts.join("; ")}. Burned or locked needs 95% to pass.`, openUrl);
 }
 
 /**
