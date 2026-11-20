@@ -317,11 +317,12 @@ liquidity and each NFT's owner at one block, and checks that the in-range positi
 liquidity. With that it does one thing: it detects liquidity a wallet can withdraw, and makes lp-lock a fail or a
 warning. It never makes a pass: when it finds no wallet in the way, or can't read the whole picture, lp-lock is what
 the check from before the index says (v2 LP tokens only), word for word, so no token passes with the index that
-wouldn't pass without it. A launch burned into a v4 pool, behind a launchpad's hook or not, reads "couldn't check". The
-A fail needs a plain pool to say it (v2, or v4 against USDC with a fixed fee of at most 1% and no swap hook); what only
-other pools show is a warning at most. The rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the header of
-`packages/inspector/src/checks.ts`: who holds the USDC in the pools, and who the next buyers would pay, in order of
-what a buyer pays per token (LP fee included), read over every pool and over the plain pools alone.
+wouldn't pass without it. A launch burned into a v4 pool, behind a launchpad's hook or not, reads "couldn't check".
+A fail from it always rests on at least 1,000 USDC that wallets can withdraw from plain pools (v2, or v4 against USDC
+with a fixed fee of at most 1% and no swap hook); tokens for sale alone, and anything in other pools, make a warning
+at most. The rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the
+header of `packages/inspector/src/checks.ts`: who holds the USDC in the pools, and who the next buyers would pay, in
+order of what a buyer pays per token (LP fee included), on one path over every pool.
 
 The v4 reading is left out when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is
 more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 500 positions, the token has more than
