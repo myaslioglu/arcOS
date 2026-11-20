@@ -112,7 +112,7 @@ In the Firebase console, Firestore, database `arcos`, collection `indexer`, docu
 | `watch` | `false` | Stops the whole Watchdog step (no check, no fan-out, no send). A missing field reads as `true`. |
 | `telegram` | `false` | Stops Watchdog's Telegram sends only: the checks still run, alerts and deliveries are still written, and the deliveries wait as `pending` (they expire after a day). A missing field reads as `true`. |
 | `stats` | `false` | Stops the whole Stats step (no `eth_getLogs`, no write to `stats`/`statsDays`, no server counts). The totals and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. |
-| `positions` | `false` | Stops the position index's step (no `eth_getLogs`, no write to `positions`/`positionsIndex`, no pool doc added). The positions and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. While it is off the index falls behind, and once it is more than 10,000 blocks behind (about 85 minutes) every token with a v2 or v4 pool reads "Couldn't check liquidity locks: the position index is catching up". |
+| `positions` | `false` | Stops the position index's step (no `eth_getLogs`, no write to `positions`/`positionsIndex`, no pool doc added). The positions and the cursor stay where they are, and the step carries on from there when the field is `true` or missing again. While it is off the index falls behind, and once it is more than 10,000 blocks behind (about 85 minutes) the liquidity-lock check runs as it did before the index, for every token: v2 pairs are judged on their LP tokens and a v4 pool reads "Couldn't check liquidity locks". Nothing gets worse than it was before the index; the v4 answers come back when the cursor is within 10,000 blocks of the head again. |
 | `watchCursor` | (set by the indexer) | The `watchState` doc id Watchdog's checks ended at; the next run's page starts after it. Set it to `null` to start the round from the first token. |
 
 The indexer never writes `paused`, `inspect`, `watch`, `telegram`, `stats` or `positions`. Change them only between runs (any time is fine: the
@@ -312,9 +312,10 @@ token and the 15 standard hookless keys), the position keys the index holds, at 
 the cursor. It reads the blocks after the cursor itself (at most 10,000 blocks, three `eth_getLogs`: the pools'
 `ModifyLiquidity`, and `Initialize` with the token as currency0 and as currency1), then every position's liquidity
 and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active liquidity. A
-pool with more than 500 positions, an index more than 10,000 blocks behind, a sum that doesn't match, or a pool of
-the token created since the cursor that the inspection wasn't given reads "Couldn't check liquidity locks", never a
-pass or a fail. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never
+pool with more than 500 positions, a sum that doesn't match, or a pool of the token created since the cursor that
+the inspection wasn't given reads "Couldn't check liquidity locks", never a pass or a fail. An index more than 10,000
+blocks behind is not used at all: the check then runs as it did before the index (v2 LP tokens only), whole, with
+nothing of the index mixed in, so a result is never worse than it was. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never
 counted. The indexer's own inspections, `/api/inspect`,
 `/t` and `/badge` read the index directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions`).
 The queries are two equality filters (`network`, `poolId`), served by Firestore's single-field indexes: no composite
@@ -327,10 +328,10 @@ one block before 1,948,056 and starts reading. From there to the head on 2026-11
 10 s after the step began, at most 12 windows a run, and no RPC answer is waited for past 110 s, so it never moves the
 other steps and a backfill run is at most about 10 s longer. A window is one `eth_getLogs` (400 ms after the previous
 call) and its writes, about a second, so the backfill takes some 300 to 400 runs: 5 to 7 hours at one run a minute,
-longer while inspections run long. Until the cursor is within 10,000 blocks of the head, every token with a v2 or v4
-pool reads "Couldn't check liquidity locks: the position index is catching up", a burned v2 pair included: until the
-backfill is done the token's old v4 pools aren't all listed (before the first run: "positions in them
-can't be read without an index yet", as before). Watch `positionsIndex/mainnet.block` against `head`, or `behind` in
+longer while inspections run long. Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives
+exactly the answers it gave before the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be
+read without an index yet"), since until the backfill is done neither the positions nor the token's old v4 pools are
+all listed. The by-value answers start on their own once it has caught up. Watch `positionsIndex/mainnet.block` against `head`, or `behind` in
 the run line. After that a run reads one window of about 120 blocks.
 
 **Redoing it.** Set `positions` to `false` on `indexer/mainnet`, wait for the run in progress to end, delete the

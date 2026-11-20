@@ -208,9 +208,16 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       const f = await lpLock([nft(7, L)], { ...burned, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: true } } } });
       expect(f).toMatchObject({ status: "unknown", detail: "A Uniswap v4 pool of this token has more than 500 positions, more than this check reads." });
     });
-    it("is more than 10,000 blocks behind", async () => {
-      const f = await lpLock([nft(7, L)], { chain: { ...burned.chain, head: 50_000n }, index: { cursor: 30_000, pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: false } } } });
-      expect(f).toMatchObject({ status: "unknown", detail: "The position index is catching up: it is more than 10,000 blocks behind the chain." });
+    it("is more than 10,000 blocks behind: the check runs as it does without an index, and reads none of it", async () => {
+      const stale = { chain: { ...burned.chain, head: 50_000n }, index: { cursor: 30_000, pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: false } } } };
+      const f = await lpLock([nft(7, L)], stale);
+      expect(f).toEqual(await lpLock([nft(7, L)], { chain: stale.chain, index: null }));
+      expect(f).toMatchObject({ status: "unknown", detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet." });
+      // Nothing of the by-value path ran: no logs, no position, no owner, no code.
+      const { input, reader } = setup([nft(7, L)], stale);
+      await checkLpLock(input, await findPools(input));
+      expect(reader.logQueries).toEqual([]);
+      expect(reader.batches.flatMap((b) => b.calls).map((c) => c.fn).filter((fn) => fn === "getPositionInfo" || fn === "ownerOf")).toEqual([]);
     });
     it("lists positions that don't add up to the pool's liquidity", async () => {
       const f = await lpLock([nft(7, L), nft(8, L)], { chain: owners({ 7: DEAD, 8: WALLET }), index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: false } } } });
@@ -248,7 +255,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     const { input, reader } = setup(positions, { chain: { nftOwners } });
     let codeReads = 0;
     input.reader = { ...reader, getCode: (a) => (codeReads++, reader.getCode(a)) };
-    const tally = await tallyLiquidity(input, await findPools(input), v4Only);
+    const tally = (await tallyLiquidity(input, await findPools(input), v4Only))!;
     expect(codeReads).toBe(40);
     expect(tally.withdrawable).toBe(40n * worth(L) * SHARE_SCALE);
     expect(tally.unknown.unclassified).toBe(20n * worth(L) * SHARE_SCALE);
@@ -312,7 +319,7 @@ describe("a pool the pool lookup can only find through the index", () => {
     expect((await run(chain([other]), { cursor: 900, pools: { [smallId]: entry(burned) } })).status).toBe("pass");
   });
 
-  it("is unknown while the index is too far behind to say which pools the token has, even for a burned v2 pair alone", async () => {
+  it("gives today's answers while the index is too far behind: a v2 pair is judged as it was, beside a v4 pool or alone", async () => {
     const reads = {
       [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
       ...v2PairReads(PAIR, USDC, TOKEN, 5_000_000_000n),
@@ -325,8 +332,21 @@ describe("a pool the pool lookup can only find through the index", () => {
       address: TOKEN, network: "mainnet", reader: fakeChain({ head: 50_000n, reads }), explorer: null, dex: { quoteTokens: [USD], v2Factory: V2, v4: UNISWAP_V4 }, knownLockers: [], explorerBase: "https://explorer.test",
       v4Positions: { cursor: 30_000, pools: {} },
     };
-    expect(await checkLpLock(input, await findPools(input))).toMatchObject({ status: "unknown", detail: "The position index is catching up: it is more than 10,000 blocks behind the chain." });
-    expect(await checkLpLock({ ...input, v4Positions: { cursor: 49_990, pools: {} } }, await findPools(input))).toMatchObject({ status: "pass", detail: "100% of the v2 LP supply can't be withdrawn." });
+    const noIndex: InspectInput = { ...input, v4Positions: undefined };
+    const scan = await findPools(input);
+    const stale = await checkLpLock(input, scan);
+    expect(stale).toEqual(await checkLpLock(noIndex, scan));
+    expect(stale).toMatchObject({ status: "pass", detail: "100% of the v2 LP supply can't be withdrawn." });
+    // An unlocked pair fails as it does today, and a v4 pool beside a burned pair still blocks the pass the old way.
+    const unlocked: InspectInput = { ...input, reader: fakeChain({ head: 50_000n, reads: { ...reads, [readKey(PAIR, "balanceOf", [DEAD])]: 10n } }) };
+    expect(await checkLpLock(unlocked, await findPools(unlocked))).toMatchObject({ status: "fail", detail: "90% of the v2 LP supply sits in wallets that can withdraw it.", fixAppId: "vault" });
+    const beside: InspectInput = { ...input, reader: fakeChain({ head: 50_000n, reads, v4: { [id]: { sqrtPriceX96: Q96, tick: 0, liquidity: L, quote: { amountIn: 1n } } } }) };
+    expect(await checkLpLock(beside, await findPools(beside))).toMatchObject({
+      status: "unknown",
+      detail: "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.",
+    });
+    // Fresh again, the by-value path answers.
+    expect(await checkLpLock({ ...input, v4Positions: { cursor: 49_990, pools: {} } }, scan)).toMatchObject({ status: "pass", detail: "100% of the v2 LP supply can't be withdrawn." });
   });
 });
 

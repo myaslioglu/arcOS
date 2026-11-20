@@ -89,7 +89,7 @@ describe("lp-lock over real v4 pools, read-only", () => {
       for (const p of scan.pools) if (p.version === "v4" && p.poolId && !index.pools[p.poolId.toLowerCase()]) index.pools[p.poolId.toLowerCase()] = { positions: [], truncated: false };
       const decimals = Number(await reader.read(address, erc20Abi, "decimals").catch(() => 18));
       const finding = await checkLpLock(input, scan, decimals);
-      const tally = await tallyLiquidity(input, scan, DEX.mainnet!);
+      const tally = (await tallyLiquidity(input, scan, DEX.mainnet!))!; // the index built above is 20 blocks behind: never stale
       const units = (scaled: bigint) => Number(scaled / SHARE_SCALE) / 1e6;
       expect(["pass", "fail", "unknown"]).toContain(finding.status);
       if (finding.status === "pass") expect((tally.burned + tally.locked) * 100n).toBeGreaterThanOrEqual((tally.burned + tally.locked + tally.withdrawable + Object.values(tally.unknown).reduce((s, v) => s + v, 0n)) * 95n);

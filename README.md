@@ -211,11 +211,13 @@ those positions hold right now, which is what pulling them takes out. Everything
 check", with the reason: a position held by a contract (it may be a locker, and its terms aren't
 read), a wallet's position in a pool whose hook runs when liquidity is removed (it can block or tax a
 withdrawal), a Uniswap v3 or Aerodrome pool (their positions aren't read yet), a pool with more than
-500 positions, a v4 pool created in the last minutes that the index hasn't recorded, or an index
-that is still catching up. Values are spot values: each side of a position at the pool's current
-price, EURC counted 1:1 with USDC. Only pools against USDC, EURC or native USDC are looked for and
-counted, as in every other check: liquidity paired with any other currency is not in the total. On testnet, which has no index, only v2 LP
-tokens are counted and a v4 pool reads "couldn't check".
+500 positions, or a v4 pool created in the last minutes that the index hasn't recorded. Values are
+spot values: each side of a position at the pool's current price, EURC counted 1:1 with USDC. Only
+pools against USDC, EURC or native USDC are looked for and counted, as in every other check:
+liquidity paired with any other currency is not in the total. Where there is no index to rely on
+(testnet, which has none, or mainnet while the index is more than 10,000 blocks behind), the check
+runs as it did before the index: only v2 LP tokens are counted and a v4 pool reads "couldn't
+check". So it is never worse than it was.
 
 ## What Inspector can and can't see
 
@@ -397,15 +399,15 @@ tokens are counted and a v4 pool reads "couldn't check".
   such a pool counts as "unknown" at its balances' value, so a token whose liquidity is mostly there
   reads "unknown". So does liquidity held by any contract that isn't a known lock contract (a
   launchpad, a Safe, a hook, an unlisted locker), a wallet's position in a v4 pool whose hook runs
-  on removal, a v4 pool with more than 500 positions, and any v4 pool while the index is more than
-  10,000 blocks behind. A v4 pool with a hook or a non-standard fee is found through the indexer's
+  on removal, and a v4 pool with more than 500 positions. A v4 pool with a hook or a non-standard fee is found through the indexer's
   list of every v4 pool since the PoolManager's deployment, and one created since the index's last
   block reads "unknown" until it is listed. Pools against a currency other than USDC, EURC or native
   USDC are never looked for, so liquidity there is never counted, whoever holds it. "Burned or
   locked" is about withdrawing liquidity only: it says nothing about
   what a pool's hook does to swaps. Values are spot values at each pool's current price, so a position
-  holding only tokens counts at what the pool prices them. Without the index (testnet, or a browser
-  that couldn't fetch it) only v2 LP tokens are counted, a token with only other pools reads "unknown",
+  holding only tokens counts at what the pool prices them. Without a fresh index (testnet, a browser
+  that couldn't fetch it, or an index more than 10,000 blocks behind) the check is the one from before
+  the index, never worse than it was: only v2 LP tokens are counted, a token with only other pools reads "unknown",
   and so does a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
   Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
