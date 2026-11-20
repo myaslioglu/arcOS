@@ -53,14 +53,19 @@
  *   LiquidityAmounts math) and classified by its holder, the PositionManager NFT's owner or else the
  *   address that holds the position in the PoolManager (`classifyHolder`: burned, a known locker, a
  *   wallet, or a contract); a v3 or Aerodrome pool's quote balance, unknown as a whole. `ahead`: that,
- *   plus, in the reference pool only (the pool holding the most quote now), what buyers would pay
- *   into each position while the token's price rises to twice the current price.
+ *   plus what buyers would pay into each position while the token's price in its pool rises to twice
+ *   the price in the reference pool, the pool holding the most quote now: one target for every v2 and
+ *   v4 pool, since buyers are routed to the cheapest pool first. A pool priced above the target gets
+ *   nothing; a v3 or Aerodrome pool has no look-ahead (its positions aren't read), and when one of
+ *   them is the reference there is none at all, and no pass.
  *   A token amount is never priced. Tokens cost their deployer nothing and a pool's price is whatever
  *   its initializer chose, so tokens times a pool's price is a number anyone can make any size: a dust
  *   position in a side pool initialised at an absurd price, or a burned token-only range far above
  *   the price, would outweigh every real dollar. The look-ahead is the one place a price is used, and
- *   it is still tokens times a price, so it is the reference pool's alone and never decides alone: a
- *   pass needs both measures, and a wallet's share counts by the larger.
+ *   it is still tokens times a price, so its prices stop at twice the reference pool's (an absurdly
+ *   expensive pool gets nothing, and an absurdly cheap one its tokens at real prices, which for dust is
+ *   dust) and it never decides alone: a pass needs both measures, and a wallet's share counts by the
+ *   larger.
  *   With W the withdrawable share and B the burned or locked share: fail when W >= 50% in either
  *   measure; pass when B >= 95% in both and the pools hold at least 1,000 units of quote now
  *   (`MIN_DEPTH`); warn when W > 5% in either (a third party's position, or a part the deployer kept);
@@ -94,9 +99,10 @@
  *   range holds the current tick, so one outside it that the index lost would go uncounted (the index
  *   records every `ModifyLiquidity` of the PoolManager since its deployment and never deletes, so that
  *   takes an indexing bug); a holder's code is read at the latest block; EURC counts 1:1 with USDC; fees
- *   owed to a position aren't counted; the look-ahead stops at twice the price, so a wallet's range
- *   further up, or one in a pool that isn't the reference, takes later buyers' money uncounted (it is
- *   the wallet selling its tokens, which the holders check is for); and a "burned or locked" pass says
+ *   owed to a position aren't counted; the look-ahead stops at twice the reference pool's price, so a
+ *   wallet's range beyond that, in any pool, takes later buyers' money uncounted, and so does any
+ *   range in a v3 or Aerodrome pool (it is the wallet selling its tokens, which the holders check is
+ *   for); and a "burned or locked" pass says
  *   that quote currency can't be withdrawn by removing liquidity, nothing about what a pool's hook does
  *   to swaps or about tokens sold into the pool (the liquidity, trade and holders checks' business).
  * - lp-lock, everywhere else: no index (testnet; an inspection that couldn't fetch it; the indexer's
@@ -135,7 +141,8 @@ import { CallReverted, type ChainReader, type Finding, type InspectInput, type P
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { MAX_EXTRA_POOLS, readV4Pools, toSixDecimals, type V4Quote } from "./v4";
 import {
-  MAX_POSITIONS_PER_POOL, ReadsTimedOut, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, readHolderCode, readV4Positions, v2Inflow,
+  MAX_POSITIONS_PER_POOL, ReadsTimedOut, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, doubledPrice, hookCanChangeRemoval, positionQuote, rawSqrtPriceAt, readHolderCode,
+  readV4Positions, tokenSqrtPrice, v2Inflow, v2TokenSqrtPrice,
   type PoolGap, type V4PoolRef,
 } from "./v4-positions";
 import { MIN_DEPTH, STATUS, buyDidNotTrade, poolCouldNotTrade, orderDepth, v2Out, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, tradeSetup, type TradeAttempt, type TradeSetup } from "./simulate";
@@ -940,8 +947,10 @@ export type LiquiditySums = { burned: bigint; locked: bigint; withdrawable: bigi
 export type LiquidityTally = {
   /** By the quote currency the positions hold right now: what pulling them takes out. */
   now: LiquiditySums;
-  /** By that plus the reference pool's inflow: what buyers would pay into each position before the token's price doubles. */
+  /** By that plus the inflow: what buyers would pay into each position before the token's price reaches twice the reference pool's. */
   ahead: LiquiditySums;
+  /** Whether there was a reference price to look ahead from. Without one `ahead` is `now`, and nothing can pass. */
+  lookAhead: boolean;
   blockers: string[];
   openUrl: string | null;
   safeUrl: string | null;
@@ -972,17 +981,23 @@ const GAP_REASON: Record<PoolGap, string> = {
  *   unknown when the pool's hook runs on removal and so can block or tax it), or a contract's (unknown: it may be a
  *   locker, and its terms aren't read). A Uniswap v3 or Aerodrome pool's quote balance, all of it unknown: its
  *   positions can't be read;
- * - `ahead`, quote now plus inflow: in the reference pool only, the pool holding the most quote now, the quote currency
- *   buyers would pay into each position while the token's price rises from the current price to twice it (a v4
- *   position's `positionQuote().inflow`; a v2 pair's reserve times sqrt 2 - 1, by LP share). It is what makes a wallet's
- *   range sitting just above the price count: it holds no quote now and takes the next buyers' money.
+ * - `ahead`, quote now plus inflow: the quote currency buyers would pay into each position while the token's price in
+ *   its pool rises from where it is to twice the price in the reference pool, the pool holding the most quote now (a v4
+ *   position's `positionQuote(..., lookTo).inflow`; a v2 pair's reserve times sqrt(target / its price) - 1, by LP
+ *   share). One target for every pool, because buyers are routed to the cheapest pool first: a pool priced below the
+ *   reference takes their money before the reference does, and one priced above twice the reference takes none in that
+ *   time and counts for its quote now alone. It is what makes a wallet's range sitting just above the price count,
+ *   in whichever pool it sits: it holds no quote now and takes the next buyers' money. A v3 or Aerodrome pool has no
+ *   inflow here (its positions aren't read); when it is the reference there is no look-ahead at all, and no pass.
  * What is never counted is a token amount at a pool's own spot price as if it were money in the pool. Tokens cost their
  * deployer nothing, and a pool's price is whatever its initializer chose, so "tokens times price" can be made any size:
- * a dust position in a side pool initialised at an absurd price would outweigh every real dollar. That is why only the
- * reference pool has an inflow (its price is the one most of the money sits at), and why `ahead` never decides alone:
- * an inflow is still tokens times a price, so a burned token-only range just above the price would outvote, in
- * `ahead`, the wallet that holds every dollar in the pool. `now` can't be moved without real quote currency, so a pass
- * needs the burned or locked share in both, and a wallet's share counts by whichever is larger.
+ * a dust position in a side pool initialised at an absurd price would outweigh every real dollar. The look-ahead is
+ * tokens times a price too, which is why its prices stop at twice the reference pool's, the price most of the money
+ * sits at: an absurdly expensive pool is past it and gets nothing, and an absurdly cheap one gets its tokens at prices
+ * up to that one, which for dust is dust. It is also why `ahead` never decides alone: a burned token-only range just
+ * above the price would outvote, in `ahead`, the wallet that holds every dollar in the pool. `now` can't be moved
+ * without real quote currency, so a pass needs the burned or locked share in both, and a wallet's share counts by
+ * whichever is larger.
  *
  * Answers null when the old check should run instead: the index is more than `TAIL_MAX_BLOCKS` behind the head, or no
  * v4 pool is involved (see `checkLpLock`). Rejects with `ReadsTimedOut` when the inspection's deadline passes first.
@@ -1021,11 +1036,17 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
   if (v4Read.unlisted.length > 0) blockers.add("A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.");
 
   // One slice per holder kind of a v2 pair, per v4 position, per unread pool: who, in which pool, how much quote now, and
-  // how much more before the price doubles (counted only in the reference pool).
+  // how much more buyers would pay into it on the way to the look-ahead price (filled in below, once that price is known).
   type Slice = { pool: number; kind: "burned" | "locked" | "withdrawable" | UnknownWhy; quote: bigint; inflow: bigint; url: string };
   const slices: Slice[] = [];
+  // Each pool's quote now, and the token's price in it (a token square-root price, 0 when it has none to read).
+  const quoteIn = new Map<number, bigint>();
+  const priceIn = new Map<number, bigint>();
+  const hold = (pool: number, quote: bigint) => quoteIn.set(pool, (quoteIn.get(pool) ?? 0n) + quote);
 
   // Uniswap v2: the quote reserve, split by who holds the LP token.
+  type Pair = { pool: number; reserve: bigint; supply: bigint; kept: bigint; burnt: bigint; inLockers: bigint; url: string };
+  const pairs: Pair[] = [];
   for (const [pool, pair] of scan.pools.entries()) {
     if (pair.version !== "v2") continue;
     const read = (fn: string, args: unknown[] = []) => beforeDeadline(deadlineAt, () => reader.read(pair.address, erc20Abi, fn, args) as Promise<bigint>);
@@ -1039,51 +1060,70 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
       [BURN_ADDRESSES, input.knownLockers].map(async (holders) => (await Promise.all(holders.map((a) => catchReverted(read("balanceOf", [a]), 0n)))).reduce((s, b) => s + b, 0n)),
     );
     const kept = burnt! + inLockers! > supply ? supply : burnt! + inLockers!;
-    const reserve = pair.depth * SHARE_SCALE;
-    const safeQuote = (reserve * kept) / supply;
-    const burnedQuote = kept === 0n ? 0n : (safeQuote * burnt!) / (burnt! + inLockers!);
-    const url = `${explorerBase}/token/${pair.address}?tab=holders`;
-    const inflow = v2Inflow(reserve);
-    const safeInflow = (inflow * kept) / supply;
-    const burnedInflow = kept === 0n ? 0n : (safeInflow * burnt!) / (burnt! + inLockers!);
-    slices.push({ pool, kind: "burned", quote: burnedQuote, inflow: burnedInflow, url }, { pool, kind: "locked", quote: safeQuote - burnedQuote, inflow: safeInflow - burnedInflow, url });
-    // "Withdrawable" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
-    // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
-    slices.push({ pool, kind: input.lockersVetted ? "withdrawable" : "unvetted", quote: reserve - safeQuote, inflow: inflow - safeInflow, url });
+    pairs.push({ pool, reserve: pair.depth * SHARE_SCALE, supply, kept, burnt: burnt!, inLockers: inLockers!, url: `${explorerBase}/token/${pair.address}?tab=holders` });
+    hold(pool, pair.depth * SHARE_SCALE);
+    priceIn.set(pool, v2TokenSqrtPrice(pair.depth, pair.tokenReserve ?? 0n));
   }
 
-  // Uniswap v3 and Aerodrome: positions are NFTs nothing here reads, so the pool's whole quote balance is unknown. What
-  // buyers would pay into it is unknown too, which never matters: a pool that is the reference holds the most quote, so
-  // with it unread nothing can reach 95% safe.
+  // Uniswap v3 and Aerodrome: positions are NFTs nothing here reads, so the pool's whole quote balance is unknown, and so
+  // is what buyers would pay into it: it counts for its quote now in both measures.
   for (const [pool, p] of scan.pools.entries()) {
-    if (p.version === "v3" || p.version === "aero") slices.push({ pool, kind: "venue", quote: p.depth * SHARE_SCALE, inflow: 0n, url: `${explorerBase}/address/${p.address}` });
+    if (p.version !== "v3" && p.version !== "aero") continue;
+    slices.push({ pool, kind: "venue", quote: p.depth * SHARE_SCALE, inflow: 0n, url: `${explorerBase}/address/${p.address}` });
+    hold(pool, p.depth * SHARE_SCALE);
   }
 
-  // Uniswap v4: the positions, each by its holder.
+  // Uniswap v4: the positions.
   const { positionManager } = dex.v4;
-  const sized = v4Read.pools.flatMap((r) => (r.gap === null ? r.positions : []));
-  const code = await readHolderCode(reader, sized.map((p) => ({ holder: p.holder, value: p.quote + p.inflow })), input.knownLockers, deadlineAt);
-  for (const r of v4Read.pools) {
+  const v4Pools = v4Read.pools.flatMap((r) => {
     if (r.gap !== null) {
       blockers.add(GAP_REASON[r.gap]);
-      continue;
+      return [];
     }
-    const pool = scan.pools.findIndex((p) => p.version === "v4" && p.poolId !== undefined && lower(p.poolId) === lower(r.pool.poolId));
-    const hooked = hookCanChangeRemoval(r.pool.key);
-    for (const position of r.positions) {
-      const holder = lower(position.holder);
-      const who = classifyHolder(position.holder, { knownLockers: input.knownLockers, code: code.has(holder) ? code.get(holder)! : undefined });
-      const kind = who === "wallet" ? (hooked ? "hook" : "withdrawable") : who;
-      const url = position.tokenId === null ? `${explorerBase}/address/${position.holder}` : `${explorerBase}/token/${positionManager}/instance/${position.tokenId}`;
-      slices.push({ pool, kind, quote: position.quote * SHARE_SCALE, inflow: position.inflow * SHARE_SCALE, url });
-    }
+    const at = scan.pools.findIndex((p) => p.version === "v4" && p.poolId !== undefined && lower(p.poolId) === lower(r.pool.poolId));
+    for (const position of r.positions) hold(at, position.quote * SHARE_SCALE);
+    priceIn.set(at, tokenSqrtPrice(r.sqrtPriceX96, r.pool.quoteIsCurrency0, r.pool.quoteDecimals));
+    return [{ ...r, at }];
+  });
+
+  // The reference pool: the one holding the most quote now (the first of equals). The look-ahead target is twice the
+  // token's price there, one price for every pool. Without a reference price to read (no quote anywhere, or the most of it
+  // in a v3 or Aerodrome pool) there is no look-ahead, and so no pass.
+  let reference = -1;
+  for (const [pool, quote] of quoteIn) if (quote > 0n && (reference === -1 || quote > quoteIn.get(reference)!)) reference = pool;
+  const target = doubledPrice(priceIn.get(reference) ?? 0n);
+  const lookAhead = target > 0n;
+
+  for (const pair of pairs) {
+    const inflow = lookAhead ? v2Inflow(pair.reserve, priceIn.get(pair.pool) ?? 0n, target) : 0n;
+    const share = (amount: bigint) => {
+      const safe = (amount * pair.kept) / pair.supply;
+      const burned = pair.kept === 0n ? 0n : (safe * pair.burnt) / (pair.burnt + pair.inLockers);
+      return { burned, locked: safe - burned, rest: amount - safe };
+    };
+    const [quote, more] = [share(pair.reserve), share(inflow)];
+    slices.push({ pool: pair.pool, kind: "burned", quote: quote.burned, inflow: more.burned, url: pair.url }, { pool: pair.pool, kind: "locked", quote: quote.locked, inflow: more.locked, url: pair.url });
+    // "Withdrawable" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
+    // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
+    slices.push({ pool: pair.pool, kind: input.lockersVetted ? "withdrawable" : "unvetted", quote: quote.rest, inflow: more.rest, url: pair.url });
   }
 
-  // The reference pool: the one holding the most quote now (the first of equals).
-  const perPool = new Map<number, bigint>();
-  for (const s of slices) perPool.set(s.pool, (perPool.get(s.pool) ?? 0n) + s.quote);
-  let reference = -1;
-  for (const [pool, quote] of perPool) if (quote > 0n && (reference === -1 || quote > perPool.get(reference)!)) reference = pool;
+  const sized = v4Pools.flatMap((r) => {
+    // The common target as this pool's own raw price. A pool already priced past it has nothing more coming to it.
+    const lookTo = lookAhead ? rawSqrtPriceAt(target, r.pool.quoteIsCurrency0, r.pool.quoteDecimals) : 0n;
+    return r.positions.map((position) => {
+      const ahead = lookTo > 0n ? positionQuote({ sqrtPriceX96: r.sqrtPriceX96, tickLower: position.tickLower, tickUpper: position.tickUpper, liquidity: position.liquidity, quoteIsCurrency0: r.pool.quoteIsCurrency0 }, lookTo) : null;
+      return { r, position, quote: position.quote * SHARE_SCALE, inflow: ahead ? toSixDecimals(ahead.inflow, r.pool.quoteDecimals) * SHARE_SCALE : 0n };
+    });
+  });
+  const code = await readHolderCode(reader, sized.map((p) => ({ holder: p.position.holder, value: p.quote + p.inflow })), input.knownLockers, deadlineAt);
+  for (const { r, position, quote, inflow } of sized) {
+    const holder = lower(position.holder);
+    const who = classifyHolder(position.holder, { knownLockers: input.knownLockers, code: code.has(holder) ? code.get(holder)! : undefined });
+    const kind = who === "wallet" ? (hookCanChangeRemoval(r.pool.key) ? "hook" : "withdrawable") : who;
+    const url = position.tokenId === null ? `${explorerBase}/address/${position.holder}` : `${explorerBase}/token/${positionManager}/instance/${position.tokenId}`;
+    slices.push({ pool: r.at, kind, quote, inflow, url });
+  }
 
   const sums = (): LiquiditySums => ({ burned: 0n, locked: 0n, withdrawable: 0n, unknown: { contract: 0n, hook: 0n, venue: 0n, unclassified: 0n, unvetted: 0n } });
   const [now, ahead] = [sums(), sums()];
@@ -1095,7 +1135,7 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
   let largestOpen: { amount: bigint; url: string } | null = null;
   let largestSafe: { amount: bigint; url: string } | null = null;
   for (const s of slices) {
-    const counted = s.quote + (s.pool === reference ? s.inflow : 0n);
+    const counted = s.quote + s.inflow;
     add(now, s.kind, s.quote);
     add(ahead, s.kind, counted);
     if (s.kind === "burned" || s.kind === "locked") {
@@ -1105,6 +1145,7 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
   return {
     now,
     ahead,
+    lookAhead,
     blockers: [...blockers],
     openUrl: (largestOpen as { url: string } | null)?.url ?? null,
     safeUrl: (largestSafe as { url: string } | null)?.url ?? null,
@@ -1140,11 +1181,11 @@ function lpLockByQuote(input: InspectInput, scan: PoolScan, dex: DexConfig, tall
   // The stricter of the two, for the figures: the one where wallets hold more, or where less is safe.
   const openView = now.withdrawable * ahead.total >= ahead.withdrawable * now.total ? now : ahead;
   const safeView = now.kept * ahead.total <= ahead.kept * now.total ? now : ahead;
-  const counted = `Measured two ways, the stricter one shown: by the ${symbol} in this token's pools now, and by that plus what buyers would pay into its main pool before the price doubles.`;
+  const counted = `Measured two ways, the stricter one shown: by the ${symbol} in this token's pools now, and by that plus what buyers would pay into its pools before its price reaches twice what it is in the main pool.`;
   const open = `${formatPct(openView.pct(openView.withdrawable))} of this token's liquidity is in positions wallets can withdraw, which hold ${wholeUnits(now.withdrawable / SHARE_SCALE)} ${symbol} now; ${formatPct(safeView.pct(safeView.kept))} is burned or locked. ${counted}`;
   if (either((m) => m.withdrawable * 2n >= m.total)) return finding("lp-lock", "fail", "Liquidity isn't locked", open, { evidenceUrl: openUrl, fixAppId: "vault" });
   const mostlySafe = !either((m) => m.kept * 100n < m.total * 95n);
-  if (mostlySafe && now.total >= MIN_DEPTH * SHARE_SCALE) {
+  if (mostlySafe && tally.lookAhead && now.total >= MIN_DEPTH * SHARE_SCALE) {
     return finding(
       "lp-lock", "pass", "Liquidity is burned or locked",
       `${formatPct(safeView.pct(safeView.kept))} of this token's liquidity is burned or locked (burned: ${formatPct(safeView.pct(safeView.burned))}, locked: ${formatPct(safeView.pct(safeView.locked))}), over ${scan.pools.length} pool(s) holding ${wholeUnits(now.total / SHARE_SCALE)} ${symbol} now. ${counted}`,
@@ -1152,7 +1193,7 @@ function lpLockByQuote(input: InspectInput, scan: PoolScan, dex: DexConfig, tall
     );
   }
   if (either((m) => m.withdrawable * 100n > m.total * 5n)) return finding("lp-lock", "warn", "Some liquidity isn't locked", open, { evidenceUrl: openUrl, fixAppId: "vault" });
-  if (mostlySafe) {
+  if (mostlySafe && now.total < MIN_DEPTH * SHARE_SCALE) {
     return unknown(`${formatPct(safeView.pct(safeView.kept))} of this token's liquidity is burned or locked, but its pools hold under ${MIN_UNITS} ${symbol}: too little to call locked liquidity. ${counted}`, tally.safeUrl);
   }
   const venues = listWith("and", foundVenues(scan.pools.filter((p) => p.version === "v3" || p.version === "aero")));

@@ -58,7 +58,7 @@ const STEP_UP = (10_001n << PRECISION) / 10_000n;
 const STEP_DOWN = (10_000n << PRECISION) / 10_001n;
 
 /** Integer square root (Newton), rounded down. */
-function isqrt(n: bigint): bigint {
+export function isqrt(n: bigint): bigint {
   if (n < 2n) return n;
   let x = 1n << BigInt((n.toString(2).length + 1) >> 1);
   for (;;) {

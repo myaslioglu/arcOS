@@ -18,7 +18,11 @@ import {
   positionFromLog,
   positionQuote,
   ReadsTimedOut,
+  doubledPrice,
+  rawSqrtPriceAt,
+  tokenSqrtPrice,
   v2Inflow,
+  v2TokenSqrtPrice,
   readHolderCode,
   readV4Positions,
   type V4PoolRef,
@@ -163,11 +167,74 @@ describe("positionQuote: a position in the quote currency alone", () => {
   });
 });
 
+describe("one price for every pool: the token's square-root price", () => {
+  it("is the raw price when the quote is currency1, its inverse when it is currency0, in 18-decimal quote units", () => {
+    // Raw price 4 with 6-decimal USDC as currency1: 4 raw USDC a raw token is 4e12 in 18 decimals; its square root, 2e6.
+    expect(tokenSqrtPrice(2n * Q96, false, 6)).toBe(2n * Q96 * 10n ** 6n);
+    // The same raw price with USDC as currency0: a quarter of a raw USDC a raw token.
+    expect(tokenSqrtPrice(2n * Q96, true, 6)).toBe((Q96 / 2n) * 10n ** 6n);
+    // Native USDC already has 18 decimals.
+    expect(tokenSqrtPrice(2n * Q96, false, 18)).toBe(2n * Q96);
+    expect(tokenSqrtPrice(0n, false, 6)).toBe(0n);
+  });
+
+  it("gives two pools at the same market price the same figure, whatever their orientation and decimals", () => {
+    // $0.001 a token (18 decimals). USDC-6 as currency1: raw price 1e-15. Native USDC-18 as currency0: raw price 1,000 tokens a USDC.
+    const usdc6 = tokenSqrtPrice(sqrtRatioAtTick(-345_405), false, 6);
+    const native = tokenSqrtPrice(sqrtRatioAtTick(69_081), true, 18);
+    const ratio = Number((usdc6 * 10n ** 9n) / native) / 1e9;
+    expect(ratio).toBeGreaterThan(0.999);
+    expect(ratio).toBeLessThan(1.001);
+  });
+
+  it("turns back into the pool's own raw price", () => {
+    for (const [sqrtP, quote0, decimals] of [[sqrtRatioAtTick(-345_405), false, 6], [sqrtRatioAtTick(69_081), true, 18], [sqrtRatioAtTick(12_345), true, 6], [Q96, false, 18]] as const) {
+      const back = rawSqrtPriceAt(tokenSqrtPrice(sqrtP, quote0, decimals), quote0, decimals);
+      expect(Number((back * 10n ** 12n) / sqrtP) / 1e12).toBeCloseTo(1, 9);
+    }
+    expect(rawSqrtPriceAt(0n, false, 6)).toBe(0n);
+  });
+
+  it("reads a v2 pair's from its reserves", () => {
+    // 4 raw USDC a raw token.
+    expect(v2TokenSqrtPrice(4_000_000n, 1_000_000n)).toBe(2n * Q96 * 10n ** 6n);
+    expect(v2TokenSqrtPrice(4_000_000n, 0n)).toBe(0n);
+  });
+
+  it("doubles a price by sqrt 2", () => {
+    const doubled = doubledPrice(Q96);
+    expect(Number((doubled * doubled * 10n ** 9n) / (Q96 * Q96)) / 1e9).toBeCloseTo(2, 8);
+  });
+});
+
+describe("positionQuote looking to a given price", () => {
+  const L = 10n ** 18n;
+  const wide = { tickLower: -60_000, tickUpper: 60_000, liquidity: L };
+  it("gains the quote between the pool's price and the target, and nothing when the pool is already past it", () => {
+    const up = sqrtRatioAtTick(3_000);
+    // Token currency0: a higher raw price is a higher token price.
+    const [lo, hi] = [sqrtRatioAtTick(-60_000), sqrtRatioAtTick(60_000)];
+    expect(positionQuote({ sqrtPriceX96: Q96, ...wide, quoteIsCurrency0: false }, up).inflow).toBe(amountsForLiquidity(up, lo, hi, L).amount1 - amountsForLiquidity(Q96, lo, hi, L).amount1);
+    expect(positionQuote({ sqrtPriceX96: up, ...wide, quoteIsCurrency0: false }, Q96).inflow).toBe(0n);
+    // Token currency1: a lower raw price is a higher token price.
+    const down = sqrtRatioAtTick(-3_000);
+    expect(positionQuote({ sqrtPriceX96: Q96, ...wide, quoteIsCurrency0: true }, down).inflow).toBeGreaterThan(0n);
+    expect(positionQuote({ sqrtPriceX96: down, ...wide, quoteIsCurrency0: true }, Q96).inflow).toBe(0n);
+    expect(positionQuote({ sqrtPriceX96: Q96, ...wide, quoteIsCurrency0: false }, 0n).inflow).toBe(0n);
+  });
+});
+
 describe("v2Inflow", () => {
-  it("is the reserve times sqrt 2 - 1: what a constant-product pair's quote side gains while the price doubles", () => {
+  it("is the reserve times sqrt(target / price) - 1: sqrt 2 - 1 while the pair's own price doubles", () => {
     // x * y = k and the price y / x doubling: y' = y * sqrt 2.
-    expect(v2Inflow(10_000_000_000n)).toBe(4_142_135_623n);
-    expect(v2Inflow(0n)).toBe(0n);
+    expect(v2Inflow(10_000_000_000n, Q96, doubledPrice(Q96))).toBe(4_142_135_623n);
+    // To four times the price: the reserve doubles.
+    expect(v2Inflow(10_000_000_000n, Q96, 2n * Q96)).toBe(10_000_000_000n);
+  });
+  it("is nothing for a pair already at or past the target, or without a price", () => {
+    expect(v2Inflow(10_000_000_000n, 2n * Q96, Q96)).toBe(0n);
+    expect(v2Inflow(10_000_000_000n, Q96, Q96)).toBe(0n);
+    expect(v2Inflow(10_000_000_000n, 0n, Q96)).toBe(0n);
   });
 });
 
@@ -308,13 +375,16 @@ describe("readV4Positions", () => {
     const positions = [nft(1, L), nft(2, 3n * L), { owner: SENDER, tickLower: -60, tickUpper: 60, salt: salt(0), liquidity: L }, nft(3, 0n)];
     const reader = chain(positions);
     const [got] = await read(reader, index(positions));
-    const held = (liquidity: bigint, lower: number, upper: number) => {
-      const q = positionQuote({ sqrtPriceX96: Q96, tickLower: lower, tickUpper: upper, liquidity, quoteIsCurrency0: false });
-      return { quote: q.now, inflow: q.inflow };
-    };
+    const held = (liquidity: bigint, tickLower: number, tickUpper: number) => ({
+      quote: positionQuote({ sqrtPriceX96: Q96, tickLower, tickUpper, liquidity, quoteIsCurrency0: false }).now,
+      tickLower,
+      tickUpper,
+      liquidity,
+    });
     expect(got).toEqual({
       pool,
       gap: null,
+      sqrtPriceX96: Q96,
       positions: [
         { holder: WALLET, tokenId: 1n, ...held(L, -600, 600) },
         { holder: "0x000000000000000000000000000000000000dEaD", tokenId: 2n, ...held(3n * L, -600, 600) },
@@ -332,7 +402,7 @@ describe("readV4Positions", () => {
     const positions = [{ owner: SENDER, tickLower: -600, tickUpper: 600, salt: salt(0), liquidity: 10n ** 24n }];
     const [got] = await read(chain(positions), index(positions), [{ ...pool, quoteDecimals: 18 }]);
     const raw = positionQuote({ sqrtPriceX96: Q96, tickLower: -600, tickUpper: 600, liquidity: 10n ** 24n, quoteIsCurrency0: false });
-    expect(got).toMatchObject({ gap: null, positions: [{ quote: raw.now / 10n ** 12n, inflow: raw.inflow / 10n ** 12n }] });
+    expect(got).toMatchObject({ gap: null, positions: [{ quote: raw.now / 10n ** 12n, liquidity: 10n ** 24n }] });
   });
 
   it("reads the blocks after the index's cursor itself, and adds the positions they opened", async () => {
@@ -426,7 +496,7 @@ describe("readV4Positions", () => {
   it("says missing for a pool the index didn't look up, which an empty list is not", async () => {
     const reader = chain([]);
     expect(await read(reader, index([], { pools: {} }))).toEqual([{ pool, gap: "missing" }]);
-    expect(await read(chain([]), index([]))).toEqual([{ pool, gap: null, positions: [] }]);
+    expect(await read(chain([]), index([]))).toEqual([{ pool, gap: null, sqrtPriceX96: Q96, positions: [] }]);
     // An entry under an inherited name is no entry.
     expect(await read(chain([]), index([], { pools: Object.create({ [id]: { positions: [], truncated: false } }) as V4PositionIndex["pools"] }))).toEqual([{ pool, gap: "missing" }]);
   });
@@ -482,7 +552,7 @@ describe("readV4Positions", () => {
   it("splits a long list over several multicalls", async () => {
     const positions = Array.from({ length: 450 }, (_, i) => nft(i + 1, 0n));
     const reader = chain(positions);
-    expect(await read(reader, index(positions))).toEqual([{ pool, gap: null, positions: [] }]);
+    expect(await read(reader, index(positions))).toEqual([{ pool, gap: null, sqrtPriceX96: Q96, positions: [] }]);
     expect(reader.batches.map((b) => b.calls.length)).toEqual([200, 200, 52]);
   });
 });

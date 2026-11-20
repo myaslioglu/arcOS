@@ -30,7 +30,7 @@ const PM = UNISWAP_V4.positionManager;
 const Q96 = 1n << 96n;
 const HEAD = 1_000n;
 const L = 10n ** 12n;
-const COUNTED = "Measured two ways, the stricter one shown: by the USDC in this token's pools now, and by that plus what buyers would pay into its main pool before the price doubles.";
+const COUNTED = "Measured two ways, the stricter one shown: by the USDC in this token's pools now, and by that plus what buyers would pay into its pools before its price reaches twice what it is in the main pool.";
 
 const v4Only: DexConfig = { quoteTokens: [USD], v4: UNISWAP_V4 };
 const everything: DexConfig = { quoteTokens: [USD, EUR], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4, aero: AERODROME };
@@ -311,6 +311,87 @@ describe("what is counted: the quote currency, never a token amount at a pool's 
     });
   });
 
+  describe("a wallet's sell wall in another pool than the one the money is in", () => {
+    // Pool A: 1,000 × 10^9 of burned liquidity in range, 29,553 USDC: the reference. Pool B: a wallet's, a little USDC in
+    // range and deep token liquidity just above its price. Buyers are routed to the cheaper pool first, so B takes their
+    // money before A does.
+    const poolA: PoolSetup = { key: v4PoolKey(TOKEN, USDC, 3000, 60), positions: [nft(1, L)] };
+    const keyB = v4PoolKey(TOKEN, USDC, 10_000, 200);
+    const owned = { chain: owners({ 1: DEAD, 2: WALLET, 3: WALLET }) };
+    /** Pool B at `tick`: 40-odd USDC in range (10^9.. liquidity is 1/750 of A's) and a deep wall from its price up 3,000 ticks. */
+    const poolB = (tick: number): PoolSetup => ({
+      key: keyB,
+      sqrtPriceX96: sqrtRatioAtTick(tick),
+      tick,
+      positions: [nft(2, L / 750n, tick - 600, tick + 600), nft(3, 50n * L, tick + 200, tick + 3_200)],
+    });
+
+    it("doesn't pass with B at A's price, though the wallet holds 0.1% of the USDC now", async () => {
+      const { input } = world([poolA, poolB(0)], owned);
+      const scan = await findPools(input);
+      const tally = (await tallyLiquidity(input, scan, v4Only))!;
+      expect(tally.now.withdrawable * 100n).toBeLessThan(tally.now.burned);
+      expect(tally.ahead.withdrawable).toBeGreaterThan(tally.ahead.burned);
+      const f = await checkLpLock(input, scan);
+      expect(f.status).toBe("fail");
+      expect(f.detail).toMatch(/which hold 39 USDC now/);
+    });
+
+    it("doesn't pass with B cheaper than A: it is looked ahead to twice A's price, not twice its own", async () => {
+      // B at a quarter of A's price (tick -13,863): its wall, from there up, is all below twice A's price.
+      const f = await check([poolA, poolB(-13_800)], owned);
+      expect(f.status).toBe("fail");
+    });
+
+    it("doesn't pass with B priced anywhere up to twice A's, and takes nothing from a B priced beyond that", async () => {
+      // 1.8x (tick 5,878): the start of the wall is within reach.
+      expect((await check([poolA, poolB(5_800)], owned)).status).not.toBe("pass");
+      // 2.2x (tick 7,885): past the target, B counts for the USDC it holds now and nothing more.
+      const { input } = world([poolA, poolB(8_000)], owned);
+      const scan = await findPools(input);
+      const tally = (await tallyLiquidity(input, scan, v4Only))!;
+      expect(tally.ahead.withdrawable).toBe(tally.now.withdrawable);
+      expect((await checkLpLock(input, scan)).status).toBe("pass");
+    });
+
+    it("works the same with the token as currency1 in the other pool: a native-USDC pool, the other orientation and 18 decimals", async () => {
+      // Pool A as before (token currency0, USDC with 6 decimals as currency1). Pool B against native USDC (address 0, 18
+      // decimals), where the token is currency1: the same market price is raw price 1e-12 the other way up, tick -276,325,
+      // and "above the token's price" is BELOW that tick.
+      const native = v4PoolKey(NATIVE, TOKEN, 10_000, 200);
+      const tick = -276_400;
+      const wall = nft(3, 10n ** 6n * 50n * L, tick - 3_200, tick - 200);
+      const inRange = nft(2, (10n ** 6n * L) / 750n, tick - 600, tick + 600);
+      const { input } = world([poolA, { key: native, sqrtPriceX96: sqrtRatioAtTick(tick), tick, positions: [inRange, wall] }], owned);
+      const scan = await findPools(input);
+      const tally = (await tallyLiquidity(input, scan, v4Only))!;
+      expect(tally.now.withdrawable * 100n).toBeLessThan(tally.now.burned);
+      expect(tally.ahead.withdrawable).toBeGreaterThan(tally.ahead.burned);
+      expect((await checkLpLock(input, scan)).status).toBe("fail");
+      // And priced beyond twice A's price (the token dearer: a LOWER tick here), it takes nothing.
+      const far = -276_400 - 8_000;
+      const beyond = world([poolA, { key: native, sqrtPriceX96: sqrtRatioAtTick(far), tick: far, positions: [nft(3, 10n ** 6n * 50n * L, far - 3_200, far - 200)] }], owned);
+      const t2 = (await tallyLiquidity(beyond.input, await findPools(beyond.input), v4Only))!;
+      expect(t2.ahead.withdrawable).toBe(0n);
+    });
+
+    it("a stranger's dust in a pool at a near-zero price beside a burned launch still passes", async () => {
+      // Tick -600,000: the token at 1e-26 of a raw USDC. The dust is 2.2e-12 tokens' worth of liquidity above that price;
+      // bought all the way up to twice the real price it is still dust.
+      const dust = nft(2, 10n ** 6n, -599_000, 0);
+      const f = await check([{ key: v4PoolKey(TOKEN, USDC, 3000, 60), positions: [nft(1, 1_000n * L)] }, { key, sqrtPriceX96: sqrtRatioAtTick(-600_000), tick: -600_000, positions: [dust] }], { chain: owners({ 1: DEAD, 2: WALLET_2 }) });
+      expect(f.status).toBe("pass");
+    });
+  });
+
+  it("has no look-ahead, and so no pass, when the pool holding the most quote is one whose price isn't read", async () => {
+    const reads = { ...noPools(everything), [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: V3_POOL, [readKey(USDC, "balanceOf", [V3_POOL])]: 40_000_000_000n };
+    const { input } = world([{ key, positions: [nft(1, L)] }], { dex: everything, chain: { reads, nftOwners: { 1: DEAD } } });
+    const tally = (await tallyLiquidity(input, await findPools(input), everything))!;
+    expect(tally.lookAhead).toBe(false);
+    expect(tally.ahead).toEqual(tally.now);
+  });
+
   it("a burned decoy holding more USDC than the real pool doesn't pass under 1,000 USDC", async () => {
     // Real pool: 295 USDC in a wallet. Decoy: 591 USDC burned. One third is withdrawable: a warning.
     const realKey = v4PoolKey(TOKEN, USDC, 3000, 60);
@@ -391,7 +472,7 @@ describe("pools the lookup may not have", () => {
   it("fails on the wallet's share once the index lists the hooked pool, where the burned pool alone would have passed", async () => {
     const f = await check([{ key, positions: [burned] }, { key: big, positions: [kept], listed: true }], { chain });
     expect(f).toMatchObject({ status: "fail", evidenceUrl: `https://explorer.test/token/${PM}/instance/2` });
-    expect(f.detail).toMatch(/^99% of this token's liquidity is in positions wallets can withdraw, which hold 1,477,650 USDC now; 1% is burned or locked\./);
+    expect(f.detail).toMatch(/^98% of this token's liquidity is in positions wallets can withdraw, which hold 1,477,650 USDC now; 2% is burned or locked\./);
   });
 
   it("can't answer when the hooked pool was created after the index's cursor and the lookup doesn't have it", async () => {
@@ -517,10 +598,11 @@ describe("a whole inspection with the position index", () => {
 });
 
 describe("pools of other kinds beside a v4 pool", () => {
-  const pair = (lpBurned: bigint, quoteReserve: bigint, quote = USDC) => ({
+  /** A v2 pair at the v4 pool's price (one raw unit of quote a raw token) unless told. */
+  const pair = (lpBurned: bigint, quoteReserve: bigint, quote = USDC, tokenReserve = quoteReserve) => ({
     ...noPools(everything),
     [readKey(V2, "getPair", [TOKEN, quote])]: PAIR,
-    ...v2PairReads(PAIR, quote, TOKEN, quoteReserve),
+    ...v2PairReads(PAIR, quote, TOKEN, quoteReserve, tokenReserve),
     [readKey(PAIR, "totalSupply", [])]: 100n,
     [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
     [readKey(PAIR, "balanceOf", [DEAD])]: lpBurned,
@@ -530,9 +612,10 @@ describe("pools of other kinds beside a v4 pool", () => {
     check([{ key, positions }], { dex: everything, chain: { reads, nftOwners }, input });
 
   it("adds a v2 pair's quote reserve to the v4 positions' quote: a burned pair doesn't hide a wallet's v4 position", async () => {
-    // The pair: 29,553.010879 USDC, burned. The v4 position: as much, in a wallet.
+    // The pair: 29,553.010879 USDC, burned. The v4 position: as much, in a wallet, and being concentrated it takes more of
+    // what buyers pay next than the pair does (as much again, against sqrt 2 - 1 of the pair's reserve).
     const f = await both([nft(7, L)], pair(100n, held(L).now), { 7: WALLET });
-    expect(f).toMatchObject({ status: "fail", detail: expect.stringMatching(/^50% of this token's liquidity is in positions wallets can withdraw, which hold 29,553 USDC now; 50% is burned or locked\./) as string });
+    expect(f).toMatchObject({ status: "fail", detail: expect.stringMatching(/^58\.9% of this token's liquidity is in positions wallets can withdraw, which hold 29,553 USDC now; 41\.1% is burned or locked\./) as string });
     const burned = await both([nft(7, L)], pair(100n, held(L).now), { 7: DEAD });
     expect(burned).toMatchObject({ status: "pass", evidenceUrl: expect.stringMatching(/instance\/7$|tab=holders$/) as string });
     expect(burned.detail).toMatch(/over 2 pool\(s\) holding 59,106 USDC now/);
@@ -548,13 +631,15 @@ describe("pools of other kinds beside a v4 pool", () => {
     expect(unvetted).toMatchObject({ status: "unknown", detail: expect.stringContaining("is v2 LP outside burn addresses and known lock contracts, and the lock contracts on Arc aren't recognized yet") as string });
   });
 
-  it("looks ahead in a v2 pair when it is the reference pool: its reserve times sqrt 2 - 1, by LP share", async () => {
+  it("looks ahead in a v2 pair to the same target as everywhere: its reserve times sqrt 2 - 1 when it is the reference, by LP share", async () => {
     const { input } = world([{ key, positions: [nft(7, L / 10n)] }], { dex: everything, chain: { reads: pair(40n, 10_000_000_000n), nftOwners: { 7: DEAD } } });
     const tally = (await tallyLiquidity(input, await findPools(input), everything))!;
     expect(tally.now.withdrawable).toBe(6_000_000_000n * SHARE_SCALE);
-    // 10,000 × (sqrt 2 - 1) = 4,142.135623 more, 60% of it to the unlocked LP; the v4 pool, not the reference, gains nothing.
+    // 10,000 × (sqrt 2 - 1) = 4,142.135623 more, 60% of it to the unlocked LP; the v4 pool, at the same price, looks to the
+    // same target and gains what its range takes on the way.
     expect(tally.ahead.withdrawable / SHARE_SCALE).toBe(6_000_000_000n + 2_485_281_374n);
-    expect(tally.ahead.burned / SHARE_SCALE).toBe(4_000_000_000n + 1_656_854_249n + held(L / 10n).now);
+    expect(tally.ahead.burned / SHARE_SCALE).toBe(4_000_000_000n + 1_656_854_249n + held(L / 10n).now + held(L / 10n).inflow);
+    expect(tally.lookAhead).toBe(true);
   });
 
   it("counts a v3 pool's USDC as unknown: a small one beside burned liquidity still passes, a large one can't", async () => {

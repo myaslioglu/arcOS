@@ -3,7 +3,7 @@ import { BURN_ADDRESSES, type Address, type UniswapV4Config } from "@arcos/chain
 import type { Hex } from "./bytecode";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { CallReverted, type ChainReader, type PoolKey, type V4PositionIndex, type V4PositionKey } from "./types";
-import { sqrtRatioAtTick, toSixDecimals } from "./v4";
+import { isqrt, sqrtRatioAtTick, toSixDecimals } from "./v4";
 
 // Who holds the liquidity of a Uniswap v4 pool. A v4 position has no token of its own: it is an entry in the PoolManager
 // keyed by (pool id, owner, tickLower, tickUpper, salt), and only the `ModifyLiquidity` logs say which entries exist. The
@@ -116,29 +116,70 @@ const E30 = 10n ** 30n;
 /**
  * A position in the quote currency alone, raw units, rounded down:
  * - `now`: the quote currency it holds at the pool's price, which is what removing it takes out in that currency;
- * - `inflow`: the quote currency buyers would pay into it while the TOKEN's price rises from the current price to twice
- *   it, which is its quote amount at the doubled price less `now` (the liquidity math is path-independent). The pool's
- *   raw price is currency1 per currency0, so when the token is currency0 the token's price doubling is the raw price
- *   doubling (its square root times sqrt 2), and when the token is currency1 it is the raw price halving (its square
- *   root divided by sqrt 2). A range the doubled price doesn't reach gains nothing; one the price has already left on
- *   the token's upside holds only quote and gains nothing more.
+ * - `inflow`: the quote currency buyers would pay into it while the pool's price moves from where it is to `lookTo` (a
+ *   raw square-root price of this pool), which is its quote amount there less `now` (the liquidity math is
+ *   path-independent). Zero when `lookTo` is on the side of the price where the position's quote shrinks: a pool
+ *   already priced past the target has nothing more coming to it. Without `lookTo` it looks to the TOKEN's price
+ *   doubling in this pool: the raw price is currency1 per currency0, so when the token is currency0 that is the raw
+ *   price doubling (its square root times sqrt 2), and when the token is currency1 it is the raw price halving.
  * The token side has no part in either number.
  */
-export function positionQuote(p: { sqrtPriceX96: bigint; tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean }): { now: bigint; inflow: bigint } {
+export function positionQuote(
+  p: { sqrtPriceX96: bigint; tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean },
+  lookTo?: bigint,
+): { now: bigint; inflow: bigint } {
   if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return { now: 0n, inflow: 0n };
   const [lower, upper] = [sqrtRatioAtTick(p.tickLower), sqrtRatioAtTick(p.tickUpper)];
   const quoteAt = (sqrtP: bigint) => {
     const { amount0, amount1 } = amountsForLiquidity(sqrtP, lower, upper, p.liquidity);
     return p.quoteIsCurrency0 ? amount0 : amount1;
   };
-  const doubled = p.quoteIsCurrency0 ? (p.sqrtPriceX96 * E30) / SQRT2_E30 : (p.sqrtPriceX96 * SQRT2_E30) / E30;
+  const target = lookTo ?? (p.quoteIsCurrency0 ? (p.sqrtPriceX96 * E30) / SQRT2_E30 : (p.sqrtPriceX96 * SQRT2_E30) / E30);
   const now = quoteAt(p.sqrtPriceX96);
-  const then = quoteAt(doubled);
+  const then = target > 0n ? quoteAt(target) : now;
   return { now, inflow: then > now ? then - now : 0n };
 }
 
-/** What a constant-product (Uniswap v2) pair's quote reserve gains while the token's price doubles: reserve * (sqrt 2 - 1). */
-export const v2Inflow = (quoteReserve: bigint): bigint => (quoteReserve * (SQRT2_E30 - E30)) / E30;
+// One price for every pool of a token, whatever the pool's orientation and its quote currency's decimals: the square
+// root of the TOKEN's price, in 18-decimal quote units per raw token unit, as a Q64.96. Pools are compared by it, and a
+// common look-ahead target (twice the reference pool's price) is turned back into each pool's own raw price with it.
+// EURC counts 1:1 with USDC here as everywhere in this check.
+
+/** sqrt(10^(18 - decimals)) with 6 decimals: what a raw quote amount's square root is scaled by to count in 18 decimals. */
+const quoteScale = (quoteDecimals: number): bigint => isqrt(10n ** BigInt(Math.max(0, 18 - quoteDecimals) + 12));
+const SCALE_ONE = 10n ** 6n;
+const Q192 = 1n << 192n;
+
+/** The token's square-root price in a v4 pool (see above), from the pool's raw `sqrtPriceX96`. Zero for no price. */
+export function tokenSqrtPrice(sqrtPriceX96: bigint, quoteIsCurrency0: boolean, quoteDecimals: number): bigint {
+  if (sqrtPriceX96 <= 0n) return 0n;
+  // Raw price is currency1 per currency0: the token's price as it is when the quote is currency1, its inverse otherwise.
+  const raw = quoteIsCurrency0 ? Q192 / sqrtPriceX96 : sqrtPriceX96;
+  return (raw * quoteScale(quoteDecimals)) / SCALE_ONE;
+}
+
+/** The pool's raw `sqrtPriceX96` at which the token's square-root price is `tokenSqrt`: `tokenSqrtPrice` backwards. Zero for none. */
+export function rawSqrtPriceAt(tokenSqrt: bigint, quoteIsCurrency0: boolean, quoteDecimals: number): bigint {
+  const raw = (tokenSqrt * SCALE_ONE) / quoteScale(quoteDecimals);
+  if (raw <= 0n) return 0n;
+  return quoteIsCurrency0 ? Q192 / raw : raw;
+}
+
+/** The token's square-root price in a Uniswap v2 pair, from its reserves (the quote's in 6 decimals). Zero without tokens. */
+export function v2TokenSqrtPrice(quoteReserve: bigint, tokenReserve: bigint): bigint {
+  return tokenReserve <= 0n ? 0n : isqrt((quoteReserve * 10n ** 12n * Q192) / tokenReserve);
+}
+
+/** A token square-root price doubled in price: times sqrt 2. */
+export const doubledPrice = (tokenSqrt: bigint): bigint => (tokenSqrt * SQRT2_E30) / E30;
+
+/**
+ * What a constant-product (Uniswap v2) pair's quote reserve gains while the token's price rises from `fromSqrt` to
+ * `toSqrt` (token square-root prices): x * y = k, so the quote reserve moves with the square root of the price, and the
+ * gain is reserve * (toSqrt / fromSqrt - 1). Nothing when the pair is already priced at or above the target, or has no price.
+ */
+export const v2Inflow = (quoteReserve: bigint, fromSqrt: bigint, toSqrt: bigint): bigint =>
+  fromSqrt <= 0n || toSqrt <= fromSqrt ? 0n : (quoteReserve * toSqrt) / fromSqrt - quoteReserve;
 
 /**
  * Uniswap v4 reads a hook's permissions off its address (v4-core `src/libraries/Hooks.sol`). These three let it run code
@@ -169,12 +210,16 @@ export type SizedPosition = {
   holder: Address;
   /** The PositionManager NFT, when it is one. */
   tokenId: bigint | null;
-  /** The quote currency it holds now, and what buyers would pay into it before the token's price doubles (`positionQuote`). */
+  /** The quote currency it holds now (`positionQuote().now`). */
   quote: bigint;
-  inflow: bigint;
+  /** Its range and liquidity, for looking ahead to a price (`positionQuote(..., lookTo).inflow`). */
+  tickLower: number;
+  tickUpper: number;
+  liquidity: bigint;
 };
 
-export type V4PoolRead = { pool: V4PoolRef } & ({ gap: PoolGap } | { gap: null; positions: SizedPosition[] });
+/** A pool's positions, with the raw price they were read at. */
+export type V4PoolRead = { pool: V4PoolRef } & ({ gap: PoolGap } | { gap: null; sqrtPriceX96: bigint; positions: SizedPosition[] });
 
 /**
  * What `readV4Positions` found. `stale`: the index's cursor is too far behind for its tail to be read, so neither the
@@ -331,8 +376,8 @@ export async function readV4Positions(a: {
     ...keys.map((k): BatchCall => ({ target: v4.stateView, abi: positionInfoAbi, functionName: "getPositionInfo", args: [pool.poolId, k.owner, k.tickLower, k.tickUpper, k.salt] })),
   ]);
   const state = await beforeDeadline(deadlineAt, () => batched(reader, stateCalls, head));
-  type Live = { key: V4PositionKey; quote: bigint; inflow: bigint; tokenId: bigint | null };
-  const live = new Map<string, Live[]>();
+  type Live = { key: V4PositionKey; quote: bigint; liquidity: bigint; tokenId: bigint | null };
+  const live = new Map<string, { sqrtPriceX96: bigint; held: Live[] }>();
   const positionManager = lower(v4.positionManager);
   let at = 0;
   for (const { pool, keys } of askedOf) {
@@ -354,18 +399,18 @@ export async function readV4Positions(a: {
       held.push({
         key,
         quote: toSixDecimals(raw.now, pool.quoteDecimals),
-        inflow: toSixDecimals(raw.inflow, pool.quoteDecimals),
+        liquidity,
         tokenId: lower(key.owner) === positionManager ? BigInt(key.salt) : null,
       });
     });
     // The pool's active liquidity is exactly the sum of the positions whose range holds the current tick. Anything else
     // means a position that isn't in the list (or one in it that isn't the pool's).
     if (sqrtPriceX96 <= 0n || inRange !== (active.value as bigint)) gaps.set(id, "mismatch");
-    else live.set(id, held);
+    else live.set(id, { sqrtPriceX96, held });
   }
 
   // Round two: who owns each NFT position that holds liquidity, at the same block.
-  const nfts = [...live.values()].flat().filter((p) => p.tokenId !== null);
+  const nfts = [...live.values()].flatMap((l) => l.held).filter((p) => p.tokenId !== null);
   const owners = await beforeDeadline(deadlineAt, () => batched(reader, nfts.map((p): BatchCall => ({ target: v4.positionManager, abi: erc721Abi, functionName: "ownerOf", args: [p.tokenId] })), head));
   const ownerOf = new Map<bigint, Address | null>(
     nfts.map((p, i) => {
@@ -378,13 +423,15 @@ export async function readV4Positions(a: {
     const id = lower(pool.poolId);
     const gap = gaps.get(id);
     if (gap) return { pool, gap };
+    const state = live.get(id);
+    if (!state) return { pool, gap: "unreadable" };
     const positions: SizedPosition[] = [];
-    for (const p of live.get(id) ?? []) {
+    for (const p of state.held) {
       const holder = p.tokenId === null ? p.key.owner : ownerOf.get(p.tokenId);
       if (!holder) return { pool, gap: "unreadable" };
-      positions.push({ holder, tokenId: p.tokenId, quote: p.quote, inflow: p.inflow });
+      positions.push({ holder, tokenId: p.tokenId, quote: p.quote, tickLower: p.key.tickLower, tickUpper: p.key.tickUpper, liquidity: p.liquidity });
     }
-    return { pool, gap: null, positions };
+    return { pool, gap: null, sqrtPriceX96: state.sqrtPriceX96, positions };
   });
   return { pools: read, stale: false, unlisted };
 }
