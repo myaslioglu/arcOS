@@ -298,9 +298,9 @@ are `indexedPositions` and `indexedPositionsFor` in `packages/data/src/server/po
 **Not fighting the main indexer.** In `pools`, a doc is the main indexer's mark that a pool's token is handled, so the
 step must never create one for a pool the main indexer has yet to see. It never reads past the main indexer's cursor
 (`indexer/mainnet.block` as this run left it): every pool at or below it that the main indexer records, it has
-recorded already, and the step writes a pool doc only where none exists, never over one. So in practice it adds the
-pools older than the main indexer's first block and nothing else. If the main indexer is behind, the position index
-waits behind it.
+recorded already, and the step writes a pool doc with `create`, which Firestore refuses over a doc that exists. So in
+practice it adds the pools older than the main indexer's first block and nothing else. If the main indexer is behind,
+the position index waits behind it.
 
 **Exactly once.** A window's positions are written first, each under its own key and only if it isn't there yet, and
 the cursor is moved after them, in a transaction that stops if the cursor isn't at the window's start. A run that dies
@@ -312,25 +312,35 @@ index holds more) and, for each v4 pool among them, the position keys the index 
 all, and the cursor. It reads the blocks after the cursor itself (at most 10,000 blocks, three `eth_getLogs`:
 `Initialize` with the token as currency0 and as currency1, then the pools' `ModifyLiquidity`), then every position's
 liquidity and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active
-liquidity. What it counts is the quote currency: what each position holds of USDC or EURC now, and that plus what buyers
-would pay into each position, in any of the token's v2 and v4 pools, before its price reaches twice what it is in the
-main pool (the pool holding the most quote now); a token amount is never priced (the rule and
-its reasons are in the README, "How Inspector decides things", and in the header of
-`packages/inspector/src/checks.ts`). "Couldn't check liquidity locks", never a pass or a fail, when: a pool has more
-than 500 positions; the token has more than 50 v4 pools; the positions don't add up (a gap in the index); a pool of the
-token was created since the cursor and the inspection wasn't given it; or the inspection's deadline passes before the
-reads are done. A pool created since the cursor that the inspection does have is read from those blocks alone. Pools
-against a currency other than USDC, EURC or native USDC are in neither list and are never counted. An index more than
-10,000 blocks behind, or switched off, is not used at all: the check then runs as it did before the index (v2 LP tokens
-only), whole, with nothing of the index mixed in, and so it does for a token with no v4 pool. A result is never worse
-than it was.
+liquidity. The verdict follows buyers' money in price order: every position selling the token above its pool's price,
+in any of its v2 and v4 pools, on one price axis; the window runs from the cheapest of them to twice the price at which
+1,000 USDC has been paid; wallets taking half of it at any point fail, 95% burned or locked at every point passes (the
+rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the header of
+`packages/inspector/src/checks.ts`). Burned or locked liquidity in a pool whose hook runs in swaps reads "couldn't
+check", so a launchpad that burns into such a pool gets no pass from this check. "Couldn't check liquidity locks", never
+a pass or a fail, when: a pool has more than 500 positions; the token has more than 50 v4 pools; the positions don't add
+up (a gap in the index); a pool of the token was created since the cursor and the inspection wasn't given it; or the
+inspection's deadline passes before the reads are done. A pool created since the cursor that the inspection does have
+is read from those blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and
+are never counted. Holders are classified by their code, up to 500 of them, in one state-overridden `eth_call` per 250
+(40 single `eth_getCode` reads when a node refuses the override).
+
+The check from before the index (v2 LP tokens only) runs instead, whole, with nothing of the index mixed in, exactly
+when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is more than 10,000 blocks
+behind, or the token has no v4 pool.
+
+Known limits of the verdict, accepted: a stored inspection is as of its block and nothing re-inspects a token when its
+price moves; a token whose old pools the backfill adds later is not re-queued for inspection (a follow-up: re-queue the
+tokens of pools the positions step creates); a token with more than 50 pools reads "couldn't check", which anyone can
+force by creating 51 empty pools, and which can never produce a fail.
 
 **The reads, and their bounds.** The indexer's own inspections, `/api/inspect`, `/t` and `/badge` read the index
 directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions`, `truncated`).
 - Pools first: one query, 51 docs at most (`indexedPoolList`: 50 and one more to know there are more).
 - Positions after them, only for v4 pools the index lists for the token: an address with no indexed pool costs no
-  positions read. One pool after another, each asked for no more than what is left of the 2,000 (and no more than 500),
-  plus one; a pool over its share ends the reading. So at most 2,000 docs plus one a pool, whatever the pools hold.
+  positions read. Four pools at a time, in order, each asked for no more than what was left of the 2,000 when its four
+  began (and no more than 500), plus one; a pool over its share, or past the total, ends the reading. So at most 2,000
+  docs plus 1,500 plus one a pool, whatever the pools hold.
 - Two more reads by id for the cursor and the switch (`positionsIndex/mainnet`, `indexer/mainnet`).
 - On the site the positions have 1.5 seconds of their own and no cooldown: when they are slow or fail, the pools are
   still answered, `positions` is left out, and the next token is read as usual (the pools' read keeps its 1.5 seconds
