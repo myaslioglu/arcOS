@@ -1,11 +1,12 @@
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
-import type { Address, NetworkId } from "@arcos/chain";
+import { arcInspectChain, type Address, type NetworkId } from "@arcos/chain";
 import { v4PoolKeys, type IndexerDoc, type TokenDoc } from "@arcos/data";
-import { indexedPools } from "@arcos/data/server";
-import type { ChainReader, ExtraPool, PoolScan, Report } from "@arcos/inspector";
+import { indexedPools, indexedPositionsFor } from "@arcos/data/server";
+import { v4PoolIdsToIndex, type ChainReader, type ExtraPool, type PoolScan, type Report, type V4PositionIndex } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
 import { decodeLogs, sourcesFor } from "./events";
 import { afterFailure, expired, pickQueue } from "./queue";
+import { runPositions, type PositionsDeps, type PositionsResult } from "./positions-run";
 import { bestPoolOf, summarize } from "./report";
 import { RangeRefused, type LogChain } from "./rpc";
 import { runStats, type StatsDeps, type StatsResult } from "./stats-run";
@@ -36,10 +37,32 @@ export type ExplorerBudget = { remaining(): number; spend(): boolean; exhaust():
 /** What an inspection gives back: the report, and the pool lookup it was made from (null when that failed). */
 export type Inspected = { report: Report; scan: PoolScan | null };
 
+/** What the index adds to an inspection: the token's pools, and the positions of its v4 pools (absent when the index has none to give). */
+export type IndexedExtras = { extraPools: ExtraPool[]; v4Positions?: V4PositionIndex };
+
 /** Inspects one token. `explorer` is null when the day's explorer budget is spent: the inspection runs on RPC only. */
-export type InspectToken = (token: Address, extraPools: ExtraPool[], explorer: ExplorerBudget | null) => Promise<Inspected>;
+export type InspectToken = (token: Address, extras: IndexedExtras, explorer: ExplorerBudget | null) => Promise<Inspected>;
+
+/**
+ * The index's pools for `token` and the positions of its v4 pools: the pools the index recorded, and the standard hookless
+ * keys the Inspector also asks about (`v4PoolIdsToIndex`). Mainnet only, as the index is. A positions read that fails
+ * leaves them out, and the inspection's lp-lock then answers as it does without an index; it never fails the inspection.
+ */
+export async function indexedExtras(db: Firestore, network: NetworkId, token: Address, log: Pick<Logger, "warn"> = silent): Promise<IndexedExtras> {
+  const extraPools: ExtraPool[] = v4PoolKeys(await indexedPools(db, network, token)).map((key) => ({ version: "v4", key }));
+  if (network !== "mainnet") return { extraPools };
+  try {
+    const { dex, nativeQuote } = arcInspectChain(network);
+    const v4Positions = await indexedPositionsFor(db, network, v4PoolIdsToIndex({ address: token, dex, nativeQuote, extraPools }));
+    return v4Positions ? { extraPools, v4Positions } : { extraPools };
+  } catch (e) {
+    log.warn("arcosIndexer positions not read", errorFields(e));
+    return { extraPools };
+  }
+}
 
 export type Logger = { info(message: string, data?: object): void; warn(message: string, data?: object): void; error(message: string, data?: object): void };
+const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
 export type RunSettings = {
   /** INSPECT_PER_TICK: tokens inspected per run (default 3). */
@@ -93,6 +116,11 @@ export type RunDeps = {
    * skipped. The `stats` switch of indexer/{network} turns it off at runtime.
    */
   stats?: StatsDeps;
+  /**
+   * The position index (step 6c), with its own cursor in positionsIndex/{network} (positions-run.ts). Absent, the step
+   * is skipped. The `positions` switch of indexer/{network} turns it off at runtime.
+   */
+  positions?: PositionsDeps;
 };
 
 export type RunResult =
@@ -119,8 +147,10 @@ export type RunResult =
       watch: WatchResult | null;
       /** The usage counter's counts (windows applied, what they added, blocks behind), or null when the step didn't run (no deps, or switched off). */
       stats: StatsResult | null;
+      /** The position index's counts (windows applied, positions added, blocks behind), or null when the step didn't run (no deps, not mainnet, or switched off). */
+      positions: PositionsResult | null;
       /**
-       * The name of the error that cut the Watchdog step (one of its phases), the inspections or the feeds short, or
+       * The name of the error that cut the Watchdog step (one of its phases), the inspections, the feeds, Stats or the position index short, or
        * null. The run still ended normally.
        */
       error: string | null;
@@ -135,8 +165,6 @@ export function runLogFields(result: RunResult): Record<string, unknown> {
   const watch = Object.fromEntries(Object.entries(result.watch).filter(([key]) => key !== "cursor"));
   return { ...result, watch };
 }
-
-const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
 /**
  * One indexer run (design 1.3, "One arcosIndexer run"):
@@ -153,8 +181,10 @@ const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
  * 6. brings the four Radar feeds up to date, rebuilding one of them in turn;
  * 6b. (Stats, when `deps.stats` is given and the console switch isn't off) counts ArcOS's usage on chain in windows of its
  *    own cursor, and refreshes the counts of its own data every 10 minutes, none started after 100 s (stats-run.ts); then
- *    the run ends, giving the lease back.
- * Steps 4b, 5, 6 and 6b can't keep the run from ending: an error there is logged and named in the result.
+ * 6c. (the position index, mainnet only, when `deps.positions` is given and the console switch isn't off) records the
+ *    positions the PoolManager's `ModifyLiquidity` logs name, in windows of its own cursor, none started after 104 s and
+ *    for at most 10 s (positions-run.ts); then the run ends, giving the lease back.
+ * Steps 4b, 5, 6, 6b and 6c can't keep the run from ending: an error there is logged and named in the result.
  */
 export async function runIndexer(deps: RunDeps): Promise<RunResult> {
   const { db, network } = deps;
@@ -301,8 +331,7 @@ async function leased(
         if (elapsed() >= limits.inspectUntilMs) break;
         const overBudget = budget.remaining() <= 0;
         try {
-          const extra: ExtraPool[] = v4PoolKeys(await indexedPools(db, network, token.address)).map((key) => ({ version: "v4", key }));
-          const { report, scan } = await inspectToken(token.address, extra, overBudget ? null : budget);
+          const { report, scan } = await inspectToken(token.address, await indexedExtras(db, network, token.address, log), overBudget ? null : budget);
           const at = now();
           const { summary, radar } = summarize(report, Timestamp.fromMillis(at), tip);
           const next = await saveInspection(db, token, {
@@ -349,6 +378,17 @@ async function leased(
       log.error("arcosIndexer stats stopped", errorFields(e));
     }
   }
+  // 6c. The position index: last, with limits of its own (positions-run.ts). Its failure is named and the run still ends.
+  let positions: PositionsResult | null = null;
+  if (deps.positions && network === "mainnet" && state.positions !== false) {
+    try {
+      positions = await runPositions({ db, network, chain, tip, now, started, elapsed, log, deps: deps.positions });
+      error ??= positions.error;
+    } catch (e) {
+      error ??= nameOf(e);
+      log.error("arcosIndexer positions stopped", errorFields(e));
+    }
+  }
   await finishRun(db, network, now(), { day: today, calls: spent - before }, runId, watch?.cursor);
 
   return {
@@ -367,6 +407,7 @@ async function leased(
     explorerCalls: spent - before,
     watch,
     stats,
+    positions,
     error,
   };
 }
