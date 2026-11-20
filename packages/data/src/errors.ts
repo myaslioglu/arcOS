@@ -1,4 +1,4 @@
-export type DataErrorCode = "network" | "address" | "pool-id" | "alert-id" | "radar-filter" | "amount" | "database-id" | "nonce" | "chat-id" | "stats-month";
+export type DataErrorCode = "network" | "address" | "pool-id" | "alert-id" | "radar-filter" | "amount" | "database-id" | "nonce" | "chat-id" | "stats-month" | "ticks" | "salt";
 
 /**
  * A value the data layer refuses. Messages say what was expected and never repeat the input: it may be a wallet address,

@@ -14,7 +14,10 @@ export function isNetwork(value: unknown): value is NetworkId {
   return typeof value === "string" && Object.hasOwn(NETWORK_FLAGS, value);
 }
 
-/** Collection ids: the SQL tables of R1 Task 1 as design 1.6 maps them, plus linkCodes, radarFeed, and Stats' stats and statsDays. */
+/**
+ * Collection ids: the SQL tables of R1 Task 1 as design 1.6 maps them, plus linkCodes, radarFeed, Stats' stats and
+ * statsDays, and the position index's positions and positionsIndex.
+ */
 export const COLLECTIONS = {
   indexer: "indexer",
   tokens: "tokens",
@@ -30,6 +33,8 @@ export const COLLECTIONS = {
   radarFeed: "radarFeed",
   stats: "stats",
   statsDays: "statsDays",
+  positions: "positions",
+  positionsIndex: "positionsIndex",
 } as const;
 export type CollectionKey = keyof typeof COLLECTIONS;
 export type CollectionName = (typeof COLLECTIONS)[CollectionKey];
@@ -74,6 +79,14 @@ export const RADAR_PASSING_MIN = 5;
 
 /** The most pools /api/pools and the indexer hand an inspection: the Inspector reads at most 50 index pools. */
 export const INDEXED_POOLS_LIMIT = 50;
+
+/**
+ * The most positions of one Uniswap v4 pool the index hands an inspection, and the most over all of a token's pools:
+ * the Inspector's own caps (MAX_POSITIONS_PER_POOL and MAX_POSITIONS in @arcos/inspector; a test in functions/ compares them). A
+ * pool with more is answered `truncated`, which lp-lock reads as "can't tell".
+ */
+export const INDEXED_POSITIONS_LIMIT = 500;
+export const INDEXED_POSITIONS_TOTAL = 2_000;
 
 /** How many tokens a wallet may watch (Watchdog's free tier). Enforced in addWatch's transaction. */
 export const FREE_WATCH_LIMIT = 3;

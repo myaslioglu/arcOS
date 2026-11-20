@@ -80,6 +80,8 @@ export type IndexerDoc = {
   telegram?: boolean;
   /** The usage counter's step (Stats): its on-chain windows and its server counts. The owner edits it; missing reads as true. */
   stats?: boolean;
+  /** The position index's step: its `ModifyLiquidity` windows. The owner edits it; missing reads as true. */
+  positions?: boolean;
   /** The watchState doc id the Watchdog step last attempted, so a run carries on where the last one stopped. Missing reads as null. */
   watchCursor?: string | null;
 };
@@ -133,6 +135,45 @@ export type PoolFields<A> = {
 };
 export type PoolDoc = PoolFields<Amount>;
 export type PoolRecord = PoolFields<bigint>;
+
+/**
+ * positions/{network}:{poolId}:{owner}:{tickLower}:{tickUpper}:{salt}: one liquidity position of a Uniswap v4 pool, as
+ * the PoolManager keys it, written the first time a `ModifyLiquidity` log names it. It records that the position exists,
+ * never how much it holds: whoever reads the index reads the liquidity from the chain. Never deleted, so a position that
+ * was emptied stays listed (and reads as holding nothing).
+ */
+export type PositionDoc = {
+  network: NetworkId;
+  /** The v4 pool id, lowercase. */
+  poolId: string;
+  /** The event's `sender`: who holds the position in the PoolManager. Lowercase. */
+  owner: Address;
+  tickLower: number;
+  tickUpper: number;
+  /** 32 bytes of hex, lowercase. */
+  salt: string;
+  /** The PositionManager NFT (the salt as a decimal number) when `owner` is the PositionManager, else null. */
+  tokenId: string | null;
+  /** The block of the first log that named the position. */
+  firstBlock: number;
+};
+
+/** A position as the Inspector reads it (`V4PositionKey` in @arcos/inspector). */
+export type PositionKey = { owner: Address; tickLower: number; tickUpper: number; salt: `0x${string}` };
+
+/**
+ * positionsIndex/{network}: how far the position index has got. `block` is the last block whose `ModifyLiquidity` logs
+ * are all in positions/ (written after them, so a crashed run repeats a window and never skips one); `fromBlock` is where
+ * it began (the PoolManager's deployment); `head` is the chain's finalized block at the last run, so `head - block` is how
+ * far behind it is.
+ */
+export type PositionsIndexDoc = {
+  network: NetworkId;
+  block: number;
+  fromBlock: number;
+  head: number;
+  updatedAt: TimestampLike;
+};
 
 /** watchState/{network}:{token}: the last observed state of a watched token; an alert is a diff against it. */
 export type WatchStateFields<A> = {

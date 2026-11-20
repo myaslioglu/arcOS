@@ -2,6 +2,7 @@
 export * from "./auth";
 export * from "./db";
 export { indexedPools } from "./pools";
+export { indexedPositions, indexedPositionsFor, readPositionsCursor, type IndexedPositions, type TokenPositions } from "./positions";
 export { readRadarFeed, type RadarFeedRead } from "./radar";
 export { readStats } from "./stats";
 export { consumeLinkCode, createLinkCode, linkCodeId, unlinkChat, unlinkWallet, type ConsumeLinkCodeResult } from "./telegram";
