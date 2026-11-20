@@ -56,14 +56,18 @@ export async function indexedPositions(db: Firestore, network: NetworkId, poolId
 /** The positions of several pools under one cursor, keyed by pool id (lowercase): what an inspection's `v4Positions` takes. */
 export type TokenPositions = { cursor: number; pools: Record<string, { positions: PositionKey[]; truncated: boolean }> };
 
+/** How many pools' positions are asked for at once. */
+const POOLS_AT_ONCE = 4;
+
 /**
  * The index's positions for each of `poolIds` (a token's v4 pools as pools/ lists them), or null before the index's
  * first run and while it is switched off. Every pool asked for has an entry, an empty one when the index holds nothing
- * for it. The reads are bounded by `total`, whatever the pools hold: one pool after another, each asked for no more
- * than what is left of the total (and no more than `limit`), plus one to know whether there are more; a pool over its
- * share is `truncated` and its list left out, and from then on, as once nothing is left of the total, no further pool
- * is read at all (each is `truncated`: nobody looked). So at most `total` + one per pool docs are read. The cursor is read first, as in
- * `indexedPositions`.
+ * for it. The reads are bounded by `total`, whatever the pools hold: the pools are read four at a time, in order, each
+ * asked for no more than what was left of the total when its four began (and no more than `limit`), plus one to know
+ * whether there are more. They are then counted in order: a pool over its share, or the one that takes the count past
+ * the total, is `truncated` and its list left out, and from then on no further pool is counted or read at all (each is
+ * `truncated`: nobody looked). So at most four times what is left is read in any one round, and never more than
+ * `total` + 3 x `limit` + one per pool docs in all. The cursor is read first, as in `indexedPositions`.
  */
 export async function indexedPositionsFor(
   db: Firestore,
@@ -75,21 +79,23 @@ export async function indexedPositionsFor(
   const cursor = await readPositionsCursor(db, network);
   if (cursor === null) return null;
   const pools: TokenPositions["pools"] = {};
+  const ids = [...new Set(poolIds.map((poolId) => normalizePoolId(poolId)))];
   let left = total;
-  for (const id of new Set(poolIds.map((poolId) => normalizePoolId(poolId)))) {
-    if (left <= 0) {
-      pools[id] = { positions: [], truncated: true };
-      continue;
-    }
-    const entry = await poolPositions(db, network, id, Math.min(limit, left));
-    if (entry.truncated) {
-      // The answer can't be relied on any more, whatever the other pools hold: nothing further is read.
-      pools[id] = { positions: [], truncated: true };
-      left = 0;
-    } else {
-      pools[id] = entry;
-      left -= entry.positions.length;
-    }
+  for (let i = 0; i < ids.length; i += POOLS_AT_ONCE) {
+    const round = ids.slice(i, i + POOLS_AT_ONCE);
+    const ask = Math.min(limit, left);
+    const entries = left > 0 ? await Promise.all(round.map((id) => poolPositions(db, network, id, ask))) : [];
+    round.forEach((id, n) => {
+      const entry = entries[n];
+      if (left <= 0 || !entry || entry.truncated || entry.positions.length > left) {
+        // The answer can't be relied on any more, whatever the other pools hold: nothing further is counted or read.
+        pools[id] = { positions: [], truncated: true };
+        left = 0;
+      } else {
+        pools[id] = entry;
+        left -= entry.positions.length;
+      }
+    });
   }
   return { cursor, pools };
 }

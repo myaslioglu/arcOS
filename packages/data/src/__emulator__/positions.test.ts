@@ -115,7 +115,7 @@ describe("indexedPositionsFor", () => {
     expect(exact!.pools[POOL_NONE]).toEqual({ positions: [], truncated: true });
   });
 
-  it("reads no more than the total plus one a pool, however many positions the pools hold", async () => {
+  it("reads four pools at a time, each for no more than what is left of the total, and none once it is used up", async () => {
     await setCursor(700);
     for (let n = 1; n <= 6; n++) await put("mainnet", POOL_A, n);
     for (let n = 7; n <= 12; n++) await put("mainnet", POOL_B, n);
@@ -145,12 +145,21 @@ describe("indexedPositionsFor", () => {
         };
       },
     });
-    const got = await indexedPositionsFor(counting, "mainnet", [POOL_A, POOL_B, POOL_NONE], 500, 8);
-    // Pool A: at most 8 (+1). Pool B: the 2 left (+1), and it has more. Pool C: not asked.
-    expect(limits).toEqual([9, 3]);
+    const later = [5, 6, 7].map((n) => `0x${n.toString(16).padStart(64, "0")}`);
+    const got = await indexedPositionsFor(counting, "mainnet", [POOL_A, POOL_B, POOL_NONE, ...later], 500, 8);
+    // The first four at once, each for at most 8 (+1). Pool A's 6 fit; pool B's 6 take it past the total, and from
+    // there nothing counts. The second round isn't asked at all.
+    expect(limits).toEqual([9, 9, 9, 9]);
     expect(got!.pools[POOL_A]!.positions).toHaveLength(6);
     expect(got!.pools[POOL_B]).toEqual({ positions: [], truncated: true });
     expect(got!.pools[POOL_NONE]).toEqual({ positions: [], truncated: true });
+    for (const id of later) expect(got!.pools[id]).toEqual({ positions: [], truncated: true });
+    // With room left after a round, the next one is asked for what is left.
+    limits.length = 0;
+    const roomy = await indexedPositionsFor(counting, "mainnet", [POOL_A, POOL_NONE, later[0]!, later[1]!, POOL_B, later[2]!], 500, 13);
+    expect(limits).toEqual([14, 14, 14, 14, 8, 8]);
+    expect(roomy!.pools[POOL_B]!.positions).toHaveLength(6);
+    expect(roomy!.pools[later[2]!]).toEqual({ positions: [], truncated: false });
   });
 });
 
