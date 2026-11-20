@@ -3,6 +3,7 @@ import { BURN_ADDRESSES, type Address, type UniswapV4Config } from "@arcos/chain
 import type { Hex } from "./bytecode";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { CallReverted, type ChainReader, type PoolKey, type V4PositionIndex, type V4PositionKey } from "./types";
+import { randomAddress } from "./simulate";
 import { isqrt, sqrtRatioAtTick, toSixDecimals } from "./v4";
 
 // Who holds the liquidity of a Uniswap v4 pool. A v4 position has no token of its own: it is an entry in the PoolManager
@@ -49,7 +50,7 @@ export const MAX_POSITIONS = 2_000;
 /** How far behind the head the index's cursor may be: the blocks after it are read in one eth_getLogs, which Arc caps at 10,000. */
 export const TAIL_MAX_BLOCKS = 10_000;
 /** How many holders' code is read to tell a wallet from a contract, the largest first; the rest stay unclassified. */
-export const MAX_HOLDER_CODE_READS = 40;
+export const MAX_HOLDER_CODE_READS = 500;
 /** How many blocks behind the node's latest everything is read at (about a second on Arc). */
 export const HEAD_MARGIN = 2n;
 /** Calls per aggregate3. A position read costs a few thousand gas, so a batch stays far below an eth_call's allowance. */
@@ -141,8 +142,8 @@ export function positionQuote(
 }
 
 // One price for every pool of a token, whatever the pool's orientation and its quote currency's decimals: the square
-// root of the TOKEN's price, in 18-decimal quote units per raw token unit, as a Q64.96. Pools are compared by it, and a
-// common look-ahead target (twice the reference pool's price) is turned back into each pool's own raw price with it.
+// root of the TOKEN's price, in 18-decimal quote units per raw token unit, as a Q64.96. Every pool's asks are put on
+// that one axis (lp-path.ts), and a price on it is turned back into a pool's own raw price with `rawSqrtPriceAt`.
 // EURC counts 1:1 with USDC here as everywhere in this check.
 
 /** sqrt(10^(18 - decimals)) with 6 decimals: what a raw quote amount's square root is scaled by to count in 18 decimals. */
@@ -172,14 +173,6 @@ export function v2TokenSqrtPrice(quoteReserve: bigint, tokenReserve: bigint): bi
 
 /** A token square-root price doubled in price: times sqrt 2. */
 export const doubledPrice = (tokenSqrt: bigint): bigint => (tokenSqrt * SQRT2_E30) / E30;
-
-/**
- * What a constant-product (Uniswap v2) pair's quote reserve gains while the token's price rises from `fromSqrt` to
- * `toSqrt` (token square-root prices): x * y = k, so the quote reserve moves with the square root of the price, and the
- * gain is reserve * (toSqrt / fromSqrt - 1). Nothing when the pair is already priced at or above the target, or has no price.
- */
-export const v2Inflow = (quoteReserve: bigint, fromSqrt: bigint, toSqrt: bigint): bigint =>
-  fromSqrt <= 0n || toSqrt <= fromSqrt ? 0n : (quoteReserve * toSqrt) / fromSqrt - quoteReserve;
 
 /**
  * Uniswap v4 reads a hook's permissions off its address (v4-core `src/libraries/Hooks.sol`). These three let it run code
@@ -212,7 +205,7 @@ export type SizedPosition = {
   tokenId: bigint | null;
   /** The quote currency it holds now (`positionQuote().now`). */
   quote: bigint;
-  /** Its range and liquidity, for looking ahead to a price (`positionQuote(..., lookTo).inflow`). */
+  /** Its range and liquidity: what it sells above the pool's price, and for how much (`v4Ask` in lp-path.ts). */
   tickLower: number;
   tickUpper: number;
   liquidity: bigint;
@@ -444,7 +437,8 @@ export async function readV4Positions(a: {
  *   delegates to: still a key that can sign a withdrawal);
  * - `contract`: any other contract. It may be a locker with terms of its own, a Safe, a launchpad or the pool's hook: its
  *   code decides who can withdraw and when, and this doesn't read that, so it is never called locked or withdrawable;
- * - `unclassified`: its code wasn't read (`code` is undefined), see `MAX_HOLDER_CODE_READS`.
+ * - `unclassified`: its code wasn't read (`code` is undefined), see `MAX_HOLDER_CODE_READS`. `code` may be only the
+ *   code's first 32 bytes (`CODE_READER`): a delegation designator is 23 bytes, so that is enough to know one.
  * This is the one place a holder is classified. A lock contract that has to be asked (ArcOS Vault's
  * `VaultFactory.isVault`, R2 Task 5) becomes one more answer in `context`, tested here before the code.
  */
@@ -462,17 +456,51 @@ export function classifyHolder(holder: Address, context: { knownLockers: readonl
 const isDelegation = (code: Hex): boolean => code.length === 2 + 23 * 2 && lower(code).startsWith("0xef0100");
 
 /**
+ * The code at many addresses in one eth_call: a 46-byte program, placed by a state override at a throwaway address, that
+ * answers two words for each address in its calldata (one 32-byte word each): its code's size, and its code's first 32
+ * bytes.
+ *   0x00 PUSH1 0                                           i = 0
+ *   0x02 JUMPDEST                                          loop:
+ *   0x03 DUP1 CALLDATASIZE GT ISZERO PUSH1 0x27 JUMPI      while i < calldatasize
+ *   0x0a DUP1 CALLDATALOAD DUP1 EXTCODESIZE                addr, size
+ *   0x0e DUP3 PUSH1 1 SHL MSTORE                           mem[2i] = size
+ *   0x13 PUSH1 32 PUSH1 0 DUP4 PUSH1 1 SHL PUSH1 32 ADD DUP4 EXTCODECOPY     mem[2i + 32] = code[0..32], zero-padded
+ *   0x20 POP PUSH1 32 ADD PUSH1 2 JUMP                     i += 32
+ *   0x27 JUMPDEST PUSH1 1 SHL PUSH1 0 RETURN               return mem[0 .. 2i]
+ * No storage, no call, no value: it only reads code. Checked against eth_getCode on Arc mainnet (live suite).
+ */
+export const CODE_READER: Hex = "0x60005b803611156027578035803b8260011b52602060008360011b602001833c506020016002565b60011b6000f3";
+/** Addresses per `CODE_READER` call: about 5,300 gas each (two cold account reads), far below the call's gas. */
+const CODE_BATCH = 250;
+const CODE_GAS = 5_000_000n;
+/** Without the batched read (a node that refuses the state override), this many holders are read one by one, as before. */
+const CODE_READS_ONE_BY_ONE = 40;
+
+/** `CODE_READER`'s answer as each address's code for `classifyHolder`: null for none, else its first bytes (at most 32). */
+export function decodeCodeReader(answer: Hex, count: number): (Hex | null)[] | null {
+  if (answer.length !== 2 + count * 128) return null;
+  return Array.from({ length: count }, (_, i) => {
+    const size = BigInt(`0x${answer.slice(2 + i * 128, 2 + i * 128 + 64)}`);
+    if (size === 0n) return null;
+    const bytes = size < 32n ? Number(size) : 32;
+    return `0x${answer.slice(2 + i * 128 + 64, 2 + i * 128 + 64 + bytes * 2)}` as Hex;
+  });
+}
+
+/**
  * The code at the holders that need it to be classified (neither burned nor a known locker), the ones holding the most
- * first, at most `MAX_HOLDER_CODE_READS` of them. Keyed by lowercase address; a holder that isn't a key wasn't read.
- * Read at the latest block: an address gains code only by a deployment to it, which a few blocks don't change.
+ * first, at most `MAX_HOLDER_CODE_READS` of them. Keyed by lowercase address; a holder that isn't a key wasn't read,
+ * and `unread` says how many weren't. Read through `CODE_READER`, `CODE_BATCH` addresses a call; where a node won't run
+ * it (it refuses the override, or answers something else), the `CODE_READS_ONE_BY_ONE` largest are read with
+ * eth_getCode instead. At the latest block: an address gains code only by a deployment to it, which a few blocks don't
+ * change. Rejects with `ReadsTimedOut` once `deadlineAt` passes.
  */
 export async function readHolderCode(
   reader: ChainReader,
   holders: readonly { holder: Address; value: bigint }[],
   knownLockers: readonly Address[],
-  /** When the inspection stops waiting (ms since the epoch): past it this rejects with `ReadsTimedOut`. */
   deadlineAt?: number,
-): Promise<Map<string, Hex | null>> {
+): Promise<{ code: Map<string, Hex | null>; unread: number }> {
   const totals = new Map<string, { holder: Address; value: bigint }>();
   for (const h of holders) {
     if (classifyHolder(h.holder, { knownLockers, code: undefined }) !== "unclassified") continue;
@@ -480,7 +508,27 @@ export async function readHolderCode(
     if (seen) seen.value += h.value;
     else totals.set(lower(h.holder), { holder: h.holder, value: h.value });
   }
-  const top = [...totals.values()].sort((x, y) => (y.value > x.value ? 1 : y.value < x.value ? -1 : 0)).slice(0, MAX_HOLDER_CODE_READS);
-  const codes = await beforeDeadline(deadlineAt, () => mapLimited(top, CODE_CONCURRENCY, (h) => reader.getCode(h.holder)));
-  return new Map(top.map((h, i) => [lower(h.holder), codes[i] ?? null]));
+  const ranked = [...totals.values()].sort((x, y) => (y.value > x.value ? 1 : y.value < x.value ? -1 : 0));
+  const top = ranked.slice(0, MAX_HOLDER_CODE_READS);
+  if (top.length === 0) return { code: new Map(), unread: 0 };
+  const batched = await beforeDeadline(deadlineAt, async (): Promise<(Hex | null)[] | null> => {
+    try {
+      const gasPrice = await reader.gasPrice();
+      const chunks: (typeof top)[] = [];
+      for (let i = 0; i < top.length; i += CODE_BATCH) chunks.push(top.slice(i, i + CODE_BATCH));
+      const answers = await mapLimited(chunks, BATCH_CONCURRENCY, async (chunk) => {
+        const at = randomAddress();
+        const data = `0x${chunk.map((h) => lower(h.holder).slice(2).padStart(64, "0")).join("")}` as Hex;
+        const answer = await reader.callWithOverride({ from: at, to: at, data, gas: CODE_GAS, gasPrice }, [{ address: at, code: CODE_READER, balance: CODE_GAS * gasPrice }]);
+        return decodeCodeReader(answer, chunk.length);
+      });
+      return answers.some((a) => a === null) ? null : answers.flatMap((a) => a!);
+    } catch {
+      return null;
+    }
+  });
+  if (batched) return { code: new Map(top.map((h, i) => [lower(h.holder), batched[i]!])), unread: ranked.length - top.length };
+  const few = top.slice(0, CODE_READS_ONE_BY_ONE);
+  const codes = await beforeDeadline(deadlineAt, () => mapLimited(few, CODE_CONCURRENCY, (h) => reader.getCode(h.holder)));
+  return { code: new Map(few.map((h, i) => [lower(h.holder), codes[i] ?? null])), unread: ranked.length - few.length };
 }

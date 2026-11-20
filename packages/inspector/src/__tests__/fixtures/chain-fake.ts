@@ -10,6 +10,8 @@ const stateViewAbi = parseAbi([
   "function getPositionInfo(bytes32, address, int24, int24, bytes32) view returns (uint128, uint256, uint256)",
 ]);
 const nftAbi = parseAbi(["function ownerOf(uint256) view returns (address)"]);
+/** The code reader's runtime, as the engine sends it (v4-positions.ts `CODE_READER`). */
+const CODE_READER = "0x60005b803611156027578035803b8260011b52602060008360011b602001833c506020016002565b60011b6000f3";
 const quoterAbi = parseAbi([
   "struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }",
   "struct QuoteExactSingleParams { PoolKey poolKey; bool zeroForOne; uint128 exactAmount; bytes hookData; }",
@@ -61,6 +63,8 @@ export type FakeChain = {
   logs?: ChainLog[] | Error;
   /** The head block (default 123). */
   head?: bigint;
+  /** The batched code read (a state-overridden eth_call) fails with this, as from a node that refuses the override. */
+  codeReaderFails?: Error;
   /** StateView's getPositionInfo fails inside the multicall, for every position. */
   positionInfoFails?: boolean;
   /** StateView's getLiquidity fails inside the multicall, for every pool. */
@@ -102,7 +106,7 @@ export type ReadRecord = { address: string; fn: string; args: readonly unknown[]
 export type BatchRecord = { calls: { target: string; fn: string; args: readonly unknown[] }[] };
 /** One quote request the fake's V4Quoter received. */
 export type QuoteRecord = { poolId: string; zeroForOne: boolean; exactAmount: bigint; gas: bigint | undefined };
-export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[]; simulations: SimRecord[]; logQueries: LogFilter[]; batchBlocks: (bigint | undefined)[] };
+export type FakeReader = ChainReader & { asked: ReadRecord[]; batches: BatchRecord[]; quotes: QuoteRecord[]; simulations: SimRecord[]; logQueries: LogFilter[]; batchBlocks: (bigint | undefined)[]; codeReads: number[] };
 
 const lower = (a: string) => a.toLowerCase();
 /** UnexpectedRevertBytes(NotEnoughLiquidity(poolId)), laid out like the bytes read live (fixtures/quoter-reverts.ts). */
@@ -140,6 +144,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
   const simulations: SimRecord[] = [];
   const logQueries: LogFilter[] = [];
   const batchBlocks: (bigint | undefined)[] = [];
+  const codeReads: number[] = [];
   const positionManager = lower(UNISWAP_V4.positionManager);
   const silent = new Set((f.silent ?? []).map(lower));
   const stateView = lower(UNISWAP_V4.stateView);
@@ -200,6 +205,7 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
     simulations,
     logQueries,
     batchBlocks,
+    codeReads,
     logs: async (filter) => {
       logQueries.push(filter);
       if (f.logs instanceof Error) throw f.logs;
@@ -243,6 +249,18 @@ export function fakeChain(f: FakeChain = {}): FakeReader {
       return f.gasPrice ?? 20_000_000_000n;
     },
     callWithOverride: async (call, overrides) => {
+      // The code reader (v4-positions.ts): a program of its own, known here by its bytes, written out a second time.
+      if (overrides[0]?.code === CODE_READER) {
+        codeReads.push(call.data.length / 64 | 0);
+        if (f.codeReaderFails) throw f.codeReaderFails;
+        let out = "";
+        for (let i = 2; i < call.data.length; i += 64) {
+          const code = f.code?.[`0x${call.data.slice(i + 24, i + 64)}`] ?? "0x";
+          const body = code.slice(2);
+          out += (body.length / 2).toString(16).padStart(64, "0") + body.slice(0, 64).padEnd(64, "0");
+        }
+        return `0x${out}`;
+      }
       const { args } = decodeFunctionData({ abi: simulatorAbi, data: call.data });
       const trade = args[0] as SimRecord["trade"];
       simulations.push({ call, overrides, trade });

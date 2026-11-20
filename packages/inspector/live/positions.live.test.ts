@@ -8,12 +8,14 @@
  * token's pools are found by their `Initialize` logs, looked for in the last LP_LOCK_LOOKBACK windows of 10,000 blocks (6
  * unless set: about 8 hours), so an older token needs a larger number and takes two requests a window.
  * What it prints is the result table; what it asserts is what must hold of any token: the finding is one of the four
- * the check can give, a pass rests on at least 950 USDC burned or locked, and a fail or a warning offers Vault.
+ * the check can give, a pass rests on a path that reached 1,000 USDC with at least 95% of it burned or locked at every
+ * point checked, and a fail or a warning offers Vault.
  */
-import { decodeEventLog, parseAbi, toEventSelector, type Hex } from "viem";
+import { decodeEventLog, erc20Abi, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import { DEX, UNISWAP_V4, type Address } from "@arcos/chain";
-import { SHARE_SCALE, checkLpLock, findPools, tallyLiquidity, type LiquiditySums } from "../src/checks";
+import { SHARE_SCALE, checkLpLock, findPools, tallyLiquidity } from "../src/checks";
+import { HOLDER_CLASSES, type ClassSums } from "../src/lp-path";
 import type { ExtraPool, InspectInput, V4PositionIndex } from "../src/types";
 import { MODIFY_LIQUIDITY_TOPIC, positionFromLog } from "../src/v4-positions";
 import { v4PoolId } from "../src/v4";
@@ -87,20 +89,31 @@ describe("lp-lock over real v4 pools, read-only", () => {
       // The standard hookless keys the scan also probes have no entry above; one that exists reads as "missing".
       const scan = await findPools(input);
       for (const p of scan.pools) if (p.version === "v4" && p.poolId && !index.pools[p.poolId.toLowerCase()]) index.pools[p.poolId.toLowerCase()] = { positions: [], truncated: false };
-      const finding = await checkLpLock(input, scan);
+      const supply = (await reader.read(address, erc20Abi, "totalSupply").catch(() => null)) as bigint | null;
+      const decimals = (await reader.read(address, erc20Abi, "decimals").catch(() => null)) as number | null;
+      const finding = await checkLpLock(input, scan, { supply, decimals: decimals === null ? null : Number(decimals) });
       // Null: no v4 pool is involved (the index built above is 20 blocks behind, so it is never stale).
       const tally = await tallyLiquidity(input, scan, DEX.mainnet!);
       const units = (scaled: bigint) => Number(scaled / SHARE_SCALE) / 1e6;
-      const sums = (m: LiquiditySums) => ({ burned: units(m.burned), locked: units(m.locked), withdrawable: units(m.withdrawable), unknown: Object.fromEntries(Object.entries(m.unknown).filter(([, v]) => v > 0n).map(([k, v]) => [k, units(v)])) });
+      const tokens = (raw: bigint) => Number(raw / 10n ** BigInt(decimals ?? 18));
+      const sums = (m: ClassSums, as: (v: bigint) => number = units) => Object.fromEntries(HOLDER_CLASSES.filter((k) => m[k] > 0n).map((k) => [k, as(m[k])]));
+      const all = (m: ClassSums) => HOLDER_CLASSES.reduce((t, k) => t + m[k], 0n);
       expect(["pass", "warn", "fail", "unknown"]).toContain(finding.status);
-      if (finding.status === "pass" && tally) expect((tally.now.burned + tally.now.locked) / SHARE_SCALE).toBeGreaterThanOrEqual(950_000_000n);
+      if (finding.status === "pass") {
+        expect(tally?.path?.reached).toBe(true);
+        for (const m of tally!.path!.prefixes) expect((m.burned + m.locked) * 100n + all(m) / 1_000_000n).toBeGreaterThanOrEqual(all(m) * 95n);
+      }
       if (finding.status === "fail" || finding.status === "warn") expect(finding).toMatchObject({ fixAppId: "vault" });
       rows.push({
         token: address,
         pools: scan.pools.map((p) => `${p.version}${p.key && BigInt(p.key.hooks) !== 0n ? `+hook ${p.key.hooks}` : ""} ${p.poolId ?? p.address}`),
         positions: Object.fromEntries(Object.entries(index.pools).map(([id, v]) => [id.slice(0, 10), v.positions.length])),
-        now: tally && sums(tally.now),
-        ahead: tally && sums(tally.ahead),
+        bids: tally && sums(tally.bids),
+        path: tally?.path && { reached: tally.path.reached, first: sums(tally.path.prefixes[0]!), last: sums(tally.path.prefixes[tally.path.prefixes.length - 1]!), points: tally.path.prefixes.length },
+        windowTokens: tally?.path && tokens(tally.path.windowTokens),
+        beyond: tally?.path && sums(tally.path.beyond, tokens),
+        venueTokens: tally && tokens(tally.venueTokens),
+        unclassified: tally?.unclassifiedHolders,
         blockers: tally?.blockers,
         status: finding.status,
         title: finding.title,

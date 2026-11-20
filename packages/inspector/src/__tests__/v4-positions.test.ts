@@ -12,6 +12,8 @@ import {
   TAIL_MAX_BLOCKS,
   amountsForLiquidity,
   beforeDeadline,
+  CODE_READER,
+  decodeCodeReader,
   classifyHolder,
   hookCanChangeRemoval,
   isPositionKey,
@@ -21,7 +23,6 @@ import {
   doubledPrice,
   rawSqrtPriceAt,
   tokenSqrtPrice,
-  v2Inflow,
   v2TokenSqrtPrice,
   readHolderCode,
   readV4Positions,
@@ -224,20 +225,6 @@ describe("positionQuote looking to a given price", () => {
   });
 });
 
-describe("v2Inflow", () => {
-  it("is the reserve times sqrt(target / price) - 1: sqrt 2 - 1 while the pair's own price doubles", () => {
-    // x * y = k and the price y / x doubling: y' = y * sqrt 2.
-    expect(v2Inflow(10_000_000_000n, Q96, doubledPrice(Q96))).toBe(4_142_135_623n);
-    // To four times the price: the reserve doubles.
-    expect(v2Inflow(10_000_000_000n, Q96, 2n * Q96)).toBe(10_000_000_000n);
-  });
-  it("is nothing for a pair already at or past the target, or without a price", () => {
-    expect(v2Inflow(10_000_000_000n, 2n * Q96, Q96)).toBe(0n);
-    expect(v2Inflow(10_000_000_000n, Q96, Q96)).toBe(0n);
-    expect(v2Inflow(10_000_000_000n, 0n, Q96)).toBe(0n);
-  });
-});
-
 describe("the hook's remove-liquidity permissions", () => {
   const hooked = (flags: string) => hookCanChangeRemoval(v4PoolKey("0x1111111111111111111111111111111111111111", USDC, 500, 10, `0x${"1".repeat(36)}${flags}`));
   it("reads BEFORE_REMOVE_LIQUIDITY (1 << 9), AFTER_REMOVE_LIQUIDITY (1 << 8) and AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA (1 << 0)", () => {
@@ -326,17 +313,56 @@ describe("classifyHolder", () => {
 });
 
 describe("readHolderCode", () => {
-  it("reads the code of the holders that need it, the largest first, and no more than the cap", async () => {
-    const holders = Array.from({ length: MAX_HOLDER_CODE_READS + 5 }, (_, i) => ({ holder: `0x${(i + 1).toString(16).padStart(40, "0")}` as `0x${string}`, value: BigInt(i + 1) }));
-    const asked: string[] = [];
-    const reader = { ...fakeChain(), getCode: async (a: `0x${string}`) => (asked.push(a), a.endsWith("2d") ? ("0x60" as const) : null) };
-    const code = await readHolderCode(reader, [...holders, { holder: "0x000000000000000000000000000000000000dEaD", value: 10n ** 9n }, { ...holders[9]!, value: 1n }], []);
-    expect(asked).toHaveLength(MAX_HOLDER_CODE_READS);
-    expect(asked).not.toContain("0x000000000000000000000000000000000000dEaD");
-    // The five smallest are left out; holder 10 counts once, with both of its positions.
+  const holderAt = (i: number) => `0x${(i + 1).toString(16).padStart(40, "0")}` as `0x${string}`;
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ holder: holderAt(i), value: BigInt(i + 1) }));
+
+  it("reads the holders' code in batches of 250 through the code reader, the largest first, up to 500 of them", async () => {
+    const holders = many(MAX_HOLDER_CODE_READS + 5);
+    const contract = holderAt(MAX_HOLDER_CODE_READS + 4);
+    const delegated = holderAt(300);
+    const reader = fakeChain({ code: { [contract]: `0x${"60".repeat(100)}`, [delegated]: `0xef0100${"ab".repeat(20)}` } });
+    let single = 0;
+    const counting = { ...reader, getCode: (a: `0x${string}`) => (single++, reader.getCode(a)) };
+    const { code, unread } = await readHolderCode(counting, [...holders, { holder: "0x000000000000000000000000000000000000dEaD", value: 10n ** 9n }, { ...holders[9]!, value: 1n }], []);
+    expect(MAX_HOLDER_CODE_READS).toBe(500);
+    expect(reader.codeReads).toEqual([250, 250]);
+    expect(single).toBe(0);
+    expect(unread).toBe(5);
+    // The five smallest are left out; a burn address is never asked about; holder 10 counts once, with both of its positions.
     for (const small of holders.slice(0, 5)) expect(code.has(small.holder)).toBe(false);
-    expect(code.get(holders[MAX_HOLDER_CODE_READS + 4]!.holder)).toBe("0x60");
-    expect(code.get(holders[20]!.holder)).toBeNull();
+    expect(code.size).toBe(MAX_HOLDER_CODE_READS);
+    // What comes back classifies: no code, a contract (its first 32 bytes are enough), an EIP-7702 delegation (23 bytes).
+    expect(code.get(holderAt(20))).toBeNull();
+    expect(classifyHolder(contract, { knownLockers: [], code: code.get(contract) })).toBe("contract");
+    expect(code.get(contract)).toBe(`0x${"60".repeat(32)}`);
+    expect(classifyHolder(delegated, { knownLockers: [], code: code.get(delegated) })).toBe("wallet");
+  });
+
+  it("falls back to reading the 40 largest one by one where the node won't run the code reader", async () => {
+    const holders = many(60);
+    const reader = fakeChain({ codeReaderFails: new Error("state override not supported"), code: { [holderAt(59)]: "0x6080" } });
+    const asked: string[] = [];
+    const { code, unread } = await readHolderCode({ ...reader, getCode: (a) => (asked.push(a), reader.getCode(a)) }, holders, []);
+    expect(asked).toHaveLength(40);
+    expect(unread).toBe(20);
+    expect(code.get(holderAt(59))).toBe("0x6080");
+    expect(code.has(holderAt(0))).toBe(false);
+  });
+
+  it("asks nothing when every holder is a burn address or a known locker", async () => {
+    const LOCKER = "0x00000000000000000000000000000000000010c4";
+    const reader = fakeChain();
+    expect(await readHolderCode(reader, [{ holder: "0x000000000000000000000000000000000000dEaD", value: 1n }, { holder: LOCKER, value: 1n }], [LOCKER])).toEqual({ code: new Map(), unread: 0 });
+    expect(reader.codeReads).toEqual([]);
+  });
+
+  it("decodes the reader's answer: a size and the first 32 bytes per address, and refuses an answer of another length", () => {
+    const word = (n: bigint) => n.toString(16).padStart(64, "0");
+    const answer = `0x${word(0n)}${"0".repeat(64)}${word(2n)}6080${"0".repeat(60)}${word(40n)}${"ab".repeat(32)}` as const;
+    expect(decodeCodeReader(answer, 3)).toEqual([null, "0x6080", `0x${"ab".repeat(32)}`]);
+    expect(decodeCodeReader(answer, 2)).toBeNull();
+    expect(decodeCodeReader("0x", 1)).toBeNull();
+    expect(CODE_READER).toHaveLength(2 + 46 * 2);
   });
 });
 
@@ -487,7 +513,7 @@ describe("readV4Positions", () => {
     const hung = chain(positions);
     const slow = { ...hung, read: () => new Promise<never>(() => {}) };
     await expect(readV4Positions({ reader: slow, v4: UNISWAP_V4, pools: [pool], index: index(positions), token: TOKEN, quotes: [USDC], deadlineAt: Date.now() + 30 })).rejects.toBeInstanceOf(ReadsTimedOut);
-    await expect(readHolderCode({ ...hung, getCode: () => new Promise<never>(() => {}) }, [{ holder: WALLET, value: 1n }], [], Date.now() + 30)).rejects.toBeInstanceOf(ReadsTimedOut);
+    await expect(readHolderCode({ ...hung, callWithOverride: () => new Promise<never>(() => {}) }, [{ holder: WALLET, value: 1n }], [], Date.now() + 30)).rejects.toBeInstanceOf(ReadsTimedOut);
     await expect(beforeDeadline(Date.now() + 1_000, async () => "in time")).resolves.toBe("in time");
     await expect(beforeDeadline(undefined, async () => "no deadline")).resolves.toBe("no deadline");
     await expect(beforeDeadline(Date.now() + 1_000, async () => Promise.reject(new Error("its own")))).rejects.toThrow("its own");
