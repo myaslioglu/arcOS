@@ -162,7 +162,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       id: "lp-lock",
       status: "fail",
       title: "Liquidity isn't locked",
-      detail: `Of the first 1,000 USDC buyers would pay for this token, 100% goes into positions wallets can withdraw and 0% into burned or locked ones. Of the 1,999 USDC in its pools now, wallets' positions hold 1,999 and burned or locked ones 0. ${ORDER}`,
+      detail: `Of the first 1,000 USDC buyers would pay for this token, 100% goes into positions wallets can withdraw and 0% into burned or locked ones. Of the 1,999 USDC in its pools now, wallets' positions hold 1,999 and burned or locked ones 0. Of that, 1,277 is within reach of sellers, down to half the price: wallets' positions hold 1,277 of it and burned or locked ones 0. ${ORDER}`,
       evidenceUrl: `https://explorer.test/token/${PM}/instance/7`,
       fixAppId: "vault",
     });
@@ -233,11 +233,14 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     await quiet([main([nft(1, 0n, LO, HI)])], { 1: WALLET });
   });
 
-  it("warns on thin liquidity in a wallet, and fails it with 1,000 USDC of wallets' money beside it: the whole path is the wallet's", async () => {
+  it("warns on thin liquidity in a wallet, and never fails it: the wording has no window in it", async () => {
     // 100 USDC in the range now; buyers pay 142 into it before it runs out.
-    const f = await paidToWallets([main([twoSided(7, 100n)])], { 7: WALLET });
+    const f = await verdict([main([twoSided(7, 100n)])], { 7: WALLET });
     expect(f.status).toBe("warn");
-    expect(f.detail).toMatch(/^In the pools Inspector can read, of the first 14[12] USDC buyers would pay for this token, 100% goes into positions wallets can withdraw/);
+    // Nor with a wallet's 1,200 USDC beside it: with under 1,000 USDC of tokens for sale there is no market price to
+    // measure reach from, and nothing fails.
+    expect((await verdict([main([twoSided(7, 100n)]), MONEY], { 7: WALLET, ...MONEY_OWNERS })).status).toBe("warn");
+    expect(f.detail).toBe(`In the pools Inspector can read, of the 142 USDC buyers could pay for the tokens now for sale, 100% goes into positions wallets can withdraw and 0% into burned or locked ones. Of the 99 USDC in its pools now, wallets' positions hold 99 and burned or locked ones 0. Counted in the order buyers' money would arrive, by what a buyer pays per token in each pool, fee included; the tokens for sale would take under 1,000 USDC in all.`);
     await quiet([main([twoSided(7, 100n)])], { 7: DEAD });
   });
 
@@ -342,23 +345,109 @@ describe("buyers' money in price order: the review's cases", () => {
     await quiet([main([twoSided(2, 2_000n), parked(100n)])], { 2: DEAD, 4: WALLET_2 });
   });
 
-  it("bids within reach: what sellers would take by selling the token down to half its price", async () => {
-    // A burned range from half the price to twice it holding 1,000 USDC: all of it within reach.
-    const burned = twoSided(2, 1_000n);
+  it("bids within reach: what sellers would take by selling the token from the market price down to half of it", async () => {
+    // A burned launch from the price up: the market price is where 1,000 USDC of it has been bought, a little above.
+    const burned = launch(2);
     // 1,200 USDC at a hundredth of the price: none of it within reach. A warning, on what the pools hold.
     const deep = T0 - 46_080;
     const far = nft(4, quoteOnlyL(deep - 6_000, deep, 1_200n), deep - 6_000, deep);
     const f = await verdict([main([burned, far])], { 2: DEAD, 4: WALLET_2 });
     expect(f.status).toBe("warn");
-    expect(f.detail).toBe("Of the 2,199 USDC in its pools now, wallets' positions hold 1,199 and burned or locked ones 999.");
-    // The same 1,200 just under the price, where sellers can take it: half or more of what is within reach. A fail.
+    expect(f.detail).toBe("In the pools Inspector can read, of the 1,199 USDC in its pools now, wallets' positions hold 1,199 and burned or locked ones 0.");
+    // The same 1,200 just under the price, where sellers can take it: all of what is within reach. A fail, and it says so.
     const near = nft(4, quoteOnlyL(T0 - 3_000, T0 - 60, 1_200n), T0 - 3_000, T0 - 60);
-    expect((await verdict([main([burned, near])], { 2: DEAD, 4: WALLET_2 })).status).toBe("fail");
+    const g = await verdict([main([burned, near])], { 2: DEAD, 4: WALLET_2 });
+    expect(g.status).toBe("fail");
+    expect(g.detail).toBe("Of the 1,199 USDC in its pools now, wallets' positions hold 1,199 and burned or locked ones 0. Of that, 1,199 is within reach of sellers, down to half the price: wallets' positions hold 1,199 of it and burned or locked ones 0.");
     // A range reaching from the price far down counts for its upper part: 3,000 USDC over [0.01x, 1x], a third or so in reach.
     const long = nft(4, quoteOnlyL(deep, T0 - 60, 3_000n), deep, T0 - 60);
-    expect((await verdict([main([twoSided(2, 5_000n), long])], { 2: DEAD, 4: WALLET_2 })).status).toBe("warn");
+    expect((await verdict([main([twoSided(2, 20_000n), long])], { 2: DEAD, 4: WALLET_2 })).status).toBe("warn");
     // A wallet launch whose 10,000 USDC sits in range: a fail, as the live ones are.
     expect((await verdict([main([twoSided(7, 10_000n)])], { 7: WALLET })).status).toBe("fail");
+  });
+
+  it("C1. a bids fail gives the figures it was decided on: a full-range burned position has under a third of its USDC within reach", async () => {
+    const [MIN, MAX] = [-887_220, 887_220];
+    const fullRange = nft(1, (10_000n * 10n ** 6n * Q96) / (sqrtRatioAtTick(T0) - sqrtRatioAtTick(MIN)), MIN, MAX);
+    const near = (usdc: bigint) => nft(2, quoteOnlyL(T0 - 3_000, T0 - 60, usdc), T0 - 3_000, T0 - 60);
+    const f = await verdict([main([fullRange, near(3_000n)])], { 1: DEAD, 2: WALLET });
+    expect(f.status).toBe("fail");
+    expect(f.detail).toMatch(/^Of the 12,999 USDC in its pools now, wallets' positions hold 2,999 and burned or locked ones 9,999\. Of that, 5,210 is within reach of sellers, down to half the price: wallets' positions hold 2,999 of it and burned or locked ones 2,210\.$/);
+    expect((await verdict([main([fullRange, near(2_000n)])], { 1: DEAD, 2: WALLET })).status).toBe("warn");
+  });
+
+  it("reach is measured from the market's price, not the pool's own: USDC in a pool initialised at a thousandth of the market is out of reach", async () => {
+    const OFF = T0 - 69_080;
+    const off = (usdc: bigint): PoolSetup => ({ key: SIDE, tick: OFF, sqrtPriceX96: sqrtRatioAtTick(OFF), positions: [nft(2, quoteOnlyL(OFF - 6_000, OFF - 10, usdc), OFF - 6_000, OFF - 10)] });
+    const owned = { 1: DEAD, 2: WALLET_2 };
+    // O-control: the same USDC that far down in the market's own pool.
+    expect((await verdict([main([launch(1), nft(2, quoteOnlyL(OFF - 6_000, OFF - 10, 1_001n), OFF - 6_000, OFF - 10)])], owned)).status).toBe("warn");
+    // O1: a fresh burned launch. O2: a burned launch holding 2,000 USDC in reach. O3: a launch burned behind a launchpad hook.
+    expect((await verdict([main([launch(1)]), off(1_001n)], owned)).status).toBe("warn");
+    expect((await verdict([main([twoSided(1, 2_000n)]), off(2_001n)], owned)).status).toBe("warn");
+    expect((await verdict([{ ...main([launch(1)], v4PoolKey(TOKEN, USDC, 3000, 60, hookWith("2080"))), listed: true }, off(1_001n)], owned)).status).toBe("warn");
+    // The token the other way up, and against native USDC: the same.
+    const high = v4PoolKey(HIGH, USDC, 3000, 60);
+    const H0 = 345_420;
+    const [a, b] = [sqrtRatioAtTick(H0 - 6_960), sqrtRatioAtTick(H0)];
+    const burnedHigh = nft(1, (100_000_000n * 10n ** 18n * Q96) / (b - a), H0 - 6_960, H0);
+    const HOFF = H0 + 69_080;
+    // Quote-only for a token that is currency1: ABOVE the tick, as currency0.
+    const [c, d] = [sqrtRatioAtTick(HOFF + 10), sqrtRatioAtTick(HOFF + 6_000)];
+    const parkedHigh = nft(2, (1_001n * 10n ** 6n * c * d) / (Q96 * (d - c)), HOFF + 10, HOFF + 6_000);
+    const hOff = await verdict(
+      [{ key: high, tick: H0, sqrtPriceX96: sqrtRatioAtTick(H0), positions: [burnedHigh] }, { key: v4PoolKey(HIGH, USDC, 500, 10), tick: HOFF, sqrtPriceX96: sqrtRatioAtTick(HOFF), positions: [parkedHigh] }],
+      owned, { token: HIGH as `0x${string}` },
+    );
+    expect(hOff.status).toBe("warn");
+  });
+
+  it("AS1, AS-MM. a stranger's tokens far up, and money that isn't his or isn't in reach: no fail", async () => {
+    const dustPool = (tokens: bigint): PoolSetup => ({ key: v4PoolKey(TOKEN, USDC, 100, 1), listed: true, tick: T0 + 68_940, sqrtPriceX96: sqrtRatioAtTick(T0 + 68_940), positions: [nft(2, tokenOnlyL(T0 + 69_000, T0 + 69_060, tokens), T0 + 69_000, T0 + 69_060)] });
+    // AS1: a bought-through burned range (20,000 USDC, nothing left for sale), his 10 tokens, and his 1,001 USDC in a
+    // pool initialised at a thousandth of the market.
+    const boughtThrough = nft(1, quoteOnlyL(T0 - 6_960, T0, 20_000n), T0 - 6_960, T0);
+    const OFF = T0 - 69_080;
+    const offMoney: PoolSetup = { key: SIDE, tick: OFF, sqrtPriceX96: sqrtRatioAtTick(OFF), positions: [nft(3, quoteOnlyL(OFF - 6_000, OFF - 10, 1_001n), OFF - 6_000, OFF - 10)] };
+    expect((await verdict([main([boughtThrough]), dustPool(10n), offMoney], { 1: DEAD, 2: WALLET_2, 3: WALLET_2 })).status).not.toBe("fail");
+    // AS-MM: 19,000 burned USDC and a third party's 1,100 USDC of bids just under the price; nothing for sale but the
+    // stranger's 10 tokens, or his 2,000 tokens that are 1,000 USDC on paper.
+    const MM = "0x00000000000000000000000000000000000b0b03";
+    const book = main([nft(1, quoteOnlyL(T0 - 6_960, T0, 19_000n), T0 - 6_960, T0), nft(4, quoteOnlyL(T0 - 3_000, T0 - 60, 1_100n), T0 - 3_000, T0 - 60)]);
+    for (const tokens of [10n, 2_000n]) expect((await verdict([book, dustPool(tokens)], { 1: DEAD, 2: WALLET_2, 4: MM })).status, String(tokens)).not.toBe("fail");
+    // The control, without the stranger: the third party's 5.5% of the USDC is a warning.
+    expect((await verdict([book], { 1: DEAD, 4: MM })).status).toBe("warn");
+  });
+
+  it("a wallet's range bought through completely, with nothing left for sale anywhere: a warning on the USDC it holds", async () => {
+    const f = await verdict([main([nft(1, quoteOnlyL(T0 - 6_960, T0, 20_000n), T0 - 6_960, T0)])], { 1: WALLET });
+    expect(f.status).toBe("warn");
+    expect(f.detail).toBe("In the pools Inspector can read, of the 19,999 USDC in its pools now, wallets' positions hold 19,999 and burned or locked ones 0.");
+  });
+
+  it("the review's shapes after buys still fail: the wallet's range holds what buyers paid", async () => {
+    const BOUGHT = T0 + 120;
+    const l100 = tokenOnlyL(T0, HI, 100_000_000n);
+    const moved = (positions: FakePosition[]): PoolSetup => ({ key: MAIN, tick: BOUGHT, sqrtPriceX96: sqrtRatioAtTick(BOUGHT), positions });
+    // H: 1.2% into the range, and 10%.
+    expect((await verdict([moved([nft(1, l100, T0, HI)])], { 1: WALLET })).status).toBe("fail");
+    expect((await verdict([{ ...moved([nft(1, l100, T0, HI)]), tick: T0 + 960, sqrtPriceX96: sqrtRatioAtTick(T0 + 960) }], { 1: WALLET })).status).toBe("fail");
+    // K1: the 99%-fee burned decoy below the market.
+    const D0 = T0 - 9_180;
+    const decoy: PoolSetup = { key: v4PoolKey(TOKEN, USDC, 990_000, 60), listed: true, tick: D0, sqrtPriceX96: sqrtRatioAtTick(D0), positions: [nft(1, tokenOnlyL(D0, D0 + 1_800, 2_000_000_000n), D0, D0 + 1_800)] };
+    expect((await verdict([moved([nft(2, l100, T0, HI)]), decoy], { 1: DEAD, 2: WALLET })).status).toBe("fail");
+    // A: 1,500 burned USDC in a side pool priced 10x lower.
+    const dTick = T0 - 23_030;
+    const side: PoolSetup = { key: SIDE, tick: dTick, sqrtPriceX96: sqrtRatioAtTick(dTick), positions: [nft(2, quoteOnlyL(dTick - 10_000, dTick - 10, 1_500n), dTick - 10_000, dTick - 10)] };
+    expect((await verdict([moved([nft(1, l100, T0, HI)]), side], { 1: WALLET, 2: DEAD })).status).toBe("fail");
+    // J: the wallet's range first in line, burned free tokens late in the window, 1,500 burned bids.
+    const first = nft(1, tokenOnlyL(T0, T0 + 960, 10_000_000n), T0, T0 + 960);
+    const late = nft(2, tokenOnlyL(T0 + 6_000, T0 + 6_900, 1_000_000_000n), T0 + 6_000, T0 + 6_900);
+    const bids = nft(3, quoteOnlyL(T0 - 6_960, T0 - 60, 1_500n), T0 - 6_960, T0 - 60);
+    expect((await verdict([moved([first, late, bids])], { 1: WALLET, 2: DEAD, 3: DEAD })).status).toBe("fail");
+    // 0.6% in: 1,020 USDC paid, a fail. 0.3% in: about 510, the warning it was before any buys.
+    expect((await verdict([{ ...moved([nft(1, l100, T0, HI)]), tick: T0 + 60, sqrtPriceX96: sqrtRatioAtTick(T0 + 60) }], { 1: WALLET })).status).toBe("fail");
+    expect((await verdict([{ ...moved([nft(1, l100, T0, HI)]), tick: T0 + 30, sqrtPriceX96: sqrtRatioAtTick(T0 + 30) }], { 1: WALLET })).status).toBe("warn");
   });
 
   it("the money beside the asks must be within reach too", async () => {
@@ -444,7 +533,7 @@ describe("earlier cases, under the price-ordered rule", () => {
     const f = await verdict([main([holdsAll, launch(2, 900_000_000n)])], { 1: WALLET, 2: DEAD });
     expect(f.status).toBe("fail");
     // Wallets take nothing on the path, so the finding is the line that carries it.
-    expect(f.detail).toBe("Of the 4,999 USDC in its pools now, wallets' positions hold 4,999 and burned or locked ones 0.");
+    expect(f.detail).toBe("Of the 4,999 USDC in its pools now, wallets' positions hold 4,999 and burned or locked ones 0. Of that, 4,999 is within reach of sellers, down to half the price: wallets' positions hold 4,999 of it and burned or locked ones 0.");
   });
 
   it("a wallet's range just above the price, beside a small burned in-range position, doesn't pass", async () => {
@@ -483,7 +572,9 @@ describe("earlier cases, under the price-ordered rule", () => {
     const owned = { 1: DEAD, 2: WALLET };
     it("fails with the wall at the burned pool's price, and with it cheaper: buyers are routed to the cheapest tokens first", async () => {
       await paidToWallets([poolA, wallet(T0)], owned);
-      await paidToWallets([poolA, wallet(T0 - 13_800)], owned);
+      // A wall at a quarter of the price is the market: what the burned pool holds up at its own price is out of reach
+      // of anyone selling down there, and so is any money beside it. A warning.
+      expect((await verdict([poolA, wallet(T0 - 13_800)], owned)).status).toBe("warn");
     });
     it("doesn't pass with the wall anywhere inside the window, and warns with it beyond: its tokens are counted", async () => {
       expect((await verdict([poolA, wallet(T0 + 5_800)], owned)).status).not.toBe("pass");
@@ -532,8 +623,8 @@ describe("one path over every pool, by what a buyer pays; only wallets in plain 
   const REFUSER = v4PoolKey(TOKEN, USDC, 3000, 60, hookWith("0080"));
   const FEE_99 = v4PoolKey(TOKEN, USDC, 990_000, 60);
   const at = (poolKey: typeof MAIN, tick: number, positions: FakePosition[], lpFee?: number): PoolSetup => ({ key: poolKey, listed: true, sqrtPriceX96: sqrtRatioAtTick(tick), tick, positions, ...(lpFee === undefined ? {} : { lpFee }) });
-  const CONDITIONAL = /^In the pools Inspector can read, of the first [\d,]+ USDC buyers would pay for this token, [\d.]+% would go into positions wallets can withdraw and [\d.]+% into burned or locked ones, if the hooks and fees of the pools selling it let buyers through\./;
-  const PLAIN_WARN = /^In the pools Inspector can read, of the first [\d,]+ USDC buyers would pay for this token, [\d.]+% goes into positions wallets can withdraw/;
+  const CONDITIONAL = /^In the pools Inspector can read, of the (first )?[\d,]+ USDC buyers (would pay for this token|could pay for the tokens now for sale), [\d.]+% would go into positions wallets can withdraw.* if the hooks and fees of the pools selling it let buyers through\./;
+  const PLAIN_WARN = /^In the pools Inspector can read, of the (first )?[\d,]+ USDC buyers (would pay for this token|could pay for the tokens now for sale), [\d.]+% goes into positions wallets can withdraw/;
 
   describe("a 99% LP fee makes every token there cost a hundred times its pool price", () => {
     it("K1 and K2. a burned wall in a 99%-fee pool below the market doesn't push the wallet's launch out of the window", async () => {
@@ -602,7 +693,10 @@ describe("one path over every pool, by what a buyer pays; only wallets in plain 
       const parked = at(REFUSER, T0 - 120, [nft(2, tokenOnlyL(T0 - 120, T0 - 60, 600_000n), T0 - 120, T0 - 60)]);
       const f = await verdict([at(LAUNCHPAD, T0, [launch(1)]), parked], { 1: DEAD, 2: WALLET_2 });
       expect(f.status).toBe("warn");
-      expect(f.detail).toMatch(CONDITIONAL);
+      // The burned launch behind the hook is said as that, not as "burned or locked" and not as nothing.
+      expect(f.detail).toBe(
+        `In the pools Inspector can read, of the first 1,000 USDC buyers would pay for this token, 59.4% would go into positions wallets can withdraw, 0% into burned or locked ones and 40.6% into burned or locked ones behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC, if the hooks and fees of the pools selling it let buyers through. ${ORDER}`,
+      );
     });
 
     describe("G3. the same holder adds tokens to a plain pool: still no fail, whatever the amount and the price", () => {
@@ -634,12 +728,22 @@ describe("one path over every pool, by what a buyer pays; only wallets in plain 
       expect(f.detail).toMatch(CONDITIONAL);
     });
 
+    it("HW. a holder's 60 USDC of tokens just under the market behind a refusing hook doesn't warn a plain burned launch: wallets outside plain pools warn from half", async () => {
+      for (const tokens of [60_000n, 40_000n, 400_000n]) {
+        const parked = at(REFUSER, T0 - 120, [nft(2, tokenOnlyL(T0 - 120, T0 - 60, tokens), T0 - 120, T0 - 60)]);
+        await quiet([main([launch(1)]), parked], { 1: DEAD, 2: WALLET_2 });
+      }
+      // The same 60 USDC of tokens from a wallet in a plain pool, where buyers do get them: a warning.
+      const real: PoolSetup = { key: SIDE, tick: T0 - 120, sqrtPriceX96: sqrtRatioAtTick(T0 - 120), positions: [nft(2, tokenOnlyL(T0 - 120, T0 - 60, 60_000n), T0 - 120, T0 - 60)] };
+      expect((await verdict([main([launch(1)]), real], { 1: DEAD, 2: WALLET_2 })).status).toBe("warn");
+    });
+
     it("B1. USDC parked behind a hook that refuses swaps, beside a plain burned launch: a warning that says where the money is", async () => {
       const parked = (usdc: bigint) => at(REFUSER, T0, [nft(2, quoteOnlyL(T0 - 6_000, T0 - 60, usdc), T0 - 6_000, T0 - 60)]);
       const f = await verdict([main([launch(1)]), parked(1_001n)], { 1: DEAD, 2: WALLET_2 });
       expect(f.status).toBe("warn");
       expect(f.detail).toBe(
-        "Of the 1,000 USDC in its pools now, wallets' positions hold 1,000 (1,000 of it behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC, where nobody may be able to sell into it) and burned or locked ones 0.",
+        "In the pools Inspector can read, of the 1,000 USDC in its pools now, wallets' positions hold 1,000 (1,000 of it behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC, where nobody may be able to sell into it) and burned or locked ones 0.",
       );
       // However much: bids outside plain pools never fail.
       expect((await verdict([main([twoSided(1, 2_000n)]), parked(500_000n)], { 1: DEAD, 2: WALLET_2 })).status).toBe("warn");
@@ -1000,7 +1104,7 @@ describe("pools of other kinds beside a v4 pool", () => {
     expect((await both([bought, launch(1)], reads(1_000n), { 7: WALLET, 1: DEAD })).status).toBe("fail");
     const f = await both([bought, launch(1)], reads(2_100n), { 7: WALLET, 1: DEAD });
     expect(f.status).toBe("warn");
-    expect(f.detail).toMatch(/Of the 4,099 USDC in its pools now, wallets' positions hold 1,999 and burned or locked ones 0\./);
+    expect(f.detail).toMatch(/of the 4,099 USDC in its pools now, wallets' positions hold 1,999 and burned or locked ones 0\./);
   });
 
   it("adds nothing while a family of pools never answered", async () => {
@@ -1053,7 +1157,8 @@ describe("where the check is the one from before the index, unchanged", () => {
   });
 
   it("a wallet's v4 position beside a burned v2 pair: the old check says unknown, the new path says fail", async () => {
-    const { input } = world([{ key, positions: [nft(7, L)] }], { dex: v2AndV4, chain: { reads: pairReads(100n), nftOwners: { 7: WALLET } } });
+    const reads = { ...pairReads(100n), ...v2PairReads(PAIR, USDC, TOKEN, 5_000n * 10n ** 6n, 5_000n * 10n ** 21n) };
+    const { input } = world([main([twoSided(7, 20_000n)])], { dex: v2AndV4, chain: { reads, nftOwners: { 7: WALLET } } });
     const scan = await findPools(input);
     expect((await checkLpLock(without(input), scan)).status).toBe("unknown");
     expect(await checkLpLock(input, scan)).toMatchObject({ status: "fail", fixAppId: "vault" });

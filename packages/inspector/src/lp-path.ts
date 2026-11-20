@@ -53,6 +53,8 @@ export type Ask = {
   hi: bigint | null;
   slope: bigint;
   tokensAbove: (price: bigint) => bigint;
+  /** Whose it is, when that matters to the reader (checks.ts keys a wallet's asks to the same wallet's bids). */
+  holder?: string;
 };
 
 /** A Uniswap v4 position's ask, or null when it sells nothing above the pool's price. `scale` multiplies its 6-decimal quote amounts. */
@@ -125,6 +127,8 @@ export type AskPath = {
   windowEnd: bigint | null;
   /** The quote paid in, by owner, from the path's start to each point checked: P1, every edge inside the window, its end. */
   prefixes: ClassSums[];
+  /** The price of each of those points, in the same order. */
+  points: bigint[];
   /** The tokens the window sells, all owners together (raw units). */
   windowTokens: bigint;
   /** The tokens still for sale beyond the window's end, by owner (raw units). Nothing when there is no window. */
@@ -204,7 +208,7 @@ export function findPath(asks: readonly Ask[], minDepth: bigint): AskPath | null
   if (reachedAt === -1) {
     // Thin: everything there is, as one prefix. An endless ask was walked to the top of the ladder above.
     const top = asks.reduce((m, a) => (a.hi !== null && a.hi > m ? a.hi : m), far);
-    return { reached: false, p1: null, windowEnd: null, prefixes: paidAt(asks, start, [top]), windowTokens: 0n, beyond: noSums() };
+    return { reached: false, p1: null, windowEnd: null, prefixes: paidAt(asks, start, [top]), points: [top], windowTokens: 0n, beyond: noSums() };
   }
   const [prev, prevTaken] = reachedAt === 0 ? [start, 0n] : [stops[reachedAt - 1]!, taken[reachedAt - 1]!];
   const [here, hereTaken] = [stops[reachedAt]!, taken[reachedAt]!];
@@ -220,5 +224,5 @@ export function findPath(asks: readonly Ask[], minDepth: bigint): AskPath | null
     const from = a.lo > start ? a.lo : start;
     if (from < windowEnd) windowTokens += a.tokensAbove(from) - left;
   }
-  return { reached: true, p1, windowEnd, prefixes: paidAt(asks, start, points), windowTokens, beyond };
+  return { reached: true, p1, windowEnd, prefixes: paidAt(asks, start, points), points, windowTokens, beyond };
 }

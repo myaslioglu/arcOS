@@ -83,27 +83,36 @@
  *   1,000 units (`MIN_DEPTH`) have been paid in; the window runs to twice that price, and the shares of what has been
  *   paid in are read at P1, at the window's end and at every range edge in between (between two edges the mix is
  *   constant). A path that never takes 1,000 units is one prefix.
- *   Bids within reach: what sellers would take out of a position by selling the token down to half its price in
- *   that position's pool (its quote now less its quote there; half of a v2 share's reserve over sqrt 2; a v3 or
- *   Aerodrome pool's quote whole). Quote parked further down is out of reach: nobody sells into it, and leaving it
- *   there risks nothing.
+ *   The market price M: the price at which the asks of plain pools, whoever holds them, have taken 1,000 units,
+ *   from the cheapest of them. It can be lowered only by offering real tokens under the market in a plain pool; paper
+ *   asks far up only raise it. When the plain pools sell less than 1,000 units in all there is no M.
+ *   Bids within reach: what a position would pay out while the token's price falls from M, or from its own pool's
+ *   price when that is lower, to half of M (a v2 share by x * y = k; a v3 or Aerodrome pool's quote whole). A pool
+ *   priced under half of M holds nothing within reach, wherever in it the quote sits: nobody sells there. Without M
+ *   nothing is within reach.
  *   FAIL, two ways, and both rest on at least 1,000 units of quote that wallets can withdraw from plain pools and
- *   that sellers could take first:
- *   - wallets in plain pools take half or more of what has been paid in at some prefix, and hold at least 1,000
- *     units of bids within reach;
+ *   that sellers at the market could take first. Without M there is no fail:
+ *   - wallets in plain pools take half or more of what has been paid in at some prefix, and THOSE wallets, the ones
+ *     selling up to that point, hold at least 1,000 units of bids within reach between them (a v2 pair's unlocked LP
+ *     holders count as one). Another holder's money beside a stranger's tokens proves nothing;
  *   - wallets in plain pools hold at least 1,000 units of bids within reach and half or more of all the bids
  *     within reach.
  *   Tokens alone never fail a token. They are free, a pool's price is its creator's choice, and the path is where
  *   buyers' money goes only if the token's market is on it: a token traded on Uniswap v3 or Aerodrome, against
  *   another currency, on another DEX, or with nothing left for sale has a path that is whatever anyone puts in a new
  *   pool. So a wallet-held launch nobody has bought from yet is a warning, and a fail once 1,000 units of what buyers
- *   paid sit in the wallet's range.
- *   WARN: wallets, plain or not, take more than 5% at some prefix; or hold more than 5% of all the bids, in reach or
- *   not, once the pools hold 1,000 units; or sell, beyond the window, a tenth or more of all the tokens for sale on the path (counted,
- *   never priced, and not measured against the supply: a holder's stray percent parked far up is no wall). A warning
- *   is worded as being about the pools read here, and where it rests only on wallets outside plain pools it says so
- *   ("would go ..., if the hooks and fees of the pools selling it let buyers through"; bids "behind a swap hook, a
- *   dynamic or high fee, or in a pool not quoted in USDC, where nobody may be able to sell into it").
+ *   paid sit in the wallet's range. A wallet's range bought through to its top, with nothing left for sale anywhere,
+ *   is a warning too: there is no M.
+ *   WARN: wallets in plain pools take more than 5% at some prefix, or hold more than 5% of all the bids (in reach or
+ *   not) once the pools hold 1,000 units; or wallets, plain or not, take or hold half or more there (a wallet outside
+ *   plain pools shows what costs nothing and may be out of anyone's reach, so alone it warns only from half); or
+ *   wallets sell, beyond the window, a tenth or more of all the tokens for sale on the path (counted, never priced,
+ *   and not measured against the supply). A warning starts "In the pools Inspector can read"; where it rests only on
+ *   wallets outside plain pools it says so ("would go ..., if the hooks and fees of the pools selling it let buyers
+ *   through"; bids "behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC, where nobody may be
+ *   able to sell into it"). Burned or locked liquidity in such pools is given as that, apart from the rest. A fail by
+ *   bids gives the within-reach figures it was decided on. A path that never takes 1,000 units is worded without a
+ *   window, and a finding leaves the path out when wallets take nothing on it.
  *   Up to 500 holders' code is read (`readHolderCode`: one state-overridden eth_call per 250, single reads when a
  *   node refuses that), largest first; a warning says so when the holders left unclassified could bring wallets to
  *   half.
@@ -129,15 +138,18 @@
  *     wallet's wall beyond the window less than a tenth; and anything that stops the new path's reads (51 empty
  *     pools, a flood of `ModifyLiquidity` in the index's tail);
  *   - a fail can be made by a stranger only by leaving at least 1,000 units of quote in a wallet's position in a
- *     plain pool within reach of sellers, where it is at risk: as half of all the bids within reach, or beside asks
- *     of his that take half of a prefix (about 500 units of tokens sold under the market, or, for a token whose
- *     market isn't on the path, any tokens at any price);
- *   - a warning can be made at no risk by anyone who holds tokens: about 50 units of asks under the market in any
- *     pool (behind a hook that refuses swaps they can't even be bought); any tokens at any price in a new pool when
- *     the token's market isn't on the pools read (v3, Aerodrome, another currency or DEX, or nothing left for sale);
- *     a tenth of all the tokens for sale parked beyond the window. And with capital, at no risk: USDC parked in a
- *     wallet's position far under the price, or behind a refusing hook, above 5% of the bids (the second warns in
- *     words that say where it is);
+ *     plain pool between the market price and half of it, where anyone can sell into it: as half of all the bids
+ *     within reach, or beside asks of his own that take half of a prefix (about 500 units of tokens sold under the
+ *     market). For a token whose market isn't on the path he sets M himself, with tokens that take 1,000 units at
+ *     his price, and his bids must sit within half of that. The money is at risk for as long as it is there; how
+ *     much risk is his choice of where in that half to put it;
+ *   - a warning can be made by anyone who holds tokens: about 50 units of asks under the market in a plain pool,
+ *     where buyers take them (behind a hook that refuses swaps it takes half of the first 1,000, about 500 units,
+ *     and risks nothing); any tokens at any price in a new plain pool when the token's market isn't on the pools read
+ *     (v3, Aerodrome, another currency or DEX, or nothing left for sale); a tenth of all the tokens for sale parked
+ *     beyond the window. And with capital, at no risk: USDC parked in a wallet's position far under the price in a
+ *     plain pool, above 5% of the bids, or behind a refusing hook, from half of them (which warns in words that say
+ *     where it is);
  *   - a wallet's asks beyond the window under that tenth go unmentioned; v3 and Aerodrome positions aren't read at
  *     all;
  *   - a finding is as of its block: nothing re-inspects a token when its price moves and the window with it, and a
@@ -173,7 +185,7 @@ import { CallReverted, type ChainReader, type Finding, type InspectInput, type P
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { MAX_EXTRA_POOLS, readV4Pools, toSixDecimals, type V4Quote } from "./v4";
 import {
-  MAX_POSITIONS_PER_POOL, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, positionQuote, readHolderCode, readV4Positions, v2TokenSqrtPrice,
+  MAX_POSITIONS_PER_POOL, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, halvedPrice, quoteHeldAt, rawSqrtPriceAt, readHolderCode, tokenSqrtPrice, readV4Positions, v2TokenSqrtPrice,
   type PoolGap, type V4PoolRef,
 } from "./v4-positions";
 import { HOLDER_CLASSES, findPath, noSums, v2Ask, v4Ask, type Ask, type AskPath, type ClassSums, type HolderClass } from "./lp-path";
@@ -979,8 +991,13 @@ export type TokenFacts = { supply: bigint | null; decimals: number | null };
 /**
  * What `tallyLiquidity` found, for the verdict. Quote amounts are 6-decimal units times `SHARE_SCALE`; token amounts raw.
  * - `bids`: the quote currency the positions hold now, by class (`HolderClass`), over every pool found;
- * - `reach`: the part of the bids within reach, by class: what sellers would take out of each position by selling the
- *   token down to half its price in that position's pool. A Uniswap v3 or Aerodrome pool's quote counts whole;
+ * - `market`: there is a market price M, the price at which the asks of plain pools (every class) have taken 1,000
+ *   units. Without one (the plain pools sell less than that) nothing is within reach and nothing can fail;
+ * - `reach`: the part of the bids within reach of sellers, by class: what a position would pay out while the token's
+ *   price falls from M, or from its own pool's price when that is lower, to half of M. A pool priced under half of M
+ *   holds nothing within reach. A Uniswap v3 or Aerodrome pool's quote counts whole. `reachOf`: the same for each
+ *   wallet in a plain pool, by holder;
+ * - `sellers`: the wallets selling in plain pools, each with the price its ask starts at on the path;
  * - `path`: where buyers' money would go (`AskPath`), one path over every pool found. Null when nothing is for sale;
  * - `unclassifiedHolders`: how many holders' code wasn't read;
  * - `blockers`: the reasons the picture itself isn't complete. With any, the new path says nothing;
@@ -989,6 +1006,9 @@ export type TokenFacts = { supply: bigint | null; decimals: number | null };
 export type LiquidityTally = {
   bids: ClassSums;
   reach: ClassSums;
+  reachOf: Map<string, bigint>;
+  market: boolean;
+  sellers: { holder: string; from: bigint }[];
   path: AskPath | null;
   unclassifiedHolders: number;
   blockers: string[];
@@ -1086,8 +1106,16 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
   if (v4Read.unlisted.length > 0) blockers.add("A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.");
 
   const bids = noSums();
-  const reach = noSums();
   const asks: Ask[] = [];
+  /** The asks of plain pools, every class: what the market price is read from. */
+  const plainAsks: Ask[] = [];
+  const sells = (ask: Ask | null, holder: string, isPlain: boolean) => {
+    if (!ask) return;
+    asks.push({ ...ask, holder });
+    if (isPlain) plainAsks.push(ask);
+  };
+  // Every slice of quote, with what of it would be within reach of sellers given the market price (see below).
+  const slices: { owner: HolderClass; holder: string; within: (market: bigint) => bigint }[] = [];
   /** A holder's class in a pool that isn't plain: a wallet's is "elsewhere", burned or locked is "doubted". */
   const classIn = (isPlain: boolean, owner: HolderClass): HolderClass => (isPlain ? owner : owner === "withdrawable" ? "elsewhere" : owner === "burned" || owner === "locked" ? "doubted" : owner);
   // The largest slice of each kind, for the evidence link: by the quote it holds now and what it would take.
@@ -1128,10 +1156,14 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
       // A v2 pair is plain when its quote is a dollar.
       const as = classIn(dollar(pair.quote), owner);
       bids[as] += quote[part];
-      // x * y = k: at half the price the quote reserve is the reserve over sqrt 2.
-      reach[as] += quote[part] - (quote[part] * 1_000_000_000n) / 1_414_213_562n;
-      const ask = v2Ask({ owner: as, price, reserve: quote[part], tokens: tokens[part] });
-      if (ask) asks.push(ask);
+      // The LP holders past the burn addresses and the lockers aren't told apart: one holder, the pair's.
+      const holder = `v2:${lower(pair.address)}`;
+      // x * y = k: the quote reserve moves with the square root of the price.
+      slices.push({ owner: as, holder, within: (market) => {
+        const [top, bottom] = [price < market ? price : market, halvedPrice(market)];
+        return price <= 0n || top <= bottom ? 0n : (quote[part] * (top - bottom)) / price;
+      } });
+      sells(v2Ask({ owner: as, price, reserve: quote[part], tokens: tokens[part] }), holder, dollar(pair.quote));
       note(owner, quote[part], url);
     }
   }
@@ -1141,7 +1173,8 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
   for (const p of scan.pools) {
     if (p.version !== "v3" && p.version !== "aero") continue;
     bids.venue += p.depth * SHARE_SCALE;
-    reach.venue += p.depth * SHARE_SCALE;
+    // Where in its range a v3 position's quote sits can't be read: all of it counts, as nobody's.
+    slices.push({ owner: "venue", holder: lower(p.address), within: () => p.depth * SHARE_SCALE });
     note("venue", p.depth * SHARE_SCALE, `${explorerBase}/address/${p.address}`);
   }
 
@@ -1182,17 +1215,43 @@ export async function tallyLiquidity(input: InspectInput, scan: PoolScan, dex: D
         scale: SHARE_SCALE,
       });
       bids[owner] += position.quote * SHARE_SCALE;
-      const range = { sqrtPriceX96: r.sqrtPriceX96, tickLower: position.tickLower, tickUpper: position.tickUpper, liquidity: position.liquidity, quoteIsCurrency0: r.pool.quoteIsCurrency0 };
-      reach[owner] += toSixDecimals(positionQuote(range).reach, r.pool.quoteDecimals) * SHARE_SCALE;
-      if (ask) asks.push(ask);
+      const { quoteIsCurrency0: q0, quoteDecimals: d } = r.pool;
+      const range = { tickLower: position.tickLower, tickUpper: position.tickUpper, liquidity: position.liquidity, quoteIsCurrency0: q0 };
+      const poolPrice = tokenSqrtPrice(r.sqrtPriceX96, q0, d);
+      slices.push({ owner, holder, within: (market) => {
+        // From the market price, or the pool's own when that is lower, down to half the market price.
+        const [top, bottom] = [poolPrice < market ? r.sqrtPriceX96 : rawSqrtPriceAt(market, q0, d), rawSqrtPriceAt(halvedPrice(market), q0, d)];
+        if (poolPrice <= halvedPrice(market)) return 0n;
+        const held = toSixDecimals(quoteHeldAt(range, top), d) - toSixDecimals(quoteHeldAt(range, bottom), d);
+        return held > 0n ? held * SHARE_SCALE : 0n;
+      } });
+      sells(ask, holder, isPlain);
       // A position that only sells tokens holds no quote yet: one unit, so that it can still be the one linked.
       note(owner, position.quote * SHARE_SCALE + (ask ? 1n : 0n), url);
     }
   }
 
+  // The market price M: where the asks of plain pools, whoever holds them, have taken 1,000 units, on the same axis as
+  // the path (what a buyer pays; the LP fee, at most 1% there, is the only difference from a pool's own price). Reach
+  // is measured from it for every pool, so quote parked under the price of a pool initialised anywhere else than at
+  // the market counts for what sellers at the market could take, which is nothing. No such price, no reach.
+  const plainMarket = findPath(plainAsks, MIN_DEPTH * SHARE_SCALE);
+  const market = plainMarket?.reached ? plainMarket.p1 : null;
+  const reach = noSums();
+  const reachOf = new Map<string, bigint>();
+  if (market !== null) {
+    for (const slice of slices) {
+      const amount = slice.within(market);
+      reach[slice.owner] += amount;
+      if (slice.owner === "withdrawable") reachOf.set(slice.holder, (reachOf.get(slice.holder) ?? 0n) + amount);
+    }
+  }
   return {
     bids,
     reach,
+    reachOf,
+    market: market !== null,
+    sellers: asks.filter((a) => a.owner === "withdrawable").map((a) => ({ holder: a.holder ?? "", from: a.lo })),
     path: findPath(asks, MIN_DEPTH * SHARE_SCALE),
     unclassifiedHolders,
     blockers: [...blockers],
@@ -1223,14 +1282,16 @@ function tokenAmount(raw: bigint, decimals: number | null): string {
  * window is every prefix from P1, where 1,000 units have been paid (`MIN_DEPTH`), to twice that price, or the whole
  * path as one prefix when it never takes 1,000. Every class counts in a prefix's total. P is the share of wallets in
  * plain pools ("withdrawable"), W that plus wallets in the other pools ("elsewhere").
- * Bids "within reach" are what sellers would take out of a position by selling the token down to half its price in
- * that pool (`reach`): quote parked further down is nobody's to sell into, and costs nothing to leave there.
- * - FAIL, from the asks: P >= 50% in some prefix, AND wallets in plain pools hold at least 1,000 units of bids within
- *   reach.
+ * Bids "within reach" are what sellers at the market price M would take out of a position by selling the token down
+ * to half of M (`LiquidityTally.reach`): quote parked further down, or in a pool priced far from the market, is
+ * nobody's to sell into, and costs nothing to leave there. Without M (plain pools sell under 1,000 units) nothing fails.
+ * - FAIL, from the asks: P >= 50% in some prefix, AND the plain-pool wallets selling up to that point hold at least
+ *   1,000 units of bids within reach between them.
  * - FAIL, from the bids alone: wallets in plain pools hold at least 1,000 units within reach, and half or more of all
  *   the bids within reach.
- * - Warn: W > 5% in some prefix; or W > 5% of the bids once the pools hold 1,000 units; or the tokens wallets (both
- *   kinds) sell beyond the window are a tenth or more of all the tokens for sale on the path.
+ * - Warn: P > 5% in some prefix, or of the bids once the pools hold 1,000 units; or W >= 50% there with wallets
+ *   outside plain pools among them; or the tokens wallets (both kinds) sell beyond the window are a tenth or more of
+ *   all the tokens for sale on the path.
  * So a fail always rests on at least 1,000 units of quote that wallets can withdraw from plain pools and that sellers
  * could take first: money at risk where it sits. Tokens alone
  * never fail a token: they are free, a pool's price is its creator's choice, and the path is only where buyers' money
@@ -1262,12 +1323,20 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
   const most = (of: (m: ClassSums) => bigint, among: ClassSums[]) => among.reduce((a, b) => (of(b) * sum(a) > of(a) * sum(b) + (sum(a) * sum(b)) / DUST ? b : a));
 
   // --- Asks.
-  const prefixes = (path?.prefixes ?? []).filter((p) => sum(p) > 0n);
-  // The money beside the tokens: without it, what the asks show is a warning at most.
-  const walletMoney = reach.withdrawable >= MIN_DEPTH * SHARE_SCALE;
-  const asksFail = walletMoney && prefixes.some((m) => atLeast(m.withdrawable, sum(m), 50n));
-  const plainWarn = prefixes.some((m) => above(m.withdrawable, sum(m), 5n));
-  const anyWarn = prefixes.some((m) => above(wallets(m), sum(m), 5n));
+  const prefixes = (path?.prefixes ?? []).map((sums, i) => ({ sums, at: path!.points[i]! })).filter((p) => sum(p.sums) > 0n);
+  const views = prefixes.map((p) => p.sums);
+  const THOUSAND = MIN_DEPTH * SHARE_SCALE;
+  // A fail by asks: wallets in plain pools take half of some prefix, and THOSE wallets, the ones selling up to that
+  // point, hold 1,000 units within reach between them. Someone else's money beside a stranger's tokens is no evidence.
+  const asksFail = prefixes.some(({ sums, at }) => {
+    if (!atLeast(sums.withdrawable, sum(sums), 50n)) return false;
+    const holders = new Set(tally.sellers.filter((seller) => seller.from < at).map((seller) => seller.holder));
+    return [...holders].reduce((money, holder) => money + (tally.reachOf.get(holder) ?? 0n), 0n) >= THOUSAND;
+  });
+  const plainWarn = views.some((m) => above(m.withdrawable, sum(m), 5n));
+  // Wallets outside plain pools cost nothing to show and may sell nothing a buyer can reach: on their own they warn
+  // only from half.
+  const anyWarn = plainWarn || views.some((m) => m.elsewhere > 0n && atLeast(wallets(m), sum(m), 50n));
   // Tokens wallets still sell beyond the window: counted, never priced, and set against every token for sale on the path.
   const beyond = path?.beyond ?? noSums();
   const forSale = path === null ? 0n : path.windowTokens + sum(path.beyond);
@@ -1276,9 +1345,11 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
 
   // --- Bids.
   const bidTotal = sum(bids);
-  const bidsMaterial = bidTotal >= MIN_DEPTH * SHARE_SCALE;
-  const bidsFail = walletMoney && atLeast(reach.withdrawable, sum(reach), 50n);
-  const bidsAnyWarn = bidsMaterial && above(wallets(bids), bidTotal, 5n);
+  const reachTotal = sum(reach);
+  const bidsMaterial = bidTotal >= THOUSAND;
+  const bidsFail = reach.withdrawable >= THOUSAND && atLeast(reach.withdrawable, reachTotal, 50n);
+  const bidsPlainWarn = bidsMaterial && above(bids.withdrawable, bidTotal, 5n);
+  const bidsAnyWarn = bidsPlainWarn || (bidsMaterial && bids.elsewhere > 0n && atLeast(wallets(bids), bidTotal, 50n));
 
   const fail = asksFail || bidsFail;
   if (!fail && !anyWarn && !beyondAny && !bidsAnyWarn) return null;
@@ -1287,31 +1358,44 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
   // rests on wallets outside plain pools.
   const asksConditional = !fail && !plainWarn && anyWarn;
   const beyondConditional = !fail && !beyondPlain && beyondAny;
-  const of = fail || !asksConditional ? (m: ClassSums) => m.withdrawable : wallets;
-  const worst = prefixes.length > 0 ? most(of, prefixes) : null;
+  const of = fail || plainWarn || !anyWarn ? (m: ClassSums) => m.withdrawable : wallets;
+  const worst = views.length > 0 ? most(of, views) : null;
   const outside = fail ? 0n : bids.elsewhere;
   const beyondTokens = fail ? (beyondPlain ? beyond.withdrawable : 0n) : beyondAny ? (beyondConditional ? wallets(beyond) : beyond.withdrawable) : 0n;
   const HOOKED = "behind a swap hook, a dynamic or high fee, or in a pool not quoted in USDC";
+  /** ", and Z% into burned or locked ones behind ...": said apart, never folded into either side. */
+  const lockedShares = (m: ClassSums) =>
+    m.doubted > 0n
+      ? `, ${pct(safe(m), sum(m))} into burned or locked ones and ${pct(m.doubted, sum(m))} into burned or locked ones ${HOOKED}`
+      : ` and ${pct(safe(m), sum(m))} into burned or locked ones`;
   // Holders whose code wasn't read could be wallets too: said when, with them, wallets would reach half.
-  const couldBeHalf = !fail && [...prefixes, ...(bidsMaterial ? [bids] : [])].some((m) => m.unclassified > 0n && atLeast(wallets(m) + m.unclassified, sum(m), 50n));
+  const couldBeHalf = !fail && [...views, ...(bidsMaterial ? [bids] : [])].some((m) => m.unclassified > 0n && atLeast(wallets(m) + m.unclassified, sum(m), 50n));
   // The path is described only when wallets take something on it, or sell beyond its window: a finding shows the lines
   // that carry it.
   const onPath = worst !== null && (of(worst) > 0n || beyondTokens > 0n);
-  const detail = [
+  const windowed = path?.reached === true;
+  const first = worst === null ? "" : windowed ? `Of the first ${paid(sum(worst))} ${symbol} buyers would pay for this token` : `Of the ${paid(sum(worst))} ${symbol} buyers could pay for the tokens now for sale`;
+  const lines = [
     worst &&
       onPath &&
       (asksConditional
-        ? `In the pools Inspector can read, of the first ${paid(sum(worst))} ${symbol} buyers would pay for this token, ${pct(of(worst), sum(worst))} would go into positions wallets can withdraw and ${pct(safe(worst), sum(worst))} into burned or locked ones, if the hooks and fees of the pools selling it let buyers through.`
-        : !fail
-          ? `In the pools Inspector can read, of the first ${paid(sum(worst))} ${symbol} buyers would pay for this token, ${pct(of(worst), sum(worst))} goes into positions wallets can withdraw and ${pct(safe(worst), sum(worst))} into burned or locked ones.`
-          : `Of the first ${paid(sum(worst))} ${symbol} buyers would pay for this token, ${pct(of(worst), sum(worst))} goes into positions wallets can withdraw and ${pct(safe(worst), sum(worst))} into burned or locked ones.`),
+        ? `${first}, ${pct(of(worst), sum(worst))} would go into positions wallets can withdraw${lockedShares(worst)}, if the hooks and fees of the pools selling it let buyers through.`
+        : `${first}, ${pct(of(worst), sum(worst))} goes into positions wallets can withdraw${lockedShares(worst)}.`),
     bidTotal > 0n &&
-      `Of the ${units(bidTotal)} ${symbol} in its pools now, wallets' positions hold ${units(fail ? bids.withdrawable : wallets(bids))}${outside > 0n ? ` (${units(outside)} of it ${HOOKED}, where nobody may be able to sell into it)` : ""} and burned or locked ones ${units(safe(bids))}.`,
+      `Of the ${units(bidTotal)} ${symbol} in its pools now, wallets' positions hold ${units(fail ? bids.withdrawable : wallets(bids))}${outside > 0n ? ` (${units(outside)} of it ${HOOKED}, where nobody may be able to sell into it)` : ""}${bids.doubted > 0n ? `, burned or locked ones ${units(safe(bids))} and burned or locked ones ${HOOKED} ${units(bids.doubted)}` : ` and burned or locked ones ${units(safe(bids))}`}.`,
+    // What a fail by bids was decided on.
+    bidsFail &&
+      `Of that, ${units(reachTotal)} is within reach of sellers, down to half the price: wallets' positions hold ${units(reach.withdrawable)} of it and burned or locked ones ${units(safe(reach))}.`,
     beyondTokens > 0n &&
       `Wallets also hold ${tokenAmount(beyondTokens, token.decimals)} in positions above twice that price${beyondConditional ? `, ${HOOKED}` : ""}, which buyers would pay into if the price rises that far.`,
     couldBeHalf && `${tally.unclassifiedHolders.toLocaleString("en-US")} holders of this token's liquidity weren't classified, more than this check reads: with them, wallets could hold half or more.`,
-    onPath && `Counted in the order buyers' money would arrive, by what a buyer pays per token in each pool, fee included, up to twice the price at which ${MIN_UNITS} ${symbol} has been paid.`,
-  ].filter((x): x is string => typeof x === "string").join(" ");
+    onPath &&
+      (windowed
+        ? `Counted in the order buyers' money would arrive, by what a buyer pays per token in each pool, fee included, up to twice the price at which ${MIN_UNITS} ${symbol} has been paid.`
+        : `Counted in the order buyers' money would arrive, by what a buyer pays per token in each pool, fee included; the tokens for sale would take under ${MIN_UNITS} ${symbol} in all.`),
+  ].filter((x): x is string => typeof x === "string");
+  // A warning is about the pools read here, and says so where it starts.
+  const detail = fail || lines.length === 0 ? lines.join(" ") : `In the pools Inspector can read, ${lines[0]![0]!.toLowerCase()}${lines[0]!.slice(1)} ${lines.slice(1).join(" ")}`.trim();
   return fail
     ? finding("lp-lock", "fail", "Liquidity isn't locked", detail, { evidenceUrl: tally.openUrl, fixAppId: "vault" })
     : finding("lp-lock", "warn", "Some liquidity isn't locked", detail, { evidenceUrl: tally.openUrl, fixAppId: "vault" });

@@ -123,15 +123,13 @@ const E30 = 10n ** 30n;
  *   already priced past the target has nothing more coming to it. Without `lookTo` it looks to the TOKEN's price
  *   doubling in this pool: the raw price is currency1 per currency0, so when the token is currency0 that is the raw
  *   price doubling (its square root times sqrt 2), and when the token is currency1 it is the raw price halving.
- * - `reach`: the quote currency sellers would take out of it by selling the token down to half its price in this
- *   pool: `now` less its quote amount there. What sits further down is out of reach: nobody sells into it.
- * The token side has no part in any of them.
+ * The token side has no part in either number.
  */
 export function positionQuote(
   p: { sqrtPriceX96: bigint; tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean },
   lookTo?: bigint,
-): { now: bigint; inflow: bigint; reach: bigint } {
-  if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return { now: 0n, inflow: 0n, reach: 0n };
+): { now: bigint; inflow: bigint } {
+  if (p.sqrtPriceX96 <= 0n || p.liquidity <= 0n) return { now: 0n, inflow: 0n };
   const [lower, upper] = [sqrtRatioAtTick(p.tickLower), sqrtRatioAtTick(p.tickUpper)];
   const quoteAt = (sqrtP: bigint) => {
     const { amount0, amount1 } = amountsForLiquidity(sqrtP, lower, upper, p.liquidity);
@@ -140,9 +138,14 @@ export function positionQuote(
   const target = lookTo ?? (p.quoteIsCurrency0 ? (p.sqrtPriceX96 * E30) / SQRT2_E30 : (p.sqrtPriceX96 * SQRT2_E30) / E30);
   const now = quoteAt(p.sqrtPriceX96);
   const then = target > 0n ? quoteAt(target) : now;
-  // The token's price halved: the mirror of the doubling above.
-  const below = quoteAt(p.quoteIsCurrency0 ? (p.sqrtPriceX96 * SQRT2_E30) / E30 : (p.sqrtPriceX96 * E30) / SQRT2_E30);
-  return { now, inflow: then > now ? then - now : 0n, reach: now > below ? now - below : 0n };
+  return { now, inflow: then > now ? then - now : 0n };
+}
+
+/** The quote currency a range of `liquidity` would hold with its pool at the raw square-root price `sqrtP` (raw units, rounded down). */
+export function quoteHeldAt(p: { tickLower: number; tickUpper: number; liquidity: bigint; quoteIsCurrency0: boolean }, sqrtP: bigint): bigint {
+  if (sqrtP <= 0n || p.liquidity <= 0n) return 0n;
+  const { amount0, amount1 } = amountsForLiquidity(sqrtP, sqrtRatioAtTick(p.tickLower), sqrtRatioAtTick(p.tickUpper), p.liquidity);
+  return p.quoteIsCurrency0 ? amount0 : amount1;
 }
 
 // One price for every pool of a token, whatever the pool's orientation and its quote currency's decimals: the square
@@ -174,6 +177,9 @@ export function rawSqrtPriceAt(tokenSqrt: bigint, quoteIsCurrency0: boolean, quo
 export function v2TokenSqrtPrice(quoteReserve: bigint, tokenReserve: bigint): bigint {
   return tokenReserve <= 0n ? 0n : isqrt((quoteReserve * 10n ** 12n * Q192) / tokenReserve);
 }
+
+/** A token square-root price halved in price: over sqrt 2. */
+export const halvedPrice = (tokenSqrt: bigint): bigint => (tokenSqrt * E30) / SQRT2_E30;
 
 /** A token square-root price doubled in price: times sqrt 2. */
 export const doubledPrice = (tokenSqrt: bigint): bigint => (tokenSqrt * SQRT2_E30) / E30;
