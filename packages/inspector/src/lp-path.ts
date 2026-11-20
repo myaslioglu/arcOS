@@ -12,11 +12,19 @@ import { isqrt, sqrtRatioAtTick, toSixDecimals } from "./v4";
 // amounts are the quote currency in 6 decimals times `SHARE_SCALE` (what goes into the position, the fee left out);
 // token amounts are raw units.
 
-/** Who a slice of liquidity belongs to, for the verdict. The last five are the kinds of "not a wallet's, not safe either". */
-export type HolderClass = "burned" | "locked" | "withdrawable" | "contract" | "hook" | "venue" | "unclassified" | "unvetted";
-export const HOLDER_CLASSES: readonly HolderClass[] = ["burned", "locked", "withdrawable", "contract", "hook", "venue", "unclassified", "unvetted"];
+/**
+ * Who a slice of liquidity belongs to, for the verdict.
+ * - `burned`, `locked`: in a plain pool, at a burn address or in a known locker;
+ * - `withdrawable`: a wallet's, in a plain pool;
+ * - `elsewhere`: a wallet's, in a pool that isn't plain (a hook that runs in swaps, a dynamic or high fee, an EURC
+ *   quote): the wallet can withdraw it, but whether a buyer ever reaches it is the pool's to decide;
+ * - `doubted`: burned or locked, in such a pool;
+ * - the rest are the other kinds of "not a wallet's, not safe either".
+ */
+export type HolderClass = "burned" | "locked" | "withdrawable" | "elsewhere" | "doubted" | "contract" | "hook" | "venue" | "unclassified" | "unvetted";
+export const HOLDER_CLASSES: readonly HolderClass[] = ["burned", "locked", "withdrawable", "elsewhere", "doubted", "contract", "hook", "venue", "unclassified", "unvetted"];
 export type ClassSums = Record<HolderClass, bigint>;
-export const noSums = (): ClassSums => ({ burned: 0n, locked: 0n, withdrawable: 0n, contract: 0n, hook: 0n, venue: 0n, unclassified: 0n, unvetted: 0n });
+export const noSums = (): ClassSums => ({ burned: 0n, locked: 0n, withdrawable: 0n, elsewhere: 0n, doubted: 0n, contract: 0n, hook: 0n, venue: 0n, unclassified: 0n, unvetted: 0n });
 
 /** LP fees are in pips, millionths. */
 const PIPS = 1_000_000n;
@@ -169,7 +177,6 @@ const total = (sums: ClassSums): bigint => HOLDER_CLASSES.reduce((s, owner) => s
  *   (every ask's take is a straight line in the square root of the price), so those points are the whole truth about
  *   every prefix from P1 to the end.
  * - When the asks never take `minDepth`, there is no window: the whole path is one prefix.
- * Which asks to give it is the caller's question (checks.ts reads two paths: every pool's, and the plain pools').
  */
 export function findPath(asks: readonly Ask[], minDepth: bigint): AskPath | null {
   if (asks.length === 0) return null;

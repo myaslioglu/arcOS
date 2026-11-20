@@ -108,7 +108,6 @@ describe("lp-lock over real v4 pools, read-only", () => {
         path: tally?.path && { reached: tally.path.reached, first: sums(tally.path.prefixes[0]!), last: sums(tally.path.prefixes[tally.path.prefixes.length - 1]!), points: tally.path.prefixes.length },
         windowTokens: tally?.path && tokens(tally.path.windowTokens),
         beyond: tally?.path && sums(tally.path.beyond, tokens),
-plain: tally?.plainPath && { reached: tally.plainPath.reached, first: sums(tally.plainPath.prefixes[0]!), points: tally.plainPath.prefixes.length },
         unclassified: tally?.unclassifiedHolders,
         blockers: tally?.blockers,
         status: finding.status,
