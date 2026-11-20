@@ -24,7 +24,7 @@ vi.mock("@arcos/shell", () => ({
   useDropTarget: () => ({ over: false, props: {} }),
   dropParams: (item: { address: string }) => ({ token: item.address }),
 }));
-vi.mock("@/lib/indexed-pools", () => ({ fetchExtraPools: vi.fn(async () => []) }));
+vi.mock("@/lib/indexed-pools", () => ({ fetchIndexedExtras: vi.fn(async () => ({ extraPools: [] })) }));
 vi.mock("@/lib/analytics", () => ({ trackEvent: state.trackEvent }));
 
 import InspectorWindow from "../Window";

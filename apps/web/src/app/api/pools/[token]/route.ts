@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAddress } from "viem";
 import { activeNetwork, type Address } from "@arcos/chain";
-import { indexedPools } from "@/lib/indexed-pools-server";
+import { indexedToken } from "@/lib/indexed-pools-server";
 import { causeCode, poolsAnswer } from "@/lib/indexed-pools";
 import { clientKey, rateLimiter } from "@/lib/rate-limit";
 
@@ -13,9 +13,11 @@ const limiter = rateLimiter(30, 60_000);
 const NO_STORE = { "cache-control": "no-store" };
 
 /**
- * GET /api/pools/[token]: the pools the indexer recorded for a token, v4 pool keys included, newest first, kept 60 s at
- * the CDN. The browser Inspector reads its `extraPools` from it. The index holds mainnet data only, so on testnet this
- * route is not there (404), and the Inspector reads that as "no indexed pools".
+ * GET /api/pools/[token]: the pools the indexer recorded for a token, v4 pool keys included, newest first, and under
+ * `positions` the liquidity positions it recorded for the token's v4 pools (position keys only, at most 500 a pool and
+ * 2,000 in all, with the index's cursor), kept 60 s at the CDN. The browser Inspector reads its `extraPools` and
+ * `v4Positions` from it. The index holds mainnet data only, so on testnet this route is not there (404), and the
+ * Inspector reads that as "nothing indexed".
  */
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }) {
   if (activeNetwork() !== "mainnet") return NextResponse.json({ error: "Not available on this network." }, { status: 404, headers: NO_STORE });
@@ -31,8 +33,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     );
   }
   try {
-    const docs = await indexedPools(token as Address);
-    return NextResponse.json(poolsAnswer(docs), { headers: { "cache-control": "public, s-maxage=60" } });
+    const { pools, positions } = await indexedToken(token as Address);
+    return NextResponse.json(poolsAnswer(pools, positions), { headers: { "cache-control": "public, s-maxage=60" } });
   } catch (e) {
     // The error's name, and the read's own error code when there is one (indexed-pools.ts, IndexUnavailable): a Firestore
     // message can name the project and the database, so never the message. In the logs: `pools failed IndexUnavailable 7`

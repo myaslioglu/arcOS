@@ -7,7 +7,7 @@ import { isAddress } from "viem";
 import { activeChain, activeNetwork, explorerUrl, type Address } from "@arcos/chain";
 import { NotAContract, inspect } from "@arcos/inspector";
 import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
-import { fetchExtraPools } from "@/lib/indexed-pools";
+import { fetchIndexedExtras } from "@/lib/indexed-pools";
 import { inspectInput } from "@/lib/inspect-input";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
@@ -31,9 +31,10 @@ export default function InspectorWindow({ winId, params }: AppProps) {
     // never on a cache hit — so reopening a window onto an already-cached report never re-fires
     // the analytics event.
     queryFn: async () => {
-      // The index's pools for the token (hooked v4 pools among them), from the site; only mainnet has an index.
-      const extraPools = activeNetwork() === "mainnet" ? await fetchExtraPools(token!) : [];
-      const r = await inspect(inspectInput(token!, client!, undefined, undefined, extraPools));
+      // The index's pools for the token (hooked v4 pools among them) and its v4 pools' positions, from the site; only
+      // mainnet has an index.
+      const { extraPools, v4Positions } = activeNetwork() === "mainnet" ? await fetchIndexedExtras(token!) : { extraPools: [] };
+      const r = await inspect(inspectInput(token!, client!, undefined, undefined, extraPools, undefined, v4Positions));
       trackEvent("inspect_run", { passed: r.passed, total: r.total });
       return r;
     },

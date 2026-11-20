@@ -1,11 +1,12 @@
 import { isAddress } from "viem";
 import type { PoolDoc, PoolQuote, PoolVersion, V4PoolKey } from "@arcos/data";
-import type { ExtraPool } from "@arcos/inspector";
+import { MAX_POSITIONS, MAX_POSITIONS_PER_POOL, isPositionKey, type ExtraPool, type V4PositionIndex } from "@arcos/inspector";
 import { indexSource, type IndexSourceOptions } from "./index-source";
 
-// The pools the indexer recorded for a token (Firestore pools/, mainnet only): what GET /api/pools/[token] answers, and
-// what the Inspector reads besides the pools its own discovery finds (`extraPools`), on the server and in the browser.
-// This module is pure: the Firestore read lives in indexed-pools-server.ts.
+// The pools the indexer recorded for a token (Firestore pools/, mainnet only) and the liquidity positions it recorded
+// for the token's Uniswap v4 pools (positions/): what GET /api/pools/[token] answers, and what the Inspector reads besides
+// the pools its own discovery finds (`extraPools`, `v4Positions`), on the server and in the browser.
+// This module is pure: the Firestore reads live in indexed-pools-server.ts.
 
 /** One indexed pool, as the route answers it. */
 export type IndexedPool = {
@@ -20,11 +21,20 @@ export type IndexedPool = {
   depthUsdc: string | null;
 };
 
-export type PoolsAnswer = { pools: IndexedPool[] };
+/**
+ * `positions`: the position index for the token's v4 pools (the Inspector's `V4PositionIndex`): its cursor, and for each
+ * pool id the position keys it holds, at most 500 a pool and 2,000 in all, else `truncated`. Absent before the position
+ * index's first run, or when it couldn't be read.
+ */
+export type PoolsAnswer = { pools: IndexedPool[]; positions?: V4PositionIndex };
 
-/** The route's answer from the stored docs, newest pool first. */
-export function poolsAnswer(docs: readonly PoolDoc[]): PoolsAnswer {
+/** What the index holds for a token: its pools, and its v4 pools' positions (null when there are none to give). */
+export type IndexedToken = { pools: PoolDoc[]; positions: V4PositionIndex | null };
+
+/** The route's answer from the stored docs, newest pool first, with the positions when there are any to give. */
+export function poolsAnswer(docs: readonly PoolDoc[], positions: V4PositionIndex | null = null): PoolsAnswer {
   return {
+    ...(positions ? { positions } : {}),
     pools: [...docs]
       .sort((a, b) => b.createdBlock - a.createdBlock)
       .map((doc) => ({
@@ -60,30 +70,71 @@ export function extraPoolsFrom(answer: unknown): ExtraPool[] {
   return out;
 }
 
+const POOL_ID = /^0x[0-9a-f]{64}$/;
+
+/**
+ * The position index in an answer, as the Inspector's `v4Positions`, or undefined when the answer has none. The answer
+ * crossed the network, so only what is well formed is kept: a cursor that is a block number, pool ids of 32 bytes, and
+ * for each pool a list of position keys within the Inspector's caps. A pool whose entry is anything else is left out,
+ * which the lp-lock check reads as "not in the index" and never as "no positions".
+ */
+export function positionsFrom(answer: unknown): V4PositionIndex | undefined {
+  if (!isRecord(answer) || !isRecord(answer.positions)) return undefined;
+  const { cursor, pools } = answer.positions;
+  if (typeof cursor !== "number" || !Number.isSafeInteger(cursor) || cursor < 0 || !isRecord(pools)) return undefined;
+  const out: V4PositionIndex = { cursor, pools: {} };
+  let total = 0;
+  for (const [id, entry] of Object.entries(pools)) {
+    if (!POOL_ID.test(id) || !isRecord(entry) || typeof entry.truncated !== "boolean" || !Array.isArray(entry.positions)) continue;
+    if (entry.positions.length > MAX_POSITIONS_PER_POOL || !entry.positions.every(isPositionKey)) continue;
+    total += entry.positions.length;
+    if (total > MAX_POSITIONS) break;
+    out.pools[id] = {
+      positions: entry.positions.map(({ owner, tickLower, tickUpper, salt }) => ({ owner, tickLower, tickUpper, salt })),
+      truncated: entry.truncated,
+    };
+  }
+  return out;
+}
+
 export { IndexUnavailable, causeCode, indexEnabled } from "./index-source";
 
 /**
- * A token's indexed pools through `load`, with the guards of `indexSource` (index-source.ts): a 1.5 s deadline, a
- * 60 s cooldown after a failure, and an answer kept 60 s per token, whatever the case of its address.
+ * What the index holds for a token through `load`, with the guards of `indexSource` (index-source.ts): a 1.5 s deadline,
+ * a 60 s cooldown after a failure, and an answer kept 60 s per token, whatever the case of its address. The positions'
+ * cursor is then up to 60 s (about 120 blocks) old, which costs nothing: the lp-lock check reads the blocks after it.
  */
-export function indexedPoolsSource(opts: Omit<IndexSourceOptions<PoolDoc[]>, "timeoutMessage" | "unavailableMessage">) {
-  const s = indexSource<PoolDoc[]>({
+export function indexedPoolsSource(opts: Omit<IndexSourceOptions<IndexedToken>, "timeoutMessage" | "unavailableMessage">) {
+  const s = indexSource<IndexedToken>({
     ...opts,
     timeoutMessage: "The pool index took too long.",
     unavailableMessage: "The pool index can't be read right now.",
   });
-  return { pools: (token: string) => s.get(token.toLowerCase()) };
+  return { token: (token: string) => s.get(token.toLowerCase()) };
+}
+
+/** What the index adds to an inspection: the token's v4 pools, and their positions when the index has them. */
+export type IndexedExtras = { extraPools: ExtraPool[]; v4Positions?: V4PositionIndex };
+
+/** An answer of the route as an inspection's extras. */
+export function extrasFrom(answer: unknown): IndexedExtras {
+  const v4Positions = positionsFrom(answer);
+  return { extraPools: extraPoolsFrom(answer), ...(v4Positions ? { v4Positions } : {}) };
 }
 
 /**
- * The browser Inspector's extra pools: GET /api/pools/[token], at most 3 s. Anything but a good answer is "no indexed
- * pools": a 404 (testnet has no index), a 503, a timeout. Discovery still runs without them.
+ * The browser Inspector's extras: GET /api/pools/[token], at most 3 s. Anything but a good answer is "nothing indexed": a
+ * 404 (testnet has no index), a 503, a timeout. Discovery still runs without the pools, and lp-lock answers without the
+ * positions as it does where there is no index.
  */
-export async function fetchExtraPools(token: string, fetchFn: typeof fetch = fetch): Promise<ExtraPool[]> {
+export async function fetchIndexedExtras(token: string, fetchFn: typeof fetch = fetch): Promise<IndexedExtras> {
   try {
     const res = await fetchFn(`/api/pools/${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(3_000) });
-    return res.ok ? extraPoolsFrom(await res.json()) : [];
+    return res.ok ? extrasFrom(await res.json()) : { extraPools: [] };
   } catch {
-    return [];
+    return { extraPools: [] };
   }
 }
+
+/** The extra pools alone (see `fetchIndexedExtras`). */
+export const fetchExtraPools = async (token: string, fetchFn: typeof fetch = fetch): Promise<ExtraPool[]> => (await fetchIndexedExtras(token, fetchFn)).extraPools;
