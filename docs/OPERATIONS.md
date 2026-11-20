@@ -318,9 +318,9 @@ liquidity. With that it does one thing: it warns about liquidity a wallet can wi
 a fail: every pass, fail and unknown of lp-lock is what the check from before the index says (v2 LP tokens only), word
 for word, and a warning from the positions takes the place of that check's pass or unknown, never of its fail. A launch
 burned into a v4 pool reads "couldn't check"; one held by a wallet reads as a warning, titled "Wallets hold most of the
-USDC in this token's pools" once wallets hold 1,000 USDC there and half of it, and "Some liquidity isn't locked"
-otherwise (a fresh wallet-held launch nobody has bought from, say). Failing a token on its v4 positions is a follow-up: it needs the USDC that
-could really be sold into, matched holder by holder to the tokens for sale, or the deployer's identity. The rule, who
+USDC Inspector found in its pools" once wallets hold 1,000 USDC there and more than half of it, and "Some liquidity
+isn't locked" otherwise (a fresh wallet-held launch nobody has bought from, say). Failing a token on its v4 positions
+is a follow-up: it needs the USDC that could really be sold into, matched holder by holder to the tokens for sale, or the deployer's identity. The rule, who
 can make which warning and at what cost are in the README, "How Inspector decides things", and in the header of
 `packages/inspector/src/checks.ts`.
 

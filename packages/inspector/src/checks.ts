@@ -82,8 +82,8 @@
  *   shares of what has been paid in are read at P1, at the window's end and at every range edge in between. A path
  *   that never takes 1,000 units is one prefix, worded without a window.
  *   The warning, by title, each a statement of what was read:
- *   - "Wallets hold most of the USDC in this token's pools": wallets in plain pools hold at least 1,000 units of the
- *     bids, and half or more of all of them;
+ *   - "Wallets hold most of the USDC Inspector found in its pools": wallets in plain pools hold at least 1,000
+ *     units of the bids, and more than half of all of them;
  *   - "Some liquidity isn't locked": wallets in plain pools take more than 5% at some prefix (up to all of it: the
  *     strong title is for money in the pools, never for tokens for sale, which are free and say where buyers' money
  *     goes only when the token's market is on the pools read), or hold more than 5% of
@@ -115,7 +115,7 @@
  *   blocks after that cursor with the token as currency0 and as currency1. Pools against a currency other than USDC,
  *   EURC or native USDC are not looked for and never counted, here as in every other check.
  *   Who can make which warning, and at what cost:
- *   - "most of the USDC": anyone who leaves at least 1,000 units, and as much as everyone else holds, in a wallet's
+ *   - "most of the USDC": anyone who leaves at least 1,000 units, and more than everyone else holds, in a wallet's
  *     position in a plain pool. Parked far under the price, or under a launch range nobody can sell out of, it
  *     costs capital and risks nothing. It is true as stated: the USDC is there, and a wallet can withdraw it;
  *   - "some liquidity isn't locked": about 50 units' worth of tokens under the market in a plain pool; any tokens at
@@ -1201,8 +1201,8 @@ function tokenAmount(raw: bigint, decimals: number | null): string {
  * path as one prefix when it never takes 1,000. Every class counts in a prefix's total. P is the share of wallets in
  * plain pools ("withdrawable"), W that plus wallets in the other pools ("elsewhere").
  * The warning has one of two titles, each a plain statement of what was read:
- * - "Wallets hold most of the USDC in this token's pools": wallets in plain pools hold at least 1,000 units of the
- *   bids, and half or more of all of them. Money, which is there whatever the token's market is;
+ * - "Wallets hold most of the USDC Inspector found in its pools": wallets in plain pools hold at least 1,000 units
+ *   of the bids, and more than half of all of them. Money, which is there whatever the token's market is;
  * - "Some liquidity isn't locked": P > 5% in some prefix (a majority too: the detail gives the share, and tokens for
  *   sale alone carry no stronger title), or of the bids once the pools hold 1,000 units; or W >= 50%
  *   there with wallets outside plain pools among them (alone they warn only from half: what they show costs nothing
@@ -1250,7 +1250,8 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
   // --- Bids.
   const bidTotal = sum(bids);
   const bidsMaterial = bidTotal >= THOUSAND;
-  const mostOfBids = bids.withdrawable >= THOUSAND && atLeast(bids.withdrawable, bidTotal, 50n);
+  // "Most" is more than half.
+  const mostOfBids = bids.withdrawable >= THOUSAND && above(bids.withdrawable, bidTotal, 50n);
   const bidsPlainWarn = bidsMaterial && above(bids.withdrawable, bidTotal, 5n);
   const bidsAnyWarn = bidsPlainWarn || (bidsMaterial && bids.elsewhere > 0n && atLeast(wallets(bids), bidTotal, 50n));
 
@@ -1296,7 +1297,7 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
   const detail = `In the pools Inspector can read, ${[lines[0]!, ...lines.slice(1).map(sentence)].join(" ")}`;
   // The strong title rests on money in the pools, never on tokens for sale: those are free, and say where buyers'
   // money goes only when the token's market is on the pools read.
-  const title = mostOfBids ? `Wallets hold most of the ${symbol} in this token's pools` : "Some liquidity isn't locked";
+  const title = mostOfBids ? `Wallets hold most of the ${symbol} Inspector found in its pools` : "Some liquidity isn't locked";
   return finding("lp-lock", "warn", title, detail, { evidenceUrl: tally.openUrl, fixAppId: "vault" });
 }
 
