@@ -27,7 +27,7 @@ const setCursor = (block: number, network: "mainnet" | "testnet" = "mainnet") =>
 // The emulator keeps what other suites wrote: start from an empty index.
 beforeEach(async () => {
   const db = arcosDb();
-  for (const name of [COLLECTIONS.positions, COLLECTIONS.positionsIndex]) {
+  for (const name of [COLLECTIONS.positions, COLLECTIONS.positionsIndex, COLLECTIONS.indexer]) {
     const snap = await db.collection(name).get();
     await Promise.all(snap.docs.map((doc) => doc.ref.delete()));
   }
@@ -69,6 +69,7 @@ describe("indexedPositions", () => {
   });
 
   it("writing a position again changes nothing: the id is the key", async () => {
+    await setCursor(500);
     await put("mainnet", POOL_A, 1);
     await put("mainnet", POOL_A, 1);
     expect((await indexedPositions(arcosDb(), "mainnet", POOL_A)).positions).toHaveLength(1);
@@ -99,12 +100,81 @@ describe("indexedPositionsFor", () => {
     for (let n = 1; n <= 3; n++) await put("mainnet", POOL_A, n);
     for (let n = 4; n <= 5; n++) await put("mainnet", POOL_B, n);
     const perPool = await indexedPositionsFor(arcosDb(), "mainnet", [POOL_A, POOL_B], 2);
-    expect(perPool!.pools[POOL_A]).toMatchObject({ truncated: true });
-    expect(perPool!.pools[POOL_B]).toMatchObject({ truncated: false, positions: [{}, {}] });
-    // A total of 4: pool A's three fit, pool B's two don't, and an empty pool after it still does.
+    // Pool A is over its limit, so its list is left out, and nothing after it is read: pool B is "truncated" unread.
+    expect(perPool!.pools[POOL_A]).toEqual({ positions: [], truncated: true });
+    expect(perPool!.pools[POOL_B]).toEqual({ positions: [], truncated: true });
+    expect((await indexedPositionsFor(arcosDb(), "mainnet", [POOL_B, POOL_A], 2))!.pools[POOL_B]).toMatchObject({ truncated: false, positions: [{}, {}] });
+    // A total of 4: pool A's three fit, pool B's two don't, and the pool after it isn't read at all.
     const capped = await indexedPositionsFor(arcosDb(), "mainnet", [POOL_A, POOL_B, POOL_NONE], 10, 4);
     expect(capped!.pools[POOL_A]!.positions).toHaveLength(3);
     expect(capped!.pools[POOL_B]).toEqual({ positions: [], truncated: true });
-    expect(capped!.pools[POOL_NONE]).toEqual({ positions: [], truncated: false });
+    expect(capped!.pools[POOL_NONE]).toEqual({ positions: [], truncated: true });
+    // Exactly the total: every pool up to it is whole, and the ones after it are unread.
+    const exact = await indexedPositionsFor(arcosDb(), "mainnet", [POOL_A, POOL_B, POOL_NONE], 10, 5);
+    expect(exact!.pools[POOL_B]!.positions).toHaveLength(2);
+    expect(exact!.pools[POOL_NONE]).toEqual({ positions: [], truncated: true });
+  });
+
+  it("reads no more than the total plus one a pool, however many positions the pools hold", async () => {
+    await setCursor(700);
+    for (let n = 1; n <= 6; n++) await put("mainnet", POOL_A, n);
+    for (let n = 7; n <= 12; n++) await put("mainnet", POOL_B, n);
+    const db = arcosDb();
+    const limits: number[] = [];
+    const counting = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop !== "collection") return Reflect.get(target, prop, receiver) as unknown;
+        return (name: string) => {
+          const collection = target.collection(name);
+          return new Proxy(collection, {
+            get(c, p, r) {
+              if (p !== "where") return Reflect.get(c, p, r) as unknown;
+              return (...args: Parameters<typeof collection.where>) => {
+                const query = c.where(...args);
+                const second = query.where.bind(query);
+                query.where = ((...more: Parameters<typeof query.where>) => {
+                  const q = second(...more);
+                  const limit = q.limit.bind(q);
+                  q.limit = (n: number) => (limits.push(n), limit(n));
+                  return q;
+                }) as typeof query.where;
+                return query;
+              };
+            },
+          });
+        };
+      },
+    });
+    const got = await indexedPositionsFor(counting, "mainnet", [POOL_A, POOL_B, POOL_NONE], 500, 8);
+    // Pool A: at most 8 (+1). Pool B: the 2 left (+1), and it has more. Pool C: not asked.
+    expect(limits).toEqual([9, 3]);
+    expect(got!.pools[POOL_A]!.positions).toHaveLength(6);
+    expect(got!.pools[POOL_B]).toEqual({ positions: [], truncated: true });
+    expect(got!.pools[POOL_NONE]).toEqual({ positions: [], truncated: true });
+  });
+});
+
+describe("the positions switch", () => {
+  const controls = (positions?: boolean) =>
+    arcosDb().collection(COLLECTIONS.indexer).doc("mainnet").set({ network: "mainnet", block: 1, ...(positions === undefined ? {} : { positions }) });
+
+  it("serves nothing while indexer/{network}.positions is false, at once, whatever the cursor says", async () => {
+    await setCursor(700);
+    await put("mainnet", POOL_A, 1);
+    await controls(false);
+    expect(await readPositionsCursor(arcosDb(), "mainnet")).toBeNull();
+    expect(await indexedPositionsFor(arcosDb(), "mainnet", [POOL_A])).toBeNull();
+    expect(await indexedPositions(arcosDb(), "mainnet", POOL_A)).toEqual({ positions: [], truncated: false, cursor: null });
+  });
+
+  it("serves again when the switch is true, missing, or there is no controls doc", async () => {
+    await setCursor(700);
+    await put("mainnet", POOL_A, 1);
+    for (const value of [true, undefined]) {
+      await controls(value);
+      expect((await indexedPositionsFor(arcosDb(), "mainnet", [POOL_A]))?.pools[POOL_A]?.positions).toHaveLength(1);
+    }
+    await arcosDb().collection(COLLECTIONS.indexer).doc("mainnet").delete();
+    expect(await readPositionsCursor(arcosDb(), "mainnet")).toBe(700);
   });
 });

@@ -1,7 +1,7 @@
 import { deleteApp, getApps } from "firebase-admin/app";
 import { afterAll, describe, expect, it } from "vitest";
 import { COLLECTIONS, poolId, poolToDoc, v4PoolKeys, type PoolRecord } from "../index";
-import { arcosDb, indexedPools } from "../server";
+import { arcosDb, indexedPoolList, indexedPools } from "../server";
 
 afterAll(async () => {
   await Promise.all(getApps().map((app) => deleteApp(app)));
@@ -46,5 +46,13 @@ describe("indexedPools", () => {
     for (let i = 0; i < 3; i++) await put(pool({ poolId: `0x00000000000000000000000000000000000b01${i.toString().padStart(2, "0")}`, token: OTHER }));
     expect(await indexedPools(arcosDb(), "mainnet", OTHER, 2)).toHaveLength(2);
     expect(await indexedPools(arcosDb(), "mainnet", "0x00000000000000000000000000000000000a6aff")).toEqual([]);
+  });
+
+  it("says when the list was cut short: one more pool than the limit, never a silent stop", async () => {
+    const MANY = "0x00000000000000000000000000000000000a6a77";
+    for (let i = 0; i < 3; i++) await put(pool({ poolId: `0x00000000000000000000000000000000000b77${i.toString().padStart(2, "0")}`, token: MANY }));
+    expect(await indexedPoolList(arcosDb(), "mainnet", MANY, 2)).toMatchObject({ truncated: true, pools: [{}, {}] });
+    expect(await indexedPoolList(arcosDb(), "mainnet", MANY, 3)).toMatchObject({ truncated: false, pools: [{}, {}, {}] });
+    expect(await indexedPoolList(arcosDb(), "mainnet", "0x00000000000000000000000000000000000a6afe")).toEqual({ pools: [], truncated: false });
   });
 });
