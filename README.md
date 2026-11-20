@@ -197,57 +197,46 @@ privileged function into a "can't be called" pass: if the contract has no `owner
 but does have privileged functions, both the ownership and privileges findings read "unknown", not
 "pass" — the same rule that applies to any other failed or missing read.
 
-The liquidity lock check, for a token with a Uniswap v4 pool on mainnet, follows buyers' money in
-the order it would arrive. Every position that sells the token above its pool's price, in every
-Uniswap v2 and v4 pool Inspector found, is put on one axis of token price (EURC counts 1:1 with
-USDC). A Uniswap v4 pool is read position by position: the indexer records every position the v4
-PoolManager's `ModifyLiquidity` logs name, and Inspector reads each one's liquidity and, for a
-PositionManager NFT, its owner, live. A Uniswap v2 pair is split by who holds its LP token. What a
-burn address holds is burned, a known lock contract locked, a wallet (an address with no code)
-withdrawable, and anything else unknown.
+The liquidity lock check counts Uniswap v2 LP tokens: the share of a pair's LP supply that is burned
+or in a known lock contract. That check decides every pass. For Uniswap v4, on mainnet, Inspector
+also reads the positions themselves, from the indexer's position index, to do one thing: detect
+liquidity a wallet can withdraw. It adds fails and warnings and never a pass. It does not certify
+Uniswap v4 liquidity as locked: when it finds no wallet in the way, the answer is the one the v2
+check gives, which for a token with only v4 pools is "couldn't check".
 
-Buyers are routed to the cheapest tokens first, so the first money goes to whoever sells cheapest,
-whatever sits further up or in another pool. The check starts at the cheapest tokens for sale, finds
-the price at which buyers have paid 1,000 USDC, and looks at every point from there to twice that
-price: of the money paid in so far, how much went into positions wallets can withdraw, and how much
-into burned or locked ones. It also looks at the USDC and EURC in the pools now, by the same
-holders, once there is 1,000 of it; below that it can't fail or warn a token.
+What it reads: every v4 position's liquidity and, for a PositionManager NFT, its owner, live; every
+v2 pair by who holds its LP token. A wallet is an address with no code. Burn addresses, lock
+contracts, any other contract, and a wallet in a pool whose hook runs when liquidity is removed (it
+can block or tax the withdrawal) are not counted as wallets.
 
-- Fail, "Liquidity isn't locked": wallets take half or more of buyers' money at some point in that
-  window, or hold half or more of the USDC in the pools now.
-- Pass, "Liquidity is burned or locked": at least 95% is burned or locked at every point of the
-  window and of the USDC in the pools now, buyers can pay at least 1,000 USDC into the pools, and no
-  material amount of tokens is for sale past the window from anything but burned or locked positions.
-- Warning, "Some liquidity isn't locked": wallets take more than 5% somewhere, or hold a material
-  amount of tokens for sale past the window. Those tokens are given as a count, never as a value: a
-  price that far up is one nobody has paid. Material means 1% of the supply, or a tenth of the tokens
-  the window sells.
-- Everything else is "couldn't check", with the largest reason first: a position held by a contract
-  (it may be a locker, and its terms aren't read), a wallet's position in a pool whose hook runs when
-  liquidity is removed (it can block or tax a withdrawal), a Uniswap v3 or Aerodrome pool holding a
-  material amount of the USDC or of the tokens (their positions aren't read yet), pools that would
-  take under 1,000 USDC from buyers, a pool with more than 500 positions, a token with more than 50
-  v4 pools, or a v4 pool created in the last minutes that the index hasn't recorded.
+It asks two questions.
 
-A pool whose hook runs in swaps is treated with one-sided doubt. The hook decides whether a buyer's
-money reaches a position at all, so a burned or locked position there reads "couldn't check" and
-can't carry a pass, while a wallet's position there still counts as a wallet's. A token launched by
-burning its liquidity into such a pool, as some launchpads do, therefore reads "couldn't check", not
-"pass": Inspector hasn't read the hook's code, and says so instead of vouching for it. Such a pool
-also can't move the window: where the path starts is taken from the pools without a swap hook
-whenever one of them has tokens for sale.
+- Who holds the USDC and EURC in the pools now? Once the pools hold 1,000 of it: half or more in
+  wallets' positions is a fail, more than 5% a warning.
+- Who would the next buyers pay? Every position selling the token above its pool's price is put in
+  order of what a buyer pays per token there, the pool's LP fee included. The check starts at the
+  cheapest, finds the price at which buyers have paid 1,000 USDC, and looks at every point from
+  there to twice that price: wallets taking half or more of the money paid in so far is a fail, more
+  than 5% a warning. Tokens wallets offer beyond that window are counted, never priced: from 1% of
+  the supply, or a tenth of what the window sells, they are a warning.
+
+Tokens for sale cost their deployer nothing, and a pool's price is whatever its creator chose, so the
+second question is asked twice and the milder answer counts: once over every pool, and once over the
+plain pools alone (Uniswap v2 pairs, and v4 pools against USDC with a fixed LP fee of at most 1% and
+no hook that runs in swaps). A pool behind a swap hook, with a dynamic or very high fee, or quoted in
+EURC can show tokens nobody will buy at the price shown, and on its own it can neither make a fail
+nor undo one that the plain pools and all the pools agree on.
 
 A fail or a warning says where the money goes and what wallets hold ("Of the first 1,000 USDC
 buyers would pay for this token, 62% goes into positions wallets can withdraw and 38% into burned or
-locked ones. Of the 1,234 USDC in its pools now, ..."), with a link to the largest position. Only
-pools against USDC, EURC or native USDC are looked for and counted, as in every other check:
-liquidity paired with any other currency is not in the picture.
+locked ones. Of the 1,234 USDC in its pools now, ..."), with a link to the largest position, and
+offers Vault. Only pools against USDC, EURC or native USDC are looked for and counted, as in every
+other check.
 
-The check from before the position index runs instead, whole and unchanged, in exactly these cases:
-on testnet, which has no index; when the browser or the server couldn't fetch the index; while the
-index is switched off or more than 10,000 blocks behind the chain; and for a token with no Uniswap
-v4 pool. That check counts only Uniswap v2 LP tokens, by the share of the LP supply burned or
-locked, and a v4 pool reads "couldn't check" in it.
+The v4 reading is left out, and the v2 check answers alone, on testnet, which has no index; when the
+index couldn't be fetched, is switched off or is more than 10,000 blocks behind the chain; when the
+token has more than 50 v4 pools or a pool with more than 500 positions; when a pool was created in
+the last minutes and isn't indexed yet; and for a token with no Uniswap v4 pool.
 
 ## What Inspector can and can't see
 
@@ -424,36 +413,29 @@ locked, and a v4 pool reads "couldn't check" in it.
   against contract callers reverts the simulated sell although a later sell from a wallet might go
   through; the finding then says "Selling straight back, in the same transaction and from a contract,
   reverted" rather than that no sell can ever succeed.
-- Liquidity lock detection reads Uniswap v2 LP token balances and, on mainnet, Uniswap v4 positions
-  from the indexer's position index. Positions in Uniswap v3 and Aerodrome pools aren't read yet:
-  such a pool's USDC or EURC counts as "unknown", and one holding a material amount of the token
-  keeps the check from passing, whatever its price. Also "unknown": liquidity held by any contract
-  that isn't a known lock contract (a launchpad, a Safe, a hook, an unlisted locker), a wallet's
-  position in a v4 pool whose hook runs on removal, burned or locked liquidity in a v4 pool whose
-  hook runs in swaps, a v4 pool with more than 500 positions, and a token with more than 50 v4
-  pools. Up to 500 holders are classified; what the rest hold is named as unclassified, and never
-  counted as safe. A v4 pool with a hook or a non-standard fee is found through the indexer's list
-  of every v4 pool since the PoolManager's deployment, and one created since the index's last block
-  reads "unknown" until it is listed. Pools against a currency other than USDC, EURC or native USDC
+- The liquidity lock check passes a token only on Uniswap v2 LP tokens that are burned or in a known
+  lock contract. Uniswap v4 positions are read, on mainnet, only to find liquidity wallets can
+  withdraw: a token whose v4 liquidity is burned reads "couldn't check", not "pass". Positions in
+  Uniswap v3 and Aerodrome pools aren't read at all. One consequence is as old as the check: a burned
+  v2 pair passes even when a wallet holds a token-only range in a v3 or Aerodrome pool beside it,
+  which holds no USDC to compare.
+- A v4 fail can be dodged by someone who sets out to: free tokens burned into a pool behind a swap
+  hook or against EURC, priced under a wallet's launch, turn the fail into a warning or "couldn't
+  check". That never produces a pass. The other way round, a stranger can make a token fail or warn
+  only by putting money or tokens in: about 500 USDC worth of tokens offered below the market from a
+  wallet, or USDC parked in a wallet's position to half of what the pools hold (and at least 1,000).
+  For a token with no plain pool selling anything, tokens offered behind a hook that refuses swaps
+  do it too, which takes holding the tokens. About 50 USDC worth of tokens offered below the market
+  makes a warning. A third party's position counts like the deployer's.
+- The v4 reading is as of the block it was read at: nothing re-inspects a token when its price moves,
+  and the window moves with the price. Past the window, a wallet's tokens for sale are reported only
+  from 1% of the supply or a tenth of what the window sells. It says nothing about tokens a wallet
+  holds outside any pool, which is what the holders check looks at. EURC counts 1:1 with USDC where
+  amounts are added up. Up to 500 holders are classified; what the rest hold is not counted as a
+  wallet's, and a warning says so when it could matter.
+- A v4 pool with a hook or a non-standard fee is found through the indexer's list of every v4 pool
+  since the PoolManager's deployment. Pools against a currency other than USDC, EURC or native USDC
   are never looked for, so liquidity there is never counted, whoever holds it.
-- What "burned or locked" does not say. It says buyers' money goes into positions nobody can
-  withdraw, up to twice the price at which 1,000 USDC has been paid. Past that, a wallet's tokens
-  for sale are reported only from 1% of the supply or a tenth of what the window sells; smaller
-  ones go unmentioned. It says nothing about tokens a wallet holds outside any pool and can sell
-  into the locked liquidity, which is what the holders check looks at. And it is as of the block it
-  was read at: nothing re-inspects a token when its price moves, and the window moves with the price.
-- The lock check reads prices from the pools themselves, so anyone willing to spend can make a
-  token look worse, never better. About 1,000 USDC parked as bids in a wallet's own position (where
-  sellers can take it) can turn a pass into a fail; about 50 USDC worth of tokens offered below the
-  price from a wallet turns a pass into a warning; creating 51 empty pools for a token makes the
-  answer "unknown", and so does burning free tokens into a pool with a swap hook. That last one cuts
-  one more way: inside the window, such a range counts as "unknown" liquidity and shrinks a wallet's
-  share with it, so a fail can read as a warning or "unknown" instead. It can't produce a pass. A
-  third party's position counts like the deployer's.
-- Without a fresh index (testnet, a browser that couldn't fetch it, the index switched off or more
-  than 10,000 blocks behind), or for a token with no v4 pool, the check is the one from before the
-  index: only v2 LP tokens are counted, a token with only other pools reads "unknown", and so does
-  a burned v2 pair next to a deeper v3 or Aerodrome pool or a v4 pool that may hold more.
 - A token's name and symbol are chosen by whoever deployed it and can imitate another token's;
   Inspector doesn't yet detect a lookalike (homoglyph) name — always check the address, not just
   the name.

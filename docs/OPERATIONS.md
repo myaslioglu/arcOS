@@ -298,13 +298,15 @@ are `indexedPositions` and `indexedPositionsFor` in `packages/data/src/server/po
 **Not fighting the main indexer.** In `pools`, a doc is the main indexer's mark that a pool's token is handled, so the
 step must never create one for a pool the main indexer has yet to see. It never reads past the main indexer's cursor
 (`indexer/mainnet.block` as this run left it): every pool at or below it that the main indexer records, it has
-recorded already, and the step writes a pool doc with `create`, which Firestore refuses over a doc that exists. So in
+recorded already, and the step writes pool docs with `create`, which Firestore refuses over a doc that exists (a
+refused batch is read again and what is still missing is written). So in
 practice it adds the pools older than the main indexer's first block and nothing else. If the main indexer is behind,
 the position index waits behind it.
 
-**Exactly once.** A window's positions are written first, each under its own key and only if it isn't there yet, and
-the cursor is moved after them, in a transaction that stops if the cursor isn't at the window's start. A run that dies
-in between repeats the window and writes nothing new; applying a window again changes no doc. A reader that takes the
+**Exactly once.** A window's positions and pools are written first, each under its own key and only if it isn't there
+yet, and the cursor is moved after them, in a transaction that stops if the cursor isn't at the window's start. A run
+that dies in between, or runs out of time, repeats the window and writes only what is still missing; applying a window
+again changes no doc. A reader that takes the
 cursor first and the positions after it sees every position opened up to that cursor.
 
 **What Inspector does with it.** An inspection gets the index's pools for the token (at most 50, with a flag when the
@@ -312,27 +314,27 @@ index holds more) and, for each v4 pool among them, the position keys the index 
 all, and the cursor. It reads the blocks after the cursor itself (at most 10,000 blocks, three `eth_getLogs`:
 `Initialize` with the token as currency0 and as currency1, then the pools' `ModifyLiquidity`), then every position's
 liquidity and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active
-liquidity. The verdict follows buyers' money in price order: every position selling the token above its pool's price,
-in any of its v2 and v4 pools, on one price axis; the window runs from the cheapest of them to twice the price at which
-1,000 USDC has been paid; wallets taking half of it at any point fail, 95% burned or locked at every point passes (the
+liquidity. With that it does one thing: it detects liquidity a wallet can withdraw, and makes lp-lock a fail or a
+warning. It never makes a pass: when it finds no wallet in the way, or can't read the whole picture, lp-lock is what
+the check from before the index says (v2 LP tokens only), word for word, so no token passes with the index that
+wouldn't pass without it. A launch burned into a v4 pool, behind a launchpad's hook or not, reads "couldn't check". The
 rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the header of
-`packages/inspector/src/checks.ts`). Burned or locked liquidity in a pool whose hook runs in swaps reads "couldn't
-check", so a launchpad that burns into such a pool gets no pass from this check. "Couldn't check liquidity locks", never
-a pass or a fail, when: a pool has more than 500 positions; the token has more than 50 v4 pools; the positions don't add
-up (a gap in the index); a pool of the token was created since the cursor and the inspection wasn't given it; or the
-inspection's deadline passes before the reads are done. A pool created since the cursor that the inspection does have
-is read from those blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and
-are never counted. Holders are classified by their code, up to 500 of them, in one state-overridden `eth_call` per 250
-(40 single `eth_getCode` reads when a node refuses the override).
+`packages/inspector/src/checks.ts`: who holds the USDC in the pools, and who the next buyers would pay, in order of
+what a buyer pays per token (LP fee included), read over every pool and over the plain pools alone.
 
-The check from before the index (v2 LP tokens only) runs instead, whole, with nothing of the index mixed in, exactly
-when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is more than 10,000 blocks
-behind, or the token has no v4 pool.
+The v4 reading is left out when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is
+more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 500 positions, the token has more than
+50 v4 pools, the positions don't add up (a gap in the index), or a pool of the token was created since the cursor and
+the inspection wasn't given it. A pool created since the cursor that the inspection does have is read from those
+blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never counted.
+When the inspection's deadline passes before the reads are done, lp-lock is "couldn't check". Holders are classified
+by their code, up to 500 of them, in one state-overridden `eth_call` per 250 (40 single `eth_getCode` reads when a
+node refuses the override).
 
-Known limits of the verdict, accepted: a stored inspection is as of its block and nothing re-inspects a token when its
-price moves; a token whose old pools the backfill adds later is not re-queued for inspection (a follow-up: re-queue the
-tokens of pools the positions step creates); a token with more than 50 pools reads "couldn't check", which anyone can
-force by creating 51 empty pools, and which can never produce a fail.
+Known limits, accepted: a stored inspection is as of its block and nothing re-inspects a token when its price moves; a
+token whose old pools the backfill adds later is not re-queued for inspection (a follow-up: re-queue the tokens of
+pools the positions step creates); anyone can take the v4 reading away from a token by creating 51 empty pools for it,
+which leaves it with the old check's answer.
 
 **The reads, and their bounds.** The indexer's own inspections, `/api/inspect`, `/t` and `/badge` read the index
 directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions`, `truncated`).
@@ -354,14 +356,24 @@ directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions
 **The first run, and the backfill.** The first run after the deploy creates `positionsIndex/mainnet` with the cursor
 one block before 1,948,056 and starts reading. From there to the head on 2026-11-20 (block 32.2 million) is about
 3,030 windows of 10,000 blocks. The step has its own budgets: no window starts after 104 s of the run or more than
-10 s after the step began, at most 12 windows a run, and no RPC answer is waited for past 110 s, so it never moves the
-other steps and a backfill run is at most about 10 s longer. A window is one `eth_getLogs` (400 ms after the previous
-call) and its writes, about a second, so the backfill takes some 300 to 400 runs: 5 to 7 hours at one run a minute,
-longer while inspections run long. Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives
-exactly the answers it gave before the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be
-read without an index yet"), since until the backfill is done neither the positions nor the token's old v4 pools are
-all listed. The answers from positions start on their own once it has caught up. Watch `positionsIndex/mainnet.block` against `head`, or `behind` in
-the run line. After that a run reads one window of about 120 blocks.
+10 s after the step began, at most 12 windows a run, no RPC answer is waited for past 110 s, and no round of a window's
+writes starts past 112 s. It runs after every other step, so it never moves them.
+
+A window is one `eth_getLogs` (400 ms after the previous call) and its writes. The writes go in chunks of 400 docs,
+six chunks at a time, each chunk one read of which docs exist and one batch of the new ones. Most windows are sparse
+and take about a second, so a run fits about 8 into its 10 s. Some are dense: the densest on mainnet (blocks 21,185,000
+to 21,194,472) has 19,996 logs, 7,678 of them new pools, which is about 50 chunks and 10 to 20 s of writes. A run that
+starts such a window can therefore end up to about 20 s later than it otherwise would, and never writes past 112 s
+plus one round. A window the run's time doesn't cover is left unfinished (`arcosIndexer positions window unfinished`
+in the log, a warning and not an error): what was written stays, the cursor doesn't move, and the next run reads those
+chunks, finds them stored and goes on with the rest. So the backfill takes some 300 to 500 runs: 5 to 8 hours at one
+run a minute, longer while inspections run long.
+
+Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives exactly the answers it gave before
+the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be read without an index yet"), since
+until the backfill is done neither the positions nor the token's old v4 pools are all listed. The fails and warnings
+from positions start on their own once it has caught up. Watch `positionsIndex/mainnet.block` against `head`, or
+`behind` in the run line. After that a run reads one window of about 120 blocks.
 
 **Redoing it.** Set `positions` to `false` on `indexer/mainnet`, wait for the run in progress to end, delete the
 document `positionsIndex/mainnet` (and the `positions` docs, if they are to be rebuilt too; leaving them is harmless,
