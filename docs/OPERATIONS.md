@@ -319,7 +319,7 @@ warning. It never makes a pass: when it finds no wallet in the way, or can't rea
 the check from before the index says (v2 LP tokens only), word for word, so no token passes with the index that
 wouldn't pass without it. A launch burned into a v4 pool, behind a launchpad's hook or not, reads "couldn't check".
 A fail from it always rests on at least 1,000 USDC that wallets can withdraw from plain pools (v2, or v4 against USDC
-with a fixed fee of at most 1% and no swap hook); tokens for sale alone, and anything in other pools, make a warning
+with a fixed fee of at most 1% and no swap hook) and that sits within reach of sellers, down to half the price; tokens for sale alone, and anything in other pools, make a warning
 at most. The rule, its reasons and what it leaves open are in the README, "How Inspector decides things", and in the
 header of `packages/inspector/src/checks.ts`: who holds the USDC in the pools, and who the next buyers would pay, in
 order of what a buyer pays per token (LP fee included), on one path over every pool.

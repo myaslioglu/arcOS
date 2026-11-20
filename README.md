@@ -223,14 +223,16 @@ dynamic or very high fee, or quoted in EURC) a hook can refuse every swap and a 
 nothing, so what a wallet shows there can warn and never fail.
 
 - Fail, "Liquidity isn't locked". Always on at least 1,000 USDC that wallets can withdraw from plain
-  pools: either wallets in plain pools hold that much and half or more of all the USDC in the pools,
-  or they hold that much and would also be paid half or more of buyers' money at some point of the
-  window. Tokens for sale never fail a token on their own: they cost their deployer nothing, and a
+  pools and that sits within reach: what sellers would take out by selling the token down to half
+  its price. Either wallets in plain pools hold that much and half or more of all the USDC within
+  reach, or they hold that much and would also be paid half or more of buyers' money at some point
+  of the window. USDC parked further under the price is nobody's to sell into and costs nothing to
+  leave there, so it can warn and not fail. Tokens for sale never fail a token on their own: they cost their deployer nothing, and a
   pool's price is whatever its creator chose. A wallet-held launch nobody has bought from yet is a
   warning; it becomes a fail once 1,000 USDC of what buyers paid sits in the wallet's position.
 - Warning, "Some liquidity isn't locked": wallets, in any pool, would be paid more than 5% of
-  buyers' money at some point of the window; or hold more than 5% of the USDC once the pools hold
-  1,000; or offer, beyond the window, a tenth or more of all the tokens for sale in the pools (counted,
+  buyers' money at some point of the window; or hold more than 5% of the USDC, within reach or
+  not, once the pools hold 1,000; or offer, beyond the window, a tenth or more of all the tokens for sale in the pools (counted,
   never priced). A warning says it is about the pools Inspector can read, and when it rests only on
   wallets outside plain pools it says so: "would go into positions wallets can withdraw, if the
   hooks and fees of the pools selling it let buyers through".
@@ -437,18 +439,18 @@ exactly the v2 check's, a fail included.
   (51 empty pools, a flood of position changes in the last blocks). All of these lead to a warning
   or to the v2 check's answer, never to a pass.
 - A fail from the v4 reading always rests on at least 1,000 USDC that wallets can withdraw from
-  plain pools. So a stranger can fail a token only by leaving that much in a wallet's position in a
-  plain pool: as half of all the USDC in the pools, or beside tokens of his that buyers would pay
-  first. Parked far under the price that money is not at risk, so it takes capital rather than a
-  loss.
+  plain pools and that sellers could take first. So a stranger can fail a token only by leaving that
+  much in a wallet's position in a plain pool, within half the price, where anyone can sell into
+  it: as half of all the USDC within reach, or beside tokens of his that buyers would pay first. It
+  costs capital, and the capital is at risk while it sits there.
 - A warning may rest on tokens alone, and anyone who holds tokens can make one at no risk: about 50
   USDC worth offered under the market, in any pool (behind a hook that refuses swaps nobody can even
   buy them, and the warning says it depends on the hook); a tenth of all the tokens for sale parked
   far above the price; or, when the token's market isn't on the pools Inspector reads (Uniswap v3 or
   Aerodrome, another currency, another DEX, or nothing left for sale), any tokens at any price in a
-  new pool, which are then all there is to read. USDC parked in a wallet's position behind a hook
-  that refuses swaps warns too, in words that say where it is; that takes the USDC and risks none of
-  it. A third party's position counts like the deployer's.
+  new pool, which are then all there is to read. USDC parked in a wallet's position far under the
+  price, or behind a hook that refuses swaps (the warning then says where it is), warns too, from 5%
+  of the USDC in the pools; that takes the USDC and risks none of it. A third party's position counts like the deployer's.
 - The v4 reading is as of the block it was read at: nothing re-inspects a token when its price moves,
   and the window moves with the price. Past the window, a wallet's tokens for sale are reported only
   from a tenth of all the tokens for sale in the pools. It says nothing about tokens a wallet
