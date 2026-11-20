@@ -84,9 +84,9 @@
  *   The warning, by title, each a statement of what was read:
  *   - "Wallets hold most of the USDC in this token's pools": wallets in plain pools hold at least 1,000 units of the
  *     bids, and half or more of all of them;
- *   - "Wallets would take most of what buyers pay next": wallets in plain pools take half or more of what has been
- *     paid in at some prefix;
- *   - "Some liquidity isn't locked": wallets in plain pools take more than 5% at some prefix, or hold more than 5% of
+ *   - "Some liquidity isn't locked": wallets in plain pools take more than 5% at some prefix (up to all of it: the
+ *     strong title is for money in the pools, never for tokens for sale, which are free and say where buyers' money
+ *     goes only when the token's market is on the pools read), or hold more than 5% of
  *     the bids once the pools hold 1,000 units; or wallets, plain or not, take or hold half or more there (a wallet
  *     outside plain pools alone warns only from half); or wallets sell, beyond the window, a tenth or more of all the
  *     tokens for sale on the path (counted, never priced, and not measured against the supply).
@@ -118,11 +118,10 @@
  *   - "most of the USDC": anyone who leaves at least 1,000 units, and as much as everyone else holds, in a wallet's
  *     position in a plain pool. Parked far under the price, or under a launch range nobody can sell out of, it
  *     costs capital and risks nothing. It is true as stated: the USDC is there, and a wallet can withdraw it;
- *   - "most of what buyers pay next": anyone who offers, from a wallet in a plain pool, about 500 units' worth of
- *     tokens under the market (they get bought); or any tokens at any price in a new plain pool when the token's
- *     market isn't on the pools read (Uniswap v3 or Aerodrome, another currency or DEX, nothing left for sale): gas
- *     and a few tokens. True of the pools read, which is how the detail begins;
- *   - "some liquidity isn't locked": about 50 units' worth of tokens under the market in a plain pool; a tenth of
+ *   - "some liquidity isn't locked": about 50 units' worth of tokens under the market in a plain pool; any tokens at
+ *     any price in a new plain pool when the token's market isn't on the pools read (Uniswap v3 or Aerodrome, another
+ *     currency or DEX, nothing left for sale), for gas, with a detail that begins by saying which pools it is about;
+ *     a tenth of
  *     all the tokens for sale parked beyond the window; about 500 units' worth behind a hook that refuses swaps, or
  *     USDC there to half of the bids (both at no risk, and worded as depending on the hook); USDC above 5% of the
  *     bids anywhere in a plain pool.
@@ -1201,11 +1200,11 @@ function tokenAmount(raw: bigint, decimals: number | null): string {
  * window is every prefix from P1, where 1,000 units have been paid (`MIN_DEPTH`), to twice that price, or the whole
  * path as one prefix when it never takes 1,000. Every class counts in a prefix's total. P is the share of wallets in
  * plain pools ("withdrawable"), W that plus wallets in the other pools ("elsewhere").
- * The warning has one of three titles, each a plain statement of what was read:
+ * The warning has one of two titles, each a plain statement of what was read:
  * - "Wallets hold most of the USDC in this token's pools": wallets in plain pools hold at least 1,000 units of the
- *   bids, and half or more of all of them;
- * - "Wallets would take most of what buyers pay next": P >= 50% in some prefix;
- * - "Some liquidity isn't locked": P > 5% in some prefix, or of the bids once the pools hold 1,000 units; or W >= 50%
+ *   bids, and half or more of all of them. Money, which is there whatever the token's market is;
+ * - "Some liquidity isn't locked": P > 5% in some prefix (a majority too: the detail gives the share, and tokens for
+ *   sale alone carry no stronger title), or of the bids once the pools hold 1,000 units; or W >= 50%
  *   there with wallets outside plain pools among them (alone they warn only from half: what they show costs nothing
  *   and may be out of anyone's reach); or the tokens wallets sell beyond the window are a tenth or more of all the
  *   tokens for sale on the path.
@@ -1240,7 +1239,6 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
 
   // --- Asks.
   const views = (path?.prefixes ?? []).filter((p) => sum(p) > 0n);
-  const mostOfPath = views.some((m) => atLeast(m.withdrawable, sum(m), 50n));
   const plainWarn = views.some((m) => above(m.withdrawable, sum(m), 5n));
   const anyWarn = plainWarn || views.some((m) => m.elsewhere > 0n && atLeast(wallets(m), sum(m), 50n));
   // Tokens wallets still sell beyond the window: counted, never priced, and set against every token for sale on the path.
@@ -1271,7 +1269,7 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
       ? `, ${pct(safe(m), sum(m))} into burned or locked ones and ${pct(m.doubted, sum(m))} into burned or locked ones ${HOOKED}`
       : ` and ${pct(safe(m), sum(m))} into burned or locked ones`;
   // Holders whose code wasn't read could be wallets too: said when, with them, wallets would reach half.
-  const couldBeHalf = !mostOfPath && !mostOfBids && [...views, ...(bidsMaterial ? [bids] : [])].some((m) => m.unclassified > 0n && atLeast(wallets(m) + m.unclassified, sum(m), 50n));
+  const couldBeHalf = !mostOfBids && [...views, ...(bidsMaterial ? [bids] : [])].some((m) => m.unclassified > 0n && atLeast(wallets(m) + m.unclassified, sum(m), 50n));
   // The path is described only when wallets take something on it, or sell beyond its window: a finding shows the lines
   // that carry it.
   const onPath = worst !== null && (of(worst) > 0n || beyondTokens > 0n);
@@ -1296,7 +1294,9 @@ function lpLockByPath(scan: PoolScan, dex: DexConfig, tally: LiquidityTally, tok
   // The reading is about the pools read here, and says so where it starts.
   const sentence = (line: string) => `${line[0]!.toUpperCase()}${line.slice(1)}`;
   const detail = `In the pools Inspector can read, ${[lines[0]!, ...lines.slice(1).map(sentence)].join(" ")}`;
-  const title = mostOfBids ? `Wallets hold most of the ${symbol} in this token's pools` : mostOfPath ? "Wallets would take most of what buyers pay next" : "Some liquidity isn't locked";
+  // The strong title rests on money in the pools, never on tokens for sale: those are free, and say where buyers'
+  // money goes only when the token's market is on the pools read.
+  const title = mostOfBids ? `Wallets hold most of the ${symbol} in this token's pools` : "Some liquidity isn't locked";
   return finding("lp-lock", "warn", title, detail, { evidenceUrl: tally.openUrl, fixAppId: "vault" });
 }
 

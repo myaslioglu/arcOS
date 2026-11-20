@@ -222,20 +222,22 @@ fee of at most 1% and no hook that runs in swaps. In any other pool (behind a sw
 dynamic or very high fee, or quoted in EURC) a hook can refuse every swap and a price can mean
 nothing.
 
-The warning has one of three titles, each a statement of what was read:
+The warning has one of two titles, each a statement of what was read:
 
 - "Wallets hold most of the USDC in this token's pools": wallets in plain pools hold at least 1,000
   USDC, and half or more of all the USDC in the pools.
-- "Wallets would take most of what buyers pay next": wallets in plain pools would be paid half or
-  more of buyers' money at some point of the window.
-- "Some liquidity isn't locked": wallets in plain pools would be paid more than 5% at some point of
-  the window, or hold more than 5% of the USDC once the pools hold 1,000; or wallets in any pool
+- "Some liquidity isn't locked": wallets in plain pools would be paid more than 5% of buyers' money
+  at some point of the window (up to all of it: the stronger title is kept for USDC in the pools,
+  since tokens for sale cost nothing and show where buyers' money goes only when the token's market
+  is on the pools read), or hold more than 5% of the USDC once the pools hold 1,000; or wallets in any pool
   take or hold half or more there; or wallets offer, beyond the window, a tenth or more of all the
   tokens for sale in the pools (counted, never priced).
 
 The detail starts "In the pools Inspector can read", gives the numbers ("of the first 1,000 USDC
 buyers would pay for this token, 62% goes into positions wallets can withdraw and 38% into burned or
 locked ones. Of the 1,234 USDC in its pools now, ..."), links the largest position and offers Vault.
+A fresh wallet-held launch therefore reads "Some liquidity isn't locked" with 100% in its detail,
+and moves to the USDC title once buyers have paid 1,000 USDC into the wallet's position.
 It says "wallets", never "the deployer": Inspector doesn't know whose wallet it is. When a share
 rests only on wallets outside plain pools it says so ("would go into positions wallets can withdraw,
 if the hooks and fees of the pools selling it let buyers through"), and burned or locked liquidity
@@ -439,12 +441,10 @@ reading says.
   token-only range in a v3 or Aerodrome pool beside it, which holds no USDC to compare.
 - Who can make a v4 warning, and what it costs. "Wallets hold most of the USDC": anyone who leaves
   1,000 USDC, and as much as everyone else holds, in a wallet's position in a plain pool; parked
-  far under the price it risks nothing. "Wallets would take most of what buyers pay next": anyone
-  who offers about 500 USDC worth of tokens under the market from a wallet in a plain pool, or, when
-  the token's market isn't on the pools Inspector reads (Uniswap v3 or Aerodrome, another currency,
-  another DEX, or nothing left for sale), any tokens at any price in a new plain pool, which are
-  then all there is to read. "Some liquidity isn't locked": about 50 USDC worth of tokens under the
-  market in a plain pool; a tenth of all the tokens for sale parked far above the price; or, at
+  far under the price it risks nothing. "Some liquidity isn't locked": about 50 USDC worth of
+  tokens under the market in a plain pool; when the token's market isn't on the pools Inspector
+  reads (Uniswap v3 or Aerodrome, another currency, another DEX, or nothing left for sale), any
+  tokens at any price in a new plain pool, which are then all there is to read; a tenth of all the tokens for sale parked far above the price; or, at
   half instead of 5%, tokens or USDC behind a hook that refuses swaps, where the warning says it
   depends on the hook. Each title is true of the pools read, and a third party's wallet counts like
   the deployer's: the warning never says whose it is.
