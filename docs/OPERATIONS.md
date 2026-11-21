@@ -370,8 +370,18 @@ and take about a second, so a run fits about 8 into its 10 s. Some are dense: th
 to 21,194,472) has 19,996 logs, 7,678 of them new pools, which is about 50 chunks and 10 to 20 s of writes. A run that
 starts such a window can therefore end up to about 20 s later than it otherwise would, and never writes past 112 s
 plus one round. A window the run's time doesn't cover is left unfinished (`arcosIndexer positions window unfinished`
-in the log, a warning and not an error): what was written stays, the cursor doesn't move, and the next run reads those
-chunks, finds them stored and goes on with the rest. So the backfill takes some 300 to 500 runs: 5 to 8 hours at one
+in the log, a warning and not an error): what was written stays, the cursor doesn't move, and the width is halved and
+stored on `positionsIndex/mainnet` (`span`), so the next run reads half as many blocks. The same when a window's logs
+don't arrive in time (`arcosIndexer positions window failed` with `DeadlineExceeded` or a timeout). It halves again
+each run, down to one block, until a window fits what the run has left, and doubles with every window applied. Once
+every doc of a window is stored its cursor moves even if the time has just run out.
+
+**If the cursor stops.** `positionsIndex/mainnet.block` not moving for several runs, with `span` falling, is this
+narrowing at work on a dense stretch: wait for `span` to reach a width that fits. With `span` steady and `behind`
+growing, look at the run line's `positions` error and the two log lines above. The step runs last and starts no window
+after 104 s, so a run whose earlier steps use all of that gives it nothing.
+
+So the backfill takes some 300 to 500 runs: 5 to 8 hours at one
 run a minute, longer while inspections run long.
 
 Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives exactly the answers it gave before

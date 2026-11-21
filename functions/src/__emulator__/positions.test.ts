@@ -6,6 +6,7 @@ import { COLLECTIONS, DATABASE_ID, poolId, positionId, positionsIndexId, tokenId
 import { arcosDb, indexedPools, indexedPositions, indexedPositionsFor } from "@arcos/data/server";
 import { v4PoolId, v4PoolKey } from "@arcos/inspector";
 import { applyPositionsWindow, decodePoolLogs, decodePositionLogs, ensurePositionsIndex } from "../indexer/positions-store";
+import { runPositions } from "../indexer/positions-run";
 import { indexedExtras, runIndexer, type RunResult } from "../indexer/run";
 import { ZERO, addr, fakeChain, fakeInspector, fakeNow, fakeReport, modifyLiquidity, v4Pool } from "./fakes";
 
@@ -541,5 +542,76 @@ describe("what the index hands an inspection", () => {
     });
     expect(result.positions).toEqual({ windows: 1, positions: 1, pools: 0, behind: 0, error: null });
     expect((await cursorDoc())?.block).toBe(2_010);
+  });
+});
+
+describe("a window too large for the time a run has left", () => {
+  const START = 7_000_000;
+  const HEAD = START + 9_999;
+  const cursorDoc = async () => (await db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet")).get()).data() as PositionsIndexDoc;
+  const quiet = { warn: () => undefined, error: () => undefined };
+  /** One run of the step alone, on a clock that moves a second every time it is asked. */
+  const run = (chain: ReturnType<typeof fakeChain>, writeUntilMs: number) => {
+    let ticks = 0;
+    return runPositions({
+      db, network: "mainnet", chain, tip: HEAD, indexed: HEAD, now: () => NOW + 1_000 * ticks++, started: NOW, elapsed: () => 0, log: quiet,
+      deps: { fromBlock: START, limits: { writeUntilMs, maxWindows: 1 } },
+    });
+  };
+
+  it("converges through the halved width: a run that can start one round of writes never finishes 10,000 blocks, and does finish 2,500", async () => {
+    // 6,000 positions spread evenly over the window: 15 chunks, three rounds of writes at full width.
+    const logs = Array.from({ length: 6_000 }, (_, i) => modifyLiquidity(START + Math.floor((i * 10_000) / 6_000), POOL, NFTS, BigInt(i + 1)));
+    // The budget: whatever the first round of writes starts within, and nothing after it.
+    let budget = 0;
+    for (let ms = 1_000; ms <= 12_000 && budget === 0; ms += 1_000) {
+      await reset();
+      const probe = await run(fakeChain({ head: HEAD, logs }), ms);
+      if (probe.positions > 0) budget = ms;
+    }
+    expect(budget).toBeGreaterThan(0);
+    await reset();
+    const spans: (number | undefined)[] = [];
+    const cursors: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const result = await run(fakeChain({ head: HEAD, logs }), budget);
+      expect(result.error).toBeNull();
+      const doc = await cursorDoc();
+      spans.push(doc.span);
+      cursors.push(doc.block);
+      if (doc.block === HEAD) break;
+    }
+    // The first run stores the first round and stops, the cursor where it was, the width halved; so does the second.
+    expect(cursors.slice(0, 2)).toEqual([START - 1, START - 1]);
+    expect(spans.slice(0, 2)).toEqual([5_000, 2_500]);
+    // From there windows fit, and the cursor gets to the head: every position stored once.
+    expect(cursors[cursors.length - 1]).toBe(HEAD);
+    expect((await db.collection(COLLECTIONS.positions).get()).size).toBe(6_000);
+  }, 110_000);
+
+  it("moves the cursor when the last docs were stored just past the time given", async () => {
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    const window = { from: START, to: HEAD };
+    const positions = decodePositionLogs([modifyLiquidity(START + 5, POOL, NFTS, 1n), modifyLiquidity(START + 6, POOL, NFTS, 2n)], PM, window);
+    // The one round starts in time; by the time it is done the time is up.
+    let asked = 0;
+    const clock = () => (asked++ === 0 ? NOW : NOW + 60_000);
+    expect(await applyPositionsWindow(db, "mainnet", window, positions, { tip: HEAD, now: NOW, until: NOW + 5_000, clock })).toEqual({ kind: "applied", block: HEAD, written: 2, pools: 0 });
+    expect((await cursorDoc()).block).toBe(HEAD);
+  });
+
+  it("halves the width, and keeps the cursor, when a window's logs don't arrive in time", async () => {
+    const logs = [modifyLiquidity(START + 100, POOL, NFTS, 1n), modifyLiquidity(START + 7_000, POOL, NFTS, 2n)];
+    const first = await run(fakeChain({ head: HEAD, logs, slowAbove: 5_000 }), 1_000_000);
+    expect(first).toMatchObject({ windows: 0, positions: 0, error: "DeadlineExceeded" });
+    expect(await cursorDoc()).toMatchObject({ block: START - 1, span: 5_000 });
+    const chain = fakeChain({ head: HEAD, logs, slowAbove: 5_000 });
+    expect(await run(chain, 1_000_000)).toMatchObject({ windows: 1, positions: 1, error: null });
+    expect(chain.asked).toEqual([{ from: START, to: START + 4_999 }]);
+    // A refusal still takes the node's hint, and is not this: nothing is stored for it.
+    await reset();
+    const refused = fakeChain({ head: HEAD, logs, maxSpan: 9_000, suggest: 9_000 });
+    expect(await run(refused, 1_000_000)).toMatchObject({ windows: 1, error: null });
+    expect((await cursorDoc()).span).toBe(9_000);
   });
 });

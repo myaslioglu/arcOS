@@ -3,8 +3,8 @@ import { DEX, UNISWAP_V4_FROM, type NetworkId } from "@arcos/chain";
 import { MODIFY_LIQUIDITY_TOPIC } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
 import { TOPICS } from "./events";
-import { applyPositionsWindow, decodePoolLogs, decodePositionLogs, ensurePositionsIndex } from "./positions-store";
-import { RangeRefused, type LogChain } from "./rpc";
+import { applyPositionsWindow, decodePoolLogs, decodePositionLogs, ensurePositionsIndex, storePositionsSpan } from "./positions-store";
+import { DeadlineExceeded, RangeRefused, type LogChain } from "./rpc";
 import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
 
 /**
@@ -18,7 +18,9 @@ import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
  * eth_getLogs, 400 ms after the last call, and its writes. A sparse window is done in about a second, so a run fits
  * about 8 into its 10 s; a dense one (the densest has 19,996 logs and 7,678 new pools) takes 10 to 20 s of writes, so
  * the step can end up to about 20 s after it began, never past 112 s plus a round. A window the run's time doesn't
- * cover is left `unfinished`: what was written stays, the cursor doesn't move, and the next run goes on with it.
+ * cover is left `unfinished`: what was written stays, the cursor doesn't move, and the next run reads a window half as
+ * wide (the width is stored with the cursor), and so on down to one block, until a window fits. The same when a
+ * window's logs don't arrive in time. The width doubles again with every window that is applied.
  */
 export type PositionsLimits = { untilMs: number; deadlineMs: number; writeUntilMs: number; maxWindows: number; stepMs: number };
 export const POSITIONS_LIMITS: PositionsLimits = { untilMs: 104_000, deadlineMs: 110_000, writeUntilMs: 112_000, maxWindows: 12, stepMs: 10_000 };
@@ -85,6 +87,20 @@ export async function runPositions(args: {
   let refusals = 0;
   // Once the node has refused a width in this run, no window is tried that wide again.
   let ceiling = MAX_WINDOW;
+  /**
+   * The window was too much for the time this run had (its logs didn't arrive, or its docs weren't all stored): the
+   * next run starts at half its width, stored with the cursor, which stays where it is. Without this a run that gets
+   * only a few seconds would fetch the same dense window and re-read the same stored chunks every minute, for ever.
+   */
+  const narrow = async (width: number) => {
+    const next = shrink(width);
+    if (next >= width) return;
+    try {
+      await storePositionsSpan(db, network, next);
+    } catch (e) {
+      log.warn("arcosIndexer positions span not stored", errorFields(e));
+    }
+  };
   // Every pass applies a window, finds one already applied, or follows a cursor another run moved; the bound keeps a
   // cursor that keeps moving from holding the run.
   for (let passes = 0; result.windows < limits.maxWindows && passes < limits.maxWindows * 2 && elapsed() < limits.untilMs && elapsed() - stepStarted < limits.stepMs; passes++) {
@@ -108,6 +124,8 @@ export async function runPositions(args: {
       }
       result.error ??= nameOf(e);
       log.warn("arcosIndexer positions window failed", { from: window.from, to: window.to, ...errorFields(e) });
+      // Out of time, here or at the node: a narrower window answers sooner.
+      if (e instanceof DeadlineExceeded || /timeout|timed out/i.test(`${nameOf(e)} ${e instanceof Error ? e.message : ""}`)) await narrow(window.to - window.from + 1);
       break;
     }
     let applied;
@@ -126,10 +144,12 @@ export async function runPositions(args: {
       break;
     }
     if (applied.kind === "unfinished") {
-      // Not an error: the window is larger than what was left of the run. Its docs so far are stored; the next run goes on.
+      // Not an error: the window is larger than what was left of the run. Its docs so far are stored, and the next run
+      // reads half as wide a window, which has that much less to store and to check.
       result.positions += applied.written;
       result.pools += applied.pools;
       log.warn("arcosIndexer positions window unfinished", { from: window.from, to: window.to, positions: applied.written, pools: applied.pools });
+      await narrow(window.to - window.from + 1);
       break;
     }
     if (applied.kind === "applied") {

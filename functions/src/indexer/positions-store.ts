@@ -71,9 +71,21 @@ export async function ensurePositionsIndex(db: Firestore, network: NetworkId, fr
 }
 
 /**
+ * Stores the width the next run should read its first window with, without moving the cursor: what a run does when a
+ * window turned out too large for the time it had. Nothing when there is no cursor doc.
+ */
+export async function storePositionsSpan(db: Firestore, network: NetworkId, span: number): Promise<void> {
+  const ref = positionsIndexRef(db, network);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.exists) tx.update(ref, { span: Math.max(1, Math.floor(span)) });
+  });
+}
+
+/**
  * What applying a window did:
  * - `applied`: its positions and pools are stored (`written` positions and `pools` pool docs were new) and the cursor is at its end;
- * - `unfinished`: the time given ran out while its docs were being stored. `written` and `pools` are what this call
+ * - `unfinished`: the time given ran out before all its docs were stored (a round of writes wasn't started). `written` and `pools` are what this call
  *   added; the cursor has not moved, and applying the window again goes on from there;
  * - `already`: the cursor was at or past the window's end;
  * - `moved`: the cursor is not where this window starts (another run moved it), and `block` is where it is;
@@ -117,8 +129,9 @@ const CREATE_RETRIES = 3;
  * How long it takes: the docs go in chunks of 400, six chunks at a time, each one read and one batch. The backfill's
  * densest window (mainnet blocks 21,185,000 to 21,194,472: 19,996 logs, 7,678 of them new pools) is about 50 chunks,
  * nine rounds. `options.until` (ms on `options.clock`) bounds it all the same: no round starts at or after it, and the
- * call then answers `unfinished` with the cursor where it was. What it wrote stays, so the next call reads those
- * chunks, finds them stored and goes on with the rest: a window too large for one run is finished over several.
+ * call then answers `unfinished` with the cursor where it was. What it wrote stays. The caller reads a narrower
+ * window next time (positions-run.ts halves the width), since re-reading a window's stored chunks takes time too: a
+ * run with little time left would otherwise read the same chunks every time and never reach the rest.
  */
 export async function applyPositionsWindow(
   db: Firestore,
@@ -171,7 +184,9 @@ export async function applyPositionsWindow(
   const positionsAdded = await addAll(entries, false);
   const poolsAdded = positionsAdded.done ? await addAll(poolEntries, true) : { added: 0, done: false };
   const [written, pools] = [positionsAdded.added, poolsAdded.added];
-  if (!poolsAdded.done || outOfTime()) return { kind: "unfinished", written, pools };
+  // Everything is stored: the cursor moves even when the time has just run out. The transaction is one read and one
+  // write, and stopping here would have the next run do all of it again for nothing.
+  if (!poolsAdded.done) return { kind: "unfinished", written, pools };
   const ref = positionsIndexRef(db, network);
   return db.runTransaction(async (tx): Promise<PositionsApplyResult> => {
     const snap = await tx.get(ref);
