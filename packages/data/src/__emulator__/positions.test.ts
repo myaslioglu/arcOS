@@ -82,6 +82,16 @@ describe("indexedPositionsFor", () => {
     expect(await indexedPositionsFor(arcosDb(), "mainnet", [POOL_A])).toBeNull();
   });
 
+  it("gives the step's progress with the cursor: whole numbers only, and no timestamp", async () => {
+    await setCursor(700);
+    expect(await indexedPositionsFor(arcosDb(), "mainnet", [])).toEqual({ cursor: 700, pools: {} });
+    await arcosDb().collection(COLLECTIONS.positionsIndex).doc("mainnet").update({ span: 1_250, ceiling: 1_250, ceilingUntil: 9_999, attempt: { from: 701, width: 1_250, at: 1_795_000_000_000 } });
+    expect((await indexedPositionsFor(arcosDb(), "mainnet", []))?.progress).toEqual({ span: 1_250, ceiling: 1_250, ceilingUntil: 9_999, attempt: { from: 701, width: 1_250 } });
+    // Anything that isn't a whole, non-negative number is left out.
+    await arcosDb().collection(COLLECTIONS.positionsIndex).doc("mainnet").update({ span: "wide", ceiling: -1, ceilingUntil: 1.5, attempt: { from: 701 } });
+    expect(await indexedPositionsFor(arcosDb(), "mainnet", [])).toEqual({ cursor: 700, pools: {} });
+  });
+
   it("answers every pool asked for under one cursor, an empty entry for a pool the index holds nothing for", async () => {
     await setCursor(700);
     await put("mainnet", POOL_A, 1);

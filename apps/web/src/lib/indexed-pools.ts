@@ -1,5 +1,5 @@
 import { isAddress } from "viem";
-import type { PoolDoc, PoolQuote, PoolVersion, V4PoolKey } from "@arcos/data";
+import type { PoolDoc, PoolQuote, PoolVersion, PositionsProgress, V4PoolKey } from "@arcos/data";
 import { MAX_POSITIONS, MAX_POSITIONS_PER_POOL, isPositionKey, type ExtraPool, type V4PositionIndex } from "@arcos/inspector";
 import { indexSource, type IndexSourceOptions } from "./index-source";
 
@@ -25,9 +25,12 @@ export type IndexedPool = {
  * `truncated`: the index holds more pools for the token than `pools` lists (it reads 50); present only when true.
  * `positions`: the position index for the token's v4 pools (the Inspector's `V4PositionIndex`): its cursor, and for each
  * pool id the position keys it holds, at most 500 a pool and 2,000 in all, else `truncated`. Absent before the position
- * index's first run, while it is switched off, or when it couldn't be read.
+ * index's first run, while it is switched off, or when it couldn't be read. Its `progress`, when the index's step has
+ * any to show, is how that step is getting on (the width it reads windows at, a ceiling on it and the block that ceiling
+ * holds to, the window it is attempting): block numbers and widths, for watching a backfill from outside. Inspector
+ * doesn't read it.
  */
-export type PoolsAnswer = { pools: IndexedPool[]; truncated?: true; positions?: V4PositionIndex };
+export type PoolsAnswer = { pools: IndexedPool[]; truncated?: true; positions?: V4PositionIndex & { progress?: PositionsProgress } };
 
 /** A token's pools as the index lists them, and whether it holds more than it listed. */
 export type IndexedPools = { pools: PoolDoc[]; truncated: boolean };
@@ -36,7 +39,7 @@ export type IndexedPools = { pools: PoolDoc[]; truncated: boolean };
 export type IndexedToken = IndexedPools & { positions: V4PositionIndex | null };
 
 /** The route's answer from the stored docs, newest pool first, with the positions when there are any to give. */
-export function poolsAnswer(docs: readonly PoolDoc[], positions: V4PositionIndex | null = null, truncated = false): PoolsAnswer {
+export function poolsAnswer(docs: readonly PoolDoc[], positions: PoolsAnswer["positions"] | null = null, truncated = false): PoolsAnswer {
   return {
     ...(truncated ? { truncated: true as const } : {}),
     ...(positions ? { positions } : {}),

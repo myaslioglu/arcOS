@@ -199,7 +199,7 @@ export function runLogFields(result: RunResult): Record<string, unknown> {
  *    own cursor, and refreshes the counts of its own data every 10 minutes, none started after 100 s (stats-run.ts); then
  * 6c. (the position index, mainnet only, when `deps.positions` is given and the console switch isn't off) records the
  *    positions the PoolManager's `ModifyLiquidity` logs name, and a pool doc for each v4 pool its `Initialize` logs name
- *    that has none, in windows of its own cursor up to this run's cursor, none started after 104 s and
+ *    that has none, in windows of its own cursor up to this run's cursor, none started after 90 s and
  *    for at most 10 s (positions-run.ts); then the run ends, giving the lease back.
  * Steps 4b, 5, 6, 6b and 6c can't keep the run from ending: an error there is logged and named in the result.
  */

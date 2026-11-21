@@ -174,8 +174,20 @@ export type PositionsIndexDoc = {
   head: number;
   /** The width in blocks of the last window that was read and stored: where the next run starts, not at the cap again. Absent before the first. */
   span?: number;
+  /**
+   * The window the step is about to read, written before it is read: its first block, its width, and when (ms). A run
+   * that finds it still at the block after the cursor knows the last attempt at that window never finished (the function
+   * was killed: out of time or memory), and reads half as wide. Removed when an attempt ends in any way the step saw.
+   */
+  attempt?: { from: number; width: number; at: number };
+  /** No window wider than this is read until the cursor has passed `ceilingUntil`: the width a window there last proved too much at, halved. */
+  ceiling?: number;
+  ceilingUntil?: number;
   updatedAt: TimestampLike;
 };
+
+/** How the position index's step is getting on, for watching it from outside: block numbers and widths only. */
+export type PositionsProgress = { span?: number; ceiling?: number; ceilingUntil?: number; attempt?: { from: number; width: number } };
 
 /** watchState/{network}:{token}: the last observed state of a watched token; an alert is a diff against it. */
 export type WatchStateFields<A> = {

@@ -97,12 +97,13 @@ describe("the position index's settings", () => {
     expect(TAIL_MAX_BLOCKS).toBeLessThanOrEqual(MAX_WINDOW);
   });
 
-  it("fits the step inside the function's time: after Stats' last window, and done before the timeout", () => {
-    expect(POSITIONS_LIMITS.untilMs).toBeGreaterThan(STATS_LIMITS.untilMs);
+  it("keeps the step clear of the function's timeout: after the last inspection starts, and 20 s to spare after its last round of writes", () => {
     expect(POSITIONS_LIMITS.untilMs).toBeGreaterThan(LIMITS.inspectUntilMs);
     expect(POSITIONS_LIMITS.deadlineMs).toBeGreaterThan(POSITIONS_LIMITS.untilMs);
-    // The last RPC answer is waited for until `deadlineMs`; the window's writes and the run's end need the rest.
-    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.deadlineMs).toBeGreaterThanOrEqual(10_000);
+    expect(POSITIONS_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(POSITIONS_LIMITS.deadlineMs);
+    // A killed run stores nothing: no window starts in the last 30 s, and no round of writes in the last 20.
+    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.untilMs).toBeGreaterThanOrEqual(30_000);
+    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(20_000);
     expect(POSITIONS_LIMITS.stepMs).toBeLessThanOrEqual(STATS_LIMITS.stepMs);
   });
 });
