@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { NetworkId } from "@arcos/chain";
-import type { IndexerDoc, PositionDoc, PositionKey, PositionsIndexDoc, PositionsProgress } from "../docs";
+import type { IndexerDoc, PositionDoc, PositionKey, PositionsIndexDoc, PositionsLastRun, PositionsProgress } from "../docs";
 import { assertNetwork, normalizePoolId, positionsIndexId } from "../ids";
 import { COLLECTIONS, INDEXED_POSITIONS_LIMIT, INDEXED_POSITIONS_TOTAL } from "../names";
 import { positionKey } from "../positions";
@@ -24,10 +24,30 @@ export async function readPositionsCursor(db: Firestore, network: NetworkId): Pr
 
 const blockNumber = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 
+/** An error's name, as it may be shown: letters, digits and underscores, 40 at most. */
+const ERROR_NAME = /^[A-Za-z0-9_]{1,40}$/;
+
+/** `lastRun` off the cursor doc, or undefined unless its numbers are whole and non-negative; the strings only from their fixed sets. */
+function lastRunOf(value: unknown): PositionsLastRun | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { at, startMs, windows, slot, reason, error } = value as Record<string, unknown>;
+  if (!blockNumber(at) || !blockNumber(startMs) || !blockNumber(windows)) return undefined;
+  return {
+    at,
+    startMs,
+    windows,
+    ...(slot === "early" || slot === "late" ? { slot } : {}),
+    ...(reason === "no-time" || reason === "off" ? { reason } : {}),
+    ...(typeof error === "string" && ERROR_NAME.test(error) ? { error } : {}),
+  };
+}
+
 /** The step's progress fields off its cursor doc, each kept only when it is a whole, non-negative number. */
 export function positionsProgress(doc: Partial<PositionsIndexDoc>): PositionsProgress {
   const { span, ceiling, ceilingUntil, attempt } = doc;
+  const lastRun = lastRunOf(doc.lastRun);
   return {
+    ...(lastRun ? { lastRun } : {}),
     ...(blockNumber(span) ? { span } : {}),
     ...(blockNumber(ceiling) ? { ceiling } : {}),
     ...(blockNumber(ceilingUntil) ? { ceilingUntil } : {}),

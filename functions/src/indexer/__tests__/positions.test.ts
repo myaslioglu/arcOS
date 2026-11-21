@@ -3,7 +3,7 @@ import { DEX, UNISWAP_V4, UNISWAP_V4_FROM } from "@arcos/chain";
 import { INDEXED_POSITIONS_LIMIT, INDEXED_POSITIONS_TOTAL } from "@arcos/data";
 import { MAX_POSITIONS, MAX_POSITIONS_PER_POOL, TAIL_MAX_BLOCKS } from "@arcos/inspector";
 import { ZERO, addr, modifyLiquidity, v3Pool, v4Pool } from "../../__emulator__/fakes";
-import { POSITIONS_LIMITS } from "../positions-run";
+import { POSITIONS_EARLY_LIMITS, POSITIONS_LIMITS } from "../positions-run";
 import { decodePoolLogs, decodePositionLogs } from "../positions-store";
 import { LIMITS } from "../run";
 import { INDEXER_OPTIONS } from "../schedule";
@@ -95,6 +95,18 @@ describe("the position index's settings", () => {
 
   it("lets the Inspector read the tail in one eth_getLogs: no more blocks than a window may span", () => {
     expect(TAIL_MAX_BLOCKS).toBeLessThanOrEqual(MAX_WINDOW);
+  });
+
+  it("fits the early slot between the indexer's windows and Watchdog's last start", () => {
+    // 20 s of windows from where it begins, none after the indexer's own windows may still be starting.
+    expect(POSITIONS_EARLY_LIMITS.stepMs).toBe(20_000);
+    expect(POSITIONS_EARLY_LIMITS.untilMs).toBeLessThanOrEqual(LIMITS.windowsUntilMs);
+    expect(POSITIONS_EARLY_LIMITS.deadlineMs).toBeGreaterThan(POSITIONS_EARLY_LIMITS.untilMs);
+    expect(POSITIONS_EARLY_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(POSITIONS_EARLY_LIMITS.deadlineMs);
+    // The last round of writes starts 8 s or more before Watchdog's last start.
+    expect(LIMITS.watchStartUntilMs - POSITIONS_EARLY_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(8_000);
+    // And every early bound is inside the late one.
+    for (const k of ["untilMs", "deadlineMs", "writeUntilMs"] as const) expect(POSITIONS_EARLY_LIMITS[k]).toBeLessThan(POSITIONS_LIMITS[k]);
   });
 
   it("keeps the step clear of the function's timeout, and still lets it start after the inspections", () => {

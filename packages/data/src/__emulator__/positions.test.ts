@@ -1,5 +1,5 @@
 import { deleteApp, getApps } from "firebase-admin/app";
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { COLLECTIONS, positionDoc, positionId, positionsIndexId, type PositionsIndexDoc } from "../index";
 import { arcosDb, indexedPositions, indexedPositionsFor, readPositionsCursor } from "../server";
@@ -87,6 +87,18 @@ describe("indexedPositionsFor", () => {
     expect(await indexedPositionsFor(arcosDb(), "mainnet", [])).toEqual({ cursor: 700, pools: {} });
     await arcosDb().collection(COLLECTIONS.positionsIndex).doc("mainnet").update({ span: 1_250, ceiling: 1_250, ceilingUntil: 9_999, attempt: { from: 701, width: 1_250, at: 1_795_000_000_000 } });
     expect((await indexedPositionsFor(arcosDb(), "mainnet", []))?.progress).toEqual({ span: 1_250, ceiling: 1_250, ceilingUntil: 9_999, attempt: { from: 701, width: 1_250 } });
+    // The last call's trace rides along too: its numbers, its slot, and a reason or an error's name from a fixed shape.
+    const ref = arcosDb().collection(COLLECTIONS.positionsIndex).doc("mainnet");
+    await ref.update({ lastRun: { at: 1_795_000_000, startMs: 4_200, windows: 3, slot: "early" } });
+    expect((await indexedPositionsFor(arcosDb(), "mainnet", []))?.progress?.lastRun).toEqual({ at: 1_795_000_000, startMs: 4_200, windows: 3, slot: "early" });
+    await ref.update({ lastRun: { at: 1_795_000_060, startMs: 101_000, windows: 0, slot: "late", reason: "no-time", error: "DeadlineExceeded" } });
+    expect((await indexedPositionsFor(arcosDb(), "mainnet", []))?.progress?.lastRun).toEqual({ at: 1_795_000_060, startMs: 101_000, windows: 0, slot: "late", reason: "no-time", error: "DeadlineExceeded" });
+    // Strings that aren't of that shape are dropped; numbers that aren't whole drop the whole trace.
+    await ref.update({ lastRun: { at: 1_795_000_060, startMs: 5, windows: 0, slot: "middle", reason: "because", error: "<script>alert(1)</script>" } });
+    expect((await indexedPositionsFor(arcosDb(), "mainnet", []))?.progress?.lastRun).toEqual({ at: 1_795_000_060, startMs: 5, windows: 0 });
+    await ref.update({ lastRun: { at: "now", startMs: 5, windows: 0 } });
+    expect((await indexedPositionsFor(arcosDb(), "mainnet", []))?.progress?.lastRun).toBeUndefined();
+    await ref.update({ lastRun: FieldValue.delete() });
     // Anything that isn't a whole, non-negative number is left out.
     await arcosDb().collection(COLLECTIONS.positionsIndex).doc("mainnet").update({ span: "wide", ceiling: -1, ceilingUntil: 1.5, attempt: { from: 701 } });
     expect(await indexedPositionsFor(arcosDb(), "mainnet", [])).toEqual({ cursor: 700, pools: {} });

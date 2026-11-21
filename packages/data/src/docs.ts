@@ -183,11 +183,21 @@ export type PositionsIndexDoc = {
   /** No window wider than this is read until the cursor has passed `ceilingUntil`: the width a window there last proved too much at, halved. */
   ceiling?: number;
   ceilingUntil?: number;
+  /** What the step's last call did, written at its end whatever it did: see `PositionsLastRun`. */
+  lastRun?: PositionsLastRun;
   updatedAt: TimestampLike;
 };
 
+/**
+ * The position index's step, the last time it was called: when (`at`, seconds since the epoch), how far into the run it
+ * began (`startMs`), how many windows it applied, which slot of the run it had ("early": right after the indexer's own
+ * windows, while backfilling; "late": at the end), and why it did nothing (`reason`) or what stopped it (`error`, an
+ * error's name), when either applies.
+ */
+export type PositionsLastRun = { at: number; startMs: number; windows: number; slot?: "early" | "late"; reason?: "no-time" | "off"; error?: string };
+
 /** How the position index's step is getting on, for watching it from outside: block numbers and widths only. */
-export type PositionsProgress = { span?: number; ceiling?: number; ceilingUntil?: number; attempt?: { from: number; width: number } };
+export type PositionsProgress = { span?: number; ceiling?: number; ceilingUntil?: number; attempt?: { from: number; width: number }; lastRun?: PositionsLastRun };
 
 /** watchState/{network}:{token}: the last observed state of a watched token; an alert is a diff against it. */
 export type WatchStateFields<A> = {
