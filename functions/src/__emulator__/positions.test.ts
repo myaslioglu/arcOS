@@ -184,19 +184,70 @@ describe("the position index's step of a run", () => {
     await stateAt(HEAD);
     const chain = fakeChain({ head: HEAD, logs });
     const result = await go(chain, { fromBlock: START, limits: { untilMs: 0 } });
-    expect(result.positions).toEqual({ windows: 0, positions: 0, pools: 0, behind: 0, error: null });
+    expect(result.positions).toEqual({ windows: 0, positions: 0, pools: 0, behind: 0, error: null, reason: "no-time" });
     expect(chain.asked).toEqual([]);
     expect(await cursorDoc()).toBeUndefined();
+  });
+
+  it("says so, and how far behind it really is, when a run leaves it no time: a starved step doesn't read as caught up", async () => {
+    await stateAt(HEAD);
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    const chain = fakeChain({ head: HEAD, logs });
+    const result = await go(chain, { fromBlock: START, limits: { untilMs: 0 } });
+    expect(result.positions).toEqual({ windows: 0, positions: 0, pools: 0, behind: HEAD - START + 1, error: null, reason: "no-time" });
+    expect(chain.asked).toEqual([]);
+    // Nothing was written: no marker, the cursor where it was.
+    expect((await cursorDoc())?.attempt).toBeUndefined();
+    expect((await cursorDoc())?.block).toBe(START - 1);
   });
 
   it("reads nothing, and writes no cursor, when the console switch is off; runs when it is true or missing", async () => {
     await stateAt(HEAD, { positions: false });
     const chain = fakeChain({ head: HEAD, logs });
-    expect((await go(chain)).positions).toBeNull();
+    expect((await go(chain)).positions).toEqual({ windows: 0, positions: 0, pools: 0, behind: 0, error: null, reason: "off" });
     expect(chain.asked).toEqual([]);
     expect(await cursorDoc()).toBeUndefined();
+    // Off with a cursor already there: the distance it has fallen behind is reported, and nothing else happens.
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    expect((await go(fakeChain({ head: HEAD, logs }))).positions).toEqual({ windows: 0, positions: 0, pools: 0, behind: HEAD - START + 1, error: null, reason: "off" });
+    await reset();
     await stateAt(HEAD, { positions: true });
     expect((await go(fakeChain({ head: HEAD, logs }))).positions).not.toBeNull();
+  });
+
+  describe("its place in the run", () => {
+    // Stats counts from a block of its own, far from the position index's, so the order of the windows asked for
+    // says which step went first.
+    const STATS_FROM = HEAD - 500;
+    const both = async (chain: ReturnType<typeof fakeChain>) =>
+      (await runIndexer({
+        db, network: "mainnet", chain, inspectToken: fakeInspector({}), settings: { inspectPerTick: 0, explorerDailyBudget: 0 }, now: clock.now,
+        positions: { fromBlock: START }, stats: { from: { block: STATS_FROM, at: "2026-11-20" } },
+      })) as Ran;
+    const firstOf = (chain: ReturnType<typeof fakeChain>) => (chain.asked[0]!.from < STATS_FROM ? "positions" : "stats");
+
+    it("goes before Stats while it is more than 10,000 blocks behind the head, and on its first run", async () => {
+      await stateAt(HEAD);
+      const first = fakeChain({ head: HEAD, logs });
+      expect((await both(first)).positions).toMatchObject({ error: null });
+      expect(firstOf(first)).toBe("positions");
+      expect(first.asked.some((w) => w.from >= STATS_FROM)).toBe(true);
+      // Put back 10,001 blocks behind: first again.
+      await db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet")).update({ block: HEAD - 10_001 });
+      const behind = fakeChain({ head: HEAD, logs });
+      await both(behind);
+      expect(firstOf(behind)).toBe("positions");
+    });
+
+    it("goes after Stats, as before, once it is within 10,000 blocks", async () => {
+      await stateAt(HEAD);
+      await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+      await db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet")).update({ block: HEAD - 10_000 });
+      const chain = fakeChain({ head: HEAD, logs });
+      expect((await both(chain)).positions).toMatchObject({ windows: 1, behind: 0, error: null });
+      expect(firstOf(chain)).toBe("stats");
+      expect(chain.asked[chain.asked.length - 1]).toEqual({ from: HEAD - 9_999, to: HEAD });
+    });
   });
 
   it("is skipped when the run is given no settings for it", async () => {
@@ -613,5 +664,102 @@ describe("a window too large for the time a run has left", () => {
     const refused = fakeChain({ head: HEAD, logs, maxSpan: 9_000, suggest: 9_000 });
     expect(await run(refused, 1_000_000)).toMatchObject({ windows: 1, error: null });
     expect((await cursorDoc()).span).toBe(9_000);
+  });
+});
+
+describe("a run killed on a window leaves word, and the next reads half as wide", () => {
+  const START = 8_000_000;
+  const HEAD = START + 39_999;
+  const cursorDoc = async () => (await db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet")).get()).data() as PositionsIndexDoc;
+  const quiet = { warn: () => undefined, error: () => undefined };
+  const logs = [modifyLiquidity(START + 100, POOL, NFTS, 1n), modifyLiquidity(START + 7_000, POOL, NFTS, 2n), modifyLiquidity(START + 15_000, POOL, NFTS, 3n), modifyLiquidity(START + 30_000, POOL, NFTS, 4n)];
+  class Killed extends Error {}
+  /** One run of the step. `dieAbove`: the function is killed (nothing after the marker happens) on any window wider than this. */
+  const run = async (dieAbove: number, maxWindows = 12) => {
+    const chain = fakeChain({ head: HEAD, logs });
+    const result = runPositions({
+      db, network: "mainnet", chain, tip: HEAD, indexed: HEAD, now: () => NOW, started: NOW, elapsed: () => 0, log: quiet,
+      deps: { fromBlock: START, limits: { maxWindows }, onAttempt: ({ width }) => { if (width > dieAbove) throw new Killed(); } },
+    });
+    return { chain, result };
+  };
+
+  it("writes the window down before reading it, and halves it when the run never came back", async () => {
+    const first = await run(5_000);
+    await expect(first.result).rejects.toBeInstanceOf(Killed);
+    // Nothing was read, nothing stored but the marker.
+    expect(first.chain.asked).toEqual([]);
+    expect(await cursorDoc()).toMatchObject({ block: START - 1, attempt: { from: START, width: 10_000, at: NOW } });
+    expect((await cursorDoc()).span).toBeUndefined();
+
+    const second = await run(5_000, 1);
+    expect(await second.result).toMatchObject({ windows: 1, positions: 1, error: null });
+    expect(second.chain.asked).toEqual([{ from: START, to: START + 4_999 }]);
+    const doc = await cursorDoc();
+    expect(doc).toMatchObject({ block: START + 4_999, span: 5_000, ceiling: 5_000, ceilingUntil: START + 9_999 });
+    expect(doc.attempt).toBeUndefined();
+  });
+
+  it("converges under repeated kills, and holds the ceiling until the cursor is past the window that died", async () => {
+    // Only 1,250 blocks at a time survive.
+    const widths: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const attempt = await run(1_250, 1);
+      const outcome = await attempt.result.then(() => "ran", () => "killed");
+      widths.push((await cursorDoc()).attempt?.width ?? 0);
+      if (outcome === "ran") break;
+    }
+    // 10,000, 5,000 and 2,500 died; 1,250 applied and took its marker with it.
+    expect(widths).toEqual([10_000, 5_000, 2_500, 0]);
+    expect(await cursorDoc()).toMatchObject({ block: START + 1_249, span: 1_250, ceiling: 1_250, ceilingUntil: START + 9_999 });
+
+    // With the danger past (nothing kills now), the width still doesn't grow before the cursor passes START + 9,999.
+    const careful = await run(Infinity);
+    expect(await careful.result).toMatchObject({ error: null });
+    const asked = careful.chain.asked.map((w) => ({ width: w.to - w.from + 1, to: w.to }));
+    for (const w of asked.filter((x) => x.to <= START + 9_999)) expect(w.width).toBeLessThanOrEqual(1_250);
+    expect(asked.filter((x) => x.to <= START + 9_999)).toHaveLength(7);
+    // Past it the width doubles again with each window.
+    const after = asked.filter((x) => x.to > START + 9_999).map((x) => x.width);
+    expect(after.slice(0, 3)).toEqual([2_500, 5_000, 10_000]);
+    expect((await db.collection(COLLECTIONS.positions).get()).size).toBe(4);
+  });
+
+  it("a refused window the run then had no time to narrow is not a kill either: its marker is cleared", async () => {
+    // The node refuses 10,000 blocks; the step may make one pass only, so it stops before reading a narrower window.
+    const chain = fakeChain({ head: HEAD, logs, maxSpan: 4_000 });
+    const result = await runPositions({ db, network: "mainnet", chain, tip: HEAD, indexed: HEAD, now: () => NOW, started: NOW, elapsed: () => 0, log: quiet, deps: { fromBlock: START, limits: { maxWindows: 0.5 } } });
+    expect(result).toMatchObject({ windows: 0, error: null });
+    expect(chain.asked).toEqual([{ from: START, to: START + 9_999 }]);
+    const doc = await cursorDoc();
+    expect(doc.attempt).toBeUndefined();
+    expect(doc.span).toBeUndefined();
+    expect(doc.ceiling).toBeUndefined();
+  });
+
+  it("a marker older than ten minutes is not the last run's: the step was off, and nothing is halved", async () => {
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    const ref = db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet"));
+    await ref.update({ attempt: { from: START, width: 10_000, at: NOW - 11 * 60_000 } });
+    const old = await run(Infinity, 1);
+    await old.result;
+    expect(old.chain.asked).toEqual([{ from: START, to: START + 9_999 }]);
+    // Nine minutes old, it is: half as wide.
+    await reset();
+    await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+    await ref.update({ attempt: { from: START, width: 10_000, at: NOW - 9 * 60_000 } });
+    const recent = await run(Infinity, 1);
+    await recent.result;
+    expect(recent.chain.asked).toEqual([{ from: START, to: START + 4_999 }]);
+  });
+
+  it("a failure the step saw is not a kill: the marker goes, and the width stays", async () => {
+    const chain = fakeChain({ head: HEAD, logs, failCall: 1 });
+    const result = await runPositions({ db, network: "mainnet", chain, tip: HEAD, indexed: HEAD, now: () => NOW, started: NOW, elapsed: () => 0, log: quiet, deps: { fromBlock: START } });
+    expect(result).toMatchObject({ windows: 0, error: "Error" });
+    expect((await cursorDoc()).attempt).toBeUndefined();
+    const next = await run(Infinity, 1);
+    await next.result;
+    expect(next.chain.asked).toEqual([{ from: START, to: START + 9_999 }]);
   });
 });

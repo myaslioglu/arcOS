@@ -1,6 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { NetworkId } from "@arcos/chain";
-import type { IndexerDoc, PositionDoc, PositionKey, PositionsIndexDoc } from "../docs";
+import type { IndexerDoc, PositionDoc, PositionKey, PositionsIndexDoc, PositionsProgress } from "../docs";
 import { assertNetwork, normalizePoolId, positionsIndexId } from "../ids";
 import { COLLECTIONS, INDEXED_POSITIONS_LIMIT, INDEXED_POSITIONS_TOTAL } from "../names";
 import { positionKey } from "../positions";
@@ -19,13 +19,32 @@ export type IndexedPositions = {
  * served, so its readers fall back at once instead of waiting for the cursor to go stale. Two reads, by id.
  */
 export async function readPositionsCursor(db: Firestore, network: NetworkId): Promise<number | null> {
+  return (await readPositionsState(db, network))?.cursor ?? null;
+}
+
+const blockNumber = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+/** The step's progress fields off its cursor doc, each kept only when it is a whole, non-negative number. */
+export function positionsProgress(doc: Partial<PositionsIndexDoc>): PositionsProgress {
+  const { span, ceiling, ceilingUntil, attempt } = doc;
+  return {
+    ...(blockNumber(span) ? { span } : {}),
+    ...(blockNumber(ceiling) ? { ceiling } : {}),
+    ...(blockNumber(ceilingUntil) ? { ceilingUntil } : {}),
+    ...(typeof attempt === "object" && attempt !== null && blockNumber(attempt.from) && blockNumber(attempt.width) ? { attempt: { from: attempt.from, width: attempt.width } } : {}),
+  };
+}
+
+/** The cursor (see `readPositionsCursor`: null before the first run and while switched off) with the step's progress. */
+async function readPositionsState(db: Firestore, network: NetworkId): Promise<{ cursor: number; progress: PositionsProgress } | null> {
   const [controls, cursor] = await db.getAll(
     db.collection(COLLECTIONS.indexer).doc(assertNetwork(network)),
     db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId(network)),
   );
   if (controls!.exists && (controls!.data() as Pick<IndexerDoc, "positions">).positions === false) return null;
-  const block = cursor!.exists ? (cursor!.data() as PositionsIndexDoc).block : null;
-  return typeof block === "number" && Number.isSafeInteger(block) ? block : null;
+  if (!cursor!.exists) return null;
+  const doc = cursor!.data() as PositionsIndexDoc;
+  return typeof doc.block === "number" && Number.isSafeInteger(doc.block) ? { cursor: doc.block, progress: positionsProgress(doc) } : null;
 }
 
 async function poolPositions(db: Firestore, network: NetworkId, poolId: string, limit: number): Promise<{ positions: PositionKey[]; truncated: boolean }> {
@@ -54,7 +73,7 @@ export async function indexedPositions(db: Firestore, network: NetworkId, poolId
 }
 
 /** The positions of several pools under one cursor, keyed by pool id (lowercase): what an inspection's `v4Positions` takes. */
-export type TokenPositions = { cursor: number; pools: Record<string, { positions: PositionKey[]; truncated: boolean }> };
+export type TokenPositions = { cursor: number; pools: Record<string, { positions: PositionKey[]; truncated: boolean }>; progress?: PositionsProgress };
 
 /** How many pools' positions are asked for at once. */
 const POOLS_AT_ONCE = 4;
@@ -76,8 +95,9 @@ export async function indexedPositionsFor(
   limit = INDEXED_POSITIONS_LIMIT,
   total = INDEXED_POSITIONS_TOTAL,
 ): Promise<TokenPositions | null> {
-  const cursor = await readPositionsCursor(db, network);
-  if (cursor === null) return null;
+  const state = await readPositionsState(db, network);
+  if (state === null) return null;
+  const { cursor, progress } = state;
   const pools: TokenPositions["pools"] = {};
   const ids = [...new Set(poolIds.map((poolId) => normalizePoolId(poolId)))];
   let left = total;
@@ -97,5 +117,6 @@ export async function indexedPositionsFor(
       }
     });
   }
-  return { cursor, pools };
+  // The step's progress rides along, when there is any to show: how wide it reads and whether it is narrowing.
+  return { cursor, pools, ...(Object.keys(progress).length > 0 ? { progress } : {}) };
 }

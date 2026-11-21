@@ -1,4 +1,4 @@
-import { Timestamp, type DocumentReference, type Firestore } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, type DocumentReference, type Firestore } from "firebase-admin/firestore";
 import type { NetworkId } from "@arcos/chain";
 import { COLLECTIONS, poolId, poolToDoc, positionDoc, positionId, positionsIndexId, type PoolDoc, type PositionDoc, type PositionsIndexDoc } from "@arcos/data";
 import { positionFromLog, type V4PositionKey } from "@arcos/inspector";
@@ -72,14 +72,39 @@ export async function ensurePositionsIndex(db: Firestore, network: NetworkId, fr
 
 /**
  * Stores the width the next run should read its first window with, without moving the cursor: what a run does when a
- * window turned out too large for the time it had. Nothing when there is no cursor doc.
+ * window turned out too large for it. With it goes a ceiling, the same width, that holds until the cursor has passed
+ * `ceilingUntil` (the end of the window that was too large), so the width doesn't grow straight back into it; and the
+ * attempt marker goes, since this attempt ended in a way the step saw. Nothing when there is no cursor doc.
  */
-export async function storePositionsSpan(db: Firestore, network: NetworkId, span: number): Promise<void> {
+export async function storePositionsSpan(db: Firestore, network: NetworkId, span: number, ceilingUntil: number): Promise<void> {
   const ref = positionsIndexRef(db, network);
+  const width = Math.max(1, Math.floor(span));
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
-    if (snap.exists) tx.update(ref, { span: Math.max(1, Math.floor(span)) });
+    if (!snap.exists) return;
+    const stored = snap.data() as PositionsIndexDoc;
+    // A ceiling already in force further on stays in force that far.
+    tx.update(ref, { span: width, ceiling: width, ceilingUntil: Math.max(ceilingUntil, stored.ceilingUntil ?? 0), attempt: FieldValue.delete() });
   });
+}
+
+/** The cursor doc as it stands, or null when there is none: one read, nothing written. */
+export async function readPositionsIndex(db: Firestore, network: NetworkId): Promise<PositionsIndexDoc | null> {
+  const snap = await positionsIndexRef(db, network).get();
+  return snap.exists ? (snap.data() as PositionsIndexDoc) : null;
+}
+
+/**
+ * Writes the attempt marker: the window about to be read. One small write, before the window's logs are asked for, so
+ * that a run killed anywhere after it (the function's time or memory) leaves word of which window it died on.
+ */
+export async function markPositionsAttempt(db: Firestore, network: NetworkId, attempt: { from: number; width: number; at: number }): Promise<void> {
+  await positionsIndexRef(db, network).update({ attempt });
+}
+
+/** Removes the attempt marker: the attempt ended in a way the step saw, and wasn't about the window's size. */
+export async function clearPositionsAttempt(db: Firestore, network: NetworkId): Promise<void> {
+  await positionsIndexRef(db, network).update({ attempt: FieldValue.delete() });
 }
 
 /**
@@ -194,7 +219,8 @@ export async function applyPositionsWindow(
     const doc = snap.data() as PositionsIndexDoc;
     if (doc.block >= window.to) return { kind: "already", block: doc.block };
     if (doc.block !== window.from - 1) return { kind: "moved", block: doc.block };
-    tx.update(ref, { block: window.to, head: Math.max(doc.head ?? 0, options.tip), updatedAt: Timestamp.fromMillis(options.now), ...(options.span === undefined ? {} : { span: options.span }) });
+    // The attempt marker goes with the move: this window is done.
+    tx.update(ref, { block: window.to, head: Math.max(doc.head ?? 0, options.tip), updatedAt: Timestamp.fromMillis(options.now), attempt: FieldValue.delete(), ...(options.span === undefined ? {} : { span: options.span }) });
     return { kind: "applied", block: window.to, written, pools };
   });
 }

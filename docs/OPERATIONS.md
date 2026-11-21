@@ -358,9 +358,10 @@ directly; the Inspector window gets it from `GET /api/pools/[token]` (`positions
 
 **The first run, and the backfill.** The first run after the deploy creates `positionsIndex/mainnet` with the cursor
 one block before 1,948,056 and starts reading. From there to the head on 2026-11-20 (block 32.2 million) is about
-3,030 windows of 10,000 blocks. The step has its own budgets: no window starts after 104 s of the run or more than
-10 s after the step began, at most 12 windows a run, no RPC answer is waited for past 110 s, and no round of a window's
-writes starts past 112 s. It runs after every other step, so it never moves them. When the node refuses a window it is
+3,030 windows of 10,000 blocks. The step has its own budgets: no window starts after 100 s of the run or more than
+10 s after the step began, at most 12 windows a run, no RPC answer is waited for past 106 s, and no round of a window's
+writes starts past 108 s. It runs after every other step (before Stats only while it is backfilling: see below), so it
+never moves the indexer's own work. When the node refuses a window it is
 retried at the width the node suggests (9,473 blocks, say), or at half when it suggests none; nothing that wide is tried
 again in that run, and the width that worked is stored on `positionsIndex/mainnet` (`span`), where the next run starts.
 
@@ -368,7 +369,7 @@ A window is one `eth_getLogs` (400 ms after the previous call) and its writes. T
 six chunks at a time, each chunk one read of which docs exist and one batch of the new ones. Most windows are sparse
 and take about a second, so a run fits about 8 into its 10 s. Some are dense: the densest on mainnet (blocks 21,185,000
 to 21,194,472) has 19,996 logs, 7,678 of them new pools, which is about 50 chunks and 10 to 20 s of writes. A run that
-starts such a window can therefore end up to about 20 s later than it otherwise would, and never writes past 112 s
+starts such a window can therefore end up to about 20 s later than it otherwise would, and never starts a round of writes past 108 s
 plus one round. A window the run's time doesn't cover is left unfinished (`arcosIndexer positions window unfinished`
 in the log, a warning and not an error): what was written stays, the cursor doesn't move, and the width is halved and
 stored on `positionsIndex/mainnet` (`span`), so the next run reads half as many blocks. The same when a window's logs
@@ -376,10 +377,27 @@ don't arrive in time (`arcosIndexer positions window failed` with `DeadlineExcee
 each run, down to one block, until a window fits what the run has left, and doubles with every window applied. Once
 every doc of a window is stored its cursor moves even if the time has just run out.
 
-**If the cursor stops.** `positionsIndex/mainnet.block` not moving for several runs, with `span` falling, is this
-narrowing at work on a dense stretch: wait for `span` to reach a width that fits. With `span` steady and `behind`
-growing, look at the run line's `positions` error and the two log lines above. The step runs last and starts no window
-after 104 s, so a run whose earlier steps use all of that gives it nothing.
+**If the cursor stops.** The function is killed at 120 s (or when it runs out of memory), and a killed run stores
+nothing of what it was doing. So before a window is read it is written down on `positionsIndex/mainnet` as `attempt`
+(`from`, `width`, `at`), and a run that finds `attempt.from` still at the block after the cursor knows the last one died
+on that window: it logs `arcosIndexer positions attempt died`, halves the width, and sets `ceiling` to it, in force
+until the cursor has passed `ceilingUntil` (the end of the window that died), so the width can't double straight back
+into it. An attempt that ends in any way the step sees removes the marker, and a marker more than ten minutes old is
+ignored (the step was off in between). The step starts no window after 100 s, waits for no RPC answer past 106 s and
+starts no round of writes past 108 s.
+
+While the index is more than 10,000 blocks behind the head, its step runs before Stats in a run instead of after it,
+so that the backfill isn't left the seconds Stats didn't use; Stats has its own cursor and catches up. Once within
+10,000 blocks the order is Stats, then positions, as it was. When the step starts no window, the run line's `positions`
+says why in `reason` (`no-time`: the run was past 100 s; `off`: the switch) and still gives the real `behind`.
+
+To watch it from outside, `GET /api/pools/<any token address>` returns `positions.cursor` and, beside it,
+`positions.progress`: `span`, `ceiling`, `ceilingUntil` and `attempt` (`from`, `width`). Reading them:
+- `cursor` still, `attempt.from` = cursor + 1 and `span` falling run by run: it is narrowing on a dense stretch. Wait.
+- `cursor` moving and `span` small with a `ceiling`: it is through the worst and will widen past `ceilingUntil`.
+- `cursor` still and no `attempt` at all: the step isn't starting. Look at the run line's `positions`: `reason` is
+  `no-time` when the run was past 100 s before the step's turn, `off` when it is switched off.
+- `span` at 1 and the cursor still: one block is too much for a run. That needs a larger function, not a narrower window.
 
 So the backfill takes some 300 to 500 runs: 5 to 8 hours at one
 run a minute, longer while inspections run long.

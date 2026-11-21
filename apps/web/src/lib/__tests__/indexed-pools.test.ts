@@ -136,6 +136,15 @@ describe("the positions in an answer", () => {
     expect(poolsAnswer([doc({})])).not.toHaveProperty("positions");
   });
 
+  it("carries the index step's progress in the route's answer, for watching a backfill, and keeps it out of what Inspector reads", () => {
+    const progress = { span: 1_250, ceiling: 1_250, ceilingUntil: 21_118_055, attempt: { from: 21_108_056, width: 1_250 } };
+    const answer: unknown = JSON.parse(JSON.stringify(poolsAnswer([], { ...index, progress })));
+    expect(answer).toEqual({ pools: [], positions: { ...index, progress } });
+    // The browser's Inspector takes the cursor and the positions, and nothing else.
+    expect(positionsFrom(answer)).toEqual(index);
+    expect(poolsAnswer([], index).positions).not.toHaveProperty("progress");
+  });
+
   it("comes back out of the answer as the Inspector's v4Positions, through JSON", () => {
     const answer: unknown = JSON.parse(JSON.stringify(poolsAnswer([doc({ version: "v4", key })], index)));
     expect(positionsFrom(answer)).toEqual(index);
