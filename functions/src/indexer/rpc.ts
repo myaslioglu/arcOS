@@ -13,7 +13,10 @@ export interface LogChain {
   logs(filter: { addresses: readonly Address[]; topic0s: readonly Hex[]; from: number; to: number; deadline?: number }): Promise<RawLog[]>;
 }
 
-/** The node refused a window as too wide (-32012) or too full (-32602, over 20,000 results). */
+/**
+ * The node refused a window as too wide (-32012) or too full (-32602, over 20,000 results), or its answer was larger than
+ * the client takes (viem's ResponseBodyTooLargeError: 10 MiB by default). Each means the window must shrink.
+ */
 export class RangeRefused extends Error {
   constructor(
     /** The width the node suggested ("retry with the range A-B"), when it named one. */
@@ -61,8 +64,24 @@ export function rpcError(e: unknown): { code: number | null; text: string } {
 const RANGE_TEXT = /range too large|max allowed range|exceeds max results|block range/i;
 const SUGGESTED = /retry with the range (\d+)\s*-\s*(\d+)/i;
 
-/** -32012, or a -32602 about the range or the result count: the window must shrink. Null for anything else. */
+/**
+ * Whether viem refused an answer for its size, anywhere in the cause chain. A dense window's logs can pass 10 MiB under
+ * the node's 20,000-result cap (blocks 21,108,056 to 21,118,055 on mainnet: 13,521 logs, 11.8 MB), and the node then
+ * names no range to retry: the window is simply halved.
+ */
+function bodyTooLarge(e: unknown): boolean {
+  for (let link = e as Link | undefined, depth = 0; typeof link === "object" && link !== null && depth < 16; link = link.cause as Link, depth++) {
+    if ((link as { name?: unknown }).name === "ResponseBodyTooLargeError") return true;
+  }
+  return false;
+}
+
+/**
+ * -32012, a -32602 about the range or the result count, or an answer too large for the client: the window must shrink.
+ * Null for anything else.
+ */
 export function rangeRefusal(e: unknown): RangeRefused | null {
+  if (bodyTooLarge(e)) return new RangeRefused();
   const { code, text } = rpcError(e);
   if (code !== -32012 && !(code === -32602 && RANGE_TEXT.test(text))) return null;
   const match = SUGGESTED.exec(text);

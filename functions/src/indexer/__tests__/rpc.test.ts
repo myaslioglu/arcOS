@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { custom, type EIP1193RequestFn } from "viem";
+import { ResponseBodyTooLargeError, custom, type EIP1193RequestFn } from "viem";
 import { MAX_WINDOW } from "../windows";
 import { CALL_GAP_MS, DeadlineExceeded, RangeRefused, RateLimited, isRateLimit, pacer, rangeRefusal, rpcLogChain, type Clock } from "../rpc";
 
@@ -37,6 +37,15 @@ describe("rangeRefusal", () => {
       rpcFailure(-32602, "request exceeded max allowed range: query exceeds max results 20000, retry with the range 23822428-23826851"),
     );
     expect(refusal?.suggested).toBe(4_424);
+  });
+
+  it("reads an answer too large for the client (viem's ResponseBodyTooLargeError) as a window to halve, with no width", () => {
+    const tooLarge = new ResponseBodyTooLargeError({ maxSize: 10_485_760, size: 11_779_739 });
+    const refusal = rangeRefusal(tooLarge);
+    expect(refusal).toBeInstanceOf(RangeRefused);
+    expect(refusal?.suggested).toBeUndefined();
+    // Wrapped, as a client may wrap it.
+    expect(rangeRefusal(Object.assign(new Error("request failed"), { cause: tooLarge }))).toBeInstanceOf(RangeRefused);
   });
 
   it("leaves any other error alone: a plain -32602, a rate limit, a timeout", () => {
@@ -131,6 +140,14 @@ describe("rpcLogChain", () => {
     });
     const chain = rpcLogChain("https://rpc.test", { clock: fakeClock(), transport: node.transport });
     await expect(chain.logs(filter)).rejects.toMatchObject({ name: "RangeRefused", suggested: 2_000 });
+  });
+
+  it("turns an answer too large for the client into RangeRefused with no width, so the window is halved", async () => {
+    const node = fakeNode(() => {
+      throw new ResponseBodyTooLargeError({ maxSize: 10_485_760, size: 11_779_739 });
+    });
+    const chain = rpcLogChain("https://rpc.test", { clock: fakeClock(), transport: node.transport });
+    await expect(chain.logs(filter)).rejects.toMatchObject({ name: "RangeRefused", suggested: undefined });
   });
 
   it("gives the deadline to both calls: a node that doesn't answer in time is DeadlineExceeded, not a range refusal", async () => {
