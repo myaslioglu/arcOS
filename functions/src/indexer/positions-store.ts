@@ -88,6 +88,12 @@ export async function storePositionsSpan(db: Firestore, network: NetworkId, span
   });
 }
 
+/** The cursor doc as it stands, or null when there is none: one read, nothing written. */
+export async function readPositionsIndex(db: Firestore, network: NetworkId): Promise<PositionsIndexDoc | null> {
+  const snap = await positionsIndexRef(db, network).get();
+  return snap.exists ? (snap.data() as PositionsIndexDoc) : null;
+}
+
 /**
  * Writes the attempt marker: the window about to be read. One small write, before the window's logs are asked for, so
  * that a run killed anywhere after it (the function's time or memory) leaves word of which window it died on.

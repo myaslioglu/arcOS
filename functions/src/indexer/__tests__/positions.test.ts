@@ -97,13 +97,14 @@ describe("the position index's settings", () => {
     expect(TAIL_MAX_BLOCKS).toBeLessThanOrEqual(MAX_WINDOW);
   });
 
-  it("keeps the step clear of the function's timeout: after the last inspection starts, and 20 s to spare after its last round of writes", () => {
-    expect(POSITIONS_LIMITS.untilMs).toBeGreaterThan(LIMITS.inspectUntilMs);
+  it("keeps the step clear of the function's timeout, and still lets it start after the inspections", () => {
+    // Inspections may start until `inspectUntilMs` and run 15 s: the step has to be allowed to start after that.
+    expect(POSITIONS_LIMITS.untilMs).toBeGreaterThanOrEqual(LIMITS.inspectUntilMs + 15_000);
     expect(POSITIONS_LIMITS.deadlineMs).toBeGreaterThan(POSITIONS_LIMITS.untilMs);
     expect(POSITIONS_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(POSITIONS_LIMITS.deadlineMs);
-    // A killed run stores nothing: no window starts in the last 30 s, and no round of writes in the last 20.
-    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.untilMs).toBeGreaterThanOrEqual(30_000);
-    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(20_000);
+    // A killed run stores nothing but its marker: no window starts in the last 20 s, and no round of writes in the last 12.
+    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.untilMs).toBeGreaterThanOrEqual(20_000);
+    expect(INDEXER_OPTIONS.timeoutSeconds * 1_000 - POSITIONS_LIMITS.writeUntilMs).toBeGreaterThanOrEqual(12_000);
     expect(POSITIONS_LIMITS.stepMs).toBeLessThanOrEqual(STATS_LIMITS.stepMs);
   });
 });

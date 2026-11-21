@@ -3,7 +3,7 @@ import { DEX, UNISWAP_V4_FROM, type NetworkId } from "@arcos/chain";
 import { MODIFY_LIQUIDITY_TOPIC } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
 import { TOPICS } from "./events";
-import { applyPositionsWindow, clearPositionsAttempt, decodePoolLogs, decodePositionLogs, ensurePositionsIndex, markPositionsAttempt, storePositionsSpan } from "./positions-store";
+import { applyPositionsWindow, clearPositionsAttempt, decodePoolLogs, decodePositionLogs, ensurePositionsIndex, markPositionsAttempt, readPositionsIndex, storePositionsSpan } from "./positions-store";
 import { DeadlineExceeded, RangeRefused, type LogChain } from "./rpc";
 import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
 
@@ -12,12 +12,12 @@ import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
  * waited for past `deadlineMs`, no round of a window's writes starts past `writeUntilMs`, at most `maxWindows` windows
  * are applied, and none starts more than `stepMs` after the step began.
  *
- * The function is killed at 120 s, and a killed run stores nothing of what it was doing. So the step keeps well clear:
- * it starts a window only before 90 s, waits for no RPC answer past 96 s and starts no round of writes past 100 s. A
- * round is six chunks of 400 docs, each a read and a batch: one to three seconds as a rule, and on the function's
- * third of a CPU, with a dense window's 12 MB of logs just parsed, it has been seen to take far longer. 20 s is what
- * is left for the last round, the cursor's transaction and the run's own end. The price is that a run whose
- * inspections go on past 90 s gives this step nothing that minute.
+ * The function is killed at 120 s, and a killed run stores nothing of what it was doing. The step starts a window
+ * only before 100 s, waits for no RPC answer past 106 s and starts no round of writes past 108 s, which leaves 12 s
+ * for the last round (six chunks of 400 docs, each a read and a batch: one to three seconds as a rule), the cursor's
+ * transaction and the run's own end. It doesn't keep further clear than that: inspections may run until about 95 s,
+ * so a step that started nothing after 90 s would often start nothing at all, and what makes a kill survivable is the
+ * attempt marker below, not the margin.
  *
  * A caught-up run reads one window (about 120 blocks). The backfill from the PoolManager's deployment (mainnet block
  * 1,948,056; about 3,030 windows of 10,000 blocks on 2026-11-20) takes a few hundred runs: a window is one
@@ -33,7 +33,10 @@ import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
  * large: the width doubles with every window applied, but not back into what just failed.
  */
 export type PositionsLimits = { untilMs: number; deadlineMs: number; writeUntilMs: number; maxWindows: number; stepMs: number };
-export const POSITIONS_LIMITS: PositionsLimits = { untilMs: 90_000, deadlineMs: 96_000, writeUntilMs: 100_000, maxWindows: 12, stepMs: 10_000 };
+export const POSITIONS_LIMITS: PositionsLimits = { untilMs: 100_000, deadlineMs: 106_000, writeUntilMs: 108_000, maxWindows: 12, stepMs: 10_000 };
+
+/** An attempt marker older than this says nothing about the last run: the step was off, or the function didn't run. */
+export const ATTEMPT_FRESH_MS = 10 * 60_000;
 
 /** Refused windows one run may halve through; as in run.ts: more than this means the node refuses whatever it is asked. */
 const MAX_REFUSALS = 24;
@@ -49,9 +52,23 @@ export type PositionsDeps = {
 /**
  * What the step did, as the run line logs it: counts only, no address. `positions` is how many new positions were stored
  * and `pools` how many pool docs it added; `behind` is how many blocks the cursor is short of the run's head. `error` is the
- * name of what cut the step short, or null.
+ * name of what cut the step short, or null. `reason`, when the step started no window for a reason of its own: the run
+ * had no time left for it ("no-time") or it is switched off ("off"). `behind` is the real figure then too, so a step
+ * that never gets to run doesn't read as caught up.
  */
-export type PositionsResult = { windows: number; positions: number; pools: number; behind: number; error: string | null };
+export type PositionsResult = { windows: number; positions: number; pools: number; behind: number; error: string | null; reason?: "no-time" | "off" };
+
+/** How far the position index's cursor is behind `tip`, from the stored doc alone: null when there is no doc yet. */
+export async function positionsBehind(db: Firestore, network: NetworkId, tip: number): Promise<number | null> {
+  const doc = await readPositionsIndex(db, network);
+  return doc === null || typeof doc.block !== "number" ? null : Math.max(0, tip - doc.block);
+}
+
+/** The result of a step that started nothing, with the real distance behind. A doc that can't be read leaves it at 0. */
+export async function idlePositions(db: Firestore, network: NetworkId, tip: number, reason: "no-time" | "off"): Promise<PositionsResult> {
+  const behind = await positionsBehind(db, network, tip).catch(() => null);
+  return { windows: 0, positions: 0, pools: 0, behind: behind ?? 0, error: null, reason };
+}
 
 type Logger = { warn(message: string, data?: object): void; error(message: string, data?: object): void };
 
@@ -88,7 +105,8 @@ export async function runPositions(args: {
   const poolManager = DEX[network]?.v4?.poolManager;
   const result: PositionsResult = { windows: 0, positions: 0, pools: 0, behind: 0, error: null };
   const until = Math.min(tip, args.indexed);
-  if (fromBlock === null || fromBlock === undefined || !poolManager || elapsed() >= limits.untilMs) return result;
+  if (fromBlock === null || fromBlock === undefined || !poolManager) return result;
+  if (elapsed() >= limits.untilMs) return idlePositions(db, network, tip, "no-time");
   const stepStarted = elapsed();
 
   const doc = await ensurePositionsIndex(db, network, fromBlock, now(), tip);
@@ -100,6 +118,8 @@ export async function runPositions(args: {
   let cap = typeof doc.ceiling === "number" && doc.ceiling >= 1 ? Math.floor(doc.ceiling) : MAX_WINDOW;
   let capUntil = typeof doc.ceilingUntil === "number" ? doc.ceilingUntil : -1;
   const capped = () => (cursor < capUntil ? cap : MAX_WINDOW);
+  // A marker written and not yet answered for: by a move of the cursor, a narrowing, or `forget`.
+  let pending = false;
   let refusals = 0;
   // Once the node has refused a width in this run, no window is tried that wide again.
   let ceiling = MAX_WINDOW;
@@ -111,6 +131,7 @@ export async function runPositions(args: {
   const narrow = async (window: { from: number; to: number }): Promise<number> => {
     const width = window.to - window.from + 1;
     const next = shrink(width);
+    pending = false;
     try {
       await storePositionsSpan(db, network, next, window.to);
     } catch (e) {
@@ -120,7 +141,9 @@ export async function runPositions(args: {
   };
   // The last run's attempt is still on the block after the cursor: it never finished and never said why. It was killed.
   const died = doc.attempt;
-  if (died && typeof died.from === "number" && typeof died.width === "number" && died.width >= 1 && died.from === cursor + 1) {
+  // A marker from long ago is not the last run's: the step was off in between, and nothing died.
+  const fresh = died !== undefined && typeof died.at === "number" && now() - died.at <= ATTEMPT_FRESH_MS;
+  if (died && fresh && typeof died.from === "number" && typeof died.width === "number" && died.width >= 1 && died.from === cursor + 1) {
     log.warn("arcosIndexer positions attempt died", { from: died.from, width: died.width });
     const half = await narrow({ from: died.from, to: died.from + Math.floor(died.width) - 1 });
     span = Math.min(span, half);
@@ -129,6 +152,7 @@ export async function runPositions(args: {
   }
   span = Math.min(span, capped());
   const forget = async () => {
+    pending = false;
     try {
       await clearPositionsAttempt(db, network);
     } catch (e) {
@@ -150,6 +174,7 @@ export async function runPositions(args: {
       log.error("arcosIndexer positions attempt not stored", errorFields(e));
       break;
     }
+    pending = true;
     await deps.onAttempt?.(attempt);
     let logs;
     try {
@@ -204,6 +229,7 @@ export async function runPositions(args: {
       result.windows++;
       result.positions += applied.written;
       result.pools += applied.pools;
+      pending = false;
       cursor = applied.block;
       span = Math.min(grow(span), ceiling, capped());
       continue;
@@ -212,6 +238,9 @@ export async function runPositions(args: {
     await forget();
     cursor = applied.block;
   }
+  // A window the node refused, with the loop's bounds stopping the step before a narrower one was read: its marker
+  // is not a death, and must not read as one to the next run.
+  if (pending) await forget();
   result.behind = Math.max(0, tip - cursor);
   return result;
 }
