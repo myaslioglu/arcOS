@@ -386,13 +386,32 @@ into it. An attempt that ends in any way the step sees removes the marker, and a
 ignored (the step was off in between). The step starts no window after 100 s, waits for no RPC answer past 106 s and
 starts no round of writes past 108 s.
 
-While the index is more than 10,000 blocks behind the head, its step runs before Stats in a run instead of after it,
-so that the backfill isn't left the seconds Stats didn't use; Stats has its own cursor and catches up. Once within
-10,000 blocks the order is Stats, then positions, as it was. When the step starts no window, the run line's `positions`
+While the index is more than 10,000 blocks behind the head (its backfill), its step has a slot early in the run:
+right after the indexer's own windows, before Watchdog and the inspections. There it starts windows for 20 s from where
+it begins and never after 40 s of the run, waits for no RPC answer past 45 s and starts no round of writes past 47 s,
+so it is done by about 50 s, before the 55 s past which Watchdog starts no check. At the end of the run a backfill had
+only what the inspections left, which can be nothing for hours. What it costs, during the backfill only: Watchdog and
+the inspections start up to about 20 s later in a run (their own limits are times of the run and don't move, so each
+does that much less in a busy minute), and a window that kills the function takes that run's Watchdog and inspections
+with it, for the few runs it takes to narrow. If the early slot had no time, the step is tried again at the end of the
+run. Once within 10,000 blocks it is back at the end, after Stats, where it reads its one window. When the step starts no window, the run line's `positions`
 says why in `reason` (`no-time`: the run was past 100 s; `off`: the switch) and still gives the real `behind`.
 
 To watch it from outside, `GET /api/pools/<any token address>` returns `positions.cursor` and, beside it,
-`positions.progress`: `span`, `ceiling`, `ceilingUntil` and `attempt` (`from`, `width`). Reading them:
+`positions.progress`: `span`, `ceiling`, `ceilingUntil`, `attempt` (`from`, `width`) and `lastRun`.
+
+`lastRun` is written at the end of every call of the step, whatever it did: `at` (seconds since the epoch: it should be
+under two minutes old), `startMs` (how far into the run the step began), `windows` (how many it applied), `slot`
+(`early` or `late`), and `reason` (`no-time`, `off`) or `error` (an error's name) when it did nothing or was stopped.
+- `at` fresh, `windows` above 0: it is working; `cursor` moves.
+- `reason: "no-time"` with a large `startMs`: the run was past the slot's cutoff before the step's turn. In the early
+  slot that means the indexer's own windows took 40 s; at the end, that the run was past 100 s.
+- `error` set: that is what stopped it (`DeadlineExceeded`: its logs didn't arrive in time; anything else is in the
+  function's log under `arcosIndexer positions`).
+- `at` old, or no `lastRun` at all, while the indexer is running: the step isn't being called, or the function dies
+  before its end. An `attempt` that stays put says which window it dies on.
+
+Reading the rest:
 - `cursor` still, `attempt.from` = cursor + 1 and `span` falling run by run: it is narrowing on a dense stretch. Wait.
 - `cursor` moving and `span` small with a `ceiling`: it is through the worst and will widen past `ceilingUntil`.
 - `cursor` still and no `attempt` at all: the step isn't starting. Look at the run line's `positions`: `reason` is

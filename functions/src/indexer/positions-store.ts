@@ -1,6 +1,6 @@
 import { FieldValue, Timestamp, type DocumentReference, type Firestore } from "firebase-admin/firestore";
 import type { NetworkId } from "@arcos/chain";
-import { COLLECTIONS, poolId, poolToDoc, positionDoc, positionId, positionsIndexId, type PoolDoc, type PositionDoc, type PositionsIndexDoc } from "@arcos/data";
+import { COLLECTIONS, poolId, poolToDoc, positionDoc, positionId, positionsIndexId, type PoolDoc, type PositionDoc, type PositionsIndexDoc, type PositionsLastRun } from "@arcos/data";
 import { positionFromLog, type V4PositionKey } from "@arcos/inspector";
 import { decodeLogs, sourcesFor, type RawLog } from "./events";
 import { selectPool } from "./pools";
@@ -85,6 +85,14 @@ export async function storePositionsSpan(db: Firestore, network: NetworkId, span
     const stored = snap.data() as PositionsIndexDoc;
     // A ceiling already in force further on stays in force that far.
     tx.update(ref, { span: width, ceiling: width, ceilingUntil: Math.max(ceilingUntil, stored.ceilingUntil ?? 0), attempt: FieldValue.delete() });
+  });
+}
+
+/** Stores what the step's call did (`lastRun`), for watching it from outside. Nothing when there is no cursor doc yet. */
+export async function storePositionsLastRun(db: Firestore, network: NetworkId, lastRun: PositionsLastRun): Promise<void> {
+  const ref = positionsIndexRef(db, network);
+  await db.runTransaction(async (tx) => {
+    if ((await tx.get(ref)).exists) tx.update(ref, { lastRun });
   });
 }
 

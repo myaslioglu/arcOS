@@ -137,7 +137,7 @@ describe("the positions in an answer", () => {
   });
 
   it("carries the index step's progress in the route's answer, for watching a backfill, and keeps it out of what Inspector reads", () => {
-    const progress = { span: 1_250, ceiling: 1_250, ceilingUntil: 21_118_055, attempt: { from: 21_108_056, width: 1_250 } };
+    const progress = { span: 1_250, ceiling: 1_250, ceilingUntil: 21_118_055, attempt: { from: 21_108_056, width: 1_250 }, lastRun: { at: 1_795_000_000, startMs: 2_100, windows: 3, slot: "early" as const } };
     const answer: unknown = JSON.parse(JSON.stringify(poolsAnswer([], { ...index, progress })));
     expect(answer).toEqual({ pools: [], positions: { ...index, progress } });
     // The browser's Inspector takes the cursor and the positions, and nothing else.

@@ -250,6 +250,74 @@ describe("the position index's step of a run", () => {
     });
   });
 
+  describe("its early slot, and the trace it leaves", () => {
+    const lastRun = async () => (await cursorDoc())?.lastRun;
+    /**
+     * A run with Watchdog in it (nothing to watch), on a chain whose every eth_getLogs takes 30 s of the run's clock,
+     * and with Watchdog's last start brought forward to 20 s: whatever runs a window before Watchdog makes it too late.
+     */
+    const withWatch = async (chain: ReturnType<typeof fakeChain>, positions: Record<string, unknown> = { fromBlock: START }) => {
+      const slow = { ...chain, logs: async (f: Parameters<typeof chain.logs>[0]) => { clock.advance(30_000); return chain.logs(f); } };
+      return (await runIndexer({
+        db, network: "mainnet", chain: slow as unknown as ReturnType<typeof fakeChain>, inspectToken: fakeInspector({}), settings: { inspectPerTick: 0, explorerDailyBudget: 0 }, now: clock.now,
+        positions, watch: { reader: {} as never, telegram: null }, limits: { watchStartUntilMs: 20_000 },
+      })) as Ran;
+    };
+
+    it("runs before Watchdog while the index is backfilling: its window is read first, and Watchdog finds the time gone", async () => {
+      await stateAt(HEAD);
+      const chain = fakeChain({ head: HEAD, logs });
+      const result = await withWatch(chain);
+      expect(result.positions).toMatchObject({ windows: 1, error: null });
+      expect(result.watch).toMatchObject({ skipped: "late" });
+      expect(await lastRun()).toMatchObject({ slot: "early", startMs: 0, windows: 1 });
+      // One window only: the early slot starts none more than 20 s after it began, and the end of the run doesn't take it up again.
+      expect(chain.asked).toHaveLength(1);
+    });
+
+    it("stays at the end of the run once caught up: Watchdog starts first, on time", async () => {
+      await stateAt(HEAD);
+      await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+      await db.collection(COLLECTIONS.positionsIndex).doc(positionsIndexId("mainnet")).update({ block: HEAD - 100 });
+      const result = await withWatch(fakeChain({ head: HEAD, logs }));
+      expect(result.watch).toMatchObject({ skipped: null });
+      expect(result.positions).toMatchObject({ windows: 1, behind: 0, error: null });
+      expect(await lastRun()).toMatchObject({ slot: "late", windows: 1 });
+    });
+
+    it("falls back to the end of the run when the early slot had no time", async () => {
+      await stateAt(HEAD);
+      await ensurePositionsIndex(db, "mainnet", START, NOW, HEAD);
+      // No early window may start (its own cutoff is passed in the test by a zero budget), and none at the end either.
+      const result = await go(fakeChain({ head: HEAD, logs }), { fromBlock: START, limits: { untilMs: 0 } });
+      expect(result.positions).toMatchObject({ windows: 0, reason: "no-time", behind: HEAD - START + 1 });
+      expect(await lastRun()).toMatchObject({ slot: "late", reason: "no-time", windows: 0 });
+    });
+
+    it("writes the trace whatever the step did: applied, idle, a named error, a throw", async () => {
+      await stateAt(HEAD);
+      // Applied.
+      await go(fakeChain({ head: HEAD, logs }), { fromBlock: START, limits: { maxWindows: 1 } });
+      const applied = await lastRun();
+      expect(applied).toEqual({ at: Math.floor(clock.now() / 1000), startMs: 0, windows: 1, slot: "early" });
+      // A window that can't be read: the error's name.
+      await go(fakeChain({ head: HEAD, logs, failCall: 1 }), { fromBlock: START });
+      expect(await lastRun()).toMatchObject({ windows: 0, error: "Error", slot: "early" });
+      // Switched off: said, and nothing else touched.
+      await stateAt(HEAD, { positions: false });
+      await go(fakeChain({ head: HEAD, logs }));
+      expect(await lastRun()).toMatchObject({ windows: 0, reason: "off", slot: "late" });
+      // A throw out of the step itself still leaves its name.
+      await stateAt(HEAD);
+      class Boom extends Error {
+        override name = "Boom";
+      }
+      const thrown = await go(fakeChain({ head: HEAD, logs }), { fromBlock: START, onAttempt: () => { throw new Boom(); } });
+      expect(thrown.error).toBe("Boom");
+      expect(await lastRun()).toMatchObject({ windows: 0, error: "Boom" });
+    });
+  });
+
   it("is skipped when the run is given no settings for it", async () => {
     await stateAt(HEAD);
     const chain = fakeChain({ head: HEAD, logs });

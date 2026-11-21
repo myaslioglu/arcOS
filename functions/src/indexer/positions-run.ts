@@ -3,7 +3,7 @@ import { DEX, UNISWAP_V4_FROM, type NetworkId } from "@arcos/chain";
 import { MODIFY_LIQUIDITY_TOPIC } from "@arcos/inspector";
 import { errorFields, nameOf } from "./errors";
 import { TOPICS } from "./events";
-import { applyPositionsWindow, clearPositionsAttempt, decodePoolLogs, decodePositionLogs, ensurePositionsIndex, markPositionsAttempt, readPositionsIndex, storePositionsSpan } from "./positions-store";
+import { applyPositionsWindow, clearPositionsAttempt, decodePoolLogs, decodePositionLogs, ensurePositionsIndex, markPositionsAttempt, readPositionsIndex, storePositionsLastRun, storePositionsSpan } from "./positions-store";
 import { DeadlineExceeded, RangeRefused, type LogChain } from "./rpc";
 import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
 
@@ -34,6 +34,16 @@ import { MAX_WINDOW, grow, nextWindow, shrink } from "./windows";
  */
 export type PositionsLimits = { untilMs: number; deadlineMs: number; writeUntilMs: number; maxWindows: number; stepMs: number };
 export const POSITIONS_LIMITS: PositionsLimits = { untilMs: 100_000, deadlineMs: 106_000, writeUntilMs: 108_000, maxWindows: 12, stepMs: 10_000 };
+
+/**
+ * The step's bounds in its early slot: right after the indexer's own windows, before Watchdog and the inspections,
+ * while the index is backfilling (run.ts). There it starts a window for 20 s from its beginning and never after 40 s
+ * of the run, waits for no RPC answer past 45 s and starts no round of writes past 47 s. A round takes one to three
+ * seconds, so the step is done by about 50 s, before the 55 s past which Watchdog starts no check. In a run whose own
+ * windows are quick (one window when the indexer is caught up: a second or two) that is 20 s of backfill, where the
+ * end of the run had only what the inspections left.
+ */
+export const POSITIONS_EARLY_LIMITS: PositionsLimits = { untilMs: 40_000, deadlineMs: 45_000, writeUntilMs: 47_000, maxWindows: 12, stepMs: 20_000 };
 
 /** An attempt marker older than this says nothing about the last run: the step was off, or the function didn't run. */
 export const ATTEMPT_FRESH_MS = 10 * 60_000;
@@ -98,9 +108,11 @@ export async function runPositions(args: {
   elapsed: () => number;
   log: Logger;
   deps: PositionsDeps;
+  /** The bounds this call starts from, before `deps.limits`: `POSITIONS_LIMITS` unless given (the early slot gives its own). */
+  base?: PositionsLimits;
 }): Promise<PositionsResult> {
   const { db, network, chain, tip, now, started, elapsed, log, deps } = args;
-  const limits = { ...POSITIONS_LIMITS, ...deps.limits };
+  const limits = { ...(args.base ?? POSITIONS_LIMITS), ...deps.limits };
   const fromBlock = deps.fromBlock ?? UNISWAP_V4_FROM[network];
   const poolManager = DEX[network]?.v4?.poolManager;
   const result: PositionsResult = { windows: 0, positions: 0, pools: 0, behind: 0, error: null };
@@ -242,5 +254,32 @@ export async function runPositions(args: {
   // is not a death, and must not read as one to the next run.
   if (pending) await forget();
   result.behind = Math.max(0, tip - cursor);
+  return result;
+}
+
+/**
+ * One call of the step in a run, with its trace: whatever it does (applies windows, has no time, is switched off,
+ * throws), `lastRun` is stored on the cursor doc at its end, so that from outside one can tell a step that isn't
+ * getting a turn from one that takes it and fails. `off`: the console switch is off, and nothing but the trace happens.
+ * Rejects as `runPositions` does, after the trace is written.
+ */
+export async function stepPositions(args: Parameters<typeof runPositions>[0] & { slot: "early" | "late"; off?: boolean }): Promise<PositionsResult> {
+  const { db, network, tip, now, elapsed, log, slot } = args;
+  const startMs = Math.max(0, Math.round(elapsed()));
+  const trace = async (windows: number, extra: { reason?: "no-time" | "off"; error?: string }) => {
+    try {
+      await storePositionsLastRun(db, network, { at: Math.floor(now() / 1000), startMs, windows, slot, ...extra });
+    } catch (e) {
+      log.warn("arcosIndexer positions trace not stored", errorFields(e));
+    }
+  };
+  let result: PositionsResult;
+  try {
+    result = args.off ? await idlePositions(db, network, tip, "off") : await runPositions(args);
+  } catch (e) {
+    await trace(0, { error: nameOf(e).slice(0, 40) });
+    throw e;
+  }
+  await trace(result.windows, { ...(result.reason ? { reason: result.reason } : {}), ...(result.error ? { error: result.error.slice(0, 40) } : {}) });
   return result;
 }

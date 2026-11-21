@@ -6,7 +6,7 @@ import { type ChainReader, type ExtraPool, type PoolScan, type Report, type V4Po
 import { errorFields, nameOf } from "./errors";
 import { decodeLogs, sourcesFor } from "./events";
 import { afterFailure, expired, pickQueue } from "./queue";
-import { idlePositions, positionsBehind, runPositions, type PositionsDeps, type PositionsResult } from "./positions-run";
+import { POSITIONS_EARLY_LIMITS, positionsBehind, stepPositions, type PositionsDeps, type PositionsResult } from "./positions-run";
 import { bestPoolOf, summarize } from "./report";
 import { RangeRefused, type LogChain } from "./rpc";
 import { runStats, type StatsDeps, type StatsResult } from "./stats-run";
@@ -46,7 +46,7 @@ export type IndexedExtras = { extraPools: ExtraPool[]; extraPoolsTruncated?: boo
 /** Inspects one token. `explorer` is null when the day's explorer budget is spent: the inspection runs on RPC only. */
 export type InspectToken = (token: Address, extras: IndexedExtras, explorer: ExplorerBudget | null) => Promise<Inspected>;
 
-/** The position index goes before Stats in a run while it is more than this many blocks behind the head: one full window. */
+/** The position index takes its early slot in a run while it is more than this many blocks behind the head: one full window. */
 export const POSITIONS_FIRST_BEHIND = 10_000;
 
 /** How long the positions read for one inspection may take: past it the inspection goes on without them. */
@@ -203,7 +203,8 @@ export function runLogFields(result: RunResult): Record<string, unknown> {
  * 6c. (the position index, mainnet only, when `deps.positions` is given and the console switch isn't off) records the
  *    positions the PoolManager's `ModifyLiquidity` logs name, and a pool doc for each v4 pool its `Initialize` logs name
  *    that has none, in windows of its own cursor up to this run's cursor, none started after 100 s and
- *    for at most 10 s (positions-run.ts); then the run ends, giving the lease back.
+ *    for at most 10 s (positions-run.ts); then the run ends, giving the lease back. While that index is more than
+ *    10,000 blocks behind the head this step runs instead right after step 4, before Watchdog, for at most 20 s.
  * Steps 4b, 5, 6, 6b and 6c can't keep the run from ending: an error there is logged and named in the result.
  */
 export async function runIndexer(deps: RunDeps): Promise<RunResult> {
@@ -292,11 +293,45 @@ async function leased(
     for (const doc of written.changed) changed.set(doc.address, doc);
   }
 
+  // 4c, ahead of 4b while the position index is backfilling. The position index's step (positions-run.ts), with limits
+  // of its own; its failure is named and the run still ends. Its place is the end of the run (6c), where a caught-up
+  // index reads its one window. But a backfill there only gets what the inspections leave, which can be nothing for
+  // hours on end. So while the index is more than a window behind the head it takes a slot here, right after the
+  // indexer's own windows: 20 s at most, over before Watchdog's last start (`POSITIONS_EARLY_LIMITS`). Watchdog and
+  // the inspections start that much later for as long as the backfill lasts, within their own limits, which are
+  // times of the run and don't move.
+  let error: string | null = null;
+  let positions: PositionsResult | null = null;
+  const positionsOn = deps.positions !== undefined && network === "mainnet";
+  const positionsStep = async (slot: "early" | "late") => {
+    if (!deps.positions) return;
+    try {
+      positions = await stepPositions({
+        db, network, chain, tip, indexed: cursor, now, started, elapsed, log, deps: deps.positions, slot, off: state.positions === false,
+        ...(slot === "early" ? { base: POSITIONS_EARLY_LIMITS } : {}),
+      });
+      error ??= positions.error;
+    } catch (e) {
+      error ??= nameOf(e);
+      log.error("arcosIndexer positions stopped", { slot, ...errorFields(e) });
+    }
+  };
+  let backfilling = false;
+  if (positionsOn && state.positions !== false) {
+    try {
+      const behind = await positionsBehind(db, network, tip);
+      // No cursor yet is the first run of all: as far behind as it gets.
+      backfilling = behind === null || behind > POSITIONS_FIRST_BEHIND;
+    } catch (e) {
+      log.warn("arcosIndexer positions cursor not read", errorFields(e));
+    }
+  }
+  if (backfilling) await positionsStep("early");
+
   // 4b. Watchdog. Its own reader and sender, its own time limits, and no explorer call; whatever fails in it, the
   // inspections and the feeds still run. A fan-out or send failure comes back named in the result, with the checks'
   // counters and cursor (watch.ts); only the checks' own page read rejects, and then the cursor, which rides on
   // finishRun, keeps the last run's.
-  let error: string | null = null;
   let watch: WatchResult | null = null;
   if (deps.watch && network === "mainnet") {
     try {
@@ -399,40 +434,11 @@ async function leased(
       log.error("arcosIndexer stats stopped", errorFields(e));
     }
   };
-  // 6c. The position index, with limits of its own (positions-run.ts). Its failure is named and the run still ends.
-  // Switched off, it still says how far behind it is, and why it did nothing.
-  let positions: PositionsResult | null = null;
-  const positionsOn = deps.positions !== undefined && network === "mainnet";
-  const positionsStep = async () => {
-    if (!deps.positions || !positionsOn) return;
-    try {
-      positions = state.positions === false ? await idlePositions(db, network, tip, "off") : await runPositions({ db, network, chain, tip, indexed: cursor, now, started, elapsed, log, deps: deps.positions });
-      error ??= positions.error;
-    } catch (e) {
-      error ??= nameOf(e);
-      log.error("arcosIndexer positions stopped", errorFields(e));
-    }
-  };
-  // The order: Stats, then the position index, which is last. But while the position index is more than a window
-  // behind the head (its backfill), it goes first: Stats keeps a cursor of its own and catches up from it, and a
-  // backfill that only ever gets the seconds Stats leaves may get none.
-  let positionsFirst = false;
-  if (positionsOn && state.positions !== false) {
-    try {
-      const behind = await positionsBehind(db, network, tip);
-      // No cursor yet is the first run of all: as far behind as it gets.
-      positionsFirst = behind === null || behind > POSITIONS_FIRST_BEHIND;
-    } catch (e) {
-      log.warn("arcosIndexer positions cursor not read", errorFields(e));
-    }
-  }
-  if (positionsFirst) {
-    await positionsStep();
-    await statsStep();
-  } else {
-    await statsStep();
-    await positionsStep();
-  }
+  // 6c. The position index, at the end of the run: when it is caught up (it then reads one window), when it is
+  // switched off (it says so), and when its early slot had no time. Stats goes first, as it always did.
+  await statsStep();
+  const early = positions as PositionsResult | null;
+  if (positionsOn && (!backfilling || early === null || early.reason === "no-time")) await positionsStep("late");
   await finishRun(db, network, now(), { day: today, calls: spent - before }, runId, watch?.cursor);
 
   return {
