@@ -2,7 +2,7 @@ import { encodeAbiParameters, encodeEventTopics, parseAbi, type Hex } from "viem
 import { ARCOS, DEX, USDC, tokenFactoryAbi, type Address } from "@arcos/chain";
 import { MODIFY_LIQUIDITY_TOPIC, type PoolScan, type Report, type V4PositionIndex } from "@arcos/inspector";
 import type { RawLog } from "../indexer/events";
-import { RangeRefused, type LogChain } from "../indexer/rpc";
+import { DeadlineExceeded, RangeRefused, type LogChain } from "../indexer/rpc";
 import type { ExplorerBudget, InspectToken } from "../indexer/run";
 
 const v3Abi = parseAbi(["event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool)"]);
@@ -80,6 +80,8 @@ export type FakeChainOptions = {
   maxSpan?: number;
   /** With `maxSpan`: the width the refusal suggests ("retry with the range A-B"). */
   suggest?: number;
+  /** A window wider than this doesn't answer in time. */
+  slowAbove?: number;
   /** The node refuses even this one block. */
   refuseBlock?: number;
   /** The nth eth_getLogs call (1-based) fails at the transport level. */
@@ -100,6 +102,7 @@ export function fakeChain(options: FakeChainOptions): LogChain & { asked: { from
       asked.push({ from, to });
       if (options.failCall === asked.length) throw new Error("ECONNRESET");
       if (options.maxSpan !== undefined && to - from + 1 > options.maxSpan) throw new RangeRefused(options.suggest);
+      if (options.slowAbove !== undefined && to - from + 1 > options.slowAbove) throw new DeadlineExceeded();
       if (options.refuseBlock !== undefined && from <= options.refuseBlock && options.refuseBlock <= to) throw new RangeRefused();
       const wanted = new Set(addresses.map((a) => a.toLowerCase()));
       return (options.logs ?? []).filter((log) => {
