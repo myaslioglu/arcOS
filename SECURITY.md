@@ -228,7 +228,7 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   `required_error`/`invalid_type_error` messages are dropped.
   `viem`, `abitype` and `wagmi` are flagged only through `abitype`'s optional `zod` peer, which the app never imports (`abitype/zod` is a separate entry point).
 - **Exposure:** a visitor's own browser tab, on input the SDKs validate (the app's forms, their vendors' replies).
-- **Decided by:** the project owner, in chat, 2026-10-30.
+- **Decided by:** the project owner, in chat, 2026-10-30; renewed until 2026-12-29 by merging #63, 2026-11-24.
 - **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-12-29). Remove it
   once the Circle packages move to a patched `zod` and the Reown copy is dealt with. That copy can't move by an
   upgrade: `@walletconnect/ethereum-provider` stays at `2.21.8`, its last Apache-2.0 release (see `query-string`

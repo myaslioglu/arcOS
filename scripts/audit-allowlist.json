@@ -1,20 +1,5 @@
 [
   {
-    "id": "GHSA-vfj7-8cjw-p6xm",
-    "package": "braces",
-    "reason": "dev-only lint chain (eslint-config-next); no fixed version published as of 2026-10-03",
-    "until": "2026-11-03",
-    "paths": ["."]
-  },
-  {
-    "id": "GHSA-vfj7-8cjw-p6xm",
-    "package": "braces",
-    "reason": "the CLI globs only paths from this repo (firebase.json, our source); no untrusted pattern reaches braces in the deploy job",
-    "until": "2026-11-03",
-    "paths": ["tools/firebase"],
-    "runtime": true
-  },
-  {
     "id": "GHSA-mrhx-c7xc-m3w5",
     "package": "zod",
     "reason": "no zod 3.x patch exists (fixed in 4.6.6+); @circle-fin/* pins zod 3.25.67 and @reown/appkit-wallet 3.22.4, and zod 4 breaks Circle (z.function().returns); a DoS in the visitor's own tab only",
