@@ -111,12 +111,17 @@ async function silent(pools: PoolSetup[], over: Parameters<typeof world>[1] = {}
 const ONLY_V4 = "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.";
 /** What the index was read for, and what nothing reaching a warning means: the words after what the old check found. */
 const READ = "Inspector read who holds the Uniswap v4 positions. In the pools Inspector can read, positions wallets can withdraw are under the thresholds for a warning, in what they hold now and in what the next buyers would pay into them.";
-const NO_PASS = "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it counts a position held by a contract as neither locked nor withdrawable.";
+/** Why that is no pass, naming every holder the warning leaves out: a contract, and a wallet behind a removal hook. */
+const NO_PASS =
+  "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it counts a position held by a contract, or a wallet's position in a pool whose hook runs when liquidity is removed, as neither locked nor withdrawable.";
 /** `NO_PASS` on a chain whose list of lock contracts isn't empty. */
-const NO_PASS_LOCKERS = "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It counts a position held by a contract other than a lock contract it recognizes as neither locked nor withdrawable.";
+const NO_PASS_LOCKERS =
+  "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It counts a position held by a contract other than a lock contract it recognizes, or a wallet's position in a pool whose hook runs when liquidity is removed, as neither locked nor withdrawable.";
 const ONLY_V4_READ = `Only Uniswap v4 pools were found. ${READ} ${NO_PASS}`;
 /** What the index came to when the reading stopped short of the whole picture: then the reasons, as the tally has them. */
 const BLOCKED = "Inspector read the position index, but couldn't tell who holds all the liquidity in this token's pools.";
+/** The blocker for a v4 pool created after the index's cursor that the lookup doesn't have. */
+const NEW_POOL = "A Uniswap v4 pool of this token was created since the index was last updated and isn't in it yet, so its liquidity isn't counted.";
 const TIMED_OUT = "Inspector ran out of time before it had read who holds the Uniswap v4 positions.";
 
 // --- The world most cases below are set in: the token at $0.001 (tick -345,420, a multiple of 60 and of 10), 18 decimals,
@@ -197,7 +202,7 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       status: "unknown",
       title: "Couldn't check liquidity locks",
       detail:
-        "Only Uniswap v4 pools were found. Inspector read who holds the Uniswap v4 positions. In the pools Inspector can read, positions wallets can withdraw are under the thresholds for a warning, in what they hold now and in what the next buyers would pay into them. That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it counts a position held by a contract as neither locked nor withdrawable.",
+        "Only Uniswap v4 pools were found. Inspector read who holds the Uniswap v4 positions. In the pools Inspector can read, positions wallets can withdraw are under the thresholds for a warning, in what they hold now and in what the next buyers would pay into them. That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it counts a position held by a contract, or a wallet's position in a pool whose hook runs when liquidity is removed, as neither locked nor withdrawable.",
       evidenceUrl: null,
       fixAppId: null,
     });
@@ -274,7 +279,11 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
   describe("a hook that runs when liquidity is removed", () => {
     const hooked = (flags: string) => v4PoolKey(TOKEN, USDC, 10_000, 60, hookWith(flags));
     it.each([["BEFORE_REMOVE_LIQUIDITY", "0200"], ["AFTER_REMOVE_LIQUIDITY", "0100"], ["AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA", "0001"]])("keeps a wallet's position from counting as a wallet's: %s can block or tax the withdrawal", async (_name, flags) => {
-      await quiet([main([twoSided(7, 2_000n)], hooked(flags))], { 7: WALLET });
+      // However much the wallet holds there, and the words say how such a position is counted.
+      for (const usdc of [2_000n, 200_000n]) {
+        const f = await quiet([main([twoSided(7, usdc)], hooked(flags))], { 7: WALLET });
+        expect(f.detail).toContain("a wallet's position in a pool whose hook runs when liquidity is removed, as neither locked nor withdrawable.");
+      }
     });
     it("changes nothing when the hook has no remove-liquidity permission", async () => {
       await paidToWallets(MOST_HELD, [main([twoSided(7, 2_000n)], hooked("2000"))], { 7: WALLET });
@@ -915,8 +924,17 @@ describe("an index that can't be relied on for a pool adds nothing: the old chec
     const f = await silent(one, { ...held, index: { cursor: Number(HEAD), pools: {} } }, stoppedBy("The position index has no entry yet for a Uniswap v4 pool of this token."));
     expect(f.status).toBe("unknown");
   });
-  it("is truncated", async () => {
-    await silent(one, { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: true } } } }, stoppedBy("A Uniswap v4 pool of this token has more than 500 positions, more than this check reads."));
+  it("is truncated, by either cap: over 500 positions in a pool, or 2,000 over the token's pools", async () => {
+    const TOO_MANY = "This token's Uniswap v4 pools have more positions than this check reads (over 500 in a pool, or 2,000 in all).";
+    await silent(one, { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: true } } } }, stoppedBy(TOO_MANY));
+    // Past the total the index lists nothing for the pools left, however few positions they hold.
+    await silent(one, { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [], truncated: true } } } }, stoppedBy(TOO_MANY));
+    // The engine's own count: five pools of 401 positions are under 500 each and over 2,000 in all. Every NFT is burned, so
+    // nothing but the count stops the reading.
+    const ids = (n: number) => Array.from({ length: 401 }, (_, i) => n * 1_000 + i);
+    const five = [500, 3000, 10_000, 100, 7_777].map((fee, n): PoolSetup => ({ key: v4PoolKey(TOKEN, USDC, fee, 60), positions: ids(n + 1).map((t) => nft(t, L)), listed: true }));
+    const burned = Object.fromEntries([1, 2, 3, 4, 5].flatMap(ids).map((t) => [t, DEAD]));
+    await silent(five, { chain: { nftOwners: burned } }, stoppedBy(TOO_MANY));
   });
   it("lists positions that don't add up to the pool's liquidity: a gap in the index", async () => {
     await silent(
@@ -976,7 +994,7 @@ describe("pools the lookup may not have", () => {
     await silent(
       [{ key, positions: [kept] }],
       { chain: { ...walletChain, logs: [created] }, index },
-      `Only Uniswap v4 pools were found. ${BLOCKED} A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.`,
+      `Only Uniswap v4 pools were found. ${BLOCKED} ${NEW_POOL}`,
     );
   });
 
@@ -1306,7 +1324,9 @@ describe("where the check is the one from before the index, unchanged", () => {
 describe("the words of an unknown that rests on positions the old check can't read", () => {
   // Three of the old check's unknowns say positions "can't be read without an index yet" (`Unread` in checks.ts): only
   // pools other than v2 were found; a deeper v3 or Aerodrome pool sits beside a burned pair; a v4 pool that may hold more
-  // sits beside it. Their status, title and links never change. Their words do, and only once there was an index to read.
+  // sits beside it. Their status, title and links never change. Their words do once an inspection was given an index,
+  // unless the index was found to be stale: then, as with none, they stand word for word. A reading cut off before the
+  // index's cursor was checked against the head says what cut it off, stale index or not.
   const AERO_POOL = "0x8888888888888888888888888888888888888888";
   /** A pair at the v4 pool's price, holding `usdc`, whose LP is all burned. */
   const burnedPair = (usdc: bigint) => ({
@@ -1339,7 +1359,7 @@ describe("the words of an unknown that rests on positions the old check can't re
   };
 
   describe("only pools other than Uniswap v2 were found", () => {
-    it("Uniswap v4 alone: the old words without an index or with a stale one, and what was read with one", async () => {
+    it("Uniswap v4 alone: the old words without an index or with one known to be stale, and what was read with one", async () => {
       expect(await words(burnedV4, {}, { index: null })).toEqual({ withIndex: ONLY_V4, without: ONLY_V4 });
       expect(await words(burnedV4, {}, { chain: STALE })).toEqual({ withIndex: ONLY_V4, without: ONLY_V4 });
       expect(await words(burnedV4, {})).toEqual({ withIndex: ONLY_V4_READ, without: ONLY_V4 });
@@ -1364,7 +1384,7 @@ describe("the words of an unknown that rests on positions the old check can't re
 
   describe("a deeper Uniswap v3 or Aerodrome pool beside a burned pair", () => {
     const beside = (other: Record<string, unknown>) => ({ ...burnedPair(2_000n), ...other });
-    it("the old words without an index or with a stale one", async () => {
+    it("the old words without an index or with one known to be stale", async () => {
       const OLD_V3 = "The deepest pool is a Uniswap v3 position, which can't be read without an index yet.";
       const OLD_AERO = "The deepest pool is an Aerodrome position, which can't be read without an index yet.";
       expect(await words(burnedV4, beside(v3(9_000n)), { index: null })).toEqual({ withIndex: OLD_V3, without: OLD_V3 });
@@ -1378,7 +1398,7 @@ describe("the words of an unknown that rests on positions the old check can't re
     });
   });
 
-  it("a Uniswap v4 pool beside a burned pair: the old words without an index or with a stale one, and what was read with one", async () => {
+  it("a Uniswap v4 pool beside a burned pair: the old words without an index or with one known to be stale, and what was read with one", async () => {
     expect(await words(burnedV4, burnedPair(2_000n), { index: null })).toEqual({ withIndex: OLD_V4_BESIDE, without: OLD_V4_BESIDE });
     expect(await words(burnedV4, burnedPair(2_000n), { chain: STALE })).toEqual({ withIndex: OLD_V4_BESIDE, without: OLD_V4_BESIDE });
     expect((await words(burnedV4, burnedPair(2_000n))).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${READ} ${NO_PASS}`);
@@ -1401,10 +1421,23 @@ describe("the words of an unknown that rests on positions the old check can't re
       expect((await words(burnedV4, { ...burnedPair(2_000n), ...v3(9_000n) }, missing)).withIndex).toBe(`The deepest pool is a Uniswap v3 pool, and Inspector doesn't read the positions in it. ${BLOCKED} ${NO_ENTRY}`);
     });
 
+    it("an empty LP token, of a pair other than the one the old check names", async () => {
+      // The burned USDC pair is the deepest, and the one the old check judges; a smaller EURC pair has no LP at all.
+      const EUR_PAIR = "0x4545454545454545454545454545454545454545";
+      const emptyEurPair = {
+        [readKey(V2, "getPair", [TOKEN, EURC.mainnet])]: EUR_PAIR,
+        ...v2PairReads(EUR_PAIR, EURC.mainnet, TOKEN, 500n * 10n ** 6n, 500n * 10n ** 21n),
+        [readKey(EUR_PAIR, "totalSupply", [])]: 0n,
+      };
+      expect((await words(burnedV4, { ...burnedPair(2_000n), ...emptyEurPair })).withIndex).toBe(
+        `A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${BLOCKED} Another Uniswap v2 pair of this token has an LP totalSupply of 0.`,
+      );
+    });
+
     it("a v4 pool the index's tail shows and nobody read, beside pools that are all Uniswap v3", async () => {
       const created: ChainLog = { topics: [INITIALIZE_TOPIC, `0x${"c1".repeat(32)}`, topic(TOKEN), topic(USDC)], data: "0x", blockNumber: 950n };
       expect((await words([], v3(5_000n), { index: { cursor: 900, pools: {} }, chain: { logs: [created] } })).withIndex).toBe(
-        `Only Uniswap v3 pools were found, and Inspector doesn't read the positions in them. ${BLOCKED} A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.`,
+        `Only Uniswap v3 pools were found, and Inspector doesn't read the positions in them. ${BLOCKED} ${NEW_POOL}`,
       );
     });
 
@@ -1423,9 +1456,51 @@ describe("the words of an unknown that rests on positions the old check can't re
       expect((await words(burnedV4, {}, refused)).withIndex).toBe(`Only Uniswap v4 pools were found. ${COULD_NOT_FINISH}`);
       expect((await words(burnedV4, burnedPair(2_000n), refused)).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${COULD_NOT_FINISH}`);
       expect((await words(burnedV4, burnedPair(2_000n), { input: { deadlineAt: Date.now() + 500 } })).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${TIMED_OUT}`);
+      // An index is known to be stale only once its cursor is checked against the head. Cut off before that, a stale one
+      // gets these words too, and never the claim that there is no index.
+      expect(await words(burnedV4, {}, { chain: STALE, input: { deadlineAt: Date.now() + 500 } })).toEqual({ withIndex: `Only Uniswap v4 pools were found. ${TIMED_OUT}`, without: ONLY_V4 });
       // A token with no v4 pool found has nothing of v4 left unread: only what is said of its v3 positions changes.
       expect((await words([], v3(5_000n), refused)).withIndex).toBe("Only Uniswap v3 pools were found, and Inspector doesn't read the positions in them.");
+      // Unless the index's list of the token's pools was cut short: a v4 pool may be among those it didn't list.
+      expect((await words([], v3(5_000n), { ...refused, input: { extraPoolsTruncated: true } })).withIndex).toBe(
+        `Only Uniswap v3 pools were found, and Inspector doesn't read the positions in them. ${COULD_NOT_FINISH}`,
+      );
     });
+  });
+
+  describe("the old check's other unknowns say nothing of an index, and keep their words with a fresh one", () => {
+    /** With the index fresh (`world`'s), the finding is the one without it, word for word. */
+    const same = async (pools: PoolSetup[], over: Parameters<typeof world>[1], detail: string) => {
+      const f = await silent(pools, over);
+      expect(f).toMatchObject({ status: "unknown", title: "Couldn't check liquidity locks", detail });
+    };
+    const v2AndV4: DexConfig = { quoteTokens: [USD], v2Factory: V2, v4: UNISWAP_V4 };
+
+    it("a v2 pair whose LP token has no supply, beside a v4 pool", async () => {
+      const emptyPair = { [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR, ...v2PairReads(PAIR, USDC, TOKEN, 2_000n * 10n ** 6n, 2_000n * 10n ** 21n), [readKey(PAIR, "totalSupply", [])]: 0n };
+      await same(burnedV4, { dex: everything, chain: { reads: { ...noPools(everything), ...emptyPair }, nftOwners: { 7: DEAD } } }, "The v2 LP token's totalSupply is 0.");
+    });
+
+    it("no pool found, after every family answered", async () => {
+      await same([], { dex: everything, chain: { reads: noPools(everything) } }, "No pool was found.");
+    });
+
+    it("no family answered at all", async () => {
+      // Nothing answers the v2 factory, and Multicall3 reverts, so the v4 lookup never answers either.
+      await same([], { dex: v2AndV4, chain: { multicallReverts: true } }, "Every call to the configured DEX contracts reverted, so no pool was found or ruled out \u2014 an address may hold no contract on this network.");
+    });
+
+    it("no pool found while a family never answered", async () => {
+      await same([], { dex: v2AndV4 }, "Uniswap v2 didn't answer, so a pool there can't be ruled out.");
+    });
+  });
+
+  it("where the chain's lock contracts aren't vetted, says that v2 LP that isn't burned is counted as neither locked nor withdrawable too", async () => {
+    // A burned pair, so the old check's answer is about the v4 pool beside it, not the unvetted LP.
+    const { withIndex } = await words(burnedV4, burnedPair(2_000n), { input: { lockersVetted: false } });
+    expect(withIndex).toBe(
+      `A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${READ} ${NO_PASS} It counts v2 LP that isn't burned or in a known lock contract the same way, as the lock contracts on Arc aren't recognized yet.`,
+    );
   });
 
   it("leaves a warning's words as they were, whatever pools sit beside the one it is about", async () => {

@@ -319,8 +319,9 @@ a fail: every pass, fail and unknown of lp-lock is what the check from before th
 warning from the positions takes the place of that check's pass or unknown, never of its fail. That check's words stand
 too, but for its unknowns that say positions "can't be read without an index yet". Once the index was read, those say
 what was read (that Inspector read who holds the v4 positions, that positions wallets can withdraw are under the
-thresholds for a warning, and that this confirms no lock) or what stopped the reading, and that Uniswap v3 and Aerodrome
-positions aren't read, without tying that to an index. A launch
+thresholds for a warning, and that this doesn't confirm a lock, since a position held by a contract, or a wallet's
+position in a pool whose hook runs when liquidity is removed, counts as neither locked nor withdrawable) or what stopped
+the reading, and that Uniswap v3 and Aerodrome positions aren't read, without tying that to an index. A launch
 burned into a v4 pool reads "couldn't check"; one held by a wallet reads as a warning, titled "Wallets hold most of the
 USDC Inspector found in its pools" once wallets hold 1,000 USDC there and more than half of it, and "Some liquidity
 isn't locked" otherwise (a fresh wallet-held launch nobody has bought from, say). Failing a token on its v4 positions
@@ -329,17 +330,20 @@ can make which warning and at what cost are in the README, "How Inspector decide
 `packages/inspector/src/checks.ts`.
 
 The v4 reading is left out when: there is no index (testnet, or it couldn't be read), it is switched off, its cursor is
-more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 500 positions, the token has more than
-50 v4 pools, the positions don't add up (a gap in the index), or a pool of the token was created since the cursor and
+more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 500 positions or the token's pools more
+than 2,000 in all, the token has more than 50 v4 pools, the positions don't add up (a gap in the index), or a pool of
+the token was created since the cursor and
 the inspection wasn't given it. A pool created since the cursor that the inspection does have is read from those
 blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never counted.
 The same when the v4 reads fail or outlast the inspection's deadline (a node refusing the tail's `eth_getLogs`, which
 Arc does past 20,000 results, is one way): the old check is started first, runs beside them, and answers. Its status
-always stands. Its words stand word for word only when there was no index to use (none, switched off, or more than
-10,000 blocks behind); in the other cases a detail that would say the positions can't be read without an index says
-what stopped the reading instead: the blocker's own sentence (for a pool with too many positions, "A Uniswap v4 pool of
-this token has more than 500 positions, more than this check reads."), or that Inspector ran out of time, or couldn't
-finish reading who holds the v4 positions. Holders are classified by their code, up to 500 of them, in one
+always stands. Its words stand word for word only when there was no index to use (none, switched off, or known to be
+more than 10,000 blocks behind: that is known once the cursor has been checked against the head, so a reading cut off
+by the deadline, or by a failed read of the head, before that says what cut it off, stale index or not); in the other
+cases a detail that would say the positions can't be read without an index says what stopped the reading instead: the
+blocker's own sentence (for too many positions, "This token's Uniswap v4 pools have more positions than this check
+reads (over 500 in a pool, or 2,000 in all)."), or that Inspector ran out of time, or couldn't finish reading who holds
+the v4 positions. Holders are classified by their code, up to 500 of them, in one
 state-overridden `eth_call` per 250 (40 single `eth_getCode` reads when a node refuses the override).
 
 Known limits, accepted: a stored inspection is as of its block and nothing re-inspects a token when its price moves; a

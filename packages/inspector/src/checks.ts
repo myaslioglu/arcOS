@@ -57,13 +57,13 @@
  *   fail (`tallyLiquidity`, lp-path.ts, `lpLockByPath`). Every pass, every fail and every unknown is the old check's,
  *   and so are its words, but for one thing. Three of its unknowns say positions "can't be read without an index yet"
  *   (`Unread`). Once an inspection had an index to read, those say instead what it read and what it didn't
- *   (`unreadDetail`): that it read who holds the v4 positions, found them under the warning's lines and still confirms
- *   no lock; or what stopped the reading; and, index or not, that v3 and Aerodrome positions aren't read. The reading
- *   runs when a v4 pool is involved and the index is fresh (`input.v4Positions`: mainnet, the index read, not switched
- *   off, its cursor within 10,000 blocks of the head). When it finds nothing to warn about, can't read the whole
- *   picture, or fails in any way (its reads outlast the inspection's deadline, a node refuses the index's tail,
- *   anything throws), the finding is the old check's. The old check is started first and runs beside it, with the time
- *   it always had. A warning replaces the old check's pass or unknown, never its fail.
+ *   (`unreadDetail`): that it read who holds the v4 positions and found them under the warning's lines, and that this
+ *   doesn't confirm a lock; or what stopped the reading; and, index or not, that v3 and Aerodrome positions aren't
+ *   read. The reading runs when a v4 pool is involved and the index is fresh (`input.v4Positions`: mainnet, the index
+ *   read, not switched off, its cursor within 10,000 blocks of the head). When it finds nothing to warn about, can't
+ *   read the whole picture, or fails in any way (its reads outlast the inspection's deadline, a node refuses the
+ *   index's tail, anything throws), the finding is the old check's. The old check is started first and runs beside
+ *   it, with the time it always had. A warning replaces the old check's pass or unknown, never its fail.
  *   What it reads: every v4 position, live (`StateView.getPositionInfo`, the exact LiquidityAmounts math), classified
  *   by its holder, the PositionManager NFT's owner or else the address that holds it in the PoolManager
  *   (`classifyHolder`); every v2 pair split by LP-token holder; a v3 or Aerodrome pool's quote balance, nobody's in
@@ -139,8 +139,10 @@
  *   Without an index (testnet; an inspection that couldn't fetch it; the indexer's `positions` switch off), with one
  *   more than 10,000 blocks behind the head (its backfill: a stale index can't say which pools there are), or with no
  *   v4 pool involved (none found, none created since the cursor, no pool list cut short), none of this runs. In the
- *   first two the old check's words stand, word for word. In the last the index was read, so only what they say of
- *   v3 and Aerodrome positions changes.
+ *   first two the old check's words stand, word for word, with one exception: an index is stale only once its cursor
+ *   has been checked against the head, so when the deadline passes or the head can't be read before that, the words
+ *   say so ("ran out of time", "couldn't finish"), stale index or not. In the last the index was read, so only what
+ *   they say of v3 and Aerodrome positions changes.
  * - prevrandao: the contract's logic code couldn't be read (the same `LogicGap` cases as
  *   privileges); a proxy's implementation bytecode is what gets scanned, never the trampoline's.
  * - trade: no DEX or no trade quote is configured, pool discovery failed, no USDC pool was found, or the round trip
@@ -166,8 +168,8 @@ import { CallReverted, type ChainReader, type Finding, type InspectInput, type P
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { MAX_EXTRA_POOLS, readV4Pools, toSixDecimals, type V4Quote } from "./v4";
 import {
-  MAX_POSITIONS_PER_POOL, ReadsTimedOut, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, readHolderCode, readV4Positions,
-  v2TokenSqrtPrice, type PoolGap, type V4PoolRef,
+  MAX_POSITIONS, MAX_POSITIONS_PER_POOL, ReadsTimedOut, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, readHolderCode,
+  readV4Positions, v2TokenSqrtPrice, type PoolGap, type V4PoolRef,
 } from "./v4-positions";
 import { HOLDER_CLASSES, findPath, noSums, v2Ask, v4Ask, type Ask, type AskPath, type ClassSums, type HolderClass } from "./lp-path";
 import { MIN_DEPTH, STATUS, buyDidNotTrade, poolCouldNotTrade, orderDepth, v2Out, poolCanRefuseSell, roundTripFee, simulateTrade, testAmountFor, tradeSetup, type TradeAttempt, type TradeSetup } from "./simulate";
@@ -946,7 +948,9 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
  * A warning takes the place of the old check's pass or unknown, and gives way to its fail.
  * The old check's answer keeps its words too, but for the three unknowns that say positions "can't be read without an
  * index yet" (`Unread`). With an index that could be used (`IndexReading`), those say what Inspector read and what it
- * didn't instead (`unreadDetail`). Without one they stand word for word.
+ * didn't instead (`unreadDetail`). Without one (none given, or one known to be more than `TAIL_MAX_BLOCKS` behind)
+ * they stand word for word. A reading cut off before the index's cursor is checked against the head says what cut it
+ * off, whether or not the index was stale.
  * `token` is the inspected token's total supply and decimals, when known: the decimals are how a token count is written.
  */
 export async function checkLpLock(input: InspectInput, scan: PoolScan | null, token: TokenFacts = { supply: null, decimals: null }): Promise<Finding> {
@@ -977,8 +981,8 @@ export async function checkLpLock(input: InspectInput, scan: PoolScan | null, to
 
 /**
  * What the position index came to in an inspection that was given one, for the words of an answer the old check gives.
- * - `none`: it couldn't be used. It is more than `TAIL_MAX_BLOCKS` behind the head, so the inspection is one without an
- *   index, and the old words stand;
+ * - `none`: it couldn't be used. It was found to be more than `TAIL_MAX_BLOCKS` behind the head, so the inspection is
+ *   one without an index, and the old words stand;
  * - `uninvolved`: it was read, and no v4 pool is involved (none found, none created since its cursor, no list cut short);
  * - `read`: every v4 position was read and its holder classified, and nothing reached a warning. `unclassified`: the
  *   holders whose code wasn't read (`MAX_HOLDER_CODE_READS`);
@@ -1031,9 +1035,11 @@ function unreadDetail(unread: Unread, reading: Exclude<IndexReading, { kind: "no
             ? [`${n === 1 ? "1 holder of this token's liquidity wasn't" : `${n.toLocaleString("en-US")} holders of this token's liquidity weren't`} classified, more than this check reads, and what ${n === 1 ? "it holds" : "they hold"} isn't counted as a wallet's.`]
             : []),
           "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool.",
-          input.knownLockers.length === 0
-            ? "It recognizes no lock contracts yet, and it counts a position held by a contract as neither locked nor withdrawable."
-            : "It counts a position held by a contract other than a lock contract it recognizes as neither locked nor withdrawable.",
+          // Every holder the warning counts as neither a wallet's nor burned or locked (`HolderClass`) is named in these
+          // words: holders whose code wasn't read above, v3 and Aerodrome pools in what was found, and here a contract, a
+          // wallet behind a removal hook and, where the lock contracts aren't vetted, v2 LP that isn't burned.
+          `${input.knownLockers.length === 0 ? "It recognizes no lock contracts yet, and it counts a position held by a contract" : "It counts a position held by a contract other than a lock contract it recognizes"}, or a wallet's position in a pool whose hook runs when liquidity is removed, as neither locked nor withdrawable.`,
+          ...(input.lockersVetted ? [] : [`It counts v2 LP that isn't burned or in a known lock contract the same way, as the lock contracts on ${input.chain.name} aren't recognized yet.`]),
         ];
       }
       case "blocked":
@@ -1076,7 +1082,9 @@ export const SHARE_SCALE = 10n ** 12n;
 
 const GAP_REASON: Record<PoolGap, string> = {
   missing: "The position index has no entry yet for a Uniswap v4 pool of this token.",
-  truncated: `A Uniswap v4 pool of this token has more than ${MAX_POSITIONS_PER_POOL} positions, more than this check reads.`,
+  // Either cap: a pool over its own, or the token's pools over the total. The index cuts a pool short at either, and past
+  // the total it lists no positions at all for the pools left (`indexedPositionsFor` in packages/data).
+  truncated: `This token's Uniswap v4 pools have more positions than this check reads (over ${MAX_POSITIONS_PER_POOL} in a pool, or ${MAX_POSITIONS.toLocaleString("en-US")} in all).`,
   // Not shown: an index this far behind sends the whole check to `lpLockWithoutIndex` (see `tallyLiquidity`).
   stale: `The position index is more than ${TAIL_MAX_BLOCKS.toLocaleString("en-US")} blocks behind the chain.`,
   mismatch: "The position index has a gap: the positions it lists for a Uniswap v4 pool don't add up to the pool's liquidity.",
@@ -1166,7 +1174,8 @@ async function tallyOrWhyNot(input: InspectInput, scan: PoolScan, dex: DexConfig
   if (silent) blockers.add(silent);
   if (listTruncated) blockers.add(`This token has more Uniswap v4 pools than are read (over ${MAX_EXTRA_POOLS}), so its liquidity can't be added up.`);
   if (unmapped) blockers.add(GAP_REASON.unreadable);
-  if (v4Read.unlisted.length > 0) blockers.add("A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.");
+  // Since the cursor, which can be up to `TAIL_MAX_BLOCKS` (over an hour) behind the head.
+  if (v4Read.unlisted.length > 0) blockers.add("A Uniswap v4 pool of this token was created since the index was last updated and isn't in it yet, so its liquidity isn't counted.");
 
   const bids = noSums();
   const asks: Ask[] = [];
@@ -1183,13 +1192,16 @@ async function tallyOrWhyNot(input: InspectInput, scan: PoolScan, dex: DexConfig
   };
 
   // Uniswap v2: the pair, split by who holds the LP token.
-  for (const pair of scan.pools) {
-    if (pair.version !== "v2") continue;
+  // The pair the old check judges is the deepest, the first of equals, as `lpLockWithoutIndex` picks it. When its LP
+  // supply is 0 that check answers alone; a blocker is shown beside its answer only for another pair.
+  const v2Pairs = scan.pools.filter((p) => p.version === "v2");
+  const judged = v2Pairs.length > 0 ? v2Pairs.reduce((a, b) => (b.depth > a.depth ? b : a)) : null;
+  for (const pair of v2Pairs) {
     const read = (fn: string, args: unknown[] = []) => beforeDeadline(deadlineAt, () => reader.read(pair.address, erc20Abi, fn, args) as Promise<bigint>);
     const supply = await read("totalSupply");
     if (supply === 0n) {
       // No evidence to compute a locked share from: an LP token with 0 supply isn't a "fail".
-      blockers.add("The v2 LP token's totalSupply is 0.");
+      blockers.add(pair === judged ? "The v2 LP token's totalSupply is 0." : "Another Uniswap v2 pair of this token has an LP totalSupply of 0.");
       continue;
     }
     const [burnt, inLockers] = await Promise.all(

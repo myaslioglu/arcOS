@@ -207,8 +207,9 @@ token with only v4 pools is "couldn't check". Where the v2 check's detail would 
 holds the v4 positions, and positions wallets can withdraw are under the thresholds for a warning
 (below), in what they hold now and in what the next buyers would pay into them. That isn't a pass:
 Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it
-counts a position held by a contract as neither locked nor withdrawable. Positions in Uniswap v3 and
-Aerodrome pools aren't read, index or not.
+counts a position held by a contract, or a wallet's position in a pool whose hook runs when
+liquidity is removed, as neither locked nor withdrawable. Positions in Uniswap v3 and Aerodrome
+pools aren't read, index or not.
 
 What it reads: every v4 position's liquidity and, for a PositionManager NFT, its owner, live; every
 v2 pair by who holds its LP token. A wallet is an address with no code. Burn addresses, lock
@@ -261,11 +262,14 @@ sale, or knowing which wallet is the deployer's), and is left for later.
 
 The v4 reading is left out, and the v2 check answers alone, on testnet, which has no index; when the
 index couldn't be fetched, is switched off or is more than 10,000 blocks behind the chain; when the
-token has more than 50 v4 pools or a pool with more than 500 positions; when a pool was created in
-the last minutes and isn't indexed yet; when reading the positions fails or takes longer than the
-inspection has; and for a token with no Uniswap v4 pool. In every one of those cases the status is
-exactly the v2 check's. So are its words when there was no index to use: on testnet, and when the
-index couldn't be fetched, is switched off or is that far behind. In the other cases a detail that
+token has more than 50 v4 pools, or more than 500 positions in a pool or 2,000 in all; when a pool
+was created since the index was last updated and isn't in it yet; when reading the positions fails
+or takes longer than the inspection has; and for a token with no Uniswap v4 pool. In every one of
+those cases the status is exactly the v2 check's. So are its words when there was no index to use:
+on testnet, and when the index couldn't be fetched, is switched off or is known to be that far
+behind. An index is known to be that far behind only once its cursor has been checked against the
+chain's head: when the inspection runs out of time, or the head can't be read, before that, the
+detail says so instead, whether or not the index was behind. In the other cases a detail that
 would say the positions "can't be read without an index yet" says what stopped the reading instead
 (a pool with too many positions, say, or the inspection running out of time). For a token with no
 v4 pool the only change is that it says Inspector doesn't read Uniswap v3 or Aerodrome positions,
