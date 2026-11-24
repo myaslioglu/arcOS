@@ -334,6 +334,10 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
    vesting wallet is its own contract (`src/vesting/ArcVesting.sol:ArcVesting`, constructor
    `(beneficiary, start, duration, cliff)`), verified one by one if needed.
 
+   forge's status line can be wrong on this explorer: on 2026-11-24 it printed "Fail - Unable to verify" (and exited
+   0) for four of the five, which were full matches a few minutes later. Check each address with
+   `curl -s https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>` and look for `is_fully_verified`.
+
 7. **Checks after the deployment.** All read-only. First the three addresses from step 5:
 
        export VAULTS=<VaultFactory> VESTINGS=<VestingFactory> PASS=<ProPass>
@@ -479,7 +483,8 @@ reads.
 R1's VaultFactory, VestingFactory and ProPass were deployed on Arc Testnet on 2026-11-17 (see "R1" above), from the
 project wallet with `DeployR1` at main `ddf1f5c` (nonces 6 to 14, nine transactions). The FeeController's owner and
 recipient, and the VaultFactory's owner, are the project wallet; the five R1 keys read back as in step 7's table, and
-Uniswap v4's PositionManager is allowed. They are not deployed on mainnet. Explorer source verification is not done yet.
+Uniswap v4's PositionManager is allowed. They are not deployed on mainnet. Their sources, and those of the two vault
+implementations, were verified on the testnet explorer on 2026-11-24 with step 6's commands, each a full match.
 
 The mainnet Multisend was deployed again on 2026-10-30, against the same FeeController and with the same ABI and fee
 keys. The previous version's `sendNative` copied each recipient's return data into memory; the new one makes the
