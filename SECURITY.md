@@ -221,15 +221,19 @@ Deliberate, documented exceptions to this project's "no high/critical `npm audit
   memory (`handleArrayResult` in zod's v4 core). It is fixed in `zod 4.6.6`; no `3.x` release carries a patch. The flagged
   range `<4.6.6` takes in `3.x`, which is what the Circle and Reown packages import, and that code path (`handleArrayResult`)
   exists only in `zod/v4/core`, which nothing here imports; npm reports the packages all the same.
-- **Why there is no fix here:** every `@circle-fin/*` package pins `zod` at exactly `3.25.67` (its latest release,
-  `@circle-fin/app-kit 1.19.0`, too) and `@reown/appkit-wallet` pins `3.22.4`. A `zod` override to `4.x` breaks
-  Circle's v3 schemas: `z.function().returns(...)`, which its fee options use, does not exist in `zod 4`
-  (`z.function(...).returns is not a function`), and `required_error`/`invalid_type_error` messages are dropped.
+- **Why there is no fix here:** every `@circle-fin/*` package pins `zod` at exactly `3.25.67` (their latest releases
+  too, `@circle-fin/app-kit 1.23.0` among them, checked 2026-11-24) and `@reown/appkit-wallet` pins `3.22.4`. A `zod`
+  override to `4.x` breaks Circle's v3 schemas: `z.function().returns(...)`, which its fee options use (still so in
+  `app-kit 1.23.0`), does not exist in `zod 4` (`z.function(...).returns is not a function`), and
+  `required_error`/`invalid_type_error` messages are dropped.
   `viem`, `abitype` and `wagmi` are flagged only through `abitype`'s optional `zod` peer, which the app never imports (`abitype/zod` is a separate entry point).
 - **Exposure:** a visitor's own browser tab, on input the SDKs validate (the app's forms, their vendors' replies).
 - **Decided by:** the project owner, in chat, 2026-10-30.
-- **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-11-29). Remove it
-  once the Circle and Reown packages move to a patched `zod`.
+- **Handled by:** an expiring entry in `scripts/audit-allowlist.json` (`runtime: true`, until 2026-12-29). Remove it
+  once the Circle packages move to a patched `zod` and the Reown copy is dealt with. That copy can't move by an
+  upgrade: `@walletconnect/ethereum-provider` stays at `2.21.8`, its last Apache-2.0 release (see `query-string`
+  below), which pins `@reown/appkit 1.7.8` and so `@reown/appkit-wallet 1.7.8` with its `zod 3.22.4`. It would need a
+  scoped override to a patched `zod`, checked on its own.
 
 ### `picomatch` (via vitest and its vite, the ESLint config, WalletConnect's `unstorage`, and the Firebase CLI)
 
