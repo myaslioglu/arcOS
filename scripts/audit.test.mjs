@@ -31,7 +31,7 @@ const advisory = (name, id, severity = "high") => ({
   range: "<=3.0.3",
 });
 
-/** The braces chain CI sees today: braces <- micromatch <- fast-glob <- @next/eslint-plugin-next <- eslint-config-next. */
+/** The braces chain CI saw on 2026-10-03: braces <- micromatch <- fast-glob <- @next/eslint-plugin-next <- eslint-config-next. */
 const bracesChain = {
   braces: { name: "braces", severity: "high", isDirect: false, via: [advisory("braces", "GHSA-vfj7-8cjw-p6xm")], effects: ["micromatch"] },
   micromatch: { name: "micromatch", severity: "high", isDirect: false, via: ["braces"], effects: ["fast-glob"] },
