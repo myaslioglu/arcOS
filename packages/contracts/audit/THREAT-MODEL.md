@@ -137,12 +137,11 @@ ProPass, D0 for a vesting design deviation, N1 for one added while writing this 
 decision of 2026-11-16 (`tokenOf`).
 
 Status:
-- **Owner decision, open**: a product choice not yet made, so the current behaviour may change before the freeze.
 - **Decided**: a choice was made; we'd like your view.
 - **Fixed**: raised in review and changed in the code, with a test; listed so you can check the fix.
 - **By design**: accepted and documented in NatSpec; listed so you can challenge it.
 - **Decided for testnet**: accepted for the testnet deployment, to be revisited before mainnet.
-- **Open until testnet**: settled by a check after the testnet deployment.
+- **Open**: needs a check on Arc; no local test can settle it.
 
 ### A. Tokens
 
@@ -234,9 +233,10 @@ fee recipient, and so keep all that token's fees.
 
 **Q20. The 100,000-gas budget.** A recipient that needs more (a Safe with guards or modules, most contracts with logic
 in `receive`) is skipped on every collect.
-- Status: **owner decision, open**.
-- Current rule: the recipient stays a plain account (code size 0), or a plain Safe measured to fit. `DeployR1` prints
-  its code size, and DEPLOY.md's R1 step 7 checks it.
+- Status: decided (the owner's decision of 2026-11-24): the operational rule is enough. Nothing enforces it on
+  chain, and the contracts don't change.
+- The rule: the recipient stays a plain account (code size 0), or a plain Safe measured to fit. `DeployR1` prints its
+  code size, and DEPLOY.md's R1 step 7 checks it.
 - Question: should that be enforced on chain (for example by `setRecipient`), or is the operational rule enough?
 
 **Q28. The owner can force the skip** on a token whose transfer cost they can push above the budget (a tax token that
@@ -394,15 +394,17 @@ value that arrives is stranded.
 ### G. USDC's two views on Arc
 
 **Q16, Q25, V14, T1. Behaviour of `0x3600` that no local test can reach.** A fork can't move `0x3600` balances, so
-these are open:
+only a check on Arc can settle these:
 - whether its `transfer` fits the 100,000-gas share budget (Q25);
 - whether an ERC-20 transfer of USDC to a contract whose `receive` reverts succeeds (T1). The `ArcVesting` wallet
   refuses native value, so this matters for vesting USDC;
 - how Arc's blocklist behaves.
 
 Also, a v4 pool of native USDC against `0x3600` would split both currencies under `address(0)`.
-- Status: open until testnet. DEPLOY.md's R1 step 7 settles T1 with a 1 USDC schedule after the deployment; the rest
-  goes to the live read-only suite. Only a mock covers the two views today.
+- Status: T1 is answered: the transfer succeeds. On Arc Testnet on 2026-11-17, a 1 USDC one-hour schedule through the
+  ERC-20 view was created (DEPLOY.md's R1 step 7), `tokenOf` named `0x3600`, and after the hour `release` paid the 1
+  USDC out (`released` reads 1,000,000 and the wallet holds 0). Q25, the blocklist (Q16) and the two views together
+  (V14) are still open: no check on Arc has measured them yet. Locally, only a mock covers the two views.
 
 **V5, and the vesting double release.** OpenZeppelin keeps separate books for native value and each token. On Arc,
 USDC vested through its ERC-20 view is also the wallet's native balance, so a beneficiary could release the same
@@ -437,7 +439,8 @@ releases between the cliff and the end then revert on overflow until `end()`. Th
 ### I. ProPass
 
 **V9. `subscribe` accepts `account == address(0)`.**
-- Status: **owner decision, open**; the current behaviour is kept. It is only the payer's loss.
+- Status: decided (the owner's decision of 2026-11-24): current behaviour kept, no contract change. It is only the
+  payer's loss.
 - Question: should it revert?
 
 **V10. `ProPass` has no reentrancy guard.** It writes `paidUntil` before forwarding the payment, and a re-entry can
@@ -465,6 +468,6 @@ then deploys. It runs every check before its first transaction:
    the recipient turn it against the other?
 3. The v4 encoding in `_collectV4`, against Arc's deployed PositionManager.
 4. `ArcVesting` on Arc's two-view USDC.
-5. The decisions above: the two still open (Q20, V9), those made on 2026-10-02 (Q9, Q28, D0, the Q21 fix and the
-   `renounceOwnership` fix under Q7 and V2), and those of 2026-11-16 (`maxFeeBps` under Q10, `tokenOf` under N2).
-   What you would choose, and why.
+5. The decisions above: those made on 2026-10-02 (Q9, Q28, D0, the Q21 fix and the `renounceOwnership` fix under Q7
+   and V2), those of 2026-11-16 (`maxFeeBps` under Q10, `tokenOf` under N2), and those of 2026-11-24 (the recipient
+   rule under Q20, `address(0)` under V9). What you would choose, and why.

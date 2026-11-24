@@ -10,14 +10,14 @@ Nothing in the contract sources was changed for this report.
 |---|---|
 | Slither | 0.11.6 (`slither-analyzer` from PyPI; crytic-compile 0.4.2, solc-select 1.2.0), in a throwaway virtualenv |
 | Compiler | solc 0.8.30, `--optimize --optimize-runs 200 --evm-version cancun` (the settings in `foundry.toml`) |
-| Source | the contracts after the owner's decision of 2026-11-16 (`tokenOf`, `maxFeeBps`), branch `r1-contract-changes` at `8db83fb`, from `main` at `aa4e1eb` (see `SCOPE.md`). `main` at `aa4e1eb` was run the same day and gave the same 46 findings. Earlier runs: the owner's decisions of 2026-10-02, branch `audit-decisions` at `134d01f`; the first, the draft's base commit, `main` at `5ad18ee` |
+| Source | the contracts after the owner's decision of 2026-11-16 (`tokenOf`, `maxFeeBps`), branch `r1-contract-changes` at `8db83fb`, from `main` at `aa4e1eb` (see `SCOPE.md`). `main` at `aa4e1eb` was run the same day and gave the same 46 findings. `8db83fb`'s `src/`, `script/` and `test/` trees are the frozen ones (`1dcad9a`, `7fe60cf`, `8e5b756`; `SCOPE.md`, "Commit"), so this run covers the frozen code. At the freeze it was run again on `main` at `a19ac2c`, with the same versions and command (plus `--json` for the counts): the same 46 findings, 34 in the contracts and 12 in the script, by detector as in the table below. Earlier runs: the owner's decisions of 2026-10-02, branch `audit-decisions` at `134d01f`; the first, the draft's base commit, `main` at `5ad18ee` |
 | Detectors | all 102 that ship with 0.11.6; none excluded |
-| Date | 2026-11-16 (earlier runs 2026-10-02 and 2026-09-30) |
+| Date | 2026-11-16, and again at the freeze on 2026-11-24 (earlier runs 2026-10-02 and 2026-09-30) |
 
 From `packages/contracts`, with `forge` on `PATH` (crytic-compile reads `forge config` even in solc mode; the npm
 install puts it at `node_modules/@foundry-rs/forge-linux-amd64/bin/forge` on Linux). `--solc` is the solc 0.8.30
 that forge downloaded: `$HOME/.svm/0.8.30/solc-0.8.30`, or `$HOME/.local/share/svm/0.8.30/solc-0.8.30` where svm
-uses the XDG data folder (the 2026-11-16 run):
+uses the XDG data folder (the 2026-11-16 and 2026-11-24 runs):
 
 ```sh
 python3 -m venv /tmp/slither-venv

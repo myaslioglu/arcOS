@@ -334,6 +334,10 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
    vesting wallet is its own contract (`src/vesting/ArcVesting.sol:ArcVesting`, constructor
    `(beneficiary, start, duration, cliff)`), verified one by one if needed.
 
+   forge's status line can be wrong on this explorer: on 2026-11-24 it printed "Fail - Unable to verify" for four of
+   the five, which were full matches a few minutes later. Check each address with
+   `curl -s https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>` and look for `is_fully_verified`.
+
 7. **Checks after the deployment.** All read-only. First the three addresses from step 5:
 
        export VAULTS=<VaultFactory> VESTINGS=<VestingFactory> PASS=<ProPass>
@@ -451,6 +455,7 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
   with guards or modules, most contracts with logic in `receive`) is skipped on every collect (`PlatformShareSkipped`),
   and that share goes to the vault's owner instead, for good. The recipient must stay a plain account (code size 0,
   checked in step 7; the script prints it too) or a plain Safe measured to fit, and `setRecipient` must keep to that.
+  The owner decided on 2026-11-24 that this operational rule is enough: nothing enforces it on chain.
 - The VaultFactory's owner can only allow or disallow position managers. It has no power over existing vaults.
   VestingFactory and ProPass have no owner.
 - Mainnet is a separate decision: it would need the v3 NonfungiblePositionManager as a second `setManager` (Kind.V3),
@@ -478,7 +483,8 @@ reads.
 R1's VaultFactory, VestingFactory and ProPass were deployed on Arc Testnet on 2026-11-17 (see "R1" above), from the
 project wallet with `DeployR1` at main `ddf1f5c` (nonces 6 to 14, nine transactions). The FeeController's owner and
 recipient, and the VaultFactory's owner, are the project wallet; the five R1 keys read back as in step 7's table, and
-Uniswap v4's PositionManager is allowed. They are not deployed on mainnet. Explorer source verification is not done yet.
+Uniswap v4's PositionManager is allowed. They are not deployed on mainnet. Their sources, and those of the two vault
+implementations, were verified on the testnet explorer on 2026-11-24 with step 6's commands, each a full match.
 
 The mainnet Multisend was deployed again on 2026-10-30, against the same FeeController and with the same ABI and fee
 keys. The previous version's `sendNative` copied each recipient's return data into memory; the new one makes the
@@ -501,7 +507,8 @@ T1, for R1: does an ERC-20 transfer of USDC (`0x3600…0000`) to a contract whos
 A fork can't answer it (a fork can't move `0x3600` USDC). Answered on 2026-11-17: yes, it passes. A 1 USDC one-hour
 schedule to the project wallet was created at the vesting wallet
 [`0xb351215AB81Ba99a40723b29f8565c3cb0234b3F`](https://explorer.testnet.arc.io/address/0xb351215AB81Ba99a40723b29f8565c3cb0234b3F); `isVesting` is true, `tokenOf` is `0x3600…0000` and its USDC
-balance is `1000000`. So USDC can be vested. The release after the hour is still to be done.
+balance was `1000000`. So USDC can be vested. After the hour the 1 USDC was released, on 2026-11-17 at 13:16 UTC:
+`released(0x3600…0000)` reads `1000000` and the wallet's balance is `0`.
 
 Every step that signs a transaction is the owner's: with a keystore key in a terminal, or with the browser-wallet path
 above, where the owner confirms each transaction in the wallet. After a deployment, the three addresses (they're

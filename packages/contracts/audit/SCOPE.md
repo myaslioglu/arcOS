@@ -1,32 +1,50 @@
 # Audit scope: 4rc.OS R1 contracts
 
-Status: **draft**. The package is frozen later (see "Commit"). Until then, numbers here are measured on the draft's
-base commit and are refreshed at the freeze. The nSLOC and line counts and the test counts below were last refreshed
-for the owner's decision of 2026-11-16: `VestingFactory.tokenOf` records each wallet's token, and `lockToken` and
-`lockPosition` take the highest share the caller accepts (`maxFeeBps`) and revert `FeeAboveMax` above it. Before that
-they were refreshed for the 2026-10-02 contract changes (hooked v4 pools refused at the lock; `renounceOwnership`
-disabled on `VaultFactory` and `ArcVesting`).
+Status: **frozen** on 2026-11-24 (see "Commit"). The contracts, the deployment script and the tests are those of
+`main` at `ddf1f5c`, the commit deployed on Arc Testnet on 2026-11-17, and none of them changed on `main` through
+`a19ac2c`. The numbers below were measured on this code before the deployment and again at the freeze, with the same
+results. They last changed with the owner's decision of 2026-11-16: `VestingFactory.tokenOf` records each wallet's
+token, and `lockToken` and `lockPosition` take the highest share the caller accepts (`maxFeeBps`) and revert
+`FeeAboveMax` above it. Before that they changed with the 2026-10-02 contract changes (hooked v4 pools refused at the
+lock; `renounceOwnership` disabled on `VaultFactory` and `ArcVesting`).
 
 The other documents in this folder:
 - `THREAT-MODEL.md`: actors, assets, trust assumptions, and the open questions for the auditor.
 - `INVARIANTS.md`: the properties the contracts must keep, and the test that enforces each.
 - `slither.md`: a static-analysis run, with every finding triaged.
 
+The product was called 4rc.OS when this package was written and is now ArcOS (https://4rcos.com). These documents keep
+the old name in their titles, and the NatSpec of `VaultFactory`, `VestingFactory` and `FeeController` says ARC.os.
+4rc.OS, ARC.os and ArcOS are one product. The sources are left as deployed. Even a comment change alters the metadata
+hash at the end of the bytecode, and the testnet comparison below would no longer hold.
+
 ## Commit
 
 | | |
 |---|---|
-| Frozen commit | `<to be set at the freeze>` |
+| Frozen code | `main` at `ddf1f5c` (`ddf1f5c5bf5a08164c2a13e4dee4b3bb9431322c`): `src/`, `script/`, `test/`, `foundry.toml`, `package.json` and the dependency pins in the root `package-lock.json`. It is the commit deployed on Arc Testnet on 2026-11-17 |
+| Unchanged through | `main` at `a19ac2c` (`a19ac2c3a51c0c3aedc52d626843dab6835b663f`). At both commits the object ids are `src` `1dcad9a`, `script` `7fe60cf`, `test` `8e5b756`, `foundry.toml` `1236e17` and `package.json` `4cbc2ae` (`git rev-parse <commit>:packages/contracts/src`, and so on), and the lockfile pins OpenZeppelin Contracts 5.6.1, forge-std 1.16.2 (`bf647bd`) and Foundry 1.7.1. Under `packages/contracts` only `DEPLOY.md` and `audit/SCOPE.md` changed in between; the root lockfile's changes are web packages only (Next.js 16.4.3 to 16.4.6) |
+| Package documents | this folder and `DEPLOY.md` as of the freeze commit on `main`, the one that set the status above. It changes no code, so the frozen code can be read at that commit too |
 | Draft written on | `main` at `5ad18ee` |
 | Updated for the owner's decisions of 2026-10-02 | branch `audit-decisions`, from `main` at `8d91dd1` |
 | Updated for the owner's decision of 2026-11-16 (`tokenOf`, `maxFeeBps`) | branch `r1-contract-changes`, contracts at `8db83fb`, from `main` at `aa4e1eb` |
 
-The package is frozen at the commit whose contracts the testnet apps (Vault, Vesting, and Inspector's lock and
-vesting checks) exercised on Arc Testnet. A contract change before then means a new testnet deployment, and the freeze
-moves to that commit. At the freeze, the deployed runtime bytecode is compared with that commit's build (immutables
-masked), as was done for R0's mainnet deployment.
+The package is frozen at the contracts the testnet apps, Vault and Vesting, use on Arc Testnet: the deployment of
+2026-11-17 from `ddf1f5c` (DEPLOY.md, "R1"). Inspector's lock and vesting checks come in a later release and are not a
+condition of the freeze, because they need no contract change. The lock check will ask `VaultFactory.isVault` about a
+token's top LP holders and about the `ownerOf` of known position NFTs, and the vesting check will read
+`VestingFactory.isVesting` and `tokenOf`. All three are public mappings in the frozen code (`VaultFactory.sol` line 45,
+`VestingFactory.sol` lines 30 and 35). A contract change from here on means a new testnet deployment, and the freeze
+moves to that commit, with the comparison below made again.
 
-Runtime bytecode on Arc Testnet matches main at `ddf1f5c`, immutables masked (checked 2026-11-17): VaultFactory, VestingFactory, ProPass and the two vault implementations, with the same CBOR metadata hash.
+Runtime bytecode on Arc Testnet matches `ddf1f5c`'s build, immutables masked: VaultFactory, VestingFactory, ProPass
+and the two vault implementations. It was checked on 2026-11-17, and again for the freeze on 2026-11-24 at block
+73,907,333. Outside the immutables the bytes are identical and the CBOR metadata hash is the same. The immutables hold
+what the deployment wired: the testnet FeeController in VaultFactory, VestingFactory and ProPass (the two
+implementations have none), and `lockVaultImpl` and `positionVaultImpl` in VaultFactory. The method: `forge build`
+from `packages/contracts` (Foundry 1.7.1; solc 0.8.30, whose sha256 matches the official release list), then each
+artifact's `deployedBytecode.object` against `eth_getCode` from `https://rpc.testnet.arc.io`, with the byte ranges in
+the artifact's `deployedBytecode.immutableReferences` zeroed in both.
 
 ## In-scope files
 
@@ -49,13 +67,14 @@ All paths are under `packages/contracts/`.
 **How nSLOC was measured.** `solidity-code-metrics` 0.0.28, run from `packages/contracts`:
 
 ```sh
-npx -y solidity-code-metrics src/vault/LockVault.sol src/vault/PositionVault.sol src/vault/VaultFactory.sol \
+npx -y solidity-code-metrics@0.0.28 src/vault/LockVault.sol src/vault/PositionVault.sol src/vault/VaultFactory.sol \
   src/vault/interfaces/IPositionManagers.sol src/vesting/ArcVesting.sol src/vesting/VestingFactory.sol \
   src/ProPass.sol src/FeeController.sol src/interfaces/IFeeController.sol script/DeployR1.s.sol
 ```
 
 Its nSLOC counts normalised source lines: no blank lines and no comment lines (NatSpec included), with a statement
-split over several lines counted as it is written. "Lines" is the file's physical line count.
+split over several lines counted as it is written. "Lines" is the file's physical line count. Both were measured again
+at the freeze (2026-11-24, at `a19ac2c`) and are the same for every file.
 
 ### R0 contracts: which are in, and why
 
@@ -159,8 +178,10 @@ npm run test:fork                     # the fork suite: needs rpc.mainnet.arc.io
 The default run took 122 s on four cores at the draft's base commit: 25 suites, 397 tests, all passing. With the
 2026-10-02 changes it is 25 suites and 401 tests. At `main` `aa4e1eb` it is 27 suites and 449 tests (Inspector's trade
 simulator and the vesting vectors the Vesting app shares came in between), and with the 2026-11-16 changes 27 suites
-and 466 tests, all passing, in 83 s on four cores. Fuzz tests run 512 times; the invariant suites set their own runs
-and depth (see `INVARIANTS.md`), with `fail_on_revert` on.
+and 466 tests, all passing, in 83 s on four cores. At the freeze (2026-11-24, at `a19ac2c`, whose tests are the
+frozen ones) it is the same 27 suites and 466 tests, all passing, in 90 s on four cores, with the per-suite counts
+below. Fuzz tests run 512 times; the invariant suites set their own runs and depth (see `INVARIANTS.md`), with
+`fail_on_revert` on.
 
 | Suite | Tests | Covers |
 |---|---:|---|
@@ -192,8 +213,9 @@ real Uniswap v3 NonfungiblePositionManager and v4 PositionManager on a fork of A
 mock-token pools (v3, v4 ERC-20/ERC-20, v4 native). It checks the fee split, every early exit on the vault and on both
 managers, the refusal of a v4 pool with a live hook, the refusal of a share above the caller's `maxFeeBps` before the
 position moves, and that the owner gets a working position back at `unlockAt`.
-It is not part of the default run or of CI, because it needs the network. Test doubles live in `test/vault/mocks/`
-and `test/vesting/mocks/`.
+It is not part of the default run or of CI, because it needs the network. At the freeze its 27 tests passed with the
+fork's state read live from `rpc.mainnet.arc.io` (`--no-storage-caching`, 2026-11-24). Test doubles live in
+`test/vault/mocks/` and `test/vesting/mocks/`.
 
 ## Out of scope
 

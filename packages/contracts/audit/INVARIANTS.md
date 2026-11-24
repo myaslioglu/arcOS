@@ -241,5 +241,6 @@ The handler drives:
 
 - **USDC at `0x3600`.** Its gas cost inside the 100,000-gas share budget, and a transfer to a contract whose
   `receive` reverts (THREAT-MODEL Q25, T1). Forks can't move `0x3600`, and the vesting two-view tests use a mock.
-  Settled on testnet after the deployment.
+  T1 was settled on Arc Testnet on 2026-11-17: a 1 USDC schedule through the ERC-20 view was created and released
+  (THREAT-MODEL, section G). The gas cost (Q25) has not been measured on Arc.
 - **Arc's blocklist** (Q16, Q26, T2). The tests model a blocked address with mock tokens and receivers only.
