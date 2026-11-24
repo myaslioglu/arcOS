@@ -502,7 +502,7 @@ T1, for R1: does an ERC-20 transfer of USDC (`0x3600…0000`) to a contract whos
 A fork can't answer it (a fork can't move `0x3600` USDC). Answered on 2026-11-17: yes, it passes. A 1 USDC one-hour
 schedule to the project wallet was created at the vesting wallet
 [`0xb351215AB81Ba99a40723b29f8565c3cb0234b3F`](https://explorer.testnet.arc.io/address/0xb351215AB81Ba99a40723b29f8565c3cb0234b3F); `isVesting` is true, `tokenOf` is `0x3600…0000` and its USDC
-balance is `1000000`. So USDC can be vested. After the hour the 1 USDC was released, on 2026-11-17 at 13:16 UTC:
+balance was `1000000`. So USDC can be vested. After the hour the 1 USDC was released, on 2026-11-17 at 13:16 UTC:
 `released(0x3600…0000)` reads `1000000` and the wallet's balance is `0`.
 
 Every step that signs a transaction is the owner's: with a keystore key in a terminal, or with the browser-wallet path

@@ -141,7 +141,7 @@ Status:
 - **Fixed**: raised in review and changed in the code, with a test; listed so you can check the fix.
 - **By design**: accepted and documented in NatSpec; listed so you can challenge it.
 - **Decided for testnet**: accepted for the testnet deployment, to be revisited before mainnet.
-- **Open until testnet**: settled by a check after the testnet deployment.
+- **Open**: needs a check on Arc; no local test can settle it.
 
 ### A. Tokens
 
@@ -233,7 +233,7 @@ fee recipient, and so keep all that token's fees.
 
 **Q20. The 100,000-gas budget.** A recipient that needs more (a Safe with guards or modules, most contracts with logic
 in `receive`) is skipped on every collect.
-- Status: decided (the project owner, in chat, 2026-11-24): the operational rule is enough. Nothing enforces it on
+- Status: decided (the owner's decision of 2026-11-24): the operational rule is enough. Nothing enforces it on
   chain, and the contracts don't change.
 - The rule: the recipient stays a plain account (code size 0), or a plain Safe measured to fit. `DeployR1` prints its
   code size, and DEPLOY.md's R1 step 7 checks it.
@@ -403,8 +403,8 @@ only a check on Arc can settle these:
 Also, a v4 pool of native USDC against `0x3600` would split both currencies under `address(0)`.
 - Status: T1 is answered: the transfer succeeds. On Arc Testnet on 2026-11-17, a 1 USDC one-hour schedule through the
   ERC-20 view was created (DEPLOY.md's R1 step 7), `tokenOf` named `0x3600`, and after the hour `release` paid the 1
-  USDC out (`released` reads 1,000,000 and the wallet holds 0). The rest is open until testnet: no check on Arc has
-  measured Q25 or the blocklist yet. Locally, only a mock covers the two views.
+  USDC out (`released` reads 1,000,000 and the wallet holds 0). Q25 and the blocklist are still open: no check on Arc
+  has measured them yet. Locally, only a mock covers the two views.
 
 **V5, and the vesting double release.** OpenZeppelin keeps separate books for native value and each token. On Arc,
 USDC vested through its ERC-20 view is also the wallet's native balance, so a beneficiary could release the same
@@ -439,7 +439,7 @@ releases between the cliff and the end then revert on overflow until `end()`. Th
 ### I. ProPass
 
 **V9. `subscribe` accepts `account == address(0)`.**
-- Status: decided (the project owner, in chat, 2026-11-24): current behaviour kept, no contract change. It is only the
+- Status: decided (the owner's decision of 2026-11-24): current behaviour kept, no contract change. It is only the
   payer's loss.
 - Question: should it revert?
 

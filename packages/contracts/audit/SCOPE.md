@@ -14,16 +14,16 @@ The other documents in this folder:
 - `slither.md`: a static-analysis run, with every finding triaged.
 
 The product was called 4rc.OS when this package was written and is now ArcOS (https://4rcos.com). These documents keep
-the old name in their titles, and the NatSpec of `VaultFactory`, `VestingFactory` and `FeeController` says ARC.os: all
-three are the same product. The sources are left as deployed. Even a comment change alters the metadata hash at the end
-of the bytecode, and the testnet comparison below would no longer hold.
+the old name in their titles, and the NatSpec of `VaultFactory`, `VestingFactory` and `FeeController` says ARC.os.
+4rc.OS, ARC.os and ArcOS are one product. The sources are left as deployed. Even a comment change alters the metadata
+hash at the end of the bytecode, and the testnet comparison below would no longer hold.
 
 ## Commit
 
 | | |
 |---|---|
 | Frozen code | `main` at `ddf1f5c` (`ddf1f5c5bf5a08164c2a13e4dee4b3bb9431322c`): `src/`, `script/`, `test/`, `foundry.toml`, `package.json` and the dependency pins in the root `package-lock.json`. It is the commit deployed on Arc Testnet on 2026-11-17 |
-| Unchanged through | `main` at `a19ac2c` (`a19ac2c3a51c0c3aedc52d626843dab6835b663f`). At both commits the trees are `src` `1dcad9a`, `script` `7fe60cf`, `test` `8e5b756`, `foundry.toml` `1236e17` and `package.json` `4cbc2ae` (`git rev-parse <commit>:packages/contracts/src`, and so on), and the lockfile pins OpenZeppelin Contracts 5.6.1, forge-std 1.16.2 (`bf647bd`) and Foundry 1.7.1. Under `packages/contracts` only `DEPLOY.md` and `audit/SCOPE.md` changed in between; the root lockfile's changes are web packages only (Next.js 16.4.3 to 16.4.6) |
+| Unchanged through | `main` at `a19ac2c` (`a19ac2c3a51c0c3aedc52d626843dab6835b663f`). At both commits the object ids are `src` `1dcad9a`, `script` `7fe60cf`, `test` `8e5b756`, `foundry.toml` `1236e17` and `package.json` `4cbc2ae` (`git rev-parse <commit>:packages/contracts/src`, and so on), and the lockfile pins OpenZeppelin Contracts 5.6.1, forge-std 1.16.2 (`bf647bd`) and Foundry 1.7.1. Under `packages/contracts` only `DEPLOY.md` and `audit/SCOPE.md` changed in between; the root lockfile's changes are web packages only (Next.js 16.4.3 to 16.4.6) |
 | Package documents | this folder and `DEPLOY.md` as of the freeze commit on `main`, the one that set the status above. It changes no code, so the frozen code can be read at that commit too |
 | Draft written on | `main` at `5ad18ee` |
 | Updated for the owner's decisions of 2026-10-02 | branch `audit-decisions`, from `main` at `8d91dd1` |
@@ -37,14 +37,14 @@ token's top LP holders and about the `ownerOf` of known position NFTs, and the v
 `VestingFactory.sol` lines 30 and 35). A contract change from here on means a new testnet deployment, and the freeze
 moves to that commit, with the comparison below made again.
 
-Runtime bytecode on Arc Testnet matches `ddf1f5c`'s build, immutables masked: VaultFactory, VestingFactory, ProPass and
-the two vault implementations. It was checked on 2026-11-17, and again for the freeze on 2026-11-24 at block
+Runtime bytecode on Arc Testnet matches `ddf1f5c`'s build, immutables masked: VaultFactory, VestingFactory, ProPass
+and the two vault implementations. It was checked on 2026-11-17, and again for the freeze on 2026-11-24 at block
 73,907,333. Outside the immutables the bytes are identical and the CBOR metadata hash is the same. The immutables hold
-what the deployment wired: the testnet FeeController in all three contracts, and `lockVaultImpl` and
-`positionVaultImpl` in VaultFactory. The method: `forge build` from `packages/contracts` (Foundry 1.7.1; solc 0.8.30,
-whose sha256 matches the official release list), then each artifact's `deployedBytecode.object` against `eth_getCode`
-from `https://rpc.testnet.arc.io`, with the byte ranges in the artifact's `deployedBytecode.immutableReferences` zeroed
-in both.
+what the deployment wired: the testnet FeeController in VaultFactory, VestingFactory and ProPass (the two
+implementations have none), and `lockVaultImpl` and `positionVaultImpl` in VaultFactory. The method: `forge build`
+from `packages/contracts` (Foundry 1.7.1; solc 0.8.30, whose sha256 matches the official release list), then each
+artifact's `deployedBytecode.object` against `eth_getCode` from `https://rpc.testnet.arc.io`, with the byte ranges in
+the artifact's `deployedBytecode.immutableReferences` zeroed in both.
 
 ## In-scope files
 
@@ -67,7 +67,7 @@ All paths are under `packages/contracts/`.
 **How nSLOC was measured.** `solidity-code-metrics` 0.0.28, run from `packages/contracts`:
 
 ```sh
-npx -y solidity-code-metrics src/vault/LockVault.sol src/vault/PositionVault.sol src/vault/VaultFactory.sol \
+npx -y solidity-code-metrics@0.0.28 src/vault/LockVault.sol src/vault/PositionVault.sol src/vault/VaultFactory.sol \
   src/vault/interfaces/IPositionManagers.sol src/vesting/ArcVesting.sol src/vesting/VestingFactory.sol \
   src/ProPass.sol src/FeeController.sol src/interfaces/IFeeController.sol script/DeployR1.s.sol
 ```
