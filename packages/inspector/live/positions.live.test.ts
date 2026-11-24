@@ -8,8 +8,9 @@
  * token's pools are found by their `Initialize` logs, looked for in the last LP_LOCK_LOOKBACK windows of 10,000 blocks (6
  * unless set: about 8 hours), so an older token needs a larger number and takes two requests a window.
  * What it prints is the result table; what it asserts is what must hold of any token: the finding is one of the four
- * the check can give, a pass, a fail or an unknown is word for word what the check says without the index (the index
- * only adds warnings), and a warning offers Vault.
+ * the check can give, a pass, a fail or an unknown is what the check says without the index (the index only adds
+ * warnings), word for word but where those words would say positions can't be read without an index, and a warning
+ * offers Vault.
  */
 import { decodeEventLog, erc20Abi, parseAbi, toEventSelector, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
@@ -98,7 +99,12 @@ describe("lp-lock over real v4 pools, read-only", () => {
       const tokens = (raw: bigint) => Number(raw / 10n ** BigInt(decimals ?? 18));
       const sums = (m: ClassSums, as: (v: bigint) => number = units) => Object.fromEntries(HOLDER_CLASSES.filter((k) => m[k] > 0n).map((k) => [k, as(m[k])]));
       expect(["pass", "warn", "fail", "unknown"]).toContain(finding.status);
-      if (finding.status !== "warn") expect(finding).toEqual(await checkLpLock({ ...input, v4Positions: undefined }, scan));
+      if (finding.status !== "warn") {
+        // The index is read here, so words that say there is none give way to what was read.
+        const before = await checkLpLock({ ...input, v4Positions: undefined }, scan);
+        expect(finding).toEqual(before.detail.endsWith("can't be read without an index yet.") ? { ...before, detail: finding.detail } : before);
+        expect(finding.detail).not.toMatch(/without an index/);
+      }
       if (finding.status === "warn") expect(finding).toMatchObject({ fixAppId: "vault" });
       rows.push({
         token: address,
