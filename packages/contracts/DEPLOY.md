@@ -334,8 +334,8 @@ commands name it (`--rpc-url arc_testnet`, from `foundry.toml`).
    vesting wallet is its own contract (`src/vesting/ArcVesting.sol:ArcVesting`, constructor
    `(beneficiary, start, duration, cliff)`), verified one by one if needed.
 
-   forge's status line can be wrong on this explorer: on 2026-11-24 it printed "Fail - Unable to verify" (and exited
-   0) for four of the five, which were full matches a few minutes later. Check each address with
+   forge's status line can be wrong on this explorer: on 2026-11-24 it printed "Fail - Unable to verify" for four of
+   the five, which were full matches a few minutes later. Check each address with
    `curl -s https://explorer.testnet.arc.io/api/v2/smart-contracts/<address>` and look for `is_fully_verified`.
 
 7. **Checks after the deployment.** All read-only. First the three addresses from step 5:

@@ -403,8 +403,8 @@ only a check on Arc can settle these:
 Also, a v4 pool of native USDC against `0x3600` would split both currencies under `address(0)`.
 - Status: T1 is answered: the transfer succeeds. On Arc Testnet on 2026-11-17, a 1 USDC one-hour schedule through the
   ERC-20 view was created (DEPLOY.md's R1 step 7), `tokenOf` named `0x3600`, and after the hour `release` paid the 1
-  USDC out (`released` reads 1,000,000 and the wallet holds 0). Q25 and the blocklist are still open: no check on Arc
-  has measured them yet. Locally, only a mock covers the two views.
+  USDC out (`released` reads 1,000,000 and the wallet holds 0). Q25, the blocklist (Q16) and the two views together
+  (V14) are still open: no check on Arc has measured them yet. Locally, only a mock covers the two views.
 
 **V5, and the vesting double release.** OpenZeppelin keeps separate books for native value and each token. On Arc,
 USDC vested through its ERC-20 view is also the wallet's native balance, so a beneficiary could release the same
