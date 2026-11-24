@@ -10,7 +10,9 @@ import { arcFields } from "./fixtures/arc";
 
 // What the position index adds to lp-lock when a Uniswap v4 pool is involved: warnings for liquidity wallets can
 // withdraw, and never a pass or a fail. Everywhere it has nothing to add, the finding is the one from before the index
-// (pools.test.ts and inspect.test.ts cover that check), word for word: `quiet` and `silent` below hold that line.
+// (pools.test.ts and inspect.test.ts cover that check): its status, title and links, and its words, but for the
+// unknowns that say positions "can't be read without an index yet", which say instead what was read and what wasn't.
+// `quiet` and `silent` below hold that line; "the words of an unknown that rests on positions" spells the words out.
 
 const TOKEN = "0x1111111111111111111111111111111111111111"; // sorts below USDC: the token is currency0, USDC currency1
 const HIGH = "0x9999999999999999999999999999999999999999"; // sorts above USDC: the token is currency1, USDC currency0
@@ -90,14 +92,32 @@ async function check(pools: PoolSetup[], over: Parameters<typeof world>[1] = {})
 const lpLock = (positions: FakePosition[], over: Parameters<typeof world>[1] & { poolKey?: typeof key; listed?: boolean } = {}) =>
   check([{ key: over.poolKey ?? key, positions, listed: over.listed }], over);
 const owners = (map: Record<number, string>): FakeChain => ({ nftOwners: map });
-/** The finding for this world, which must be the one the check gives without the index: the new path said nothing. */
-async function silent(pools: PoolSetup[], over: Parameters<typeof world>[1] = {}): Promise<Finding> {
+/**
+ * The finding for this world, which must be the one the check gives without the index (the new path said nothing), word
+ * for word, or with `detail` as its words when the old ones say the positions can't be read without an index.
+ */
+async function silent(pools: PoolSetup[], over: Parameters<typeof world>[1] = {}, detail?: string): Promise<Finding> {
   const { input } = world(pools, over);
   const scan = await findPools(input);
   const f = await checkLpLock(input, scan);
-  expect(f).toEqual(await checkLpLock({ ...input, v4Positions: undefined }, scan));
+  const before = await checkLpLock({ ...input, v4Positions: undefined }, scan);
+  expect(f).toEqual(detail === undefined ? before : { ...before, detail });
+  if (detail !== undefined) expect(before.detail).toMatch(/can't be read without an index yet\.$/);
   return f;
 }
+
+// --- The words of an unknown the old check gives with the index read. ---
+/** The old check's words for a token with only v4 pools: what an inspection without a usable index still says. */
+const ONLY_V4 = "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.";
+/** What the index was read for, and what nothing reaching a warning means: the words after what the old check found. */
+const READ = "Inspector read who holds the Uniswap v4 positions. In the pools Inspector can read, positions wallets can withdraw are under the thresholds for a warning, in what they hold now and in what the next buyers would pay into them.";
+const NO_PASS = "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it counts a position held by a contract as neither locked nor withdrawable.";
+/** `NO_PASS` on a chain whose list of lock contracts isn't empty. */
+const NO_PASS_LOCKERS = "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It counts a position held by a contract other than a lock contract it recognizes as neither locked nor withdrawable.";
+const ONLY_V4_READ = `Only Uniswap v4 pools were found. ${READ} ${NO_PASS}`;
+/** What the index came to when the reading stopped short of the whole picture: then the reasons, as the tally has them. */
+const BLOCKED = "Inspector read the position index, but couldn't tell who holds all the liquidity in this token's pools.";
+const TIMED_OUT = "Inspector ran out of time before it had read who holds the Uniswap v4 positions.";
 
 // --- The world most cases below are set in: the token at $0.001 (tick -345,420, a multiple of 60 and of 10), 18 decimals,
 // a supply of one billion, USDC (6 decimals) as currency1. ---
@@ -142,13 +162,15 @@ const paidToWallets = async (title: string, pools: PoolSetup[], nftOwners: Recor
   return f;
 };
 /**
- * The new path has nothing to add: the finding is the one the check gives without the index, word for word, and that
- * one is never a pass for a token with a Uniswap v4 pool. Returns it.
+ * The new path has nothing to add: the finding is the one the check gives without the index, and that one is never a
+ * pass for a token with a Uniswap v4 pool. Its words say what was read (`detail`) where the old ones say the positions
+ * can't be read without an index. Returns it.
  */
-const quiet = async (pools: PoolSetup[], nftOwners: Record<number, string>, over: Parameters<typeof world>[1] = {}, facts = FACTS) => {
+const quiet = async (pools: PoolSetup[], nftOwners: Record<number, string>, over: Parameters<typeof world>[1] = {}, facts = FACTS, detail = ONLY_V4_READ) => {
   const f = await verdict(pools, nftOwners, over, facts);
   const before = await verdict(pools, nftOwners, { ...over, index: null }, facts);
-  expect(f).toEqual(before);
+  expect(before.detail).toBe(ONLY_V4);
+  expect(f).toEqual({ ...before, detail });
   expect(f.status).not.toBe("fail");
   expect(f.status).not.toBe("warn");
   if (pools.length > 0) expect(f.status).toBe("unknown");
@@ -168,20 +190,22 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
     });
   });
 
-  it("adds nothing when the NFT sits at a burn address: the finding is the old check's, and no pass", async () => {
+  it("adds nothing when the NFT sits at a burn address: the finding is the old check's, and no pass, in words that say what was read", async () => {
     const f = await quiet([main([twoSided(7, 2_000n)])], { 7: DEAD });
     expect(f).toEqual({
       id: "lp-lock",
       status: "unknown",
       title: "Couldn't check liquidity locks",
-      detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.",
+      detail:
+        "Only Uniswap v4 pools were found. Inspector read who holds the Uniswap v4 positions. In the pools Inspector can read, positions wallets can withdraw are under the thresholds for a warning, in what they hold now and in what the next buyers would pay into them. That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool. It recognizes no lock contracts yet, and it counts a position held by a contract as neither locked nor withdrawable.",
       evidenceUrl: null,
       fixAppId: null,
     });
   });
 
   it("adds nothing when a known locker holds it, or a contract: neither is a wallet", async () => {
-    await quiet([main([twoSided(1, 3_000n), twoSided(2, 1_000n)])], { 1: LOCKER, 2: NATIVE }, { input: { knownLockers: [LOCKER] } });
+    // With a lock contract it recognizes, the words don't say it recognizes none.
+    await quiet([main([twoSided(1, 3_000n), twoSided(2, 1_000n)])], { 1: LOCKER, 2: NATIVE }, { input: { knownLockers: [LOCKER] } }, FACTS, `Only Uniswap v4 pools were found. ${READ} ${NO_PASS_LOCKERS}`);
     await quiet([main([twoSided(7, 2_000n)])], { 7: CONTRACT }, { chain: { code: { [CONTRACT]: "0x6080" } } });
   });
 
@@ -301,11 +325,16 @@ describe("lp-lock over a Uniswap v4 pool's positions", () => {
       expect(f).toMatchObject({ status: "warn", fixAppId: "vault" });
       expect(f.detail).toMatch(/goes into positions wallets can withdraw and .* 60 holders of this token's liquidity weren't classified, more than this check reads: with them, wallets could hold half or more\. Counted in the order/);
     });
-    it("counts holders left unclassified as nobody's: they can't make a warning", async () => {
-      const positions = [twoSided(2, 9_300n), ...Array.from({ length: 70 }, (_, i) => twoSided(100 + i, 10n))];
-      const nftOwners = Object.fromEntries([[2, DEAD], ...positions.slice(1).map((_, i) => [100 + i, `0x${(0xb0b100 + i).toString(16).padStart(40, "0")}`])]) as Record<number, string>;
+    it("counts holders left unclassified as nobody's: they can't make a warning, and the words say they weren't classified", async () => {
+      // The node won't run the batched read, so only the 40 largest holders are read: `n` stay unclassified.
+      const unread = (n: number): [PoolSetup[], Record<number, string>, Parameters<typeof world>[1]] => {
+        const positions = [twoSided(2, 9_300n), ...Array.from({ length: 40 + n }, (_, i) => twoSided(100 + i, 10n))];
+        const nftOwners = Object.fromEntries([[2, DEAD], ...positions.slice(1).map((_, i) => [100 + i, `0x${(0xb0b100 + i).toString(16).padStart(40, "0")}`])]) as Record<number, string>;
+        return [[main(positions)], nftOwners, { chain: { codeReaderFails: new Error("no state override") } }];
+      };
       // 40 wallets read (4%), 30 unclassified (3%).
-      await quiet([main(positions)], nftOwners, { chain: { codeReaderFails: new Error("no state override") } });
+      await quiet(...unread(30), FACTS, `Only Uniswap v4 pools were found. ${READ} 30 holders of this token's liquidity weren't classified, more than this check reads, and what they hold isn't counted as a wallet's. ${NO_PASS}`);
+      await quiet(...unread(1), FACTS, `Only Uniswap v4 pools were found. ${READ} 1 holder of this token's liquidity wasn't classified, more than this check reads, and what it holds isn't counted as a wallet's. ${NO_PASS}`);
     });
   });
 });
@@ -877,20 +906,27 @@ describe("an index that can't be relied on for a pool adds nothing: the old chec
   // A wallet holds everything that can be read: with the whole picture it is a warning.
   const held = { chain: owners({ 7: WALLET, 8: WALLET }) };
   const one: PoolSetup[] = [{ key, positions: [nft(7, L)] }];
+  /** The old check's unknown, in words that say what stopped the reading instead of that there is no index. */
+  const stoppedBy = (reason: string) => `Only Uniswap v4 pools were found. ${BLOCKED} ${reason}`;
   it("warns with the whole picture", async () => {
     expect((await check(one, held)).title).toBe(MOST_HELD);
   });
   it("has no entry for the pool", async () => {
-    expect((await silent(one, { ...held, index: { cursor: Number(HEAD), pools: {} } })).status).toBe("unknown");
+    const f = await silent(one, { ...held, index: { cursor: Number(HEAD), pools: {} } }, stoppedBy("The position index has no entry yet for a Uniswap v4 pool of this token."));
+    expect(f.status).toBe("unknown");
   });
   it("is truncated", async () => {
-    await silent(one, { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: true } } } });
+    await silent(one, { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: true } } } }, stoppedBy("A Uniswap v4 pool of this token has more than 500 positions, more than this check reads."));
   });
   it("lists positions that don't add up to the pool's liquidity: a gap in the index", async () => {
-    await silent([{ key, positions: [nft(7, L), nft(8, L)] }], { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: false } } } });
+    await silent(
+      [{ key, positions: [nft(7, L), nft(8, L)] }],
+      { ...held, index: { cursor: Number(HEAD), pools: { [id]: { positions: [keyOf(nft(7, L))], truncated: false } } } },
+      stoppedBy("The position index has a gap: the positions it lists for a Uniswap v4 pool don't add up to the pool's liquidity."),
+    );
   });
   it("names a position that doesn't answer", async () => {
-    await silent(one, { chain: { ...held.chain, positionInfoFails: true } });
+    await silent(one, { chain: { ...held.chain, positionInfoFails: true } }, stoppedBy("The positions of a Uniswap v4 pool couldn't be read."));
   });
 
   it("finds a position opened after the index's cursor, so a fresh wallet position still counts", async () => {
@@ -937,7 +973,11 @@ describe("pools the lookup may not have", () => {
     // The pool that is read is all a wallet's: a warning, but for the pool nobody has read.
     const walletChain: FakeChain = { nftOwners: { 2: WALLET } };
     expect((await check([{ key, positions: [kept] }], { chain: walletChain, index })).title).toBe(MOST_HELD);
-    await silent([{ key, positions: [kept] }], { chain: { ...walletChain, logs: [created] }, index });
+    await silent(
+      [{ key, positions: [kept] }],
+      { chain: { ...walletChain, logs: [created] }, index },
+      `Only Uniswap v4 pools were found. ${BLOCKED} A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.`,
+    );
   });
 
   it("ignores a new pool against a currency that isn't a quote: such pools are never counted", async () => {
@@ -951,6 +991,7 @@ describe("pools the lookup may not have", () => {
     const decoys = Array.from({ length: MAX_EXTRA_POOLS }, (_, i): PoolSetup => ({ key: v4PoolKey(TOKEN, USDC, 4_000 + i, 60), positions: [], listed: true }));
     const real: PoolSetup = { key: big, positions: [kept], listed: true };
     const small: PoolSetup = { key, positions: [burned] };
+    const CUT_SHORT = `Only Uniswap v4 pools were found. ${BLOCKED} This token has more Uniswap v4 pools than are read (over 50), so its liquidity can't be added up.`;
 
     it("is seen: with a 51st pool the index lists, the new path says nothing, where the pools it read would have warned", async () => {
       const { input } = world([{ key, positions: [kept] }, ...decoys, real], { chain });
@@ -958,7 +999,7 @@ describe("pools the lookup may not have", () => {
       expect(scan.truncated).toBe(true);
       expect(scan.pools.some((p) => p.poolId === bigId)).toBe(false);
       const f = await checkLpLock(input, scan);
-      expect(f).toEqual(await checkLpLock({ ...input, v4Positions: undefined }, scan));
+      expect(f).toEqual({ ...(await checkLpLock({ ...input, v4Positions: undefined }, scan)), detail: CUT_SHORT });
       expect(f.status).toBe("unknown");
     });
 
@@ -973,7 +1014,7 @@ describe("pools the lookup may not have", () => {
 
     it("is a blocker too when the index's own read was cut short (`extraPoolsTruncated`)", async () => {
       expect((await check([{ key, positions: [kept] }], { chain })).title).toBe(MOST_HELD);
-      await silent([{ key, positions: [kept] }], { chain, input: { extraPoolsTruncated: true } });
+      await silent([{ key, positions: [kept] }], { chain, input: { extraPoolsTruncated: true } }, CUT_SHORT);
     });
   });
 });
@@ -989,10 +1030,10 @@ describe("the inspection's deadline", () => {
       const pending = inspect({ ...input, deadlineAt: Date.now() + 5_000 });
       await vi.advanceTimersByTimeAsync(4_100);
       const report = await pending;
-      // The new path gave up; the finding is the old check's.
+      // The new path gave up; the finding is the old check's, in words that say what stopped the reading.
       expect(report.findings.find((f) => f.id === "lp-lock")).toEqual({
         id: "lp-lock", status: "unknown", title: "Couldn't check liquidity locks",
-        detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet.", evidenceUrl: null, fixAppId: null,
+        detail: `Only Uniswap v4 pools were found. ${TIMED_OUT}`, evidenceUrl: null, fixAppId: null,
       });
       expect(report.findings.find((f) => f.id === "liquidity")?.status).toBe("pass");
       expect(report.findings).toHaveLength(9);
@@ -1005,7 +1046,8 @@ describe("the inspection's deadline", () => {
     const { input, reader } = world([{ key, positions: [nft(7, L)] }], { chain: owners({ 7: DEAD }) });
     const scan = await findPools(input);
     const before = reader.batches.length;
-    expect(await checkLpLock({ ...input, deadlineAt: Date.now() + 500 }, scan)).toMatchObject({ status: "unknown", detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet." });
+    // An index was given, and nothing says it is stale: the words don't say there is none.
+    expect(await checkLpLock({ ...input, deadlineAt: Date.now() + 500 }, scan)).toMatchObject({ status: "unknown", detail: `Only Uniswap v4 pools were found. ${TIMED_OUT}` });
     expect(reader.batches.length).toBe(before);
     expect(reader.logQueries).toEqual([]);
   });
@@ -1114,8 +1156,9 @@ describe("pools of other kinds beside a v4 pool", () => {
   });
 
   it("a burned v2 pair beside a burned v4 pool: nothing to add, and the old check's answer is no pass", async () => {
-    const f = await silent([main([twoSided(7, 2_000n)])], { dex: everything, chain: { reads: pair(100n, 2_000n), nftOwners: { 7: DEAD } } });
-    expect(f).toMatchObject({ status: "unknown", detail: "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet." });
+    const v4Beside = `A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${READ} ${NO_PASS}`;
+    const f = await silent([main([twoSided(7, 2_000n)])], { dex: everything, chain: { reads: pair(100n, 2_000n), nftOwners: { 7: DEAD } } }, v4Beside);
+    expect(f).toMatchObject({ status: "unknown", detail: v4Beside });
   });
 
   it("splits a v2 pair by LP holder; LP in a known locker or an unvetted one is nobody's wallet", async () => {
@@ -1123,7 +1166,12 @@ describe("pools of other kinds beside a v4 pool", () => {
     expect(await both([twoSided(7, 2_000n)], pair(80n, 2_000n), { 7: DEAD })).toMatchObject({ status: "fail", detail: "20% of the v2 LP supply sits in wallets that can withdraw it." });
     // A wallet's v4 position of that size beside a burned pair: the old check can't see it, and the warning stands.
     expect((await both([twoSided(7, 1_800n), twoSided(8, 400n)], pair(100n, 1_800n), { 7: DEAD, 8: WALLET })).status).toBe("warn");
-    await silent([main([twoSided(7, 2_000n)])], { dex: everything, chain: { reads: { ...pair(50n, 2_000n), [readKey(PAIR, "balanceOf", [LOCKER])]: 50n }, nftOwners: { 7: DEAD } }, input: { knownLockers: [LOCKER] } });
+    await silent(
+      [main([twoSided(7, 2_000n)])],
+      { dex: everything, chain: { reads: { ...pair(50n, 2_000n), [readKey(PAIR, "balanceOf", [LOCKER])]: 50n }, nftOwners: { 7: DEAD } }, input: { knownLockers: [LOCKER] } },
+      `A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${READ} ${NO_PASS_LOCKERS}`,
+    );
+    // The unvetted answer says nothing of an index: its words stand.
     await silent([main([twoSided(7, 2_000n)])], { dex: everything, chain: { reads: pair(10n, 2_000n), nftOwners: { 7: DEAD } }, input: { lockersVetted: false } });
   });
 
@@ -1139,7 +1187,11 @@ describe("pools of other kinds beside a v4 pool", () => {
   it("V3-2. a v3 pool's positions aren't read, so nothing of it is a wallet's and nothing of it makes a pass: beside a burned v4 wall the old check answers", async () => {
     // A v3 pool holding no USDC and 9.99M tokens, a wallet's range just under the wall for all anyone here can tell.
     for (const tokens of [9_990_000n, 10_100_000n, 100_000n]) {
-      const f = await silent([main([launch(1)])], { dex: everything, chain: { reads: { ...noPools(everything), ...v3(0n, tokens) }, nftOwners: { 1: DEAD } } });
+      const f = await silent(
+        [main([launch(1)])],
+        { dex: everything, chain: { reads: { ...noPools(everything), ...v3(0n, tokens) }, nftOwners: { 1: DEAD } } },
+        `Only Uniswap v3 and Uniswap v4 pools were found, and Inspector doesn't read the positions in the Uniswap v3 ones. ${READ} ${NO_PASS}`,
+      );
       expect(f.status).toBe("unknown");
     }
   });
@@ -1190,11 +1242,14 @@ describe("where the check is the one from before the index, unchanged", () => {
     }
   });
 
-  it("a v2 pair beside a v3 pool keeps the old rule too", async () => {
+  it("a v2 pair beside a v3 pool keeps the old rule too, and with the index read says v3 positions aren't read without tying it to an index", async () => {
     const dex: DexConfig = { quoteTokens: [USD], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4 };
     const reads = { ...pairReads(100n), [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: V3_POOL, [readKey(USDC, "balanceOf", [V3_POOL])]: 9_000_000_000n };
     const { input } = world([], { dex, chain: { reads }, index: { cursor: 900, pools: {} } });
-    expect(await checkLpLock(input, await findPools(input))).toMatchObject({ status: "unknown", detail: "The deepest pool is a Uniswap v3 position, which can't be read without an index yet." });
+    const scan = await findPools(input);
+    const before = await checkLpLock(without(input), scan);
+    expect(before).toMatchObject({ status: "unknown", detail: "The deepest pool is a Uniswap v3 position, which can't be read without an index yet." });
+    expect(await checkLpLock(input, scan)).toEqual({ ...before, detail: "The deepest pool is a Uniswap v3 pool, and Inspector doesn't read the positions in it." });
   });
 
   it("a v2-only token whose tail shows a new v4 pool nobody has read: the new path says nothing, and the old check answers as today", async () => {
@@ -1245,5 +1300,145 @@ describe("where the check is the one from before the index, unchanged", () => {
   it("answers as before the index when no index is given", async () => {
     const f = await lpLock([nft(7, L)], { chain: owners({ 7: WALLET }), index: null });
     expect(f).toMatchObject({ status: "unknown", detail: "Only Uniswap v4 pools were found, and liquidity positions in them can't be read without an index yet." });
+  });
+});
+
+describe("the words of an unknown that rests on positions the old check can't read", () => {
+  // Three of the old check's unknowns say positions "can't be read without an index yet" (`Unread` in checks.ts): only
+  // pools other than v2 were found; a deeper v3 or Aerodrome pool sits beside a burned pair; a v4 pool that may hold more
+  // sits beside it. Their status, title and links never change. Their words do, and only once there was an index to read.
+  const AERO_POOL = "0x8888888888888888888888888888888888888888";
+  /** A pair at the v4 pool's price, holding `usdc`, whose LP is all burned. */
+  const burnedPair = (usdc: bigint) => ({
+    [readKey(V2, "getPair", [TOKEN, USDC])]: PAIR,
+    ...v2PairReads(PAIR, USDC, TOKEN, usdc * 10n ** 6n, usdc * 10n ** 21n),
+    [readKey(PAIR, "totalSupply", [])]: 100n,
+    [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
+    [readKey(PAIR, "balanceOf", [DEAD])]: 100n,
+  });
+  const v3 = (usdc: bigint) => ({ [readKey(V3, "getPool", [TOKEN, USDC, 3000])]: V3_POOL, [readKey(USDC, "balanceOf", [V3_POOL])]: usdc * 10n ** 6n });
+  const aero = (usdc: bigint) => ({ [readKey(AERODROME.clFactory, "getPool", [TOKEN, USDC, 50])]: AERO_POOL, [readKey(USDC, "balanceOf", [AERO_POOL])]: usdc * 10n ** 6n });
+  /** A v4 pool whose one position is burned: nothing there to warn about. */
+  const burnedV4 = [main([twoSided(7, 2_000n)])];
+  /** An index more than 10,000 blocks behind the head, which is no index. */
+  const STALE: FakeChain = { head: 50_000n };
+  const OLD_ONLY = (names: string) => `Only ${names} pools were found, and liquidity positions in them can't be read without an index yet.`;
+  const OLD_V4_BESIDE = "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.";
+  /**
+   * The words with the index as given (fresh unless told) and without it, for these v4 pools and reads over every kind of
+   * pool. Everything else of the two findings is the same, and both are unknowns.
+   */
+  const words = async (pools: PoolSetup[], reads: Record<string, unknown>, over: { index?: V4PositionIndex | null; chain?: FakeChain; input?: Partial<InspectInput> } = {}) => {
+    const { input } = world(pools, { dex: everything, index: over.index, input: over.input, chain: { reads: { ...noPools(everything), ...reads }, nftOwners: { 7: DEAD }, ...over.chain } });
+    const scan = await findPools(input);
+    const withIndex = await checkLpLock(input, scan, FACTS);
+    const without = await checkLpLock({ ...input, v4Positions: undefined }, scan, FACTS);
+    expect({ ...withIndex, detail: without.detail }).toEqual(without);
+    expect(without).toMatchObject({ status: "unknown", title: "Couldn't check liquidity locks", fixAppId: null });
+    return { withIndex: withIndex.detail, without: without.detail };
+  };
+
+  describe("only pools other than Uniswap v2 were found", () => {
+    it("Uniswap v4 alone: the old words without an index or with a stale one, and what was read with one", async () => {
+      expect(await words(burnedV4, {}, { index: null })).toEqual({ withIndex: ONLY_V4, without: ONLY_V4 });
+      expect(await words(burnedV4, {}, { chain: STALE })).toEqual({ withIndex: ONLY_V4, without: ONLY_V4 });
+      expect(await words(burnedV4, {})).toEqual({ withIndex: ONLY_V4_READ, without: ONLY_V4 });
+    });
+
+    it("Uniswap v3 or Aerodrome beside v4: their positions aren't read, which isn't tied to an index, and what was read of v4", async () => {
+      const all = await words(burnedV4, { ...v3(5_000n), ...aero(5_000n) });
+      expect(all.without).toBe(OLD_ONLY("Uniswap v3, Uniswap v4 and Aerodrome"));
+      expect(all.withIndex).toBe(`Only Uniswap v3, Uniswap v4 and Aerodrome pools were found, and Inspector doesn't read the positions in the Uniswap v3 and Aerodrome ones. ${READ} ${NO_PASS}`);
+      expect((await words(burnedV4, aero(5_000n))).withIndex).toBe(`Only Uniswap v4 and Aerodrome pools were found, and Inspector doesn't read the positions in the Aerodrome ones. ${READ} ${NO_PASS}`);
+      expect((await words(burnedV4, { ...v3(5_000n), ...aero(5_000n) }, { chain: STALE })).withIndex).toBe(all.without);
+    });
+
+    it("Uniswap v3 or Aerodrome alone, the index read and no v4 pool involved: only what is said of their positions changes", async () => {
+      for (const [reads, names] of [[v3(5_000n), "Uniswap v3"], [aero(5_000n), "Aerodrome"], [{ ...v3(5_000n), ...aero(5_000n) }, "Uniswap v3 and Aerodrome"]] as const) {
+        expect(await words([], reads)).toEqual({ withIndex: `Only ${names} pools were found, and Inspector doesn't read the positions in them.`, without: OLD_ONLY(names) });
+        expect(await words([], reads, { index: null })).toEqual({ withIndex: OLD_ONLY(names), without: OLD_ONLY(names) });
+        expect(await words([], reads, { chain: STALE })).toEqual({ withIndex: OLD_ONLY(names), without: OLD_ONLY(names) });
+      }
+    });
+  });
+
+  describe("a deeper Uniswap v3 or Aerodrome pool beside a burned pair", () => {
+    const beside = (other: Record<string, unknown>) => ({ ...burnedPair(2_000n), ...other });
+    it("the old words without an index or with a stale one", async () => {
+      const OLD_V3 = "The deepest pool is a Uniswap v3 position, which can't be read without an index yet.";
+      const OLD_AERO = "The deepest pool is an Aerodrome position, which can't be read without an index yet.";
+      expect(await words(burnedV4, beside(v3(9_000n)), { index: null })).toEqual({ withIndex: OLD_V3, without: OLD_V3 });
+      expect(await words(burnedV4, beside(aero(9_000n)), { chain: STALE })).toEqual({ withIndex: OLD_AERO, without: OLD_AERO });
+    });
+    it("with the index read: that pool's positions aren't read, and what was read of the v4 pool beside it", async () => {
+      expect((await words(burnedV4, beside(v3(9_000n)))).withIndex).toBe(`The deepest pool is a Uniswap v3 pool, and Inspector doesn't read the positions in it. ${READ} ${NO_PASS}`);
+      expect((await words(burnedV4, beside(aero(9_000n)))).withIndex).toBe(`The deepest pool is an Aerodrome pool, and Inspector doesn't read the positions in it. ${READ} ${NO_PASS}`);
+      // With no v4 pool there is nothing to say of one.
+      expect((await words([], beside(aero(9_000n)))).withIndex).toBe("The deepest pool is an Aerodrome pool, and Inspector doesn't read the positions in it.");
+    });
+  });
+
+  it("a Uniswap v4 pool beside a burned pair: the old words without an index or with a stale one, and what was read with one", async () => {
+    expect(await words(burnedV4, burnedPair(2_000n), { index: null })).toEqual({ withIndex: OLD_V4_BESIDE, without: OLD_V4_BESIDE });
+    expect(await words(burnedV4, burnedPair(2_000n), { chain: STALE })).toEqual({ withIndex: OLD_V4_BESIDE, without: OLD_V4_BESIDE });
+    expect((await words(burnedV4, burnedPair(2_000n))).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${READ} ${NO_PASS}`);
+  });
+
+  describe("an index whose reading was stopped: the words say what stopped it, and never that there is no index", () => {
+    const NO_ENTRY = "The position index has no entry yet for a Uniswap v4 pool of this token.";
+    /** The index has no entry for the v4 pool. */
+    const missing = { index: { cursor: Number(HEAD), pools: {} } };
+    /** The index lists the pool, but the node refuses its tail's eth_getLogs, as Arc does past 20,000 results. */
+    const refused = {
+      index: { cursor: 900, pools: { [v4PoolId(MAIN)]: { positions: [keyOf(twoSided(7, 2_000n))], truncated: false } } },
+      chain: { logs: Object.assign(new Error("query exceeds max results 20000"), { code: -32012 }) },
+    };
+    const COULD_NOT_FINISH = "Inspector couldn't finish reading who holds the Uniswap v4 positions.";
+
+    it("a blocker, beside each of the old check's findings", async () => {
+      expect((await words(burnedV4, {}, missing)).withIndex).toBe(`Only Uniswap v4 pools were found. ${BLOCKED} ${NO_ENTRY}`);
+      expect((await words(burnedV4, burnedPair(2_000n), missing)).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${BLOCKED} ${NO_ENTRY}`);
+      expect((await words(burnedV4, { ...burnedPair(2_000n), ...v3(9_000n) }, missing)).withIndex).toBe(`The deepest pool is a Uniswap v3 pool, and Inspector doesn't read the positions in it. ${BLOCKED} ${NO_ENTRY}`);
+    });
+
+    it("a v4 pool the index's tail shows and nobody read, beside pools that are all Uniswap v3", async () => {
+      const created: ChainLog = { topics: [INITIALIZE_TOPIC, `0x${"c1".repeat(32)}`, topic(TOKEN), topic(USDC)], data: "0x", blockNumber: 950n };
+      expect((await words([], v3(5_000n), { index: { cursor: 900, pools: {} }, chain: { logs: [created] } })).withIndex).toBe(
+        `Only Uniswap v3 pools were found, and Inspector doesn't read the positions in them. ${BLOCKED} A Uniswap v4 pool of this token was created in the last minutes and isn't in the index yet, so its liquidity isn't counted.`,
+      );
+    });
+
+    it("a family of pools that never answered", async () => {
+      // No answer from the v2 factory: it reverts, so Uniswap v2 never answered.
+      const dex: DexConfig = { quoteTokens: [USD], v2Factory: V2, v4: UNISWAP_V4 };
+      const { input } = world(burnedV4, { dex, chain: { nftOwners: { 7: DEAD } } });
+      const scan = await findPools(input);
+      expect(scan.silent).toEqual(["Uniswap v2"]);
+      const before = await checkLpLock({ ...input, v4Positions: undefined }, scan, FACTS);
+      expect(before.detail).toBe(ONLY_V4);
+      expect(await checkLpLock(input, scan, FACTS)).toEqual({ ...before, detail: `Only Uniswap v4 pools were found. ${BLOCKED} Uniswap v2 didn't answer, so a pool there can't be ruled out.` });
+    });
+
+    it("a read that fails, and the inspection's deadline", async () => {
+      expect((await words(burnedV4, {}, refused)).withIndex).toBe(`Only Uniswap v4 pools were found. ${COULD_NOT_FINISH}`);
+      expect((await words(burnedV4, burnedPair(2_000n), refused)).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${COULD_NOT_FINISH}`);
+      expect((await words(burnedV4, burnedPair(2_000n), { input: { deadlineAt: Date.now() + 500 } })).withIndex).toBe(`A Uniswap v4 pool that may hold more than this v2 pair sits beside it. ${TIMED_OUT}`);
+      // A token with no v4 pool found has nothing of v4 left unread: only what is said of its v3 positions changes.
+      expect((await words([], v3(5_000n), refused)).withIndex).toBe("Only Uniswap v3 pools were found, and Inspector doesn't read the positions in them.");
+    });
+  });
+
+  it("leaves a warning's words as they were, whatever pools sit beside the one it is about", async () => {
+    // The finding as the check gave it before these words changed (a19ac2c), word for word.
+    const { input } = world([main([twoSided(7, 2_000n)])], { dex: everything, chain: { reads: { ...noPools(everything), ...burnedPair(2_000n), ...v3(9_000n), ...aero(1_000n) }, nftOwners: { 7: WALLET } } });
+    expect(await checkLpLock(input, await findPools(input), FACTS)).toEqual({
+      id: "lp-lock",
+      status: "warn",
+      title: SOME,
+      detail: `In the pools Inspector can read, of the first 1,000 USDC buyers would pay for this token, 77.4% goes into positions wallets can withdraw and 22.6% into burned or locked ones. Of the 13,999 USDC in its pools now, wallets' positions hold 1,999 and burned or locked ones 2,000. ${ORDER}`,
+      // The largest slice that isn't burned or locked is the v3 pool's USDC, which is nobody's in particular.
+      evidenceUrl: `https://explorer.test/address/${V3_POOL}`,
+      fixAppId: "vault",
+    });
   });
 });

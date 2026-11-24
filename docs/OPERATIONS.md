@@ -315,8 +315,12 @@ all, and the cursor. It reads the blocks after the cursor itself (at most 10,000
 `Initialize` with the token as currency0 and as currency1, then the pools' `ModifyLiquidity`), then every position's
 liquidity and each NFT's owner at one block, and checks that the in-range positions add up to the pool's active
 liquidity. With that it does one thing: it warns about liquidity a wallet can withdraw. It never makes a pass and never
-a fail: every pass, fail and unknown of lp-lock is what the check from before the index says (v2 LP tokens only), word
-for word, and a warning from the positions takes the place of that check's pass or unknown, never of its fail. A launch
+a fail: every pass, fail and unknown of lp-lock is what the check from before the index says (v2 LP tokens only), and a
+warning from the positions takes the place of that check's pass or unknown, never of its fail. That check's words stand
+too, but for its unknowns that say positions "can't be read without an index yet". Once the index was read, those say
+what was read (that Inspector read who holds the v4 positions, that positions wallets can withdraw are under the
+thresholds for a warning, and that this confirms no lock) or what stopped the reading, and that Uniswap v3 and Aerodrome
+positions aren't read, without tying that to an index. A launch
 burned into a v4 pool reads "couldn't check"; one held by a wallet reads as a warning, titled "Wallets hold most of the
 USDC Inspector found in its pools" once wallets hold 1,000 USDC there and more than half of it, and "Some liquidity
 isn't locked" otherwise (a fresh wallet-held launch nobody has bought from, say). Failing a token on its v4 positions
@@ -330,9 +334,13 @@ more than 10,000 blocks behind, the token has no v4 pool, a pool has more than 5
 the inspection wasn't given it. A pool created since the cursor that the inspection does have is read from those
 blocks alone. Pools against a currency other than USDC, EURC or native USDC are in neither list and are never counted.
 The same when the v4 reads fail or outlast the inspection's deadline (a node refusing the tail's `eth_getLogs`, which
-Arc does past 20,000 results, is one way): the old check is started first, runs beside them, and answers. Holders are classified
-by their code, up to 500 of them, in one state-overridden `eth_call` per 250 (40 single `eth_getCode` reads when a
-node refuses the override).
+Arc does past 20,000 results, is one way): the old check is started first, runs beside them, and answers. Its status
+always stands. Its words stand word for word only when there was no index to use (none, switched off, or more than
+10,000 blocks behind); in the other cases a detail that would say the positions can't be read without an index says
+what stopped the reading instead: the blocker's own sentence (for a pool with too many positions, "A Uniswap v4 pool of
+this token has more than 500 positions, more than this check reads."), or that Inspector ran out of time, or couldn't
+finish reading who holds the v4 positions. Holders are classified by their code, up to 500 of them, in one
+state-overridden `eth_call` per 250 (40 single `eth_getCode` reads when a node refuses the override).
 
 Known limits, accepted: a stored inspection is as of its block and nothing re-inspects a token when its price moves; a
 token whose old pools the backfill adds later is not re-queued for inspection (a follow-up: re-queue the tokens of
@@ -424,7 +432,8 @@ run a minute, longer while inspections run long.
 Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives exactly the answers it gave before
 the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be read without an index yet"), since
 until the backfill is done neither the positions nor the token's old v4 pools are all listed. The warnings
-from positions start on their own once it has caught up. Watch `positionsIndex/mainnet.block` against `head`, or
+from positions start on their own once it has caught up, and so do the details that say what was read in place of
+"can't be read without an index yet". Watch `positionsIndex/mainnet.block` against `head`, or
 `behind` in the run line. After that a run reads one window of about 120 blocks.
 
 **Redoing it.** Set `positions` to `false` on `indexer/mainnet`, wait for the run in progress to end, delete the
