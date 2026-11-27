@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractSelectors, minimalProxyTarget, usesOpcode, walkOpcodes } from "../bytecode";
+import { extractSelectors, minimalProxyTarget, opaqueCode, usesOpcode, walkOpcodes } from "../bytecode";
 
 describe("walkOpcodes", () => {
   it("skips push data", () => {
@@ -42,5 +42,25 @@ describe("minimalProxyTarget", () => {
   });
   it("returns null for anything else", () => {
     expect(minimalProxyTarget("0x6080604052")).toBeNull();
+  });
+});
+
+describe("opaqueCode", () => {
+  const delegate = "ab".repeat(20);
+  it("reads EIP-7702's delegation designator, exactly 0xef0100 and an address", () => {
+    expect(opaqueCode(`0xef0100${delegate}`)).toBe("eip7702");
+    expect(opaqueCode(`0xEF0100${delegate.toUpperCase()}`)).toBe("eip7702");
+    // A byte more or less is no designator.
+    expect(opaqueCode(`0xef0100${delegate}00`)).toBeNull();
+    expect(opaqueCode(`0xef0100${delegate.slice(2)}`)).toBeNull();
+  });
+  it("reads an Arbitrum Stylus program by its prefix", () => {
+    expect(opaqueCode("0xeff00000aabbccdd")).toBe("stylus");
+    expect(opaqueCode("0xEFF000")).toBe("stylus");
+  });
+  it("leaves EVM bytecode, a clone included, to the scans", () => {
+    expect(opaqueCode("0x6080604052")).toBeNull();
+    expect(opaqueCode(`0x363d3d373d3d3d363d73${delegate}5af43d82803e903d91602b57fd5bf3`)).toBeNull();
+    expect(opaqueCode("0xef")).toBeNull();
   });
 });

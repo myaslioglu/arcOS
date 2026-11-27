@@ -11,3 +11,6 @@ export const isNotAContract = (e: unknown): boolean => named(e, "NotAContract");
 /** Backpressure: this server process was already running its most inspections at once (`InspectorBusy`), or this one
  * ran out of time (`InspectionTimeout`). */
 export const isBusy = (e: unknown): boolean => named(e, "InspectorBusy", "InspectionTimeout");
+
+/** The chain isn't one this site reads: not on its network, or not switched on (`ChainNotEnabled`). */
+export const isChainNotEnabled = (e: unknown): boolean => named(e, "ChainNotEnabled");

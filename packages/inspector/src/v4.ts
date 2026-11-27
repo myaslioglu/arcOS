@@ -105,8 +105,11 @@ export function quoteInRange(p: { sqrtPriceX96: bigint; tick: number; tickSpacin
   return p.sqrtPriceX96 <= lowerRatio ? 0n : (p.liquidity * (p.sqrtPriceX96 - lowerRatio)) / Q96;
 }
 
-/** A currency pools can quote against, with the decimals its amounts carry (on Arc: 6 for the USDC ERC-20 and EURC, 18 for native USDC). */
-export type V4Quote = { address: Address; symbol: string; decimals: number };
+/**
+ * A currency pools can quote against, with the decimals its amounts carry (on Arc: 6 for the USDC ERC-20 and EURC, 18 for
+ * native USDC). `unpriced`: it has no US dollar rate yet (WETH, native ETH off Arc), so a pool against it is never quoted.
+ */
+export type V4Quote = { address: Address; symbol: string; decimals: number; unpriced?: boolean };
 
 export type V4Read = {
   /** StateView answered at least one question with something it could be decoded from: the contracts are there. */
@@ -226,13 +229,14 @@ function isPoolShort(data: Hex | null, poolId: Hex): boolean {
  * `token`'s v4 pools against each quote currency: one round trip for the state, then one quote per pool that exists, `QUOTE_CONCURRENCY` at a time.
  * 1. One multicall of `StateView.getSlot0` and `getLiquidity` for every candidate: the standard hookless keys and the
  *    index's pools. A pool whose `sqrtPriceX96` is 0 was never initialised.
- * 2. For each pool that exists, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call
+ * 2. For each pool that exists against a priced quote, a V4Quoter exact-output quote for `quoteUnits` of the quote currency, as its own eth_call
  *    with `QUOTE_GAS`: a quote walks tick words, so one pool that plants an empty tick-spacing-1 range would starve the
  *    others in a shared call, and its failure stays its own. Only the pool's own NotEnoughLiquidity means it can't pay
  *    (`liquid: false`). A quote that fails otherwise leaves it undecided (`liquid: null`, "quote-unavailable"). A pool with
  *    a hook isn't quoted at all: whatever its quote said would be the hook's to fake, so it is undecided (`liquid: null`,
  *    "hook"). Check 10's round trip still trades through it, but a few USDC each way says
- *    nothing about 1,000. `depth` is the in-range amount, shown as such; it doesn't decide anything.
+ *    nothing about 1,000. A pool against a quote with no dollar rate (`V4Quote.unpriced`) isn't quoted either: it is
+ *    undecided ("unpriced"). `depth` is the in-range amount, shown as such; it doesn't decide anything.
  * A Multicall3 that reverts as a whole reads as "nothing answered" (`answered: false`); a transport failure there rejects.
  */
 export async function readV4Pools(a: {
@@ -275,6 +279,8 @@ export async function readV4Pools(a: {
     const held = quoteInRange({ sqrtPriceX96: c.sqrtPriceX96, tick: c.tick, tickSpacing: c.key.tickSpacing, liquidity: c.liquidity, quoteIsCurrency0: c.quoteIsCurrency0 });
     const base = { address: a.v4.poolManager, version: "v4" as const, quote: c.quote.symbol, depth: toSixDecimals(held, c.quote.decimals), poolId: c.id, key: c.key };
     if (hasHook(c.key)) return { ...base, liquid: null, undecided: "hook" };
+    // 1,000 units of a currency with no dollar rate say nothing about 1,000 USD, so the quote isn't asked for.
+    if (c.quote.unpriced) return { ...base, liquid: null, undecided: "unpriced" };
     try {
       // The quote currency comes out: if it is currency1 the swap sells currency0 for it, and the other way round.
       const params = { poolKey: c.key, zeroForOne: !c.quoteIsCurrency0, exactAmount: a.quoteUnits * 10n ** BigInt(c.quote.decimals), hookData: "0x" };

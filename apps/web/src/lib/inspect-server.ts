@@ -1,18 +1,19 @@
 import "server-only";
-import { activeChain, type Address } from "@arcos/chain";
-import { DEADLINE_MS, explorerFetch, inspect, proExplorerApi, withDeadline, type Report } from "@arcos/inspector";
+import { activeChain, activeNetwork, enabledInspectChains, type Address, type InspectChainKey } from "@arcos/chain";
+import { DEADLINE_MS, explorerFetch, inspect, proExplorerApi, sourcifySource, withDeadline, type Report } from "@arcos/inspector";
+import { BUDGET_SPENT, NO_EXPLORER_KEY, budgetedFetch, dailyBudget } from "./explorer-budget";
 import { indexedExtrasFor } from "./indexed-pools-server";
-import { inspectInput } from "./inspect-input";
+import { inspectInput, inspectInputFor } from "./inspect-input";
 import { processGlobal } from "./process-global";
 import { inFlightGate } from "./rate-limit";
 import { reportTtlMs } from "./report-cache";
-import { explorerPacer, serverRpcClient } from "./server-rpc";
+import { explorerPacer, inspectRpcClient, serverRpcClient } from "./server-rpc";
 import { ttlCache } from "./ttl-cache";
 
 // Next bundles this module into more than one chunk (the route handlers get one copy, the proof page another), so
-// every budget below is kept on globalThis (see process-global.ts): one RPC health record, one report cache, one gate
-// and one explorer pacer per server process, whichever copy runs. The errors that come out of them may therefore come
-// from another copy's classes; the routes tell them apart by name (see inspection-outcome.ts).
+// every budget below is kept on globalThis (see process-global.ts): one RPC health record per chain, one report cache,
+// one gate, one explorer pacer and one explorer budget per server process, whichever copy runs. The errors that come out
+// of them may therefore come from another copy's classes; the routes tell them apart by name (see inspection-outcome.ts).
 
 // The RPC budget against the 15 s deadline. An inspection's RPC reads run in sequential steps, with the rest of each
 // step in parallel. Measured by timing the engine over a reader whose every call takes 1 s: 5 steps for a plain token
@@ -27,10 +28,12 @@ import { ttlCache } from "./ttl-cache";
 // most once: after timing out, the primary is skipped for longer than any inspection runs. With a healthy secondary
 // the deepest path takes 3 s plus one round trip per step, under 7 s for 13 steps at 0.3 s each. Every endpoint
 // hanging is an outage: one call alone takes 12 s on mainnet (4 × 3 s), the deadline cuts the inspection off, and it
-// answers "busy" (503) without being cached.
+// answers "busy" (503) without being cached. A chain other than Arc has two endpoints (the keyed provider, then the
+// public RPC: rpc-urls.ts), so its worst call is 6 s.
 const client = serverRpcClient();
-// A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts).
-const cache = processGlobal("inspect.reportCache", () => ttlCache<Report>(reportTtlMs));
+// A clean report is kept 5 minutes, a degraded one 30 seconds (see report-cache.ts). One cache for every chain, keyed by
+// chain and address, so Arc's report of an address and Base's of the same address are never one another's.
+const cache = processGlobal("inspect.reportCache", () => ttlCache<Report>(reportTtlMs, 1_000));
 
 /** Thrown when 8 uncached inspections are already running in this server process — backpressure, not a hard failure. */
 export class InspectorBusy extends Error {
@@ -40,8 +43,16 @@ export class InspectorBusy extends Error {
   }
 }
 
-// Caps concurrent UNCACHED inspections per server process. A cache hit or a join on an in-flight promise for the
-// same address never reaches this gate: ttlCache only calls its loader for genuinely new work.
+/** Thrown for a chain this site doesn't read: not on its network, or not switched on (`NEXT_PUBLIC_INSPECT_CHAINS`). */
+export class ChainNotEnabled extends Error {
+  constructor() {
+    super("Inspector doesn't read that chain on this site.");
+    this.name = "ChainNotEnabled";
+  }
+}
+
+// Caps concurrent UNCACHED inspections per server process, on every chain together. A cache hit or a join on an in-flight
+// promise for the same chain and address never reaches this gate: ttlCache only calls its loader for genuinely new work.
 const gate = processGlobal("inspect.gate", () => inFlightGate(8, () => new InspectorBusy()));
 
 // Blockscout's free tier allows 5 requests a second, and one inspection makes up to 4 explorer calls
@@ -49,10 +60,46 @@ const gate = processGlobal("inspect.gate", () => inFlightGate(8, () => new Inspe
 // therefore waits its turn here instead of being refused and cached as "unknown". The worst case per
 // server process, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the 15 s deadline;
 // each request then gets at most 8 s, and none is still sent once its inspection's deadline has
-// passed (see explorer-fetch.ts in @arcos/inspector).
+// passed (see explorer-fetch.ts in @arcos/inspector). The PRO API's limit is per key, across chains, so
+// every chain waits in the same queue.
 const explorerTurn = explorerPacer();
 
-export function cachedInspection(address: Address): Promise<Report> {
+// The explorer calls inspections off Arc may make in a UTC day, per process (explorer-budget.ts). Arc's aren't counted.
+const explorerBudget = processGlobal("inspect.explorerBudget", () => dailyBudget());
+
+/**
+ * The report for `address` on the chain `chainKey` names (Arc unless told), from this process's cache or a new
+ * inspection. Rejects with `ChainNotEnabled` for a chain this site doesn't read, `InspectorBusy` or `InspectionTimeout`
+ * under load, `NotAContract`, or whatever else stopped the inspection.
+ */
+export function cachedInspection(address: Address, chainKey: InspectChainKey = "arc"): Promise<Report> {
+  if (chainKey === "arc") return cache.get(`arc:${address.toLowerCase()}`, () => gate.run(() => arcInspection(address)));
+  const chain = enabledInspectChains(activeNetwork()).find((c) => c.key === chainKey);
+  if (!chain) return Promise.reject(new ChainNotEnabled());
+  return cache.get(`${chain.key}:${address.toLowerCase()}`, () =>
+    gate.run(async () => {
+      const controller = new AbortController();
+      // Blockscout's PRO API for the chain, the only explorer the server reads off Arc, while today's budget lasts.
+      const explorerApi = proExplorerApi(chain.chainId, process.env.BLOCKSCOUT_API_KEY);
+      const explorerSkipped = !explorerApi ? NO_EXPLORER_KEY : explorerBudget.remaining() <= 0 ? BUDGET_SPENT : undefined;
+      const fetchFn = explorerFetch(explorerTurn, controller.signal, budgetedFetch(explorerBudget));
+      // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
+      const deadlineAt = Date.now() + DEADLINE_MS;
+      const input = inspectInputFor(chain, address, inspectRpcClient(chain), {
+        fetchFn,
+        ...(explorerApi ? { explorerApi } : {}),
+        deadlineAt,
+        // Sourcify, free and keyless: a match there is evidence of verified source Blockscout may not have.
+        verifyFallback: chain.sourcify ? sourcifySource(chain.chainId, { signal: controller.signal }) : null,
+        ...(explorerSkipped ? { explorerSkipped } : {}),
+      });
+      return withDeadline(inspect(input), controller, DEADLINE_MS);
+    }),
+  );
+}
+
+/** An inspection on Arc, exactly as the server made one before there were other chains. */
+async function arcInspection(address: Address): Promise<Report> {
   // Arc mainnet's public explorer refuses server requests (a Cloudflare bot check), so with a key the server
   // reads the same data from Blockscout's PRO API. Without one (local dev) it uses the public explorer. The key
   // is a runtime secret, read here on each call rather than at module load.
@@ -62,17 +109,13 @@ export function cachedInspection(address: Address): Promise<Report> {
   // ttlCache never caches a rejected promise (see ttl-cache.ts), so a timeout is never cached.
   // Each inspection has its own controller: when its deadline passes, its explorer requests stop,
   // and no other inspection's do.
-  return cache.get(address.toLowerCase(), () =>
-    gate.run(async () => {
-      // The index's pools for this token, hooked v4 pools among them (at most 1.5 s, none when the index can't be read),
-      // then its v4 pools' positions (1.5 s of their own, left out when they can't be read; see indexed-pools.ts). The
-      // 15 s deadline starts after them.
-      const { extraPools, extraPoolsTruncated, v4Positions } = await indexedExtrasFor(address);
-      const controller = new AbortController();
-      const fetchFn = explorerFetch(explorerTurn, controller.signal);
-      // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
-      const deadlineAt = Date.now() + DEADLINE_MS;
-      return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt, v4Positions, extraPoolsTruncated)), controller, DEADLINE_MS);
-    }),
-  );
+  // The index's pools for this token, hooked v4 pools among them (at most 1.5 s, none when the index can't be read),
+  // then its v4 pools' positions (1.5 s of their own, left out when they can't be read; see indexed-pools.ts). The
+  // 15 s deadline starts after them.
+  const { extraPools, extraPoolsTruncated, v4Positions } = await indexedExtrasFor(address);
+  const controller = new AbortController();
+  const fetchFn = explorerFetch(explorerTurn, controller.signal);
+  // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
+  const deadlineAt = Date.now() + DEADLINE_MS;
+  return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt, v4Positions, extraPoolsTruncated)), controller, DEADLINE_MS);
 }

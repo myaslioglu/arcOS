@@ -36,6 +36,9 @@ the server's explorer reads use because explorer.arc.io refuses server requests)
 the sign-in cookie, below) and `TELEGRAM_WEBHOOK_SECRET` (what Telegram sends in the `X-Telegram-Bot-Api-Secret-Token`
 header of each call to `/api/telegram/webhook`, which the route compares in constant time). All three are Secret Manager
 secrets, pinned to a version and available at runtime only. None is ever a `NEXT_PUBLIC_` value or in the repository.
+The server also reads a fourth, `INSPECT_RPC_KEY`, the RPC provider's key for the Inspector's other chains (below), which
+`apphosting.yaml` doesn't name yet: until it does, those reads use the chains' public RPCs. It will be set up the same
+way ([docs/DEPLOYING.md](docs/DEPLOYING.md#the-inspectors-other-chains)).
 Every other
 setting in that file is public: `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`, for one, is a client identifier that ships in
 the browser bundle.
@@ -75,11 +78,13 @@ Signing in is free and sends no transaction: the wallet signs an EIP-4361 messag
 ## Rate limiting and the trusted-proxy assumption
 
 `/api/inspect`, `/api/approvals`, `/api/event` and `/api/csp-report` limit each client, in memory and per server
-instance: a first line of defence, not a guarantee. A client is the entry of `x-forwarded-for` that the site's own
-proxies vouch for (`clientKey` in `apps/web/src/lib/rate-limit.ts`), else `x-real-ip`, else one shared `"unknown"` key.
-By default that entry is the rightmost one, the hop the nearest proxy added: every entry to its left is client-supplied
-and trivially spoofed, and is never trusted. An IPv6 address counts by its /64, so a client cycling through a block
-doesn't dodge its limit.
+instance: a first line of defence, not a guarantee. So do the Inspector's pages for chains other than Arc
+(`/t/<chain>/<address>`, its social card and `/badge/<chain>/<address>`, 30 a minute together), since each of them can
+spend the RPC provider's paid quota; Arc's `/t` and `/badge` stay unlimited. A client is the entry of `x-forwarded-for`
+that the site's own proxies vouch for (`clientKey` in `apps/web/src/lib/rate-limit.ts`), else `x-real-ip`, else one
+shared `"unknown"` key. By default that entry is the rightmost one, the hop the nearest proxy added: every entry to its
+left is client-supplied and trivially spoofed, and is never trusted. An IPv6 address counts by its /64, so a client
+cycling through a block doesn't dodge its limit.
 
 If a Google load balancer in front of App Hosting adds an entry of its own to the right of the client's, every visitor
 is keyed by that one entry and they share a single bucket: stricter, never looser. `ARCOS_TRUSTED_HOPS` (server-only,
@@ -116,11 +121,13 @@ Every response carries these headers (`headers()` in `apps/web/next.config.ts`, 
 The full policy is sent as `Content-Security-Policy-Report-Only`, so it blocks nothing. It says the page takes its
 scripts and styles from itself (and one font stylesheet from Google Fonts, for the WalletConnect modal) and calls only
 itself, Arc's RPC nodes and explorers, WalletConnect and Reown, and Circle's App Kit; `security-headers.ts` lists each
-host with who calls it. Browsers post what it would have blocked to `/api/csp-report`, which writes a log line (the
-directive, the blocked origin or keyword, and the page's path) for at most ten distinct violations per request and
-answers 204 to everything. It logs no query string, no address, no client address and no user agent, reads at most
-256 KB (Chromium puts the whole policy in every report, and keeps up to 100 for one upload) and limits each client. The
-policy watches real traffic for a few days before it is enforced, in a later step.
+host with who calls it. The Inspector's reads of other chains are the server's, so the policy names none of their hosts
+(a test checks that `connect-src` names no `alchemy.com`, `blockscout.com` or `sourcify.dev` host). Browsers post what
+it would have blocked to `/api/csp-report`, which writes a log line (the directive, the blocked origin or keyword, and
+the page's path) for at most ten distinct violations per request and answers 204 to everything. It logs no query string,
+no address, no client address and no user agent, reads at most 256 KB (Chromium puts the whole policy in every report,
+and keeps up to 100 for one upload) and limits each client. The policy watches real traffic for a few days before it is
+enforced, in a later step.
 
 `script-src` allows `'unsafe-inline'`. Next's own bootstrap scripts and the theme script are inline and carry no nonce,
 and a nonce is made for each request, which would make every page render on the server on each visit instead of being
@@ -147,17 +154,40 @@ sends its own usage and error reports to Circle.
 
 ## Reading contracts anyone can deploy
 
-Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that
-does: the server's four clients (`serverRpcClient`, `approvalsRpcClient`, `authRpcClient` and `watchRpcClient` in
+Inspector reads whichever token contract a visitor asks about, so CCIP-Read (EIP-3668) is off on every client that does:
+the server's four clients (`serverRpcClient`, `approvalsRpcClient`, `authRpcClient` and `watchRpcClient` in
 `apps/web/src/lib/server-rpc.ts`, all built by `inspectionClient` in `packages/inspector/src/inspection-client.ts`, each
 with its own endpoint-health record) — `serverRpcClient` behind `/api/inspect`, `/badge`, `/t` and its image, and
-`/api/pulse`; `approvalsRpcClient` behind `/api/approvals` alone, which reads the allowance, symbol, name and decimals
-of whatever token contracts an address has approved; `authRpcClient` behind `/api/auth/verify` alone, which checks
-smart-wallet signatures; `watchRpcClient` behind `POST /api/watches` alone, which checks that the token address a
-signed-in wallet adds holds code — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`).
-With it on, a read that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is
-a blind server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind
-Swap and Bridge only read Circle's own contracts.
+`/api/pulse` (and, for each of the Inspector's other chains, `inspectRpcClient` behind the same routes' chain forms);
+`approvalsRpcClient` behind `/api/approvals` alone, which reads the allowance, symbol, name and decimals of whatever
+token contracts an address has approved; `authRpcClient` behind `/api/auth/verify` alone, which checks smart-wallet
+signatures; `watchRpcClient` behind `POST /api/watches` alone, which checks that the token address a signed-in wallet
+adds holds code — and every client of the browser's wagmi config (`apps/web/src/providers/wagmi.ts`). With it on, a read
+that reverts with `OffchainLookup` makes viem fetch URLs the contract chose: from the server, that is a blind
+server-side request forgery. Such a revert is read like any other revert. The Circle App Kit clients behind Swap and
+Bridge only read Circle's own contracts.
+
+## The Inspector's other chains
+
+The Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet only from the site's server, and only for the chains
+`NEXT_PUBLIC_INSPECT_CHAINS` switches on; every other chain slug answers 404
+([docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md)).
+
+- **The key.** `INSPECT_RPC_KEY` is a server-only runtime secret, read in one file, `apps/web/src/lib/rpc-urls.ts`, which
+  only `server-rpc.ts` imports (a test pins both, and that no `NEXT_PUBLIC_` name holds a key). It is sent in the
+  `Authorization: Bearer` header to the provider's fixed hosts (`eth-mainnet`, `base-mainnet`, `arb-mainnet` and
+  `opt-mainnet.g.alchemy.com`), never in a URL: viem writes the URL into its error messages, and the routes log an
+  error's name only. The deploy's bundle scan (`scripts/scan-bundle.mjs`) looks for the strings in its secret list in
+  both the browser and the server build; the key's line in that list is one of the owner's steps
+  ([docs/DEPLOYING.md](docs/DEPLOYING.md#the-inspectors-other-chains)). Without the key, or with the value `none`, the
+  server reads each chain's public RPC.
+- **Where requests go.** Every host is fixed in code: the provider, each chain's public RPC, Blockscout's PRO API by
+  chain id, and `sourcify.dev`. The only part a visitor chooses is the address, which must be a 20-byte hex address
+  before anything is read, and the chain, which must be one switched on. CCIP-Read stays off, so a contract can't send
+  the server anywhere.
+- **Spending.** Each chain's pages, card and badge take a turn from a per-client limiter (above), and the explorer reads
+  for these chains have a daily budget per server instance ([docs/OPERATIONS.md](docs/OPERATIONS.md#the-inspectors-other-chains)).
+  Walking many addresses costs a client its turns, not the site's quota.
 
 ## Connecting a phone wallet
 

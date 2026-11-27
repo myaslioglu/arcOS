@@ -2,6 +2,7 @@ import type { Abi } from "viem";
 import type { Address, DexConfig, InspectChainKey, NativeQuote, NetworkId, PrevrandaoCopy, TradeQuote } from "@arcos/chain";
 import type { Hex } from "./bytecode";
 import type { ExplorerSource } from "./explorer";
+import type { VerificationSource } from "./sourcify";
 
 /**
  * The call reached the chain and reverted (or returned no data): the function isn't there, or it said no. `data` is what it
@@ -41,6 +42,12 @@ export type Report = {
   /** The same numbers, broken out by status — every surface should show `unknown` explicitly rather than folding it into "not pass". */
   counts: { pass: number; warn: number; fail: number; unknown: number };
   explorerReachable: boolean;
+  /**
+   * Why the explorer wasn't asked at all, when that was on purpose (`InspectInput.explorerSkipped`): the sentence the
+   * explorer-based findings give in place of "The explorer didn't answer". Absent when the explorer was asked, or had to
+   * be done without for any other reason.
+   */
+  explorerSkipped?: string;
   /**
    * Some read this report relies on failed at the transport level, so a second try might read more:
    * - a `ChainReader` call failed: an HTTP error, a timeout, or a JSON-RPC error that isn't the node's answer (anything
@@ -132,7 +139,8 @@ export type V4PoolPositions = { positions: V4PositionKey[]; truncated: boolean }
  */
 export type V4PositionIndex = { cursor: number; pools: Record<string, V4PoolPositions> };
 
-export type PoolVersion = "v2" | "v3" | "v4" | "aero";
+/** `aero` is Slipstream (Aerodrome's, or Velodrome's), `solidly` the classic pools of the same two. */
+export type PoolVersion = "v2" | "v3" | "v4" | "aero" | "solidly";
 
 export type Pool = {
   /** Where the pool's tokens sit: the pair or pool contract, or for v4 the PoolManager, which holds the tokens of every v4 pool. */
@@ -141,8 +149,10 @@ export type Pool = {
   /** The quote currency's symbol: a quote token's, or on v4 the native currency's (`InspectInput.nativeQuote`, "USDC" on Arc). */
   quote: string;
   /**
-   * In units of the quote currency, 6 decimals. v2, v3 and Aerodrome: the pool's balance of the quote token. v4: what the
-   * active liquidity holds in range at the current price (see `quoteInRange` in v4.ts), not the pool's total.
+   * In units of the quote currency, 6 decimals. v2, v3, Slipstream and the classic pools: the pool's balance of the quote
+   * token. v4: what the active liquidity holds in range at the current price (see `quoteInRange` in v4.ts), not the
+   * pool's total. For a stable quote that is US dollars; for one that isn't priced (`undecided: "unpriced"`, WETH) it is
+   * the quote's own units, kept for display, and never set against a dollar figure.
    */
   depth: bigint;
   /**
@@ -151,14 +161,15 @@ export type Pool = {
    * `false` is only ever a hookless pool's own "not enough liquidity".
    */
   liquid: boolean | null;
-  /** v4, with `liquid: null`. "quote-unavailable": the quote failed in some way that isn't the pool's own answer. "hook": the
-   * pool has a hook, which runs inside any swap and so could fake a quote either way; it isn't quoted. */
-  undecided?: "quote-unavailable" | "hook";
+  /** With `liquid: null`. v4: "quote-unavailable", the quote failed in some way that isn't the pool's own answer; "hook",
+   * the pool has a hook, which runs inside any swap and so could fake a quote either way, and it isn't quoted. Any kind:
+   * "unpriced", its quote currency has no US dollar rate yet (WETH, native ETH), so 1,000 units can't be judged. */
+  undecided?: "quote-unavailable" | "hook" | "unpriced";
   /**
-   * v2 only: whether its reserves hold any tokens at all. `false` for a pair holding USDC `sync`ed in and nothing to sell
-   * for it, whatever its depth; such a pair is never liquid and the trade check never trades against it. A pair with tokens
+   * v2: whether its reserves hold any tokens at all. `false` for a pair holding USDC `sync`ed in and nothing to sell for
+   * it, whatever its depth; such a pair is never liquid and the trade check never trades against it. A pair with tokens
    * is `true` even when it quotes nothing for the test amount or is thin; it is liquid only with 1,000 USDC and a nonzero
-   * quote.
+   * quote. The classic pools (`solidly`) are always `false`: the trade simulation doesn't swap through them yet.
    */
   tradable?: boolean;
   /** v2 only: the token's reserve, in its raw units, next to `depth`, the USDC (or EURC) reserve. */
@@ -194,8 +205,8 @@ export type PoolScan = {
 
 /**
  * One inspection. The fields that describe the chain (`chain`, `dex`, `knownLockers`, `explorerBase`, `arcosTokenFactory`,
- * `nativeQuote`, `tradeQuote`, `lockersVetted`, `unscanned`, `prevrandao`) come from its registry entry (`InspectChain` in
- * @arcos/chain), through `chainInput`: nothing in the engine assumes which chain it reads.
+ * `nativeQuote`, `tradeQuote`, `lockersVetted`, `unscanned`, `prevrandao`, `unverifiedFails`) come from its registry entry
+ * (`InspectChain` in @arcos/chain), through `chainInput`: nothing in the engine assumes which chain it reads.
  */
 export type InspectInput = {
   address: Address;
@@ -230,12 +241,27 @@ export type InspectInput = {
    */
   lockersVetted: boolean;
   /**
-   * The kinds of pool on the chain that discovery can't see, by name. Arc has none. The liquidity checks don't read this
-   * yet: they treat discovery as complete, so no registry entry may name any until they do (inspect-chains.test.ts).
+   * The kinds of pool on the chain that discovery can't see, by name. Arc has none. With any, the liquidity check never
+   * says "no pool" or "thin": a pool where it can't look may be there.
    */
   unscanned: string[];
   /** The prevrandao check's warning on this chain. */
   prevrandao: PrevrandaoCopy;
+  /**
+   * An explorer's explicit "not verified" (Blockscout's `is_verified: false`, and no match in `verifyFallback`) is a fail.
+   * Where it isn't (every chain but Arc: Etherscan, which isn't read, holds sources Blockscout may not), it is unknown.
+   */
+  unverifiedFails: boolean;
+  /**
+   * A second place to ask whether the code that runs is verified (Sourcify, off Arc): a match there is a pass, and its
+   * "no match" is half of what a fail needs. Absent or null: only the explorer is asked.
+   */
+  verifyFallback?: VerificationSource | null;
+  /**
+   * Why `explorer` is null on purpose, as the sentence the explorer-based findings give instead of "The explorer didn't
+   * answer" (the server's daily allowance of explorer calls is spent, say). The report carries it too (`Report.explorerSkipped`).
+   */
+  explorerSkipped?: string;
   /** Pools to read besides the ones discovery finds, hooked v4 pools among them. From the index (`pools/` in Firestore, filled by the indexer). */
   extraPools?: ExtraPool[];
   /**

@@ -1,3 +1,4 @@
+import { inspectChain } from "@arcos/chain";
 import type { Finding, Report } from "@arcos/inspector";
 import { shortAddress } from "./format";
 
@@ -10,6 +11,23 @@ export const NAME_DISCLOSURE = "The name and symbol are chosen by whoever deploy
 
 export const tokenLabel = (r: Report): string => r.token.symbol ?? shortAddress(r.address);
 
+/**
+ * The chain a report read, by name: "Arc" on either of the site's networks, as every surface has always said, and the
+ * registry's name for any other ("Base", "OP Mainnet").
+ */
+export function chainLabel(r: Pick<Report, "chain" | "network">): string {
+  if (r.chain === "arc") return "Arc";
+  return inspectChain(r.network, r.chain)?.name ?? r.chain;
+}
+
+/**
+ * Why the explorer-based checks are unknown on a surface with one line for it, or null when the explorer answered: the
+ * report's own reason when the explorer was left out on purpose (`Report.explorerSkipped`), else that it didn't answer.
+ */
+export function explorerNote(r: Pick<Report, "explorerReachable" | "explorerSkipped">): "skipped" | "unreachable" | null {
+  return r.explorerSkipped ? "skipped" : r.explorerReachable ? null : "unreachable";
+}
+
 /** "5 of 9 checks pass" — with an explicit unknown clause whenever there is one to show, so a
  * gap in the evidence is never silently folded into "not pass". */
 export function passLine(r: Pick<Report, "counts" | "total">): string {
@@ -18,7 +36,7 @@ export function passLine(r: Pick<Report, "counts" | "total">): string {
 }
 
 export function summaryLine(r: Report): string {
-  return `${tokenLabel(r)} on Arc — ${passLine(r)}`;
+  return `${tokenLabel(r)} on ${chainLabel(r)} — ${passLine(r)}`;
 }
 
 /** Slices by Unicode code point, not UTF-16 code unit, so a surrogate pair (e.g. an emoji) is never split in half. */
@@ -53,19 +71,21 @@ export function badgeColor(counts: Report["counts"] | null): string {
  * interpolated. The badge has no room for the project's disclaimer (or the explorer-down fact)
  * as visible text, so both are carried in a <title> (read by tooltips and screen readers) and in
  * aria-label; the visible right-hand cell stays short ("5/8 pass", or "5/8 pass · 3 ?" when some
- * checks are unknown).
+ * checks are unknown). Off Arc the left-hand cell names the chain after the token ("PEPE - Ethereum"), so the title does too.
  */
 export function badgeSvg(r: Report | null): string {
-  const left = r ? shortLabel(tokenLabel(r), 16) : "ArcOS";
+  const label = r ? shortLabel(tokenLabel(r), 16) : "ArcOS";
+  const left = r && r.chain !== "arc" ? `${label} - ${chainLabel(r)}` : label;
   const right = r
     ? r.counts.unknown > 0
       ? `${r.counts.pass}/${r.total} pass · ${r.counts.unknown} ?`
       : `${r.counts.pass}/${r.total} pass`
     : "not inspected";
   const disclaimer = r ? " — automated analysis, not investment advice" : "";
-  const explorerNote = r && !r.explorerReachable ? " — the explorer didn't answer some checks" : "";
+  const note = r ? explorerNote(r) : null;
+  const explorerText = note === "skipped" ? " — the explorer wasn't asked for some checks" : note === "unreachable" ? " — the explorer didn't answer some checks" : "";
   const nameNote = r ? ` — ${NAME_DISCLOSURE}` : "";
-  const title = `${left}: ${right}${disclaimer}${explorerNote}${nameNote}`;
+  const title = `${left}: ${right}${disclaimer}${explorerText}${nameNote}`;
   const color = badgeColor(r ? r.counts : null);
   const lw = 12 + left.length * 7;
   const rw = 12 + right.length * 7;

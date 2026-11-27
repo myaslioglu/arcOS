@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequestError, RpcRequestError, TimeoutError, createPublicClient, createTransport, type EIP1193RequestFn, type Transport } from "viem";
-import { CHAINS, arcInspectChain } from "@arcos/chain";
+import { CHAINS, arcInspectChain, inspectChain } from "@arcos/chain";
 import { inspect } from "../inspect";
 import { viemReader } from "../reader";
 import { arcOutOfGasIsNodeAnswer, endpointHealth, outOfGasIsNodeAnswerFor, rpcTransport } from "../rpc-transport";
@@ -519,5 +519,60 @@ describe("outOfGasIsNodeAnswerFor: the chain's own out-of-gas shapes", () => {
     const other = outOfGasIsNodeAnswerFor({ outOfGas: [{ code: -32000, text: /^out of gas$/i }] });
     expect(cases.map(other)).toEqual([false, true, false, false, false, false, false]);
     expect(cases.map(outOfGasIsNodeAnswerFor({ outOfGas: [] }))).toEqual([false, false, false, false, false, false, false]);
+  });
+
+  // The answers measured on 2026-11-27 (docs/INSPECTOR-CHAINS.md): an endless loop capped at 100,000 gas, through Alchemy and
+  // through each chain's public RPC.
+  it("reads each chain's measured answer as the node's, and a gas limit under the intrinsic cost as a refusal everywhere", () => {
+    const measured = {
+      ethereum: ["out of gas: gas required exceeds: 100000", -32003],
+      base: ["out of gas: gas required exceeds: 100000", -32003],
+      optimism: ["out of gas: gas required exceeds: 100000", -32003],
+      arbitrum: ["out of gas: gas required exceeds: 100000", -32000],
+    } as const;
+    for (const [key, [message, code]] of Object.entries(measured)) {
+      const rule = outOfGasIsNodeAnswerFor(inspectChain("mainnet", key)!);
+      expect(rule(rpcErr(code, message)), key).toBe(true);
+      expect(rule(rpcErr(-32000, "intrinsic gas too low")), key).toBe(false);
+      expect(rule(rpcErr(-32000, "err: intrinsic gas too low: have 20000, want 21000 (supplied gas 20000)")), key).toBe(false);
+    }
+    // arb1.arbitrum.io says it shorter.
+    expect(outOfGasIsNodeAnswerFor(inspectChain("mainnet", "arbitrum")!)(rpcErr(-32000, "out of gas"))).toBe(true);
+    // geth's -32000 isn't op-geth's or geth's answer: a different error, which fails over.
+    expect(outOfGasIsNodeAnswerFor(inspectChain("mainnet", "ethereum")!)(rpcErr(-32000, "out of gas"))).toBe(false);
+  });
+});
+
+// A keyed provider gets its key in a request header, never in its URL: viem writes the URL into the message of every
+// error it makes for a request, and a log line or a report must never carry the key.
+describe("rpcTransport's per-endpoint headers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends each endpoint the headers given for its URL, and none to the rest", async () => {
+    const seen: { url: string; authorization: string | null }[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+      return Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "upstream down" } });
+    });
+    const chain = { ...CHAINS.mainnet, rpcUrls: { default: { http: ["https://keyed.test/v2", "https://public.test"] } } };
+    const headers = (url: string) => (url === "https://keyed.test/v2" ? { authorization: "Bearer k" } : undefined);
+    await expect(rpcTransport(chain, { headers })({ chain }).request({ method: "eth_blockNumber" })).rejects.toThrow();
+    expect(seen).toEqual([
+      { url: "https://keyed.test/v2", authorization: "Bearer k" },
+      { url: "https://public.test/", authorization: null },
+    ]);
+  });
+
+  it("never puts the header's value into an error's message", async () => {
+    vi.stubGlobal("fetch", async () => new Response("unavailable", { status: 503 }));
+    const chain = { ...CHAINS.mainnet, rpcUrls: { default: { http: ["https://keyed.test/v2"] } } };
+    const error = await rpcTransport(chain, { headers: () => ({ authorization: "Bearer secret-value-123" }) })({ chain })
+      .request({ method: "eth_blockNumber" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    const all = JSON.stringify(error, Object.getOwnPropertyNames(error)) + String((error as Error).message) + String((error as { details?: string }).details);
+    expect(all).not.toContain("secret-value-123");
   });
 });

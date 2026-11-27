@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { processGlobal } from "../process-global";
+import { arcInspectChain, inspectChain } from "@arcos/chain";
 import { endpointHealth } from "@arcos/inspector";
-import { approvalsRpcClient, explorerPacer, serverRpcClient } from "../server-rpc";
+import { approvalsRpcClient, explorerPacer, inspectRpcClient, serverRpcClient } from "../server-rpc";
 
 describe("server-rpc", () => {
   it("keeps one RPC client per process", () => {
@@ -69,6 +70,68 @@ describe("server-rpc", () => {
 
       expect(revokeHealth.coolingUntil.size).toBeGreaterThan(0);
       expect(inspectorHealth.coolingUntil.size).toBe(0);
+    });
+  });
+
+  // Off Arc: one client per chain, over the keyed provider (its key in a header) and then the chain's public RPC, each with
+  // its own endpoint-health record and the chain's own out-of-gas answer.
+  describe("the Inspector's clients for chains other than Arc", () => {
+    const arbitrum = inspectChain("mainnet", "arbitrum")!;
+    const base = inspectChain("mainnet", "base")!;
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+      for (const key of ["arbitrum", "base"]) {
+        const health = processGlobal(`inspect.rpcHealth.${key}`, endpointHealth);
+        health.coolingUntil.clear();
+        health.failedAt.clear();
+      }
+    });
+
+    it("keeps Arc's client for Arc, and one client per other chain, each its own", () => {
+      expect(inspectRpcClient(arcInspectChain("mainnet"))).toBe(serverRpcClient());
+      expect(inspectRpcClient(base)).toBe(inspectRpcClient(base));
+      expect(inspectRpcClient(base)).not.toBe(inspectRpcClient(arbitrum));
+      expect(inspectRpcClient(base)).not.toBe(serverRpcClient());
+    });
+
+    it("reads Arbitrum's out-of-gas answer (-32000) as the node's: one endpoint asked, nothing cooled", async () => {
+      const health = processGlobal("inspect.rpcHealth.arbitrum", endpointHealth);
+      let asked = 0;
+      vi.stubGlobal("fetch", async () => {
+        asked++;
+        return Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "out of gas: gas required exceeds: 2000000" } });
+      });
+      await expect(inspectRpcClient(arbitrum).call({ to: arbitrum.dex!.v4!.quoter, data: "0x12345678", gas: 2_000_000n })).rejects.toThrow();
+      expect(asked).toBe(1);
+      expect(health.coolingUntil.size).toBe(0);
+    });
+
+    it("asks the keyed provider first, its key in a header and never in the URL, then the public RPC", async () => {
+      // Ethereum's client is built here for the first time in this process, with the key set.
+      vi.stubEnv("INSPECT_RPC_KEY", "test-key-abc");
+      const seen: { url: string; authorization: string | null }[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+        return new Response("unavailable", { status: 503 });
+      });
+      await expect(inspectRpcClient(inspectChain("mainnet", "ethereum")!).getBlockNumber()).rejects.toThrow();
+      expect(seen).toEqual([
+        { url: "https://eth-mainnet.g.alchemy.com/v2", authorization: "Bearer test-key-abc" },
+        { url: "https://ethereum-rpc.publicnode.com/", authorization: null },
+      ]);
+      const health = processGlobal("inspect.rpcHealth.ethereum", endpointHealth);
+      health.coolingUntil.clear();
+      health.failedAt.clear();
+    });
+
+    it("cools only that chain's endpoints when one fails, never Arc's", async () => {
+      const own = processGlobal("inspect.rpcHealth.base", endpointHealth);
+      const arcs = processGlobal("inspect.rpcHealth", endpointHealth);
+      vi.stubGlobal("fetch", async () => new Response("unavailable", { status: 503 }));
+      await expect(inspectRpcClient(base).getBlockNumber()).rejects.toThrow();
+      expect(own.coolingUntil.size).toBeGreaterThan(0);
+      expect(arcs.coolingUntil.size).toBe(0);
     });
   });
 });

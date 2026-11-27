@@ -1,15 +1,16 @@
 import { getAddress } from "viem";
 import { tokenFactoryAbi, type Address } from "@arcos/chain";
-import { extractSelectors, minimalProxyTarget, usesOpcode, type Hex } from "./bytecode";
+import { extractSelectors, minimalProxyTarget, opaqueCode, usesOpcode, type Hex } from "./bytecode";
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, abiDeclaresTransfer, addressFromSlot,
   beaconImplementation, checkHolders, checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges,
   checkProxy, checkTrade, checkVerified, dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
-  type LogicBlock, type LogicGap, type ProxySlotKind,
+  type LogicBlock, type LogicGap, type ProxySlotKind, type SourcifyAnswers,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import { ExplorerUnavailable, type ContractInfo, type ExplorerSource, type HolderPage, type TokenInfo } from "./explorer";
 import { cleanLabel } from "./label";
+import type { VerificationSource } from "./sourcify";
 import { isDecodeFailure, isNodeAnswer } from "./rpc-errors";
 import { CallReverted, type ChainReader, type CheckId, type Finding, type InspectInput, type Report } from "./types";
 
@@ -137,6 +138,15 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
   };
 }
 
+/** Asks `source` about `address`, and reports a question nobody could answer (a rejection): `null` then, never "no match". */
+function askVerification(source: VerificationSource, onFailure: () => void) {
+  return (address: Address): Promise<boolean | null> =>
+    source.verified(address).catch(() => {
+      onFailure();
+      return null;
+    });
+}
+
 /** Reports every request that ended in `ExplorerUnavailable`, including one a contract record absorbed and flagged
  * (`ContractInfo.degraded`). A 404 is the explorer answering, not an outage. */
 function watchExplorer(explorer: ExplorerSource, onFailure: () => void): ExplorerSource {
@@ -171,6 +181,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const { reader, explorer, address } = input;
   const code = await reader.getCode(address);
   if (!code) throw new NotAContract(address);
+  // An EIP-7702 delegated account or an Arbitrum Stylus program: no EVM bytecode to resolve or scan (see `opaqueCode`).
+  const opaque = opaqueCode(code);
+  if (opaque) return opaqueInspection(input, opaque, () => degraded, markDegraded);
 
   const cloneOf = minimalProxyTarget(code);
   // For a clone, NEVER fall back to its own trampoline bytecode — that's not the logic that runs.
@@ -378,7 +391,13 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber, arcosTemplate] = await Promise.all([
+  // Sourcify, where the chain asks it: about this address, and about the code it runs when that was identified and read.
+  const verification = input.verifyFallback ? askVerification(input.verifyFallback, markDegraded) : null;
+  const sourcifyAsked: Promise<SourcifyAnswers | null> = verification
+    ? Promise.all([verification(address), forwardsCalls && logicAt && logicCode !== null ? verification(logicAt) : Promise.resolve(null)]).then(([own, logic]) => ({ own, logic }))
+    : Promise.resolve(null);
+
+  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber, arcosTemplate, sourcify] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
     // For anything that forwards, the record that matters is the one for the code that RUNS:
     // Blockscout's record for a proxy or a clone address describes the forwarding code, and
@@ -402,6 +421,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     input.arcosTokenFactory
       ? reader.read(input.arcosTokenFactory, tokenFactoryAbi, "isArcosToken", [address]).then((v) => v === true).catch(() => null)
       : Promise.resolve(null),
+    sourcifyAsked,
   ]);
 
   const readOr = async <T>(fn: string, fallback: T): Promise<T> => (reader.read(address, erc20Abi, fn) as Promise<T>).catch(() => fallback);
@@ -443,7 +463,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // proxy itself, or that points at empty code, is an address the engine explicitly refused to
     // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
     // finding saying that code couldn't be identified is the report contradicting itself.
-    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null, arcosTemplate)),
+    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null, arcosTemplate, sourcify)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
@@ -458,33 +478,119 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // the privileges and proxy findings' business.
     guard("trade", () => checkTrade(input, poolScan)),
   ]);
-  findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
+  return report(input, { name, symbol, decimals, supply }, findings, { explorerReachable, degraded, blockNumber });
+}
 
+/** The report of `findings`, in `ORDER`, with the counts every surface shows. */
+function report(
+  input: InspectInput,
+  token: { name: string | null; symbol: string | null; decimals: number | null; supply: bigint | null },
+  findings: Finding[],
+  read: { explorerReachable: boolean; degraded: boolean; blockNumber: bigint | null },
+): Report {
+  findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
   const counts = {
     pass: findings.filter((f) => f.status === "pass").length,
     warn: findings.filter((f) => f.status === "warn").length,
     fail: findings.filter((f) => f.status === "fail").length,
     unknown: findings.filter((f) => f.status === "unknown").length,
   };
-
   return {
-    address,
+    address: input.address,
     network: input.network,
     chain: input.chain.key,
     chainId: input.chain.chainId,
     token: {
-      name: cleanLabel(name, 64),
-      symbol: cleanLabel(symbol, 32),
-      decimals: decimals === null ? null : Number(decimals),
-      totalSupply: supply === null ? null : supply.toString(),
+      name: cleanLabel(token.name, 64),
+      symbol: cleanLabel(token.symbol, 32),
+      decimals: token.decimals === null ? null : Number(token.decimals),
+      totalSupply: token.supply === null ? null : token.supply.toString(),
     },
     findings,
     passed: counts.pass,
     total: findings.length,
     counts,
-    explorerReachable,
-    degraded,
-    blockNumber: blockNumber === null ? "unknown" : blockNumber.toString(),
+    explorerReachable: read.explorerReachable,
+    ...(input.explorerSkipped ? { explorerSkipped: input.explorerSkipped } : {}),
+    degraded: read.degraded,
+    blockNumber: read.blockNumber === null ? "unknown" : read.blockNumber.toString(),
     generatedAt: (input.now?.() ?? new Date()).toISOString(),
   };
+}
+
+/** What the checks say about code that isn't EVM bytecode (`opaqueCode`), by kind. */
+const OPAQUE: Record<"eip7702" | "stylus", { verified: string | null; proxy: string; logic: string }> = {
+  eip7702: {
+    // The account's key can point it at other code at any time, so no one contract's source says what it runs.
+    verified: "This address is an EIP-7702 delegated account: it runs another contract's code, and its key can point it at other code at any time, so no one contract's source says what it does.",
+    proxy: "This address is an EIP-7702 delegated account: its key can point it at other code at any time, which this check can't follow.",
+    logic: "This address is an EIP-7702 delegated account: it runs another contract's code, which its key can change at any time, so its logic can't be read.",
+  },
+  stylus: {
+    verified: null,
+    proxy: "This is an Arbitrum Stylus program (WebAssembly), whose proxy slots and code this check can't read.",
+    logic: "This is an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.",
+  },
+};
+
+/**
+ * An inspection of code that isn't EVM bytecode to scan: an EIP-7702 delegated account, or an Arbitrum Stylus program.
+ * The checks about code (ownership, privileges, proxy, prevrandao) are unknown, never a pass on a scan that couldn't run.
+ * The market checks (holders, liquidity, lp-lock, trade) run as for any token, and so does source verification for a
+ * Stylus program, whose code is its own; a delegated account's isn't.
+ */
+async function opaqueInspection(input: InspectInput, kind: "eip7702" | "stylus", degraded: () => boolean, markDegraded: () => void): Promise<Report> {
+  const { reader, explorer, address } = input;
+  const words = OPAQUE[kind];
+  let explorerReachable = explorer !== null;
+  const ask = async <T>(call: () => Promise<T>): Promise<T | null> => {
+    if (!explorer) return null;
+    try {
+      return await call();
+    } catch {
+      explorerReachable = false;
+      return null;
+    }
+  };
+  const verification = kind === "stylus" && input.verifyFallback ? askVerification(input.verifyFallback, markDegraded) : null;
+  const [contract, tokenInfo, holderPage, poolScan, blockNumber, sourcified] = await Promise.all([
+    kind === "stylus" ? ask<ContractInfo>(() => explorer!.contract(address)) : Promise.resolve(null),
+    ask<TokenInfo | null>(() => explorer!.token(address)),
+    ask<HolderPage | null>(() => explorer!.topHolders(address)),
+    findPools(input)
+      .catch(() => null)
+      .then((scan) => {
+        try {
+          input.onPools?.(scan);
+        } catch {
+          // ignored on purpose
+        }
+        return scan;
+      }),
+    reader.blockNumber().catch(() => null),
+    verification ? verification(address) : Promise.resolve(null),
+  ]);
+  const readOr = async <T>(fn: string, fallback: T): Promise<T> => (reader.read(address, erc20Abi, fn) as Promise<T>).catch(() => fallback);
+  const [name, symbol, decimals, supply] = await Promise.all([
+    readOr<string | null>("name", tokenInfo?.name ?? null),
+    readOr<string | null>("symbol", tokenInfo?.symbol ?? null),
+    readOr<number | null>("decimals", tokenInfo?.decimals ?? null),
+    readOr<bigint | null>("totalSupply", tryBig(tokenInfo?.totalSupply ?? null)),
+  ]);
+  const unknownCode = (id: CheckId, title: string, detail: string, evidence: string | null): Finding => ({ id, status: "unknown", title, detail, evidenceUrl: evidence, fixAppId: null });
+  const contractUrl = `${input.explorerBase}/address/${address}?tab=contract`;
+  const findings = await Promise.all([
+    words.verified === null
+      ? guard("verified", () => checkVerified(input, contract, null, null, verification ? { own: sourcified, logic: null } : null))
+      : Promise.resolve(unknownCode("verified", "Couldn't check source verification", words.verified, contractUrl)),
+    Promise.resolve(unknownCode("ownership", "Couldn't read the contract's logic", words.logic, `${input.explorerBase}/address/${address}?tab=read_contract`)),
+    Promise.resolve(unknownCode("privileges", "Couldn't read the contract's logic", words.logic, `${input.explorerBase}/address/${address}?tab=write_contract`)),
+    Promise.resolve(unknownCode("proxy", "Couldn't check if this contract is upgradeable", words.proxy, contractUrl)),
+    guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
+    guard("liquidity", () => checkLiquidity(input, poolScan)),
+    guard("lp-lock", () => checkLpLock(input, poolScan, { supply, decimals: decimals === null ? null : Number(decimals) })),
+    Promise.resolve(unknownCode("prevrandao", "Couldn't read the contract's logic", words.logic, null)),
+    guard("trade", () => checkTrade(input, poolScan)),
+  ]);
+  return report(input, { name, symbol, decimals, supply }, findings, { explorerReachable, degraded: degraded(), blockNumber });
 }

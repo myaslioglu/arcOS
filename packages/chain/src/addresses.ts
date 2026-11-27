@@ -24,21 +24,46 @@ export const BURN_ADDRESSES: Address[] = [
 /** Uniswap v4's contracts. `poolManager` holds the tokens of every v4 pool; `stateView` and `quoter` are what Inspector reads. */
 export type UniswapV4Config = { poolManager: Address; positionManager: Address; stateView: Address; quoter: Address };
 
-/** Aerodrome Slipstream (concentrated liquidity). `tickSpacings` are the ones the factory has enabled. */
-export type AerodromeConfig = { clFactory: Address; positionManager: Address; tickSpacings: number[] };
+/**
+ * Aerodrome Slipstream (concentrated liquidity), or a deployment of the same code under another name (Velodrome
+ * Slipstream). `tickSpacings` are the ones the factory has enabled. `name` is what findings call its pools: "Aerodrome"
+ * when absent, as on Arc.
+ */
+export type AerodromeConfig = { clFactory: Address; positionManager: Address; tickSpacings: number[]; name?: string };
+
+/**
+ * A Solidly-style factory, Aerodrome's or Velodrome's classic pools: `getPool(tokenA, tokenB, stable)` names the volatile
+ * pool and the stable one of a pair. `name` is what findings call its pools.
+ */
+export type SolidlyConfig = { factory: Address; name: string };
+
+/**
+ * How one unit of a quote currency converts to US dollars. "stable": 1 unit is $1 (USDC, USDT; EURC on Arc is counted
+ * 1:1 with USDC). "unpriced": no rate is read for it yet, so pools against it are found but not priced (WETH and native
+ * ETH until Chainlink prices them). A feed (a Chainlink aggregator, and the oldest answer that still counts, in seconds) is
+ * for a quote priced that way; no entry has one yet.
+ */
+export type QuoteUsd = "stable" | "unpriced" | { feed: Address; maxAgeS: number };
+
+/**
+ * A currency pools are quoted against. `decimals` is 6 and `usd` "stable" when left out: Arc's USDC and EURC, written as
+ * they always were.
+ */
+export type DexQuote = { address: Address; symbol: string; decimals?: number; usd?: QuoteUsd };
 
 /**
  * Which pools Inspector reads on a network. Uniswap v2 and v3 exist on mainnet only (testnet has neither), so those
- * fields are optional; `v4` and `aero` are absent where the network has no such contracts. A missing block means
+ * fields are optional; `v4`, `aero` and `solidly` are absent where the network has no such contracts. A missing block means
  * "not scanned here", never "scanned and empty".
  */
 export type DexConfig = {
-  quoteTokens: { address: Address; symbol: string }[];
+  quoteTokens: DexQuote[];
   v2Factory?: Address;
   v3Factory?: Address;
   v3FeeTiers?: number[];
   v4?: UniswapV4Config;
   aero?: AerodromeConfig;
+  solidly?: SolidlyConfig;
 };
 
 /** Multicall3, at its canonical address on both networks. Inspector batches its v4 and Aerodrome reads through it. */

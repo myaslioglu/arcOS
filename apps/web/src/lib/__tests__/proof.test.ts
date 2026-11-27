@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, Report } from "@arcos/inspector";
-import { NAME_DISCLOSURE, badgeColor, badgeSvg, passLine, rankFindings, readAtLine, shortLabel, summaryLine } from "../proof";
+import { NAME_DISCLOSURE, badgeColor, badgeSvg, chainLabel, explorerNote, passLine, rankFindings, readAtLine, shortLabel, summaryLine } from "../proof";
+import { ogCard } from "../og-card";
 
 const report = (over: Partial<Report> = {}): Report => ({
   address: "0x1111111111111111111111111111111111111111",
@@ -181,3 +182,61 @@ describe("rankFindings", () => {
     expect(hiddenCount).toBe(0);
   });
 });
+
+describe("the chain a report read", () => {
+  const onBase = (over: Partial<Report> = {}) => report({ chain: "base", chainId: 8453, ...over });
+
+  it("is Arc on either network, as every surface has always said, and the registry's name elsewhere", () => {
+    expect(chainLabel(report())).toBe("Arc");
+    expect(chainLabel(report({ network: "testnet", chainId: 5042002 }))).toBe("Arc");
+    expect(chainLabel(onBase())).toBe("Base");
+    expect(chainLabel(onBase({ chain: "optimism", chainId: 10 }))).toBe("OP Mainnet");
+    expect(chainLabel(onBase({ chain: "arbitrum", chainId: 42161 }))).toBe("Arbitrum One");
+  });
+
+  it("names the chain in the summary line", () => {
+    expect(summaryLine(onBase())).toBe("DUKE on Base — 3 of 8 checks pass");
+    expect(summaryLine(report())).toBe("DUKE on Arc — 3 of 8 checks pass");
+  });
+
+  it("follows the token in the badge off Arc, in its visible label and in its title, and widens it to fit", () => {
+    const svg = badgeSvg(onBase());
+    expect(svg).toContain(">DUKE - Base<");
+    expect(svg).toContain("<title>DUKE - Base: 3/8 pass — automated analysis, not investment advice");
+    expect(svg).toContain('width="157"');
+    // Arc's badge is the same as ever.
+    expect(badgeSvg(report())).toContain('width="108"');
+    expect(badgeSvg(report())).not.toContain(" - ");
+  });
+
+  it("says the explorer wasn't asked, rather than that it didn't answer, when it was left out on purpose", () => {
+    const skipped = onBase({ explorerReachable: false, explorerSkipped: "The explorer wasn't asked: no key." });
+    expect(explorerNote(skipped)).toBe("skipped");
+    expect(explorerNote(onBase({ explorerReachable: false }))).toBe("unreachable");
+    expect(explorerNote(onBase())).toBeNull();
+    expect(badgeSvg(skipped)).toContain("the explorer wasn't asked for some checks");
+    expect(badgeSvg(skipped)).not.toContain("didn't answer");
+  });
+});
+
+describe("the social card", () => {
+  const text = (node: unknown): string =>
+    typeof node === "string" ? node
+    : Array.isArray(node) ? node.map(text).join("")
+    : typeof node === "object" && node !== null && "props" in node ? text((node as { props: { children?: unknown } }).props.children)
+    : "";
+
+  it("names the chain the report read, Arc as before", () => {
+    expect(text(ogCard(report()))).toContain("ArcOS · token report on Arc · 0x1111…1111");
+    expect(text(ogCard(report({ chain: "base", chainId: 8453 })))).toContain("ArcOS · token report on Base · 0x1111…1111");
+    expect(text(ogCard(null))).toContain("ArcOS · token report on Arc");
+    expect(text(ogCard(null, "Base"))).toContain("ArcOS · token report on Base");
+  });
+
+  it("words the explorer note by why the explorer is missing, with Arc's words unchanged", () => {
+    expect(text(ogCard(report({ explorerReachable: false })))).toContain("The explorer didn't answer some checks.");
+    expect(text(ogCard(report({ chain: "base", chainId: 8453, explorerReachable: false, explorerSkipped: "x" })))).toContain("The explorer wasn't asked for some checks.");
+    expect(text(ogCard(report()))).not.toContain("The explorer");
+  });
+});
+

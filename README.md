@@ -104,6 +104,12 @@ by ArcOS's own TokenFactory still passes source verification through the factory
 Revoke's list (`/api/approvals`) reads approval events through the same key; without one it asks the
 public explorer, which refuses the server on mainnet, so the list answers "Couldn't load approvals" there.
 
+The Inspector's other chains stay off unless a mainnet build names them in `NEXT_PUBLIC_INSPECT_CHAINS` (`ethereum`,
+`base`, `arbitrum`, `optimism`, separated by commas); with it unset, their routes answer 404. The server then reads
+each chain's public RPC, or Alchemy first when `INSPECT_RPC_KEY` is set (server-only, never `NEXT_PUBLIC_`). Their
+explorer reads go through `BLOCKSCOUT_API_KEY` too, and count against `INSPECT_EXPLORER_DAILY_BUDGET` (300 a UTC day
+per server process unless set). [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the details.
+
 Sign-in with Ethereum (`/api/auth/*`) needs two server settings: `NEXT_PUBLIC_SITE_URL`, whose host is the only domain a
 sign-in message may name, and `ARCOS_SESSION_SECRET`, 32 random bytes or more that sign the session cookie (on App
 Hosting a Secret Manager secret). It also reads and writes the Firestore database `arcos`. Without either setting the
@@ -112,7 +118,7 @@ rest of the site runs as before and sign-in answers "Sign-in isn't available rig
 Other scripts, run from the repo root: `npm test`, `npm run typecheck`, `npm run lint`, `npm run
 build`. `npm run test:live -w @arcos/inspector` is not part of `npm test`: it reads real Uniswap v4
 and Aerodrome pools from Arc mainnet's public RPC (read-only, one call at a time), and runs the
-liquidity-lock check over the positions of the newest v4 tokens on Radar, so it needs the network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. `npm run
+liquidity-lock check over the positions of the newest v4 tokens on Radar, so it needs the network; behind an HTTP proxy, set `NODE_USE_ENV_PROXY=1` in the shell first. It also checks the Inspector's entries for Ethereum, Base, Arbitrum One and OP Mainnet against those chains (`-- chains` runs only that part), through their public RPCs, or Alchemy when `INSPECT_RPC_KEY` is set in that shell. `npm run
 test:emulator -w @arcos/data` runs the Firestore suite against the local emulator; it needs Java 21
 or newer and no credentials. It and `@arcos/data`'s unit tests use the pinned Firebase CLI in
 `tools/firebase`, which the root install leaves out: install it once with
@@ -128,7 +134,7 @@ the suite's types; `npm run lint` covers it too.
 ## Repo layout
 
 - `apps/web` — the Next.js app: the desktop shell wiring, the apps listed above, the public
-  proof page (`/t/<address>`), badge (`/badge/<address>`) and API routes, including `/api/pulse`
+  proof page (`/t/<address>`, and `/t/<chain>/<address>` on the other chains), badge (`/badge/<address>`) and API routes, including `/api/pulse`
   (the wallpaper's live chart), `/api/approvals` (Revoke's list), `/api/event` (the event counts),
   `/api/pools/<token>` (a token's indexed pools), `/api/radar` (Radar's first page of a filter),
   `/api/stats` (the usage counts, public, mainnet only) and `/api/csp-report` (content security policy violation reports).
@@ -152,6 +158,8 @@ the suite's types; `npm run lint` covers it too.
 - `docs/QA-R0.md` — the manual test script for this release.
 - `docs/DEPLOYING.md` — how a change reaches https://4rcos.com: CI, the deploy and its smoke checks.
 - `docs/OPERATIONS.md` — what runs where, the indexer's console controls, deploying the functions, costs and checks.
+- `docs/INSPECTOR-CHAINS.md` — Inspector on Ethereum, Base, Arbitrum One and OP Mainnet: how each check decides there,
+  and what was measured.
 
 ## Contracts
 
@@ -276,8 +284,43 @@ v4 pool the only change is that it says Inspector doesn't read Uniswap v3 or Aer
 without tying that to an index. And whenever the v2 check fails a token, that fail stands whatever
 the v4 reading says.
 
+### Ethereum, Base, Arbitrum One and OP Mainnet
+
+Inspector can also read Ethereum, Base, Arbitrum One and OP Mainnet, each once it is switched on for the site
+(`NEXT_PUBLIC_INSPECT_CHAINS`, [docs/DEPLOYING.md](docs/DEPLOYING.md#the-inspectors-other-chains)). Until then their
+pages answer 404. Their reports come from the site's server: `/t/<chain>/<address>`, `/badge/<chain>/<address>` and
+`/api/inspect/<chain>/<address>`, where `<chain>` is `ethereum`, `base`, `arbitrum` or `optimism`. Arc's links don't
+change: `/t/<address>` is Arc's, and `/t/arc/<address>` redirects to it. The nine checks are the same. What differs is
+below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table and what was measured.
+
+- Source verification asks Blockscout and Sourcify. Either one saying verified is a pass, and a proxy needs the code it
+  runs verified too, by either. Both saying "not verified" reads "couldn't check", not a fail: Inspector doesn't read
+  Etherscan, where many contracts are verified and nowhere else.
+- Liquidity counts pools against USDC and USDT, 1:1 with the dollar: Uniswap v2, v3 and hookless v4 on every chain, and
+  the Slipstream and classic pools of Aerodrome (Base) and Velodrome (OP Mainnet). Pools against WETH and native ETH are
+  found and named, but they aren't priced yet, so they are never called liquid or thin. A token whose only pools are
+  against them reads "couldn't check".
+- "No pool found" and "thin liquidity" are never warnings there. Each chain has pools the scan can't see: hooked or
+  unusual-fee v4 pools, which no index lists off Arc, pools on other DEXes, and on Base and OP Mainnet the Slipstream
+  pools of other factories. So those answers read "couldn't check" and name what wasn't read.
+- The liquidity lock check passes a token when at least 95% of its deepest Uniswap v2 pair's LP is burned, with no
+  deeper pool of another kind beside it, as on Arc. Anything else reads "couldn't check": no lock contract is recognized
+  on these chains yet, so LP that isn't burned may sit in one. It never fails a token there. Uniswap v4 positions aren't
+  read; the position index is Arc's.
+- The trade check trades in pools against USDC only. Its simulator gets its USDC through a state override of USDC's
+  balance (storage slot 9 on all four chains). Pools against USDT, WETH or ETH and the classic pools are never traded
+  through, but a liquid or undecided one keeps a pass to a warning, as a hooked or EURC pool does on Arc.
+- The PREVRANDAO warning says what the opcode gives on that chain: a value validators can bias on Ethereum; Ethereum's
+  RANDAO value from a block the sequencer chose, known in advance, on Base and OP Mainnet; always 1 on Arbitrum.
+- Holder concentration, and Blockscout's side of source verification, need the server's Blockscout PRO key and a share
+  of its daily explorer reads. Without either, those parts read "couldn't check", and the report says why.
+
 ## What Inspector can and can't see
 
+- An EIP-7702 delegated account (an address whose code points at another contract's) and an Arbitrum Stylus program
+  (WebAssembly) have no EVM bytecode of their own to scan. Ownership, privileges, proxy and `PREVRANDAO` read
+  "couldn't check" for them, and so does source verification for a delegated account, whose key can point it at other
+  code at any time. Holders, liquidity, the liquidity lock and the trade check run as for any token.
 - It follows standard proxies one hop: EIP-1967 implementation and beacon slots, the older
   ZeppelinOS implementation and admin slots (Circle's FiatToken proxies, EURC among them), and
   EIP-1167 clones. A proxy behind a proxy, or one whose slots disagree, reads "unknown", not "clean".
@@ -454,7 +497,9 @@ the v4 reading says.
 - The liquidity lock check passes or fails a token only on Uniswap v2 LP tokens. Uniswap v4
   positions are read, on mainnet, only to warn about liquidity wallets can withdraw: a token whose
   v4 liquidity is burned reads "couldn't check", not "pass", and one whose v4 liquidity sits in a
-  wallet reads as a warning, not "fail". Positions in Uniswap v3 and Aerodrome pools aren't read at
+  wallet reads as a warning, not "fail". A wallet's position in a pool whose hook runs when liquidity is
+  removed counts as neither locked nor withdrawable, so a token whose v4 liquidity sits there reads
+  "couldn't check" too. Positions in Uniswap v3 and Aerodrome pools aren't read at
   all, and on testnet, which has no index, neither are Uniswap v4 positions. One consequence is as
   old as the check: a burned v2 pair passes even when a wallet holds a token-only range in a v3 or
   Aerodrome pool beside it, which holds no USDC to compare.
@@ -498,6 +543,32 @@ the v4 reading says.
   not a limit scoped to this app. A "busy" error from the service (shown as "The swap/bridge
   service is busy. Try again in a minute.") is possible, especially around a shared limit getting
   hit by unrelated traffic, and isn't a sign anything here is broken.
+- The `PREVRANDAO` scan reads a contract's code as instructions from its first byte to its last, leaving out only the
+  compiler's metadata at the very end. Text some compilers store in the code after the last instruction (revert
+  messages, say) is read the same way, so a byte there can look like `PREVRANDAO`: on 2026-11-27 Arbitrum One's WETH
+  read "Uses PREVRANDAO" from the text of two of its error messages. This errs toward a warning.
+- On Ethereum, Base, Arbitrum One and OP Mainnet (each once it is switched on):
+  - Reports come from the site's server only, through one RPC provider with each chain's public RPC behind it, and a
+    report is kept 5 minutes. Each visitor gets 30 of these chains' pages, social cards or badges a minute from a server
+    instance, and 30 calls a minute of the Inspector's API, Arc's included.
+  - Pools the scan can't see neither count nor trade: hooked and unusual-fee Uniswap v4 pools (many tokens launched on
+    Base through Clanker or Zora trade in such pools), pools on other DEXes (SushiSwap, Curve, Balancer, Camelot and the
+    rest), and the Slipstream pools of a second factory on Base and OP Mainnet. A token whose market is only there reads
+    "couldn't check" for liquidity, and its trade check runs on the pools that were found, or reads "couldn't check".
+  - WETH and ETH aren't priced yet. Liquidity against them is never measured in dollars, and a v2 pair against WETH
+    can't be ranked beside one against USDC, so the liquidity lock reads "couldn't check" there.
+  - The trade check trades only against USDC. A token traded mostly against WETH, USDT or ETH gets its round trips in
+    its USDC pools, which may be thin, or none at all.
+  - Source verification never fails a token, since Etherscan isn't read: a contract verified only on Etherscan reads
+    "couldn't check", and so does one verified nowhere.
+  - No lock contract is recognized, so LP in a locker reads "couldn't check", the same as LP in a wallet. A fail needs a
+    vetted list of each chain's lockers.
+  - Holder concentration counts an exchange's hot wallet or a bridge like any wallet. On a large token they can fill
+    the top ten.
+  - Explorer reads come out of the same Blockscout plan as Arc's server pages, Revoke and the indexer. Each server
+    instance has a daily share for these chains (300 reads by default, 50 to 75 inspections). Past it, until the UTC day
+    ends, holder concentration reads "couldn't check" and source verification rests on Sourcify alone.
+  - There is no Radar, Watchdog or index for these chains, and no report is stored.
 - The contracts are unaudited.
 
 ## Event counts

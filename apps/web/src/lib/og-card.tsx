@@ -1,7 +1,7 @@
 import type { Report } from "@arcos/inspector";
 import { shortAddress } from "./format";
 import { findingRowBudget } from "./og-layout";
-import { NAME_DISCLOSURE, passLine, rankFindings, shortLabel, tokenLabel } from "./proof";
+import { NAME_DISCLOSURE, chainLabel, explorerNote, passLine, rankFindings, shortLabel, tokenLabel } from "./proof";
 
 /**
  * Each status's finding row used to lead with a glyph (✔/!/X/?) coloured by TINT below. next/og's
@@ -42,12 +42,15 @@ const MARK = {
  * which owns that budget and is unit-tested, so a line added here can't silently spend the room
  * the footer needs. `rankFindings` fills the rows worst-first, so what "+N more" hides is never
  * the worst news.
+ *
+ * `chain` names the chain on a card with no report ("Token not found"), off Arc; a report names its own.
  */
-export function ogCard(report: Report | null) {
-  const explorerNote = report !== null && !report.explorerReachable;
+export function ogCard(report: Report | null, chain = "Arc") {
+  const note = report ? explorerNote(report) : null;
   const { shown: rows, hiddenCount } = report
-    ? rankFindings(report.findings, findingRowBudget(explorerNote))
+    ? rankFindings(report.findings, findingRowBudget(note !== null))
     : { shown: [], hiddenCount: 0 };
+  const on = report ? chainLabel(report) : chain;
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 48, background: "#f6f7f9", color: "#14161c", fontSize: 30 }}>
       <div style={{ display: "flex", fontSize: 26, color: "#555a66" }}>
@@ -55,12 +58,14 @@ export function ogCard(report: Report | null) {
             the card — this is that address, short-formed, fixed-width regardless of the token's
             own (attacker-controlled) name/symbol length above, so it never risks the header line
             wrapping. */}
-        {report ? `ArcOS · token report on Arc · ${shortAddress(report.address)}` : "ArcOS · token report on Arc"}
+        {report ? `ArcOS · token report on ${on} · ${shortAddress(report.address)}` : `ArcOS · token report on ${on}`}
       </div>
       <div style={{ display: "flex", fontSize: 64, marginTop: 12 }}>{report ? shortLabel(tokenLabel(report), 16) : "Token not found"}</div>
       {report && <div style={{ display: "flex", fontSize: 40, marginTop: 4 }}>{passLine(report)}</div>}
-      {explorerNote && (
-        <div style={{ display: "flex", fontSize: 22, marginTop: 6, color: "#6b6f79" }}>The explorer didn&apos;t answer some checks.</div>
+      {note && (
+        <div style={{ display: "flex", fontSize: 22, marginTop: 6, color: "#6b6f79" }}>
+          {note === "skipped" ? "The explorer wasn't asked for some checks." : "The explorer didn't answer some checks."}
+        </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", marginTop: 24 }}>
         {rows.map((f) => (

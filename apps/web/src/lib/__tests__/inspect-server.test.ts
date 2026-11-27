@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtraPool, InspectInput, Report, V4PositionIndex } from "@arcos/inspector";
 
 // A marker module that throws outside a server build.
@@ -45,5 +45,71 @@ describe("cachedInspection", () => {
     inspect.mockResolvedValue({ degraded: false } as Report);
     await cachedInspection("0x0000000000000000000000000000000000a6a6a2");
     expect(inspect.mock.calls.at(-1)![0].extraPools).toBeUndefined();
+  });
+});
+
+describe("cachedInspection off Arc", () => {
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  let n = 0;
+  /** A fresh address per case: the report cache is one per process, for every case in this file. */
+  const fresh = () => `0x00000000000000000000000000000000000b${(++n).toString(16).padStart(4, "0")}` as `0x${string}`;
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("refuses a chain the flag doesn't switch on, and every chain on the testnet site, inspecting nothing", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    inspect.mockClear();
+    await expect(cachedInspection(fresh(), "base")).rejects.toMatchObject({ name: "ChainNotEnabled" });
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    await expect(cachedInspection(fresh(), "ethereum")).rejects.toMatchObject({ name: "ChainNotEnabled" });
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
+    await expect(cachedInspection(fresh(), "base")).rejects.toMatchObject({ name: "ChainNotEnabled" });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it("inspects on the chain with its registry entry, asks Sourcify, and never reads the Arc index", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    vi.stubEnv("BLOCKSCOUT_API_KEY", "proapi_test");
+    indexedExtrasFor.mockClear();
+    inspect.mockResolvedValue({ degraded: false } as Report);
+    const token = fresh();
+    await cachedInspection(token, "base");
+    const input = inspect.mock.calls.at(-1)![0];
+    expect(input).toMatchObject({ address: token, network: "mainnet", chain: { key: "base", chainId: 8453 }, explorerBase: "https://base.blockscout.com", unverifiedFails: false });
+    expect(input.verifyFallback).toBeTruthy();
+    expect(input.explorer).not.toBeNull();
+    expect(input.explorerSkipped).toBeUndefined();
+    expect(input.deadlineAt).toBeGreaterThan(Date.now());
+    expect(indexedExtrasFor).not.toHaveBeenCalled();
+    expect(input.extraPools).toBeUndefined();
+  });
+
+  it("keeps Arc's report and Base's of the same address apart", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    indexedExtrasFor.mockResolvedValue({ extraPools: [] });
+    inspect.mockResolvedValue({ degraded: false } as Report);
+    inspect.mockClear();
+    await cachedInspection(BASE_USDC, "base");
+    await cachedInspection(BASE_USDC, "arc");
+    await cachedInspection(BASE_USDC.toLowerCase() as `0x${string}`, "base");
+    expect(inspect.mock.calls.map((c) => c[0].chain.key)).toEqual(["base", "arc"]);
+  });
+
+  it("leaves the explorer out, saying why, without a PRO key or once today's budget is spent", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    inspect.mockResolvedValue({ degraded: false } as Report);
+    vi.stubEnv("BLOCKSCOUT_API_KEY", "none");
+    await cachedInspection(fresh(), "base");
+    expect(inspect.mock.calls.at(-1)![0]).toMatchObject({ explorer: null, explorerSkipped: "The explorer wasn't asked: this server has no key for it." });
+    vi.stubEnv("BLOCKSCOUT_API_KEY", "proapi_test");
+    vi.stubEnv("INSPECT_EXPLORER_DAILY_BUDGET", "0");
+    await cachedInspection(fresh(), "base");
+    expect(inspect.mock.calls.at(-1)![0]).toMatchObject({
+      explorer: null,
+      explorerSkipped: "The explorer wasn't asked: this server has used up today's explorer reads for chains other than Arc.",
+    });
   });
 });
