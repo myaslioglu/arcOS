@@ -4,7 +4,10 @@ import { ARCOS, DEX, KNOWN_LOCKERS, USDC, type Address } from "../addresses";
 import { USDC_DECIMALS } from "../amounts";
 import { checkArcosAddresses } from "../addressSanity";
 import { CHAINS, explorerUrl, type NetworkId } from "../chains";
-import { INSPECT_CHAINS, arcInspectChain, chainExplorerUrl, inspectChain, type InspectChain } from "../inspect-chains";
+import {
+  INSPECT_CHAINS, arcInspectChain, chainExplorerUrl, enabledChainSlugs, enabledInspectChain, enabledInspectChains, inspectChain, otherExplorerUrl,
+  type InspectChain,
+} from "../inspect-chains";
 
 const NETWORKS: NetworkId[] = ["mainnet", "testnet"];
 const all = NETWORKS.flatMap((n) => INSPECT_CHAINS[n].map((c) => [n, c] as const));
@@ -18,6 +21,7 @@ const addressesOf = (c: InspectChain): Address[] => [
         ...(c.dex.v3Factory ? [c.dex.v3Factory] : []),
         ...(c.dex.v4 ? Object.values(c.dex.v4) : []),
         ...(c.dex.aero ? [c.dex.aero.clFactory, c.dex.aero.positionManager] : []),
+        ...(c.dex.solidly ? [c.dex.solidly.factory] : []),
       ]
     : []),
   ...(c.nativeQuote ? [c.nativeQuote.address, ...(c.nativeQuote.erc20View ? [c.nativeQuote.erc20View] : [])] : []),
@@ -27,9 +31,15 @@ const addressesOf = (c: InspectChain): Address[] => [
 ];
 
 describe("the Inspector's chain registry", () => {
-  it("has Arc, and only Arc, on each network", () => {
-    expect(INSPECT_CHAINS.mainnet.map((c) => c.key)).toEqual(["arc"]);
+  it("has Arc first on each network, and Ethereum, Base, Arbitrum One and OP Mainnet on mainnet only", () => {
+    expect(INSPECT_CHAINS.mainnet.map((c) => c.key)).toEqual(["arc", "ethereum", "base", "arbitrum", "optimism"]);
     expect(INSPECT_CHAINS.testnet.map((c) => c.key)).toEqual(["arc"]);
+    expect(INSPECT_CHAINS.mainnet.slice(1).map((c) => [c.name, c.chainId, c.slug])).toEqual([
+      ["Ethereum", 1, "ethereum"],
+      ["Base", 8453, "base"],
+      ["Arbitrum One", 42161, "arbitrum"],
+      ["OP Mainnet", 10, "optimism"],
+    ]);
   });
 
   it("has unique keys and slugs on each network, and each chain id is its viem chain's", () => {
@@ -101,10 +111,15 @@ describe("the Inspector's chain registry", () => {
     }
   });
 
-  it("names no pool kind as unscanned until a check reads `unscanned`", () => {
-    // The liquidity, lp-lock and trade checks treat discovery as complete: "no pool" and "thin" would be claims about pools
-    // nobody looked for. A chain may list what it can't see only once they read the list (InspectInput.unscanned).
-    for (const [n, c] of all) expect(c.unscanned, `${n} ${c.key}`).toEqual([]);
+  it("names what discovery can't see off Arc, and nothing on Arc, where every pool kind is read", () => {
+    // The liquidity check reads the list: "no pool" and "thin" are unknown wherever a kind of pool goes unread.
+    for (const n of NETWORKS) expect(arcInspectChain(n).unscanned, n).toEqual([]);
+    for (const c of INSPECT_CHAINS.mainnet.slice(1)) {
+      expect(c.unscanned[0], c.key).toBe("Uniswap v4 pools with a hook or an unusual fee");
+      expect(c.unscanned.at(-1), c.key).toBe("pools on other DEXes");
+      // Where Slipstream is read, the pools of its second factory aren't.
+      expect(c.unscanned.includes("Slipstream pools from other factories"), c.key).toBe(Boolean(c.dex?.aero));
+    }
   });
 
   it("knows Arc's out-of-gas answer, -32003 \"out of gas…\", and nothing else", () => {
@@ -130,11 +145,31 @@ describe("the Inspector's chain registry", () => {
     for (const [n, c] of all) if (c.key !== "arc") expect(c.lockersVetted, `${n} ${c.key}`).toBe(false);
   });
 
+  it("asks Sourcify off Arc, and lets an explorer's \"not verified\" fail a token only on Arc", () => {
+    for (const [n, c] of all) {
+      expect(c.sourcify, `${n} ${c.key}`).toBe(c.key !== "arc");
+      expect(c.unverifiedFails, `${n} ${c.key}`).toBe(c.key === "arc");
+    }
+  });
+
   it("finds a chain by key, and nothing for a key it doesn't have", () => {
     expect(inspectChain("mainnet", "arc")).toBe(arcInspectChain("mainnet"));
     expect(inspectChain("testnet", "arc")).toBe(arcInspectChain("testnet"));
-    expect(inspectChain("mainnet", "base")).toBeNull();
+    expect(inspectChain("mainnet", "base")?.chainId).toBe(8453);
+    expect(inspectChain("testnet", "base")).toBeNull();
     expect(inspectChain("mainnet", "ARC")).toBeNull();
+    expect(inspectChain("mainnet", "polygon")).toBeNull();
+  });
+
+  it("links another explorer beside the address off Arc, and none on Arc", () => {
+    const usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+    expect(otherExplorerUrl(inspectChain("mainnet", "ethereum")!, "token", usdc)).toBe(`https://etherscan.io/token/${usdc}`);
+    expect(otherExplorerUrl(inspectChain("mainnet", "base")!, "address", usdc)).toBe(`https://basescan.org/address/${usdc}`);
+    expect(otherExplorerUrl(inspectChain("mainnet", "arbitrum")!, "token", usdc)).toBe(`https://arbiscan.io/token/${usdc}`);
+    expect(otherExplorerUrl(inspectChain("mainnet", "optimism")!, "token", usdc)).toBe(`https://optimistic.etherscan.io/token/${usdc}`);
+    for (const n of NETWORKS) expect(otherExplorerUrl(arcInspectChain(n), "token", usdc)).toBeNull();
+    // Evidence links go to the chain's Blockscout, where the data came from.
+    expect(chainExplorerUrl(inspectChain("mainnet", "base")!, "token", usdc)).toBe(`https://base.blockscout.com/token/${usdc}`);
   });
 
   it("links the chain's explorer as explorerUrl does for the site's chain", () => {
@@ -142,6 +177,146 @@ describe("the Inspector's chain registry", () => {
       for (const kind of ["address", "tx", "token"] as const) {
         expect(chainExplorerUrl(arcInspectChain(n), kind, "0xabc"), `${n} ${kind}`).toBe(explorerUrl(kind, "0xabc", n));
       }
+    }
+  });
+});
+
+describe("Ethereum, Base, Arbitrum One and OP Mainnet in the registry", () => {
+  const others = INSPECT_CHAINS.mainnet.filter((c) => c.key !== "arc");
+  const byKey = (key: string) => inspectChain("mainnet", key)!;
+
+  it("writes every address checksummed, and each chain's addresses are distinct", () => {
+    for (const c of others) {
+      const addresses = addressesOf(c).filter((a) => a !== "0x0000000000000000000000000000000000000000");
+      for (const a of addresses) expect(getAddress(a), `${c.key} ${a}`).toBe(a);
+      // The trade quote is the chain's USDC, which is also its first quote token: the rest are all different contracts.
+      const distinct = new Set(addresses.map((a) => a.toLowerCase()));
+      expect(distinct.size, c.key).toBe(addresses.length - 1);
+    }
+  });
+
+  it("quotes against USDC first, with USDT where there is one, then WETH: the dollars stable, WETH not priced yet", () => {
+    const quotes = (key: string) => byKey(key).dex!.quoteTokens.map((q) => [q.symbol, q.decimals, q.usd]);
+    const usdc = ["USDC", 6, "stable"];
+    const usdt = ["USDT", 6, "stable"];
+    const weth = ["WETH", 18, "unpriced"];
+    expect(quotes("ethereum")).toEqual([usdc, usdt, weth]);
+    expect(quotes("base")).toEqual([usdc, weth]);
+    expect(quotes("arbitrum")).toEqual([usdc, usdt, weth]);
+    expect(quotes("optimism")).toEqual([usdc, usdt, weth]);
+    // Native ETH is a v4 quote too, unpriced, and no ERC-20 shows its balances.
+    for (const c of others) expect(c.nativeQuote, c.key).toEqual({ address: "0x0000000000000000000000000000000000000000", symbol: "ETH", decimals: 18, usd: "unpriced", erc20View: null });
+  });
+
+  it("buys with USDC in the trade check, funded through its balance mapping at slot 9", () => {
+    for (const c of others) {
+      expect(c.tradeQuote, c.key).toEqual({ token: c.dex!.quoteTokens[0]!.address, decimals: 6, balanceSlot: 9 });
+    }
+  });
+
+  it("reads Uniswap v2, v3 and v4 everywhere, and Slipstream and the classic pools on Base and OP Mainnet only", () => {
+    for (const c of others) {
+      expect(c.dex?.v2Factory, c.key).toBeDefined();
+      expect(c.dex?.v3FeeTiers, c.key).toEqual([100, 500, 3000, 10000]);
+      expect(Object.keys(c.dex!.v4!).sort(), c.key).toEqual(["poolManager", "positionManager", "quoter", "stateView"]);
+    }
+    expect([byKey("base").dex!.aero!.name, byKey("base").dex!.solidly!.name]).toEqual(["Aerodrome Slipstream", "Aerodrome classic"]);
+    expect([byKey("optimism").dex!.aero!.name, byKey("optimism").dex!.solidly!.name]).toEqual(["Velodrome Slipstream", "Velodrome classic"]);
+    for (const key of ["base", "optimism"]) expect(byKey(key).dex!.aero!.tickSpacings, key).toEqual([1, 10, 50, 100, 200, 2000]);
+    for (const key of ["ethereum", "arbitrum"]) {
+      expect(byKey(key).dex!.aero, key).toBeUndefined();
+      expect(byKey(key).dex!.solidly, key).toBeUndefined();
+    }
+  });
+
+  it("knows each chain's measured out-of-gas answer: -32003 on geth and op-geth, -32000 on Arbitrum's Nitro", () => {
+    const matches = (key: string, code: number, text: string) => byKey(key).outOfGas.some((s) => s.code === code && s.text.test(text));
+    for (const key of ["ethereum", "base", "optimism"]) {
+      expect(matches(key, -32003, "out of gas: gas required exceeds: 100000"), key).toBe(true);
+      expect(matches(key, -32000, "out of gas"), key).toBe(false);
+    }
+    expect(matches("arbitrum", -32000, "out of gas: gas required exceeds: 100000")).toBe(true);
+    expect(matches("arbitrum", -32000, "out of gas")).toBe(true);
+    expect(matches("arbitrum", -32003, "out of gas")).toBe(false);
+    // A gas limit under the intrinsic cost is a refusal on every chain, in every wording measured.
+    for (const c of others) {
+      for (const text of ["intrinsic gas too low", "err: intrinsic gas too low: have 20000, want 21000 (supplied gas 20000)"]) {
+        expect(c.outOfGas.some((s) => s.text.test(text)), `${c.key} ${text}`).toBe(false);
+      }
+    }
+  });
+
+  it("words PREVRANDAO for each chain in a title that fits one row of the social card", () => {
+    expect(others.map((c) => c.prevrandao.warnTitle)).toEqual([
+      "Uses PREVRANDAO, which validators can bias",
+      "Uses PREVRANDAO, predictable on Base",
+      "Uses PREVRANDAO, always 1 on Arbitrum",
+      "Uses PREVRANDAO, predictable on OP Mainnet",
+    ]);
+    for (const c of INSPECT_CHAINS.mainnet) {
+      expect(c.prevrandao.warnTitle.length, c.key).toBeLessThanOrEqual(43);
+      expect(c.prevrandao.evidenceUrl, c.key).toMatch(/^https:\/\//);
+    }
+  });
+
+  it("keeps a public RPC behind the server's keyed provider, and no key in the registry", () => {
+    expect(others.map((c) => c.viem.rpcUrls.default.http)).toEqual([
+      ["https://ethereum-rpc.publicnode.com"],
+      ["https://mainnet.base.org"],
+      ["https://arb1.arbitrum.io/rpc"],
+      ["https://mainnet.optimism.io"],
+    ]);
+    expect(JSON.stringify(INSPECT_CHAINS, (_, v) => (v instanceof RegExp ? String(v) : v))).not.toMatch(/alchemy/i);
+  });
+
+  it("links evidence to each chain's Blockscout, which no browser reads from here", () => {
+    expect(others.map((c) => c.explorer)).toEqual([
+      { url: "https://eth.blockscout.com", publicApiUrl: null },
+      { url: "https://base.blockscout.com", publicApiUrl: null },
+      { url: "https://arbitrum.blockscout.com", publicApiUrl: null },
+      { url: "https://optimism.blockscout.com", publicApiUrl: null },
+    ]);
+  });
+});
+
+describe("which chains are switched on (NEXT_PUBLIC_INSPECT_CHAINS)", () => {
+  const keys = (chains: InspectChain[]) => chains.map((c) => c.key);
+
+  it("switches on nothing but Arc while the flag is unset or empty", () => {
+    for (const flag of [undefined, "", " , "]) {
+      expect(keys(enabledInspectChains("mainnet", flag)), String(flag)).toEqual(["arc"]);
+      expect(enabledInspectChain("mainnet", "base", flag), String(flag)).toBeNull();
+    }
+  });
+
+  it("switches each chain on by its slug, on its own, in registry order whatever the flag's order", () => {
+    expect(keys(enabledInspectChains("mainnet", "base"))).toEqual(["arc", "base"]);
+    expect(keys(enabledInspectChains("mainnet", "optimism, ethereum"))).toEqual(["arc", "ethereum", "optimism"]);
+    expect(keys(enabledInspectChains("mainnet", "ethereum,base,arbitrum,optimism"))).toEqual(["arc", "ethereum", "base", "arbitrum", "optimism"]);
+    expect(enabledInspectChain("mainnet", "arbitrum", "ethereum,base,arbitrum,optimism")?.chainId).toBe(42161);
+  });
+
+  it("ignores what isn't a slug, a key spelled otherwise included, and never switches Arc off", () => {
+    expect(keys(enabledInspectChains("mainnet", "polygon,BASE,eth,arc"))).toEqual(["arc"]);
+    expect(enabledChainSlugs("arc,base")).toEqual(new Set(["base"]));
+    expect(enabledInspectChain("mainnet", "arc", "")).toBe(arcInspectChain("mainnet"));
+  });
+
+  it("has nothing but Arc on testnet, whatever the flag says", () => {
+    expect(keys(enabledInspectChains("testnet", "ethereum,base,arbitrum,optimism"))).toEqual(["arc"]);
+    expect(enabledInspectChain("testnet", "base", "base")).toBeNull();
+  });
+
+  it("reads the flag from the environment when given none", () => {
+    const before = process.env.NEXT_PUBLIC_INSPECT_CHAINS;
+    try {
+      process.env.NEXT_PUBLIC_INSPECT_CHAINS = "base";
+      expect(keys(enabledInspectChains("mainnet"))).toEqual(["arc", "base"]);
+      delete process.env.NEXT_PUBLIC_INSPECT_CHAINS;
+      expect(keys(enabledInspectChains("mainnet"))).toEqual(["arc"]);
+    } finally {
+      if (before === undefined) delete process.env.NEXT_PUBLIC_INSPECT_CHAINS;
+      else process.env.NEXT_PUBLIC_INSPECT_CHAINS = before;
     }
   });
 });

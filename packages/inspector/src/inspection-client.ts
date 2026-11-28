@@ -10,6 +10,12 @@ import { rpcTransport, type EndpointHealth } from "./rpc-transport";
  * the indexer build supplies one, the chain's own (`outOfGasIsNodeAnswerFor`) for an inspection, and Arc's
  * (`arcOutOfGasIsNodeAnswer`) for the site's Arc-only clients.
  */
-export function inspectionClient(chain: Chain, health?: EndpointHealth, isNodeAnswer?: (e: unknown) => boolean): PublicClient {
-  return createPublicClient({ chain, transport: rpcTransport(chain, { health, isNodeAnswer }), ccipRead: false });
+export function inspectionClient(
+  chain: Chain,
+  health?: EndpointHealth,
+  isNodeAnswer?: (e: unknown) => boolean,
+  /** Request headers by endpoint URL (see `RpcTransportOptions.headers`): a keyed provider's key, kept out of its URL. */
+  headers?: (url: string) => Record<string, string> | undefined,
+): PublicClient {
+  return createPublicClient({ chain, transport: rpcTransport(chain, { health, isNodeAnswer, ...(headers ? { headers } : {}) }), ccipRead: false });
 }

@@ -1,9 +1,10 @@
 import "server-only";
-import type { PublicClient } from "viem";
-import { activeChain, activeNetwork, arcInspectChain } from "@arcos/chain";
+import { defineChain, type PublicClient } from "viem";
+import { activeChain, activeNetwork, arcInspectChain, type InspectChain } from "@arcos/chain";
 import { arcOutOfGasIsNodeAnswer, endpointHealth, inspectionClient, outOfGasIsNodeAnswerFor } from "@arcos/inspector";
 import { processGlobal } from "./process-global";
-import { perSecond } from "./rate-limit";
+import { perSecond, type PacedTurns } from "./rate-limit";
+import { inspectRpcEndpoints } from "./rpc-urls";
 
 /**
  * The server's RPC client, one per process: the inspection engine, `/api/pulse`, `/api/inspect`, `/badge` and `/t`
@@ -25,12 +26,34 @@ export function serverRpcClient(): PublicClient {
 }
 
 /**
- * The explorer pacer every server route shares, one per process: at most 4 explorer requests start in any second
- * (Blockscout's free tier allows 5). Inspections and Revoke's lookups wait their turn in the same queue, and Revoke
- * runs only a couple of lookups at once (see approvals-server.ts), so it can't crowd inspections out.
+ * The Inspector's RPC client for `chain`, one per chain per process. Arc's is `serverRpcClient()`, unchanged. Any other
+ * chain (Ethereum, Base, Arbitrum One, OP Mainnet) gets a client of its own over its own endpoint-health record, so one
+ * chain's endpoints failing never cools another's: the keyed provider first, when the runtime secret `INSPECT_RPC_KEY`
+ * is set, its key in a request header, then the chain's public RPC (rpc-urls.ts). It reads an out-of-gas answer as the
+ * node's in that chain's own shapes (`outOfGasIsNodeAnswerFor`, measured per chain), and CCIP-Read is off, as on every
+ * client that reads contracts anyone can deploy. The endpoints are fixed when the client is first built: a new key takes
+ * a new server process (a rollout).
  */
-export function explorerPacer(): () => Promise<void> {
-  return processGlobal("inspect.explorerPacer", () => perSecond(4));
+export function inspectRpcClient(chain: InspectChain): PublicClient {
+  if (chain.key === "arc") return serverRpcClient();
+  return processGlobal(`inspect.rpcClient.${chain.key}`, () => {
+    const endpoints = inspectRpcEndpoints(chain);
+    const headers = new Map(endpoints.flatMap((e) => (e.headers ? [[e.url, e.headers] as const] : [])));
+    const viem = defineChain({ ...chain.viem, rpcUrls: { default: { http: endpoints.map((e) => e.url) } } });
+    return inspectionClient(viem, processGlobal(`inspect.rpcHealth.${chain.key}`, endpointHealth), outOfGasIsNodeAnswerFor(chain), (url) => headers.get(url));
+  });
+}
+
+/**
+ * The explorer pacer every server route shares, one per process: at most 4 explorer requests start in any second
+ * (Blockscout's free tier allows 5), whichever chain they read, since the PRO API's limit is per key. It has two queues
+ * over that one window (`perSecond`). What reads Arc waits in `high`: inspections and Revoke's lookups, in one queue as
+ * before there were other chains, and Revoke runs only a couple of lookups at once (see approvals-server.ts), so it can't
+ * crowd inspections out. Inspections of the other chains wait in `low`, which gets a turn only when nothing of Arc's
+ * waits, so a burst of them never puts Arc's reads behind theirs.
+ */
+export function explorerPacer(): PacedTurns {
+  return processGlobal("inspect.explorerQueues", () => perSecond(4));
 }
 
 /**

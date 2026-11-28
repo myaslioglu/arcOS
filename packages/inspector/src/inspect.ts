@@ -1,15 +1,16 @@
 import { getAddress } from "viem";
 import { tokenFactoryAbi, type Address } from "@arcos/chain";
-import { extractSelectors, minimalProxyTarget, usesOpcode, type Hex } from "./bytecode";
+import { extractSelectors, minimalProxyTarget, opaqueCode, usesOpcode, type Hex } from "./bytecode";
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, abiDeclaresTransfer, addressFromSlot,
   beaconImplementation, checkHolders, checkLiquidity, checkLpLock, checkOwnership, checkPrevrandao, checkPrivileges,
   checkProxy, checkTrade, checkVerified, dispatcherInBytecode, erc20Abi, findPools, gateLogicPass, resolveOwner, slotReadable, slotSet,
-  type LogicBlock, type LogicGap, type ProxySlotKind,
+  type LogicBlock, type LogicGap, type LogicVerification, type ProxySlotKind, type SourcifyAnswers,
 } from "./checks";
 import { combinePrivileges, type Privilege } from "./privileges";
 import { ExplorerUnavailable, type ContractInfo, type ExplorerSource, type HolderPage, type TokenInfo } from "./explorer";
 import { cleanLabel } from "./label";
+import type { VerificationSource } from "./sourcify";
 import { isDecodeFailure, isNodeAnswer } from "./rpc-errors";
 import { CallReverted, type ChainReader, type CheckId, type Finding, type InspectInput, type Report } from "./types";
 
@@ -103,6 +104,34 @@ const kindOf = (s: ProxySlots): ProxySlotKind | null => (s.impl || s.beacon ? "e
 /** Both kinds of slot are set, so both kinds of admin slot may name someone. */
 const bothKinds = (s: ProxySlots): boolean => s.zeppelinos !== null && (s.impl !== null || s.beacon !== null);
 
+/** What `at`'s proxy slots hold, or `UNREAD` when any read threw or came back malformed. */
+async function readProxySlots(reader: ChainReader, at: Address): Promise<ProxySlots> {
+  try {
+    const values = await Promise.all(PROXY_SLOTS.map((slot) => reader.getStorageAt(at, slot)));
+    // A malformed answer is no more an answer than a rejected call — see `slotReadable`.
+    return values.every(slotReadable) ? slotsFrom(values) : UNREAD;
+  } catch {
+    return UNREAD;
+  }
+}
+
+/**
+ * Who holds the admin slot of the proxy at `at`, whose set slots follow `kind`'s layout: EIP-1967's admin slot, or
+ * ZeppelinOS's for a ZeppelinOS-style proxy. A failed read is not evidence of an empty slot, but it makes no difference to
+ * what can be said: without an address, both are "whoever controls upgrades". With both kinds of slot set (`bothKinds`),
+ * the ZeppelinOS admin slot has to agree with the EIP-1967 one, or be empty: if it names someone else, or couldn't be
+ * read, which admin the proxy's bytecode honours can't be told, so nobody is named (as `logic-ambiguous` scores no logic).
+ */
+async function proxyAdmin(reader: ChainReader, at: Address, kind: ProxySlotKind | null, both: boolean): Promise<Address | null> {
+  const readAdmin = (slot: Hex): Promise<Address | null | undefined> =>
+    reader.getStorageAt(at, slot).then((v) => (slotReadable(v) ? addressFromSlot(v) : undefined), () => undefined);
+  const [own, other] = await Promise.all([
+    readAdmin(kind === "zeppelinos" ? ZEPPELINOS_ADMIN_SLOT : ADMIN_SLOT),
+    both ? readAdmin(ZEPPELINOS_ADMIN_SLOT) : Promise.resolve(null),
+  ]);
+  return own && (other === null || other?.toLowerCase() === own.toLowerCase()) ? own : null;
+}
+
 /** The ZeppelinOS slot names something other than what the EIP-1967 slots name: a beacon, or a different
  * implementation. Only the proxy's own bytecode decides which it reads, so neither is "the logic". */
 const zeppelinosConflicts = (s: ProxySlots): boolean =>
@@ -135,6 +164,15 @@ function watchReader(reader: ChainReader, onFailure: () => void): ChainReader {
     callWithOverride: (call, overrides) => watch(() => reader.callWithOverride(call, overrides)),
     logs: (filter) => watch(() => reader.logs(filter)),
   };
+}
+
+/** Asks `source` about `address`, and reports a question nobody could answer (a rejection): `null` then, never "no match". */
+function askVerification(source: VerificationSource, onFailure: () => void) {
+  return (address: Address): Promise<boolean | null> =>
+    source.verified(address).catch(() => {
+      onFailure();
+      return null;
+    });
 }
 
 /** Reports every request that ended in `ExplorerUnavailable`, including one a contract record absorbed and flagged
@@ -171,6 +209,9 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const { reader, explorer, address } = input;
   const code = await reader.getCode(address);
   if (!code) throw new NotAContract(address);
+  // An EIP-7702 delegated account or an Arbitrum Stylus program: no EVM bytecode to resolve or scan (see `opaqueCode`).
+  const opaque = opaqueCode(code);
+  if (opaque) return opaqueInspection(input, opaque, () => degraded, markDegraded);
 
   const cloneOf = minimalProxyTarget(code);
   // For a clone, NEVER fall back to its own trampoline bytecode — that's not the logic that runs.
@@ -220,16 +261,6 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       return fetched === null ? [null, "logic-empty"] : [fetched, null];
     } catch {
       return [null, "logic-unreadable"];
-    }
-  };
-
-  const readProxySlots = async (at: Address): Promise<ProxySlots> => {
-    try {
-      const values = await Promise.all(PROXY_SLOTS.map((slot) => reader.getStorageAt(at, slot)));
-      // A malformed answer is no more an answer than a rejected call — see `slotReadable`.
-      return values.every(slotReadable) ? slotsFrom(values) : UNREAD;
-    } catch {
-      return UNREAD;
     }
   };
 
@@ -289,7 +320,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // The clone's target was fetched — check whether the TARGET is itself an upgradeable proxy.
     // A slot read that THREW says nothing: without it, "no slot is set" is an assumption, not a
     // reading, so `checkProxy` must not turn it into "not upgradeable".
-    const targetSlots = await readProxySlots(cloneOf);
+    const targetSlots = await readProxySlots(reader, cloneOf);
     targetSlotsRead = targetSlots.read;
     slotKind = kindOf(targetSlots);
     slotsOfBothKinds = bothKinds(targetSlots);
@@ -317,34 +348,28 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
 
   // Everything resolved from somewhere else has to answer for itself before it can be scored.
   if (logicCode !== null && logicAt !== null && !logicVetted) {
-    const gap = vet(logicCode, await readProxySlots(logicAt));
+    const gap = vet(logicCode, await readProxySlots(reader, logicAt));
     if (gap !== null) {
       logicCode = null;
       logicGap = gap;
     }
   }
+  // Logic resolved from somewhere else may have no EVM bytecode to scan, as the token's own may not (`opaqueCode`): an
+  // EIP-7702 delegated account or an Arbitrum Stylus program behind a proxy or a clone. It is a gap, never scanned as
+  // EVM: a byte of WebAssembly, or of the address a delegation names, is no opcode.
+  const logicOpaque = logicCode === null ? null : opaqueCode(logicCode);
+  if (logicOpaque !== null) {
+    logicCode = null;
+    logicGap = logicOpaque === "eip7702" ? "logic-eip7702" : "logic-stylus";
+  }
 
   // The ONE value behind both `proxy`'s upgradeability fail and R1's block on the logic checks.
   const upgradeable = cloneOf === null ? topSlotsSet : cloneTargetIsProxy;
   // Whose slots make it upgradeable — this address's own, or the clone target's. That is also
-  // where the admin slot lives (the one of the same kind), and the page to link as evidence for
-  // "someone can replace this".
+  // where the admin slot lives (the one of the same kind, `proxyAdmin`), and the page to link as
+  // evidence for "someone can replace this".
   const upgradeableAt: Address | null = !upgradeable ? null : cloneOf === null ? address : cloneOf;
-  // A failed admin read is not evidence of an empty slot, but it makes no difference to what can
-  // be said: without an address, both are "whoever controls upgrades". With both kinds of slot set,
-  // the ZeppelinOS admin slot has to agree with the EIP-1967 one, or be empty: if it names someone
-  // else, or couldn't be read, which admin the proxy's bytecode honours can't be told, so nobody is
-  // named (as `logic-ambiguous` scores no logic).
-  const readAdmin = (slot: Hex): Promise<Address | null | undefined> =>
-    reader.getStorageAt(upgradeableAt!, slot).then((v) => (slotReadable(v) ? addressFromSlot(v) : undefined), () => undefined);
-  let admin: Address | null = null;
-  if (upgradeableAt) {
-    const [own, other] = await Promise.all([
-      readAdmin(slotKind === "zeppelinos" ? ZEPPELINOS_ADMIN_SLOT : ADMIN_SLOT),
-      slotsOfBothKinds ? readAdmin(ZEPPELINOS_ADMIN_SLOT) : Promise.resolve(null),
-    ]);
-    admin = own && (other === null || other?.toLowerCase() === own.toLowerCase()) ? own : null;
-  }
+  const admin = upgradeableAt ? await proxyAdmin(reader, upgradeableAt, slotKind, slotsOfBothKinds) : null;
 
   // Code that delegates calls but resolves to no known clone target or proxy slot. `checkProxy`
   // reports this shape on its own; what it must NOT do is discard the contract's own dispatcher,
@@ -364,6 +389,10 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * whose behaviour is decided somewhere else, including a DELEGATECALL to an address that couldn't
    * be identified at all. */
   const forwardsCalls = runsOtherCode || forwardsToUnidentifiedCode;
+  /** The code that runs, where `verified` names it: code this engine read and scored. An address the engine refused to
+   * score (a further proxy, empty code, a delegated account whose key picks what runs) is never named as "the
+   * implementation it runs", and a Stylus program is named only to say no source vouches for it (`logicVerification`). */
+  const verifiedLogicAt = logicCode !== null ? logicAt : null;
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -378,7 +407,13 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     }
   };
 
-  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber, arcosTemplate] = await Promise.all([
+  // Sourcify, where the chain asks it: about this address, and about the code it runs when that was identified and read.
+  const verification = input.verifyFallback ? askVerification(input.verifyFallback, markDegraded) : null;
+  const sourcifyAsked: Promise<SourcifyAnswers | null> = verification
+    ? Promise.all([verification(address), forwardsCalls && verifiedLogicAt ? verification(verifiedLogicAt) : Promise.resolve(null)]).then(([own, logic]) => ({ own, logic }))
+    : Promise.resolve(null);
+
+  const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber, arcosTemplate, sourcify] = await Promise.all([
     ask<ContractInfo>(() => explorer!.contract(address)),
     // For anything that forwards, the record that matters is the one for the code that RUNS:
     // Blockscout's record for a proxy or a clone address describes the forwarding code, and
@@ -402,6 +437,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     input.arcosTokenFactory
       ? reader.read(input.arcosTokenFactory, tokenFactoryAbi, "isArcosToken", [address]).then((v) => v === true).catch(() => null)
       : Promise.resolve(null),
+    sourcifyAsked,
   ]);
 
   const readOr = async <T>(fn: string, fallback: T): Promise<T> => (reader.read(address, erc20Abi, fn) as Promise<T>).catch(() => fallback);
@@ -437,18 +473,24 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const gate = (f: Finding): Finding => gateLogicPass(input, f, blockFor(false));
   const gateOpcodes = (f: Finding): Finding => gateLogicPass(input, f, blockFor(true));
 
+  /** What `verified` reads about the code that runs, for code that forwards: a Stylus implementation can't be scanned for
+   * a call that forwards again, and may keep a further implementation in any storage slot, so its source never vouches
+   * for what runs, whatever the explorer or Sourcify say about it. */
+  const logicVerification: LogicVerification =
+    logicOpaque === "stylus" ? { at: logicAt, info: logicContract, why: "stylus" } : { at: verifiedLogicAt, info: logicContract };
   const findings = await Promise.all([
     // `logicAt` is where the code that runs WOULD live; it is only the code this engine actually
     // scored when `logicCode` came back with something. An implementation that turned out to be a
     // proxy itself, or that points at empty code, is an address the engine explicitly refused to
     // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
-    // finding saying that code couldn't be identified is the report contradicting itself.
-    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null, arcosTemplate)),
+    // finding saying that code couldn't be identified is the report contradicting itself. A Stylus
+    // program is named only to say why no source vouches for it (`logicVerification`).
+    guard("verified", () => checkVerified(input, contract, forwardsCalls ? logicVerification : null, arcosTemplate, sourcify)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
-      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, upgradeable, slotKind, admin });
+      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, logicOpaque, upgradeable, slotKind, admin });
     }),
     guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),
@@ -458,33 +500,151 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // the privileges and proxy findings' business.
     guard("trade", () => checkTrade(input, poolScan)),
   ]);
-  findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
+  return report(input, { name, symbol, decimals, supply }, findings, { explorerReachable, degraded, blockNumber });
+}
 
+/** The report of `findings`, in `ORDER`, with the counts every surface shows. */
+function report(
+  input: InspectInput,
+  token: { name: string | null; symbol: string | null; decimals: number | null; supply: bigint | null },
+  findings: Finding[],
+  read: { explorerReachable: boolean; degraded: boolean; blockNumber: bigint | null },
+): Report {
+  findings.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
   const counts = {
     pass: findings.filter((f) => f.status === "pass").length,
     warn: findings.filter((f) => f.status === "warn").length,
     fail: findings.filter((f) => f.status === "fail").length,
     unknown: findings.filter((f) => f.status === "unknown").length,
   };
-
   return {
-    address,
+    address: input.address,
     network: input.network,
     chain: input.chain.key,
     chainId: input.chain.chainId,
     token: {
-      name: cleanLabel(name, 64),
-      symbol: cleanLabel(symbol, 32),
-      decimals: decimals === null ? null : Number(decimals),
-      totalSupply: supply === null ? null : supply.toString(),
+      name: cleanLabel(token.name, 64),
+      symbol: cleanLabel(token.symbol, 32),
+      decimals: token.decimals === null ? null : Number(token.decimals),
+      totalSupply: token.supply === null ? null : token.supply.toString(),
     },
     findings,
     passed: counts.pass,
     total: findings.length,
     counts,
-    explorerReachable,
-    degraded,
-    blockNumber: blockNumber === null ? "unknown" : blockNumber.toString(),
+    explorerReachable: read.explorerReachable,
+    ...(input.explorerSkipped ? { explorerSkipped: input.explorerSkipped } : {}),
+    degraded: read.degraded,
+    blockNumber: read.blockNumber === null ? "unknown" : read.blockNumber.toString(),
     generatedAt: (input.now?.() ?? new Date()).toISOString(),
   };
+}
+
+/** What the checks say about code that isn't EVM bytecode (`opaqueCode`), by kind. A Stylus program's `proxy` is for proxy
+ * slots that all read empty (`opaqueInspection`). */
+const OPAQUE: Record<"eip7702" | "stylus", { verified: string | null; proxy: string; logic: string }> = {
+  eip7702: {
+    // The account's key can point it at other code at any time, so no one contract's source says what it runs.
+    verified: "This address is an EIP-7702 delegated account: it runs another contract's code, and its key can point it at other code at any time, so no one contract's source says what it does.",
+    proxy: "This address is an EIP-7702 delegated account: its key can point it at other code at any time, which this check can't follow.",
+    logic: "This address is an EIP-7702 delegated account: it runs another contract's code, which its key can change at any time, so its logic can't be read.",
+  },
+  stylus: {
+    verified: null,
+    proxy: "This is an Arbitrum Stylus program (WebAssembly). Its EIP-1967 and ZeppelinOS proxy slots are empty, but its code can't be read, so whether it forwards its calls some other way can't be told.",
+    logic: "This is an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.",
+  },
+};
+
+/** A Stylus program's proxy check when a proxy slot couldn't be read. */
+const STYLUS_SLOTS_UNREAD =
+  "This is an Arbitrum Stylus program (WebAssembly). Its EIP-1967 and ZeppelinOS proxy slots couldn't be read, and its code can't be, so whether it forwards its calls elsewhere can't be told.";
+
+/**
+ * An inspection of code that isn't EVM bytecode to scan: an EIP-7702 delegated account, or an Arbitrum Stylus program.
+ * The checks about the code's logic (ownership, privileges, prevrandao) are unknown, never a pass on a scan that couldn't
+ * run. The market checks (holders, liquidity, lp-lock, trade) run as for any token.
+ *
+ * A Stylus program can be a proxy itself (an ERC-1967 one, say), so its proxy slots are read as any contract's
+ * (`readProxySlots`). With one set, the proxy check says so as it does for any proxy (`checkProxy`, naming the admin
+ * when its slot holds one). Its own source never vouches for what runs: its code can't be scanned for a call that
+ * forwards, and a proxy can keep its implementation in any storage slot, not only the standard ones read here
+ * (OpenZeppelin's Stylus proxy keeps it in an ordinary field). So source verification is unknown in every case, saying
+ * why: a slot couldn't be read, a set slot names code that isn't followed, or nothing rules forwarding out. With every
+ * slot read and empty, the proxy check stays unknown too. A delegated account's slots aren't read: its key, not a slot,
+ * picks the code it runs, so no one contract's source is its own.
+ */
+async function opaqueInspection(input: InspectInput, kind: "eip7702" | "stylus", degraded: () => boolean, markDegraded: () => void): Promise<Report> {
+  const { reader, explorer, address } = input;
+  const words = OPAQUE[kind];
+  let explorerReachable = explorer !== null;
+  const ask = async <T>(call: () => Promise<T>): Promise<T | null> => {
+    if (!explorer) return null;
+    try {
+      return await call();
+    } catch {
+      explorerReachable = false;
+      return null;
+    }
+  };
+  const verification = kind === "stylus" && input.verifyFallback ? askVerification(input.verifyFallback, markDegraded) : null;
+  const [contract, tokenInfo, holderPage, poolScan, blockNumber, sourcified, slots] = await Promise.all([
+    kind === "stylus" ? ask<ContractInfo>(() => explorer!.contract(address)) : Promise.resolve(null),
+    ask<TokenInfo | null>(() => explorer!.token(address)),
+    ask<HolderPage | null>(() => explorer!.topHolders(address)),
+    findPools(input)
+      .catch(() => null)
+      .then((scan) => {
+        try {
+          input.onPools?.(scan);
+        } catch {
+          // ignored on purpose
+        }
+        return scan;
+      }),
+    reader.blockNumber().catch(() => null),
+    verification ? verification(address) : Promise.resolve(null),
+    kind === "stylus" ? readProxySlots(reader, address) : Promise.resolve(null),
+  ]);
+  /** Whose layout a Stylus program's set slots follow, when they name code it may run instead of its own: `null` when
+   * none is set, one couldn't be read, or this is a delegated account. */
+  const slotKind = slots?.read ? kindOf(slots) : null;
+  const readOr = async <T>(fn: string, fallback: T): Promise<T> => (reader.read(address, erc20Abi, fn) as Promise<T>).catch(() => fallback);
+  const [name, symbol, decimals, supply, admin] = await Promise.all([
+    readOr<string | null>("name", tokenInfo?.name ?? null),
+    readOr<string | null>("symbol", tokenInfo?.symbol ?? null),
+    readOr<number | null>("decimals", tokenInfo?.decimals ?? null),
+    readOr<bigint | null>("totalSupply", tryBig(tokenInfo?.totalSupply ?? null)),
+    slotKind ? proxyAdmin(reader, address, slotKind, bothKinds(slots!)) : Promise.resolve(null),
+  ]);
+  const unknownCode = (id: CheckId, title: string, detail: string, evidence: string | null): Finding => ({ id, status: "unknown", title, detail, evidenceUrl: evidence, fixAppId: null });
+  const contractUrl = `${input.explorerBase}/address/${address}?tab=contract`;
+  // A Stylus program's own source vouches for nothing about what runs (see above); its slots only say why.
+  const logic: LogicVerification | null =
+    slots === null ? null
+    : !slots.read ? { at: null, info: null, why: "slots-unread" }
+    : slotKind !== null ? { at: null, info: null, why: "slot-not-followed" }
+    : { at: null, info: null, why: "stylus" };
+  const proxy = (): Finding => {
+    if (slots !== null && !slots.read) return unknownCode("proxy", "Couldn't check if this contract is upgradeable", STYLUS_SLOTS_UNREAD, contractUrl);
+    if (slotKind === null) return unknownCode("proxy", "Couldn't check if this contract is upgradeable", words.proxy, contractUrl);
+    return checkProxy(input, {
+      cloneOf: null, cloneReadFailed: false, cloneTargetEmpty: false, targetSlotsRead: true, forwardsToUnidentifiedCode: false, logicDelegates: false, logicOpaque: null,
+      upgradeable: true, slotKind, admin,
+    });
+  };
+  const findings = await Promise.all([
+    words.verified === null
+      ? guard("verified", () => checkVerified(input, contract, logic, null, verification ? { own: sourcified, logic: null } : null))
+      : Promise.resolve(unknownCode("verified", "Couldn't check source verification", words.verified, contractUrl)),
+    Promise.resolve(unknownCode("ownership", "Couldn't read the contract's logic", words.logic, `${input.explorerBase}/address/${address}?tab=read_contract`)),
+    Promise.resolve(unknownCode("privileges", "Couldn't read the contract's logic", words.logic, `${input.explorerBase}/address/${address}?tab=write_contract`)),
+    guard("proxy", proxy),
+    guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
+    guard("liquidity", () => checkLiquidity(input, poolScan)),
+    guard("lp-lock", () => checkLpLock(input, poolScan, { supply, decimals: decimals === null ? null : Number(decimals) })),
+    Promise.resolve(unknownCode("prevrandao", "Couldn't read the contract's logic", words.logic, null)),
+    guard("trade", () => checkTrade(input, poolScan)),
+  ]);
+  return report(input, { name, symbol, decimals, supply }, findings, { explorerReachable, degraded: degraded(), blockNumber });
 }

@@ -7,18 +7,21 @@ vi.mock("server-only", () => ({}));
 // Revoke's own RPC client, mocked here: this file checks that cachedApprovals reads it (and only it), never the
 // Inspector's serverRpcClient, and it never touches a real network. Its readContract serves the multicall and the
 // canary alike; getBlockNumber (eth_blockNumber) is what the canary used to read, and must stay unused.
-const { readContract, getBlockNumber, approvalsRpcClient, serverRpcClient } = vi.hoisted(() => ({
+// The explorer pacer's two queues, which give a turn at once: Revoke reads Arc, so its requests wait in `high`.
+const { readContract, getBlockNumber, approvalsRpcClient, serverRpcClient, pacedHigh, pacedLow } = vi.hoisted(() => ({
   readContract: vi.fn(),
   getBlockNumber: vi.fn(),
   approvalsRpcClient: vi.fn(() => ({ readContract, getBlockNumber })),
   serverRpcClient: vi.fn(() => {
     throw new Error("cachedApprovals must not read the Inspector's shared RPC client");
   }),
+  pacedHigh: vi.fn(() => Promise.resolve()),
+  pacedLow: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../server-rpc", () => ({
   approvalsRpcClient,
   serverRpcClient,
-  explorerPacer: () => () => Promise.resolve(),
+  explorerPacer: () => ({ high: pacedHigh, low: pacedLow }),
 }));
 
 // The real chain, which one test swaps for a copy without Multicall3.
@@ -96,6 +99,8 @@ describe("cachedApprovals", () => {
     getBlockNumber.mockResolvedValue(1n); // the RPC is up unless a test says otherwise
     approvalsRpcClient.mockClear();
     serverRpcClient.mockClear();
+    pacedHigh.mockClear();
+    pacedLow.mockClear();
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubEnv("BLOCKSCOUT_API_KEY", "proapi_k");
@@ -231,6 +236,9 @@ describe("cachedApprovals", () => {
     ]);
     for (const q of queries) expect(q.topic1).toBe(topic(owner));
     expect(readContract).not.toHaveBeenCalled(); // nothing to check live
+    // Each one waited its turn in the pacer's first queue, with Arc's inspections, as it did before there were two.
+    expect(pacedHigh).toHaveBeenCalledTimes(3);
+    expect(pacedLow).not.toHaveBeenCalled();
   });
 
   it("reads a Permit2 allowance through Permit2, with the block's timestamp from Multicall3 in the same aggregate3 call", async () => {

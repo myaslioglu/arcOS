@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ARCOS, CHAINS, DEX, KNOWN_LOCKERS, USDC, arcInspectChain, type NetworkId } from "@arcos/chain";
+import { ARCOS, CHAINS, DEX, INSPECT_CHAINS, KNOWN_LOCKERS, USDC, arcInspectChain, type NetworkId } from "@arcos/chain";
 import { chainInput } from "../chain-input";
 
 describe("chainInput", () => {
@@ -17,12 +17,29 @@ describe("chainInput", () => {
       expect(input.lockersVetted, network).toBe(true);
       expect(input.unscanned, network).toEqual([]);
       expect(input.prevrandao.warnTitle, network).toBe("Uses PREVRANDAO, which is always 0 on Arc");
+      expect(input.unverifiedFails, network).toBe(true);
+    }
+  });
+
+  it("gives an inspection off Arc that chain's own fields: its Blockscout for evidence, its quotes and its rules", () => {
+    for (const chain of INSPECT_CHAINS.mainnet.filter((c) => c.key !== "arc")) {
+      const input = chainInput(chain);
+      expect(input.chain, chain.key).toEqual({ key: chain.key, name: chain.name, chainId: chain.chainId });
+      expect(input.dex, chain.key).toBe(chain.dex);
+      expect(input.explorerBase, chain.key).toBe(chain.explorer.url);
+      expect(input.explorerBase, chain.key).toMatch(/^https:\/\/[a-z]+\.blockscout\.com$/);
+      expect(input.arcosTokenFactory, chain.key).toBeNull();
+      expect(input.tradeQuote, chain.key).toEqual({ token: chain.dex!.quoteTokens[0]!.address, decimals: 6, balanceSlot: 9 });
+      expect(input.nativeQuote, chain.key).toMatchObject({ symbol: "ETH", usd: "unpriced", erc20View: null });
+      expect([input.lockersVetted, input.unverifiedFails], chain.key).toEqual([false, false]);
+      expect(input.unscanned.length, chain.key).toBeGreaterThan(0);
+      expect(input.prevrandao, chain.key).toBe(chain.prevrandao);
     }
   });
 
   it("carries every field the engine reads about the chain, and nothing else", () => {
     expect(Object.keys(chainInput(arcInspectChain("mainnet"))).sort()).toEqual(
-      ["arcosTokenFactory", "chain", "dex", "explorerBase", "knownLockers", "lockersVetted", "nativeQuote", "prevrandao", "tradeQuote", "unscanned"],
+      ["arcosTokenFactory", "chain", "dex", "explorerBase", "knownLockers", "lockersVetted", "nativeQuote", "prevrandao", "tradeQuote", "unscanned", "unverifiedFails"],
     );
   });
 });

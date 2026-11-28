@@ -9,7 +9,7 @@ All of it is in the Firebase project `arcos-c80cf`, region `europe-west4`.
 
 | Piece | Runs as | Reads | Writes |
 |---|---|---|---|
-| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, positions, positionsIndex, radarFeed, indexer, stats) | nothing in Firestore yet |
+| App Hosting `arcos`: https://4rcos.com | `arcos-web@` | Arc mainnet RPC, Blockscout PRO API, Firestore `arcos` (pools, positions, positionsIndex, radarFeed, indexer, stats); for the Inspector's other chains, once switched on, their RPCs (Alchemy, then each chain's public RPC) and Sourcify | nothing in Firestore yet |
 | App Hosting `arcos-testnet`: https://testnet.4rcos.com | `arcos-testnet-web@` | Arc testnet RPC and explorer | nothing; it has no Firestore access |
 | Function `arcosIndexer` (codebase `arcos`, [functions/](../functions)) | `arcos-jobs@` | Arc mainnet RPC, Blockscout PRO API, the Telegram Bot API (sends only), Firestore `arcos` (`watches`, `users`; `count()` aggregations of `users`, `watches`, `watchState`, `tokens`) | Firestore `arcos`: `indexer`, `pools`, `tokens`, `reports`, `radarFeed`, `watchState`, `alerts`, `deliveries`, `stats`, `statsDays`, `positions`, `positionsIndex`, `users.telegram` (cleared when a chat blocked the bot) |
 | Cloud Scheduler job of `arcosIndexer`, every minute (UTC) | calls the function with an OIDC token of `arcos-jobs@` | | |
@@ -433,9 +433,12 @@ Reading the rest:
 So the backfill takes some 300 to 500 runs: 5 to 8 hours at one
 run a minute, longer while inspections run long.
 
-Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives exactly the answers it gave before
-the index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be read without an index yet"), since
-until the backfill is done neither the positions nor the token's old v4 pools are all listed. The warnings
+Until the cursor is within 10,000 blocks of the head, the liquidity-lock check gives the answers it gave before the
+index (v2 pairs on their LP tokens; for a v4 pool, "positions in them can't be read without an index yet"), since until
+the backfill is done neither the positions nor the token's old v4 pools are all listed. Its status is always the one it
+gave before the index. Its words are too, except when the inspection runs out of time, or can't read the chain's head,
+before it has checked the cursor against the head: then the detail says that instead, since it can't tell whether the
+index was behind (README, "How Inspector decides things"). The warnings
 from positions start on their own once it has caught up, and so do the details that say what was read in place of
 "can't be read without an index yet". Watch `positionsIndex/mainnet.block` against `head`, or
 `behind` in the run line. After that a run reads one window of about 120 blocks.
@@ -472,6 +475,82 @@ stored, the pool docs added, the blocks the cursor is short of the run's head, a
 - The site reads the index only on mainnet, and only on App Hosting (or against the emulator), so a dev server never
   reaches the live database. A read gets 1.5 seconds; after a failure the site reads nothing for a minute. Without the
   index, every inspection runs as before, on its own pool discovery.
+
+## The Inspector's other chains
+
+The site's server inspects tokens on Ethereum, Base, Arbitrum One and OP Mainnet, for each chain
+`NEXT_PUBLIC_INSPECT_CHAINS` switches on ([INSPECTOR-CHAINS.md](INSPECTOR-CHAINS.md); the settings and the owner's steps
+are in [DEPLOYING.md](DEPLOYING.md#the-inspectors-other-chains)). None of it runs in the functions: the indexer, Radar,
+Watchdog and Stats are Arc's alone, and no report of these chains is stored.
+
+**What an inspection reads.** Measured on 2026-11-27, one uncached inspection sends 41 to 69 RPC requests: 30 to 56
+`eth_call`s, up to 6 more with a state override (the trade check's round trips), 3 to 7 `eth_getStorageAt`, 1 to 3
+`eth_getCode`, an `eth_blockNumber` and, with a trade, an `eth_gasPrice`. While the explorer budget lasts it also makes 4
+to 6 Blockscout PRO API calls, and it asks Sourcify once, twice for a proxy. A report is kept 5 minutes in each instance
+(30 seconds when degraded), and `/api/inspect`, `/badge` and the social card as long at the CDN, so a report asked for
+again in that time costs nothing.
+
+**The RPC key, `INSPECT_RPC_KEY`.** One Alchemy key for the four chains, a Secret Manager secret the server reads at
+runtime. It goes in the `Authorization` header of each call to `eth-mainnet`, `base-mainnet`, `arb-mainnet` or
+`opt-mainnet.g.alchemy.com/v2`, never in a URL, and no log line carries it (the routes log an error's name only). Each
+chain's public RPC stands behind it: `ethereum-rpc.publicnode.com`, `mainnet.base.org`, `arb1.arbitrum.io/rpc`,
+`mainnet.optimism.io`. An endpoint that fails is skipped for 60 seconds by every call in that instance. So a wrong or
+revoked key (Alchemy answers 401, -32600 `Must be authenticated!`) costs one failed attempt a minute per chain and
+instance, and every read goes to the public RPC: the pages keep working, on an endpoint that promises no capacity.
+Without the secret, or with the value `none` (as on testnet), only the public RPCs are read.
+
+To rotate the key: create the new one at Alchemy, add it as a new version of the secret (in bash, Cloud Shell's shell:
+`read -rsp 'Key: ' K; echo; printf %s "$K" | gcloud secrets versions add INSPECT_RPC_KEY --project arcos-c80cf --data-file=-; unset K`),
+bump the `@N` pin in `apps/web/apphosting.yaml` and let that merge roll out. Only then delete the old key at Alchemy and
+destroy the old version: an instance resolves its pinned version when it starts, so destroying a version a running
+rollout is pinned to stops new instances from starting.
+
+**The explorer budget, `INSPECT_EXPLORER_DAILY_BUDGET`.** Blockscout's PRO plan is shared by the indexer (its own 3,000
+a day, "The indexer" above), Revoke's approvals and the site's Inspector pages, every chain together. Inspections off
+Arc get a soft budget of their own, counted in memory per server instance: by default 300 explorer calls a UTC day, 50
+to 75 inspections (each sends 4 to 6). Arc's calls aren't counted. App Hosting runs at most 2 instances, so it is 600 a
+day at most from the instances running at once, under a third of the 2,000 that the plan's 5,000 leaves after the
+indexer. An instance that starts later in the day starts a count of its own, so a day in which instances stop and start
+can spend more; the plan's quota stays the hard limit. Whether there is budget left is asked when an inspection starts,
+and each request it sends is counted; a 402 from the explorer (the plan's quota or payment gone) spends the rest of
+the day's budget at once. Past the budget, an inspection runs without the explorer: holder concentration reads
+"couldn't check" and source verification rests on Sourcify, and the report, the proof page, the badge's title and the
+social card say "The explorer wasn't asked: this server has used up today's explorer reads for chains other than Arc."
+Such a report isn't degraded, so it is kept 5 minutes. To change the budget, set `INSPECT_EXPLORER_DAILY_BUDGET` (a
+plain runtime value, a whole number from 0 to 1,000,000) in `apps/web/apphosting.yaml`; anything else is ignored and the
+default applies. 0 switches these reads off: the explorer is never asked for these chains, and the reports say "The
+explorer wasn't asked: this server's explorer reads for chains other than Arc are switched off." Without
+`BLOCKSCOUT_API_KEY` the explorer is never asked for these chains, and the reports say "this server has no key for it".
+While the budget lasts, these chains' explorer reads share Arc's pace (4 a second per instance), since the PRO API's
+limit is per key, but wait in a queue of their own, behind Arc's: Arc's inspections and Revoke's lookups always get
+the next turn first (`explorerPacer` in `apps/web/src/lib/server-rpc.ts`). With Arc's 8 inspections and these chains'
+4 all reading the explorer at once, Arc's 48 reads take about 12 seconds, as with Arc alone, plus at most a second for
+turns already given out to these chains; these chains' 24 come after them, about 18 seconds in all, past the 15-second
+deadline, so their inspections last in line answer "busy". Once the day's budget is spent, these chains add nothing to
+the queue.
+
+**What it costs.** Alchemy prices requests in compute units (CU): 26 for an `eth_call`, 20 for `eth_getCode`,
+`eth_getStorageAt` or `eth_gasPrice`, 10 for `eth_blockNumber` (its pricing page, 2026-11-27). An uncached inspection
+comes to about 1,000 to 1,800 CU. The free plan's 30 million CU a month covers about 20,000 uncached inspections. Past
+that, pay as you go is $0.52 per million CU, about $0.80 per 1,000 inspections: 1,000 uncached inspections a day is
+about 45 million CU a month, under $25 at that rate even with no free allowance, and 3,000 a day about $70. The free
+plan also caps throughput (300 CU a second on the same page; pay as you go, 10,000), about one uncached inspection every
+3 to 6 seconds when sustained. Past a cap Alchemy answers 429, which the server takes as the endpoint failing: that instance reads the
+chain's public RPC for the next minute. With the key used for the measurements, a burst of 120 parallel `eth_call`s on Base
+all went through. Sourcify is free and needs no key. The explorer calls come out of the Blockscout plan, within the
+budget above.
+
+**At once.** Each instance runs at most 4 uncached inspections of these chains at a time, the four chains together, in
+a gate of their own (`apps/web/src/lib/inspect-server.ts`); the next one answers "busy". Arc keeps its own 8, as before
+there were other chains, so a few clients walking uncached pages of these chains, 30 a minute each, fill only theirs and
+never take one of Arc's slots. Their explorer reads share Arc's pace but wait behind Arc's (above).
+
+**Signs to watch.** The provider's dashboard (requests and CU by chain) for cost. In Logs Explorer on the `arcos`
+service, the same lines as Arc's with the chain's slug before the error's name: `inspect failed base TypeError`, and
+likewise `badge inspect failed`, `proof page inspect failed` and `og inspect failed`. A busy instance or a timeout
+(`InspectorBusy`, `InspectionTimeout`) isn't logged; the route answers 503, or the page says it is busy. Nothing logs
+the budget: a report whose holders read "The explorer wasn't asked: this server has used up today's explorer reads"
+says it is spent.
 
 ## Deploying
 
@@ -840,7 +919,8 @@ minute), a steady-state run makes:
 The first run's 24-hour backfill reads and writes about 6,000 documents once. Firestore single-region prices are about
 half of the multi-region $0.06 per 100,000 reads and $0.18 per 100,000 writes, so the indexer's Firestore use is about
 $2 a month. The explorer budget covers about 500 inspections a day; at about 2,900 new tokens a day, most reports
-are made on RPC only and marked `degraded` unless the budget grows.
+are made on RPC only and marked `degraded` unless the budget grows. The Inspector's reads of other chains are the
+site's, not the indexer's: their cost is under "The Inspector's other chains", above.
 
 ## Tests
 

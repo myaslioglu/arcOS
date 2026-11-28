@@ -208,4 +208,60 @@ test.describe("server-built routes", () => {
     expect(response.headers()["content-type"]).toMatch(/^image\/svg\+xml\b/);
     expect(await response.text()).toMatch(/<svg[\s>]/); // an XML prolog may come first
   });
+
+  test("/t/<USDC> names a social card that answers a PNG", async ({ page, request }) => {
+    await page.goto(`/t/${USDC}`);
+    const card = await page.locator('meta[property="og:image"]').getAttribute("content");
+    expect(card).toBeTruthy();
+    const response = await request.get(new URL(card!).pathname + new URL(card!).search);
+    expect(response.status()).toBe(200);
+    expect(response.headers()["content-type"]).toBe("image/png");
+  });
+});
+
+// The chain form of the routes, /<route>/<chain>/<address>. Arc's slug there is sent to the bare address for good. Every
+// other chain answers only where NEXT_PUBLIC_INSPECT_CHAINS (read from the same apphosting.yaml as the build) switches it
+// on, and 404 everywhere else: the suite checks whichever this build is.
+test.describe("the chain routes", () => {
+  test.setTimeout(45_000);
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const ETHEREUM_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+  const enabled = new Set((process.env.NEXT_PUBLIC_INSPECT_CHAINS ?? "").split(",").map((s) => s.trim()));
+
+  for (const route of ["t", "badge", "api/inspect"]) {
+    test(`/${route}/arc/<USDC> redirects for good to /${route}/<USDC>`, async ({ request }) => {
+      const response = await request.get(`/${route}/arc/${USDC}`, { maxRedirects: 0 });
+      expect(response.status()).toBe(308);
+      expect(response.headers()["location"]).toBe(`/${route}/${USDC}`);
+    });
+  }
+
+  test("/t/base/<Base USDC> renders a report or the degraded view where Base is on, and 404 where it isn't", async ({ page }) => {
+    const response = await page.goto(`/t/base/${BASE_USDC}`);
+    if (!enabled.has("base")) {
+      expect(response?.status()).toBe(404);
+      return;
+    }
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText("ArcOS · proof page")).toBeVisible();
+    const report = page.getByRole("heading", { level: 1 });
+    const degraded = page.getByText(/Couldn't read the chain for this token|busy reading other tokens/);
+    await expect(report.or(degraded)).toBeVisible();
+  });
+
+  test("/badge/ethereum/<USDC> is an SVG where Ethereum is on, and 404 where it isn't", async ({ request }) => {
+    const response = await request.get(`/badge/ethereum/${ETHEREUM_USDC}`);
+    if (!enabled.has("ethereum")) {
+      expect(response.status()).toBe(404);
+      return;
+    }
+    expect(response.status()).toBe(200);
+    expect(response.headers()["content-type"]).toMatch(/^image\/svg\+xml\b/);
+  });
+
+  test("/api/inspect/<chain>/<address> answers 404 for a chain the site doesn't read", async ({ request }) => {
+    const response = await request.get(`/api/inspect/polygon/${ETHEREUM_USDC}`);
+    expect(response.status()).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not available on this network." });
+  });
 });

@@ -25,6 +25,8 @@ const simulatorAbi = parseAbi([
 ]);
 const plainAbi = parseAbi([
   "function getPool(address,address,int24) view returns (address)",
+  // A Solidly factory's: the same name, keyed by whether the pool is the stable kind.
+  "function getPool(address,address,bool) view returns (address)",
   "function balanceOf(address) view returns (uint256)",
   "function slot0() view returns (uint160, int24)",
 ]);

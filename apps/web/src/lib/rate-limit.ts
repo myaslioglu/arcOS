@@ -86,29 +86,41 @@ export function clientKey(headers: Pick<Headers, "get">, hops: number = trustedH
   return lower.includes(":") ? ipv6Prefix64(lower) : lower;
 }
 
+/** `perSecond`'s two queues: `await high()` or `await low()` before each call. */
+export type PacedTurns = { high: () => Promise<void>; low: () => Promise<void> };
+
 /**
- * Spaces calls out per process: at most `limit` start in any one-second window, in arrival order.
- * `await turn()` before each call. Unlike `rateLimiter`, nothing is refused; later calls wait.
+ * Spaces calls out per process: at most `limit` start in any one-second window, whichever queue they wait in. Each
+ * queue is first in, first out, and each turn that comes free goes to the first call waiting in `high`, or to the first
+ * in `low` when `high` is empty. A `high` call so waits only for the `high` calls before it and for the turns already
+ * given out in the last second; a `low` call waits for those too, and for every `high` call, but once nothing waits in
+ * `high` the `low` calls start at the full rate. Used through one queue alone, either one, it paces exactly as a single
+ * queue: in arrival order, `limit` a second. Unlike `rateLimiter`, nothing is refused; later calls wait.
  */
 export function perSecond(
   limit: number,
   now: () => number = Date.now,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-): () => Promise<void> {
+): PacedTurns {
   const starts: number[] = [];
-  let queue: Promise<void> = Promise.resolve();
-  return () => {
-    const turn = queue.then(async () => {
-      if (starts.length >= limit) {
-        const wait = starts[0]! + 1000 - now();
-        if (wait > 0) await sleep(wait);
-        starts.shift();
-      }
-      starts.push(now());
-    });
-    queue = turn;
-    return turn;
+  const waiting: Record<keyof PacedTurns, (() => void)[]> = { high: [], low: [] };
+  // One step per call, each giving out one turn, in order: a step waits for the window, then serves `high` first.
+  let steps: Promise<void> = Promise.resolve();
+  const step = async () => {
+    if (starts.length >= limit) {
+      const wait = starts[0]! + 1000 - now();
+      if (wait > 0) await sleep(wait);
+      starts.shift();
+    }
+    starts.push(now());
+    (waiting.high.shift() ?? waiting.low.shift())!();
   };
+  const turn = (queue: keyof PacedTurns) => (): Promise<void> => {
+    const mine = new Promise<void>((resolve) => waiting[queue].push(resolve));
+    steps = steps.then(step);
+    return mine;
+  };
+  return { high: turn("high"), low: turn("low") };
 }
 
 /**

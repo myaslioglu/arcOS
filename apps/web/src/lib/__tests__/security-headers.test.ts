@@ -115,6 +115,14 @@ describe("reportOnlyPolicy", () => {
     }
   });
 
+  // Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet on the server only (/api/inspect/<chain>/<address>), so the
+  // page never calls the RPC provider, those chains' Blockscout APIs or Sourcify, and the policy names none of them. (Their
+  // public RPCs are in it already, for App Kit's Swap and Bridge.)
+  it("names no host the Inspector reads only from the server for chains other than Arc", () => {
+    const connect = d["connect-src"]!.join(" ");
+    for (const host of ["alchemy.com", "blockscout.com", "sourcify.dev"]) expect(connect, host).not.toContain(host);
+  });
+
   it("lets the browser read the explorers' APIs, which Finder and Inspector call from the page", () => {
     const connect = d["connect-src"]!;
     expect(connect).toContain("https://explorer.arc.io");

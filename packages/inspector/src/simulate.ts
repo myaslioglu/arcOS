@@ -75,7 +75,10 @@ export const MAX_TEST_AMOUNT = 10_000_000n;
  */
 export const MIN_TEST_AMOUNT = 10_000n;
 
-/** The kinds TradeSimulator swaps through: a v2 pair, a v3-style pool (Uniswap v3 and Aerodrome Slipstream), v4's PoolManager. */
+/**
+ * The kinds TradeSimulator swaps through: a v2 pair, a v3-style pool (Uniswap v3 and Slipstream), v4's PoolManager. The
+ * classic Solidly pools aren't among them: they are found, never traded (`Pool.tradable` is false for them).
+ */
 const KIND = { v2: 0, v3: 1, aero: 1, v4: 2 } as const;
 
 /** TradeSimulator's statuses. */
@@ -194,7 +197,7 @@ export const unitBuyLimit = (depth: bigint): bigint => {
  * liquidity raises its balance, so every liquid pool is measured, not only the deepest (`simulateTrade`).
  */
 export function tradePools(scan: PoolScan, token: Address, setup: TradeSetup): Pool[] {
-  const usable = scan.pools.filter((p) => usdcOf(p, token, setup) !== null && p.tradable !== false);
+  const usable = scan.pools.filter((p) => p.version !== "solidly" && usdcOf(p, token, setup) !== null && p.tradable !== false);
   return [...byDepth(usable.filter((p) => !hooked(p))), ...byDepth(usable.filter(hooked))];
 }
 
@@ -255,6 +258,8 @@ export function fallbackPool(scan: PoolScan, token: Address, setup: TradeSetup, 
       (p) =>
         p !== refused &&
         !exclude.includes(p) &&
+        p.tradable !== false &&
+        p.version !== "solidly" &&
         usdcOf(p, token, setup) !== null &&
         !poolCanRefuseSell(p) &&
         p.liquid === true &&
@@ -440,8 +445,10 @@ const fromSixDecimals = (units: bigint, decimals: number): bigint =>
  *   `maxAmount` in the token's own decimals, is written into the `balanceOf` mapping at keccak256(abi.encode(S, slot)). That
  *   is where Solidity keeps a mapping's entry; Vyper hashes the slot and the key the other way round, so a Vyper token needs
  *   another formula. The call pays the node's price and a quarter, so a node that holds it against the block's base fee
- *   (EIP-1559) doesn't refuse the call as underpriced. No chain in the registry funds this way yet: this path is only tested
- *   against a fake chain, and a chain that names a slot needs a live check that `balanceOf(S)` reads it under the override.
+ *   (EIP-1559) doesn't refuse the call as underpriced: on Arbitrum One, eth_gasPrice answered 20,000,000 wei while the
+ *   latest block's base fee was 20,020,000 (2026-11-27). USDC funds this way on Ethereum, Base, Arbitrum One and OP
+ *   Mainnet, at slot 9; the live suite checks that `balanceOf(S)` reads it under the override on each
+ *   (live/chains.live.test.ts).
  */
 function funding(setup: TradeSetup, simulator: Address, maxAmount: bigint, gasPrice: bigint): { gasPrice: bigint; simulator: StateOverride; token: StateOverride[] } {
   const code = tradeSimulatorRuntime;
@@ -467,11 +474,13 @@ async function roundTrip(reader: ChainReader, token: Address, setup: TradeSetup,
   const limit = unitBuyLimit(pool.depth);
   const maxAmount = pool.version === "v2" || limit < amount ? amount : limit;
   const usdc = usdcOf(pool, token, setup)!;
+  // `tradePools` and `fallbackPool` never hand a classic pool to a round trip: the simulator has no swap path for one.
+  if (pool.version === "solidly") throw new Error("the trade simulation doesn't swap through a Solidly pool");
   // A v4 pool against the native currency is paid in the native currency's decimals; everything else in the token's own.
   const decimals = setup.funding.kind === "native" && lower(usdc) === lower(setup.funding.address) ? setup.funding.decimals : setup.decimals;
   const { simulator, router } = simulatorAddresses();
   const trade = {
-    kind: KIND[pool.version],
+    kind: KIND[pool.version as keyof typeof KIND],
     pool: pool.address,
     token,
     usdc,

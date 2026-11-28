@@ -855,6 +855,20 @@ describe("inspect", () => {
     expect(find(r, "proxy").detail).toMatch(/delegate/i);
   });
 
+  it("never scans an EIP-7702 delegated account behind a proxy or a clone as EVM, on Arc as on every chain", async () => {
+    // Scanned as EVM, the 0x44 bytes of the address the delegation names would read as PREVRANDAO.
+    const DELEGATED = `0xef0100${"44".repeat(20)}`;
+    const LOGIC = "This contract runs the code of an EIP-7702 delegated account, whose key can point it at other code at any time, so its logic can't be read.";
+    const proxied = await run({ code: { [TOKEN]: PLAIN, [IMPL]: DELEGATED }, storage: { [`${TOKEN}:${IMPL_SLOT}`]: slotWith(IMPL) } });
+    expect(find(proxied, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+    for (const id of ["privileges", "prevrandao"] as const) expect(find(proxied, id), id).toMatchObject({ status: "unknown", title: "Couldn't read the contract's logic", detail: LOGIC });
+    // The account's key picks the code that runs, so no one contract's verified source describes it.
+    expect(find(proxied, "verified")).toMatchObject({ status: "unknown", detail: expect.stringContaining("forwards its calls to code that couldn't be identified") });
+    const cloned = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: DELEGATED } });
+    expect(find(cloned, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check if this clone is upgradeable" });
+    expect(find(cloned, "prevrandao")).toMatchObject({ status: "unknown", detail: LOGIC });
+  });
+
   it("says unknown, not 'not upgradeable', when a clone target's EIP-1967 slots can't be read", async () => {
     const r = await run({ code: { [TOKEN]: cloneOf(IMPL), [IMPL]: PLAIN }, storageError: new Error("ETIMEDOUT") });
     expect(find(r, "proxy")).toMatchObject({ status: "unknown", title: "Couldn't check if this clone is upgradeable" });

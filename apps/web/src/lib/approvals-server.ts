@@ -52,7 +52,8 @@ export function cachedApprovals(owner: Address): Promise<ApprovalsAnswer> {
   return cache.get(owner.toLowerCase(), () =>
     gate.run(() => {
       const controller = new AbortController();
-      const fetchFn = explorerFetch(explorerPacer(), controller.signal);
+      // Revoke reads Arc, so its requests wait in the pacer's first queue, with Arc's inspections.
+      const fetchFn = explorerFetch(explorerPacer().high, controller.signal);
       const client = approvalsRpcClient();
       return withDeadline(
         loadApprovals(owner, {

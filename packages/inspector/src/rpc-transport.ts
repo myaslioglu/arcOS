@@ -17,8 +17,16 @@ export type EndpointHealth = { coolingUntil: Map<string, number>; failedAt: Map<
 export const endpointHealth = (): EndpointHealth => ({ coolingUntil: new Map(), failedAt: new Map(), seq: 0 });
 
 export type RpcTransportOptions = {
-  /** One endpoint's transport. Default: viem's HTTP transport, one attempt of at most 3 s, no retry of its own. */
+  /**
+   * One endpoint's transport. Default: viem's HTTP transport, one attempt of at most 3 s, no retry of its own, sending the
+   * headers `headers` gives for the URL.
+   */
   connect?: (url: string) => Transport;
+  /**
+   * Request headers for an endpoint, by its URL: how a keyed provider gets its key without the key being part of the URL
+   * (which viem writes into the message of every error it makes for a request). Read by the default `connect` only.
+   */
+  headers?: (url: string) => Record<string, string> | undefined;
   /** The clock the cooldowns are kept against. */
   now?: () => number;
   /** The cooldowns, shared by every transport given the same one. Default: this transport's own. */
@@ -57,7 +65,11 @@ export type RpcTransportOptions = {
 export function rpcTransport(
   chain: Chain,
   {
-    connect = (url) => http(url, { timeout: ATTEMPT_MS, retryCount: 0 }),
+    headers,
+    connect = (url) => {
+      const own = headers?.(url);
+      return http(url, { timeout: ATTEMPT_MS, retryCount: 0, ...(own ? { fetchOptions: { headers: own } } : {}) });
+    },
     now = () => Date.now(),
     health = endpointHealth(),
     isNodeAnswer: extraIsNodeAnswer,

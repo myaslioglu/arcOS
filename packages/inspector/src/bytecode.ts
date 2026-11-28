@@ -51,3 +51,17 @@ export function minimalProxyTarget(code: string): Hex | null {
   const m = EIP1167.exec(code);
   return m ? (`0x${m[1]!.toLowerCase()}` as Hex) : null;
 }
+
+/** EIP-7702's delegation designator: 0xef0100 and the 20-byte address whose code the account runs, nothing else. */
+const EIP7702 = /^0xef0100[0-9a-f]{40}$/i;
+/** Arbitrum Stylus marks a WebAssembly program's code with this prefix. */
+const STYLUS = /^0xeff000/i;
+
+/**
+ * Code that isn't EVM bytecode to scan: an EIP-7702 delegated account (`eip7702`: an account whose key points it at
+ * another contract's code, and can point it elsewhere at any time) or an Arbitrum Stylus program (`stylus`: WebAssembly).
+ * Neither has a dispatcher or opcodes this engine reads. `null` for anything else.
+ */
+export function opaqueCode(code: string): "eip7702" | "stylus" | null {
+  return EIP7702.test(code) ? "eip7702" : STYLUS.test(code) ? "stylus" : null;
+}

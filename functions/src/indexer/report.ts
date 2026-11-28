@@ -32,5 +32,7 @@ export function bestPoolOf(scan: PoolScan | null): TokenDoc["bestPool"] | undefi
   if (scan === null) return undefined;
   if (scan.pools.length === 0) return null;
   const pool = bestPool(scan.pools);
+  // The classic Solidly pools are read on Base and OP Mainnet only, and the index is Arc's: its docs have no such kind.
+  if (pool.version === "solidly") return undefined;
   return { id: (pool.poolId ?? pool.address).toLowerCase(), version: pool.version, depthUsdc: pool.depth.toString() };
 }

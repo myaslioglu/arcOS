@@ -2,7 +2,12 @@
  * Check rules — when each answers "unknown" (a failed or missing read is never silently a "pass"):
  * - verified: the explorer didn't answer, or it answered without a record of this address (a 404)
  *   or without the field — only an explicit `is_verified: false` is the `fail`, since that finding
- *   tells a reader the deployer never published the source.
+ *   tells a reader the deployer never published the source. Where the chain asks Sourcify too (every
+ *   chain but Arc), a match there is as good as the explorer's "verified", and "not verified" needs
+ *   both: the explorer's explicit `false` and no match on Sourcify. Even that is a `fail` only where
+ *   the chain allows one (`unverifiedFails`, Arc alone): elsewhere Etherscan, which isn't read, may
+ *   hold the source, so it is unknown, whether Sourcify was asked or not. See
+ *   `checkVerifiedWithSourcify`.
  * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next
  *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
  *   whether anyone controls it can't be told either way; or there's no owner function but the
@@ -13,7 +18,8 @@
  *   renounced Ownable leaves the roles untouched, so it's reported as role-based admin (a warn).
  * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone, or an
  *   EIP-1967 or ZeppelinOS-style proxy, whose implementation is unreachable, points at empty code,
- *   is itself a proxy, or can't be picked out because its slots name two candidates); or
+ *   is itself a proxy, can't be picked out because its slots name two candidates, or isn't EVM
+ *   bytecode: an EIP-7702 delegated account or an Arbitrum Stylus program); or
  *   privileged functions were found but the owner is unknown, or there's no owner function at all
  *   (can't tell if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's
  *   bytecode and ABI, never on its own trampoline, which has no dispatcher and so would look
@@ -28,7 +34,9 @@
  *   upgradeable proxy is a fail ("Clone of an upgradeable proxy"), not a pass; a clone whose
  *   target's own proxy slots couldn't be read is unknown, because an unread slot is not an unset
  *   one; code that delegates calls (DELEGATECALL) but resolves to no known clone target or proxy
- *   slot is unknown, not "not a proxy".
+ *   slot is unknown, not "not a proxy"; so is a clone of an EIP-7702 delegated account (its key can
+ *   point it at other code) or of an Arbitrum Stylus program (its code can't be scanned for a
+ *   DELEGATECALL), never "not upgradeable".
  * - holders: the explorer didn't answer, total supply is unknown, or the holder list came back
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
@@ -37,22 +45,32 @@
  *   the explorer confirms neither (through `next_page_params` nor through its own holders-count)
  *   that they are every holder there is, since a share added up from an unknown fraction of the
  *   holders is a floor, not a concentration figure — a floor can still be a warn or a fail, but
- *   never a pass.
+ *   never a pass. On a chain with pools discovery can't see (`unscanned`), such a pool is counted
+ *   as a holder (a hooked v4 pool never is: its tokens are the PoolManager's, which is left out),
+ *   so over half is a fail there only when the holders with no code (no pool is one) hold over
+ *   half on their own; otherwise it is a warn that says so, naming the kinds of pool it may be.
  * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
  *   or every pool contract reverted (an address with no contract code does that, and inside a
  *   multicall answers 0x), which is never reported as "no pool found" — that would be a claim about
  *   pools made from a call that failed. The same goes for one family (Uniswap v2 and v3, Uniswap v4,
  *   Aerodrome) that never answered while another did: a liquid pool found elsewhere still passes, but
  *   "no pool" and "thin" wait for it. A v4 pool is liquid when a V4Quoter quote for 1,000 USDC out
- *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing.
+ *   succeeds; the "in range" figure shown with it (see `quoteInRange`) decides nothing. A pool against
+ *   a currency with no dollar rate yet (WETH, native ETH: `usd: "unpriced"`) is never liquid or thin,
+ *   only found ("unpriced"), and the finding is unknown unless another pool is liquid. On a chain with
+ *   pools discovery can't see (`unscanned`: off Arc, hooked v4 pools and other DEXes), "no pool" and
+ *   "thin" are unknown, naming them; a liquid pool still passes.
  * - lp-lock is the check from before the position index (`lpLockWithoutIndex`), and that check alone decides every
  *   pass and every unknown. Only Uniswap v2 has LP tokens to count. Unknown when no DEX is configured, pool discovery
  *   failed, the pool contracts never answered (or a family didn't and no pool was found), only pools other than
  *   Uniswap v2 exist, a pool of another kind may hold more than a burned pair, the v2 pair's LP totalSupply is zero
  *   (no evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain whose lock
- *   contracts aren't vetted (`lockersVetted`), where the rest may sit in one. One thing it doesn't see, as before: a
- *   wallet's token-only range in a Uniswap v3 or Aerodrome pool beside a burned v2 pair holds no quote, so the pair
- *   still passes.
+ *   contracts aren't vetted (`lockersVetted`), where the rest may sit in one. A pool or pair whose depth can't be set
+ *   against the judged pair's (one is against a currency with no dollar rate yet, WETH) may be the deeper one: unknown
+ *   too, as are v2 pairs against both kinds of quote, since which holds the most can't be told. So is a burned pair,
+ *   however deep, on a chain with pools discovery can't see (`unscanned`: every chain but Arc), since one of those may
+ *   hold more: there lp-lock never passes. One thing it doesn't see, as before: a wallet's token-only range in a Uniswap
+ *   v3 or Aerodrome pool beside a burned v2 pair holds no quote, so the pair still passes.
  * - lp-lock with the position index adds WARNINGS for Uniswap v4 liquidity, and nothing else: never a pass, never a
  *   fail (`tallyLiquidity`, lp-path.ts, `lpLockByPath`). Every pass, every fail and every unknown is the old check's,
  *   and so are its words, but for one thing. Three of its unknowns say positions "can't be read without an index yet"
@@ -160,13 +178,14 @@
  * running NOW and stand unchanged.
  */
 import { parseAbi } from "viem";
-import { BURN_ADDRESSES, type Address, type DexConfig } from "@arcos/chain";
+import { BURN_ADDRESSES, UNSCANNED_V4, type Address, type DexConfig, type DexQuote } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { ContractInfo, HolderPage } from "./explorer";
 import { CallReverted, type ChainReader, type Finding, type InspectInput, type Pool, type PoolKey, type PoolScan, type PoolVersion } from "./types";
 import { multicall, type BatchCall, type BatchResult } from "./multicall";
 import { MAX_EXTRA_POOLS, readV4Pools, toSixDecimals, type V4Quote } from "./v4";
+import { sourcifyPageUrl } from "./sourcify";
 import {
   MAX_POSITIONS, MAX_POSITIONS_PER_POOL, ReadsTimedOut, TAIL_MAX_BLOCKS, beforeDeadline, classifyHolder, hookCanChangeRemoval, readHolderCode,
   readV4Positions, v2TokenSqrtPrice, type PoolGap, type V4PoolRef,
@@ -188,6 +207,8 @@ const v2PairAbi = parseAbi(["function token0() view returns (address)", "functio
 const v3FactoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
 /** Slipstream's factory keys a pool by tick spacing (an int24), where Uniswap v3's takes a fee. */
 const aeroFactoryAbi = parseAbi(["function getPool(address,address,int24) view returns (address)"]);
+/** A Solidly factory (Aerodrome's and Velodrome's classic pools) keys a pool by whether it is the stable kind. */
+const solidlyFactoryAbi = parseAbi(["function getPool(address,address,bool) view returns (address)"]);
 
 const FORWARDS_TO_UNIDENTIFIED_TITLE = "Forwards calls to unidentified code";
 const FORWARDS_TO_UNIDENTIFIED_DETAIL =
@@ -197,15 +218,19 @@ const FORWARDS_TO_UNIDENTIFIED_DETAIL =
  * Why the engine has no logic code to score. A proxy's own bytecode is a trampoline with no
  * function dispatcher, so scoring it would read "nothing privileged here" off the proxy instead of
  * off the code that actually runs — every one of these is `unknown`, never a pass. `null` means the
- * logic code WAS read.
+ * logic code WAS read. The last two are logic that was found but isn't EVM bytecode (`opaqueCode`):
+ * an EIP-7702 delegated account or an Arbitrum Stylus program behind a proxy or a clone, never
+ * scanned as EVM.
  */
-export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous";
+export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous" | "logic-eip7702" | "logic-stylus";
 
 const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
   "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
   "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
   "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
   "logic-ambiguous": { title: "Couldn't read the contract's logic", detail: "This proxy's slots name two different places its logic could live — both of EIP-1967's slots, or an EIP-1967 slot and the ZeppelinOS one — and only its own bytecode decides which it runs, so which code to read can't be told." },
+  "logic-eip7702": { title: "Couldn't read the contract's logic", detail: "This contract runs the code of an EIP-7702 delegated account, whose key can point it at other code at any time, so its logic can't be read." },
+  "logic-stylus": { title: "Couldn't read the contract's logic", detail: "This contract runs an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read." },
 };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -419,7 +444,27 @@ export async function beaconImplementation(reader: ChainReader, beacon: Address 
 /** Distinguishes "the factory reverted" from "the factory answered the zero address". */
 const REVERTED = Symbol("factory call reverted");
 
-const VENUE: Record<PoolVersion, string> = { v2: "Uniswap v2", v3: "Uniswap v3", v4: "Uniswap v4", aero: "Aerodrome" };
+/** Uniswap's versions, by name. */
+const UNISWAP = { v2: "Uniswap v2", v3: "Uniswap v3", v4: "Uniswap v4" } as const;
+
+/**
+ * What findings call each kind of pool: Uniswap's by version, and Slipstream and the classic pools by the name the chain's
+ * config gives them ("Aerodrome" on Arc, "Velodrome Slipstream" on OP Mainnet).
+ */
+export type VenueNames = Record<PoolVersion, string>;
+export const venueNames = (dex: DexConfig | null): VenueNames => ({ ...UNISWAP, aero: dex?.aero?.name ?? "Aerodrome", solidly: dex?.solidly?.name ?? "Solidly" });
+
+/** "an" before a name said with a vowel ("an Aerodrome pool"), "a" before the rest ("a Uniswap v3 pool"). */
+const article = (name: string): string => (/^[aeio]/i.test(name) ? "an" : "a");
+
+/** A quote token's decimals (6 unless the config says), and whether its units are dollars (`usd` "stable", the default). */
+const quoteFacts = (quote: DexQuote): { decimals: number; priced: boolean } => ({ decimals: quote.decimals ?? 6, priced: (quote.usd ?? "stable") === "stable" });
+
+/** A pool whose depth is in dollars: one against a quote with no rate yet is `undecided: "unpriced"`. */
+const priced = (pool: Pool): boolean => pool.undecided !== "unpriced";
+
+/** Two pools' depths mean the same thing: both in dollars, or both in the same unpriced currency. */
+const comparable = (a: Pool, b: Pool): boolean => (priced(a) && priced(b)) || (!priced(a) && !priced(b) && a.quote === b.quote);
 
 /** "a", "a and b", "a, b and c" (or "or"). */
 const listWith = (word: "and" | "or", items: readonly string[]): string =>
@@ -436,23 +481,31 @@ const uniswapVersions = (dex: DexConfig): ("v2" | "v3" | "v4")[] => [
 const uniswapV2V3Name = (dex: DexConfig): string => `Uniswap ${listWith("and", [dex.v2Factory && "v2", dex.v3Factory && "v3"].filter((v): v is string => Boolean(v)))}`;
 
 /**
- * What can be quoted against on v4: the config's quote tokens (6 decimals, USDC and EURC) and the chain's native currency
- * (`input.nativeQuote`, currency `address(0)`), when it has one: on Arc, native USDC with 18 decimals. A token is never its
- * own quote, and the native currency and its ERC-20 view (`nativeQuote.erc20View`, Arc's USDC at 0x3600) are one asset, so
- * inspecting that ERC-20 leaves out both forms of it.
+ * What can be quoted against on v4: the config's quote tokens (on Arc USDC and EURC, 6 decimals) and the chain's native
+ * currency (`input.nativeQuote`, currency `address(0)`), when it has one: on Arc, native USDC with 18 decimals. A token is
+ * never its own quote, and the native currency and its ERC-20 view (`nativeQuote.erc20View`, Arc's USDC at 0x3600) are one
+ * asset, so inspecting that ERC-20 leaves out both forms of it. A quote with no dollar rate (WETH, native ETH) is marked
+ * `unpriced`: its pools are found, never quoted.
  */
 function v4Quotes(input: Pick<InspectInput, "address" | "nativeQuote">, dex: DexConfig): V4Quote[] {
   const token = lower(input.address);
-  const quotes = dex.quoteTokens.filter((q) => lower(q.address) !== token).map((q) => ({ ...q, decimals: 6 }));
+  const quotes = dex.quoteTokens
+    .filter((q) => lower(q.address) !== token)
+    .map((q): V4Quote => {
+      const { decimals, priced: isPriced } = quoteFacts(q);
+      return { address: q.address, symbol: q.symbol, decimals, ...(isPriced ? {} : { unpriced: true }) };
+    });
   const native = input.nativeQuote;
   const isNative = native !== null && (lower(native.address) === token || (native.erc20View !== null && lower(native.erc20View) === token));
-  return native && !isNative ? [...quotes, { address: native.address, symbol: native.symbol, decimals: native.decimals }] : quotes;
+  if (!native || isNative) return quotes;
+  return [...quotes, { address: native.address, symbol: native.symbol, decimals: native.decimals, ...(native.usd === "stable" ? {} : { unpriced: true }) }];
 }
 
 /** Rejects if any call fails at the transport level — the caller decides what "pools unknown" means. */
 export async function findPools(input: InspectInput): Promise<PoolScan> {
   const { dex, reader, address } = input;
   if (!dex) return { pools: [], factoriesAnswered: false, silent: [] };
+  const names = venueNames(dex);
   let uniswapAnswered = false;
   const askFactory = async (factory: Address, abi: typeof v2FactoryAbi | typeof v3FactoryAbi, fn: string, args: unknown[]): Promise<unknown> => {
     const answer = await catchReverted<unknown>(reader.read(factory, abi, fn, args), REVERTED);
@@ -473,23 +526,30 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     const [r0, r1] = [BigInt(reserves[0]), BigInt(reserves[1])];
     return lower(token0) === lower(quote) ? { quote: r0, token: r1 } : { quote: r1, token: r0 };
   };
-  const add = async (pool: unknown, version: PoolVersion, quote: { address: Address; symbol: string }, fee?: number): Promise<Pool | null> => {
+  // Depth is in 6 decimals of the quote: dollars for a stable quote. A quote with no dollar rate (WETH) can't say whether
+  // a pool holds 1,000 USD, so its pools are undecided ("unpriced"), their depth kept in the quote's own units.
+  const add = async (pool: unknown, version: PoolVersion, quote: DexQuote, fee?: number): Promise<Pool | null> => {
     if (typeof pool !== "string" || lower(pool) === ZERO) return null;
+    const { decimals, priced: isPriced } = quoteFacts(quote);
     if (version === "v2") {
       const reserves = await v2Reserves(pool as Address, quote.address);
-      const depth = reserves.quote;
+      const depth = toSixDecimals(reserves.quote, decimals);
       // Only a pair with no tokens at all (USDC `sync`ed in) is left out of the trade check. One that holds tokens but quotes
       // nothing for the test amount is still traded against, and its buy reverting caps the finding (see `checkTrade`).
       const tradable = reserves.token > 0n;
+      if (!isPriced) return { address: pool as Address, version, quote: quote.symbol, depth, liquid: null, undecided: "unpriced", tradable, tokenReserve: reserves.token };
       const liquid = depth >= MIN_DEPTH && tradable && v2Out(testAmountFor(depth), depth, reserves.token) > 0n;
       return { address: pool as Address, version, quote: quote.symbol, depth, liquid, tradable, tokenReserve: reserves.token };
     }
-    const depth = await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n);
-    return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...(fee === undefined ? {} : { fee }) };
+    const depth = toSixDecimals(await catchReverted(reader.read(quote.address, erc20Abi, "balanceOf", [pool]) as Promise<bigint>, 0n), decimals);
+    // The classic pools are found and counted, never traded: the simulator has no swap path for them yet.
+    const kind = { ...(fee === undefined ? {} : { fee }), ...(version === "solidly" ? { tradable: false } : {}) };
+    if (!isPriced) return { address: pool as Address, version, quote: quote.symbol, depth, liquid: null, undecided: "unpriced", ...kind };
+    return { address: pool as Address, version, quote: quote.symbol, depth, liquid: depth >= MIN_DEPTH, ...kind };
   };
   // Uniswap v2 and v3 exist on mainnet only, so a network's config may leave either out: nothing is asked of a factory it
   // doesn't name, and v3 without fee tiers has no pool to look for.
-  const { v2Factory, v3Factory, aero: aeroConfig } = dex;
+  const { v2Factory, v3Factory, aero: aeroConfig, solidly: solidlyConfig } = dex;
   const v3Tiers = v3Factory ? (dex.v3FeeTiers ?? []).map((fee) => ({ factory: v3Factory, fee })) : [];
   // A token is never its own quote: inspecting USDC or EURC skips that quote.
   const quotes = dex.quoteTokens.filter((quote) => lower(quote.address) !== lower(address));
@@ -508,46 +568,65 @@ export async function findPools(input: InspectInput): Promise<PoolScan> {
     ? readV4Pools({ reader, v4: dex.v4, token: address, quotes: v4Quotes(input, dex), extra: input.extraPools ?? [], quoteUnits: MIN_DEPTH / 1_000_000n })
     : null;
 
-  // Aerodrome Slipstream: the factory's `getPool` for every quote and every tick spacing the config lists, in one multicall
-  // (12 questions would otherwise be 12 parallel requests), then the quote balance of each pool that exists, as for v3.
-  const aeroAsks = aeroConfig
-    ? quotes.flatMap((quote) =>
-        aeroConfig.tickSpacings.map((spacing) => ({
-          quote,
-          call: { target: aeroConfig.clFactory, abi: aeroFactoryAbi, functionName: "getPool", args: [address, quote.address, spacing] } satisfies BatchCall,
-        })),
-      )
-    : [];
-  const aero = (async (): Promise<{ answered: boolean; pools: (Pool | null)[] }> => {
-    if (aeroAsks.length === 0) return { answered: false, pools: [] };
+  /**
+   * One family of factories asked through one multicall (12 questions would otherwise be 12 parallel requests), then the
+   * quote balance of each pool that exists, as for v3: Slipstream for every quote and every tick spacing the config lists,
+   * the classic pools for every quote, volatile and stable.
+   */
+  const batched = async (version: "aero" | "solidly", asks: { quote: DexQuote; call: BatchCall }[]): Promise<{ answered: boolean; pools: (Pool | null)[] }> => {
+    if (asks.length === 0) return { answered: false, pools: [] };
     let answers: BatchResult[];
     try {
-      answers = await multicall(reader, aeroAsks.map((ask) => ask.call));
+      answers = await multicall(reader, asks.map((ask) => ask.call));
     } catch (e) {
       if (e instanceof CallReverted) return { answered: false, pools: [] }; // the aggregate itself reverted: nothing was read
       throw e;
     }
     const pools = await Promise.all(
-      aeroAsks.map((ask, i) => {
+      asks.map((ask, i) => {
         const answer = answers[i]!;
-        return answer.ok ? add(answer.value, "aero", ask.quote) : null;
+        return answer.ok ? add(answer.value, version, ask.quote) : null;
       }),
     );
     return { answered: answers.some((a) => a.ok), pools };
-  })();
-  const [uniswapResults, v4Read, aeroRead] = await Promise.all([Promise.all(perQuote), v4, aero]);
+  };
+  const aero = batched(
+    "aero",
+    aeroConfig
+      ? quotes.flatMap((quote) =>
+          aeroConfig.tickSpacings.map((spacing) => ({
+            quote,
+            call: { target: aeroConfig.clFactory, abi: aeroFactoryAbi, functionName: "getPool", args: [address, quote.address, spacing] } satisfies BatchCall,
+          })),
+        )
+      : [],
+  );
+  const solidly = batched(
+    "solidly",
+    solidlyConfig
+      ? quotes.flatMap((quote) =>
+          [false, true].map((stable) => ({
+            quote,
+            call: { target: solidlyConfig.factory, abi: solidlyFactoryAbi, functionName: "getPool", args: [address, quote.address, stable] } satisfies BatchCall,
+          })),
+        )
+      : [],
+  );
+  const [uniswapResults, v4Read, aeroRead, solidlyRead] = await Promise.all([Promise.all(perQuote), v4, aero, solidly]);
 
   // A family whose contracts never answered says nothing about its pools. The answer that matters to a finding is whether
   // one exists, so each configured family is accounted for on its own.
   const families = [
     { name: uniswapV2V3Name(dex), configured: Boolean(v2Factory || v3Factory), answered: uniswapAnswered },
-    { name: VENUE.v4, configured: Boolean(dex.v4), answered: v4Read?.answered ?? false },
-    { name: VENUE.aero, configured: Boolean(aeroConfig), answered: aeroRead.answered },
+    { name: names.v4, configured: Boolean(dex.v4), answered: v4Read?.answered ?? false },
+    { name: names.aero, configured: Boolean(aeroConfig), answered: aeroRead.answered },
+    { name: names.solidly, configured: Boolean(solidlyConfig), answered: solidlyRead.answered },
   ];
   return {
     pools: [
       ...uniswapResults.flat().filter((p): p is Pool => p !== null),
       ...aeroRead.pools.filter((p): p is Pool => p !== null),
+      ...solidlyRead.pools.filter((p): p is Pool => p !== null),
       ...(v4Read?.pools ?? []),
     ],
     factoriesAnswered: families.some((f) => f.configured && f.answered),
@@ -571,37 +650,122 @@ const finding = (id: Finding["id"], status: Finding["status"], title: string, de
  * code, and otherwise says where the code that runs lives (`at`, `null` when the engine knows this
  * token forwards but couldn't identify where) and what the explorer has on it. A verified proxy in
  * front of unverified logic is the shape that made this matter: the reassuring line was true of 40
- * lines of forwarding code and false of everything behind it.
+ * lines of forwarding code and false of everything behind it. `why` is for code no source can vouch
+ * for though it may be identified, all of it an Arbitrum Stylus program's or behind one: "slots-unread",
+ * proxy slots that are the only sign of whether it forwards and couldn't be read; "slot-not-followed",
+ * a set proxy slot naming code this check doesn't follow; "stylus", code that is a Stylus program (`at`,
+ * or this address itself when `at` is null), which can't be scanned for a call that forwards and may
+ * keep an implementation in any storage slot, so its source never says for sure what runs.
  */
-export type LogicVerification = { at: Address | null; info: ContractInfo | null };
+export type LogicVerification = { at: Address | null; info: ContractInfo | null; why?: "slots-unread" | "slot-not-followed" | "stylus" };
+
+/** Why `checkVerified` can't vouch for the code that runs: `why`, or that the code couldn't be identified (`at` null). */
+const unvouchedLogic = (logic: LogicVerification): string =>
+  logic.why === "slots-unread"
+    ? "This address's own source is verified, but its proxy slots couldn't be read, so whether it runs code from somewhere else can't be told."
+    : logic.why === "slot-not-followed"
+      ? "This address's own source is verified, but its proxy slots name other code, which this check doesn't follow — so what it actually runs may be anything."
+      : logic.why === "stylus" && logic.at === null
+        ? "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source may not say what runs."
+        : logic.why === "stylus"
+          ? `This proxy's own source is verified, but the code it runs (${logic.at}) is an Arbitrum Stylus program, whose code can't be read, so whether that program runs its own source or forwards again can't be told.${logic.info?.verified === false ? " The explorer says that program isn't verified, either." : ""}`
+          : "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
+
+/** Where a finding about code no source vouches for links: the code it names, else this address's page. */
+const unvouchedUrl = (input: InspectInput, logic: LogicVerification, own: string): string =>
+  logic.at === null ? own : `${input.explorerBase}/address/${logic.at}?tab=contract`;
+
+/**
+ * What the second verification source (`InspectInput.verifyFallback`, Sourcify) said: about this address (`own`), and
+ * about the code it runs when that lives elsewhere (`logic`). `true` a match, `false` no match, `null` no answer (or not
+ * asked: `logic` for a contract that runs its own code).
+ */
+export type SourcifyAnswers = { own: boolean | null; logic: boolean | null };
+
+/** Why "not verified" is no fail off Arc (`unverifiedFails`): the source may be on Etherscan, which Inspector doesn't read. */
+const NOT_ON_ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
 
 export function checkVerified(
   input: InspectInput,
   contract: ContractInfo | null,
   logic: LogicVerification | null = null,
   arcosTemplate: boolean | null = null,
+  sourcify: SourcifyAnswers | null = null,
 ): Finding {
   const url = `${input.explorerBase}/address/${input.address}?tab=contract`;
+  if (sourcify) return checkVerifiedWithSourcify(input, contract, logic, sourcify, url);
   // Positive evidence from chain, not the explorer: the ArcOS TokenFactory marks only the tokens it deploys itself,
   // each from one of its fixed templates, and the templates are published with the factory's verified source. It
   // never covers code that forwards its calls, and a failed read (null) claims nothing.
   if (arcosTemplate === true && logic === null && input.arcosTokenFactory && contract?.verified !== true) {
     return finding("verified", "pass", "Source code is verified (through the ArcOS TokenFactory)", "The ArcOS TokenFactory created this token, and it can only deploy four fixed templates, whose source is part of its verified source. This address's own explorer page may still say it isn't verified.", { evidenceUrl: `${input.explorerBase}/address/${input.arcosTokenFactory}?tab=contract` });
   }
-  if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer didn't answer.", { evidenceUrl: url });
+  if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", input.explorerSkipped ?? "The explorer didn't answer.", { evidenceUrl: url });
   if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });
-  if (!contract.verified) return finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
-  if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
-  if (logic.at === null) {
-    return finding("verified", "unknown", "Couldn't check source verification", "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", { evidenceUrl: url });
+  // A "not verified" is a fail only where the chain allows one (`unverifiedFails`, Arc), with a second source or without.
+  if (!contract.verified) {
+    return input.unverifiedFails
+      ? finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url })
+      : finding("verified", "unknown", "Couldn't check source verification", `The explorer says this contract isn't verified. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: url });
   }
+  if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
+  if (logic.at === null || logic.why) return finding("verified", "unknown", "Couldn't check source verification", unvouchedLogic(logic), { evidenceUrl: unvouchedUrl(input, logic, url) });
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   if (logic.info === null || logic.info.verified === null) {
     return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
   }
-  return logic.info.verified
-    ? finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url })
-    : finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl });
+  if (logic.info.verified) return finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url });
+  return input.unverifiedFails
+    ? finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl })
+    : finding("verified", "unknown", "Couldn't check source verification", `The proxy's own source is verified, but the explorer says the implementation it runs (${logic.at}) isn't. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: logicUrl });
+}
+
+/**
+ * `checkVerified` where a second source answers as well (Sourcify, on every chain but Arc). A record is verified when
+ * either source says so: the explorer's `is_verified: true`, or Sourcify's match of the runtime code. It is "not
+ * verified" only when both said no: the explorer's explicit `false`, and no match on Sourcify. Even then it is a fail only
+ * where the chain allows one (`unverifiedFails`): elsewhere sources are verified on Etherscan above all, which Inspector
+ * doesn't read, so "neither has it" is unknown. Anything the sources couldn't answer is unknown, as on Arc. For code that
+ * forwards its calls, both this address and the code it runs must be verified for a pass, as on Arc.
+ */
+function checkVerifiedWithSourcify(input: InspectInput, contract: ContractInfo | null, logic: LogicVerification | null, sourcify: SourcifyAnswers, url: string): Finding {
+  const unknown = (detail: string, evidenceUrl = url) => finding("verified", "unknown", "Couldn't check source verification", detail, { evidenceUrl });
+  const sourcifyUrl = (address: string) => sourcifyPageUrl(input.chain.chainId, address);
+  /** Either source says verified (`true`); both say not (`false`); or it can't be told (`null`). */
+  const verdict = (explorer: boolean | null | undefined, sourcified: boolean | null): boolean | null =>
+    explorer === true || sourcified === true ? true : explorer === false && sourcified === false ? false : null;
+  /** Why a record couldn't be decided, from what each source did or didn't say. */
+  const why = (info: ContractInfo | null, sourcified: boolean | null, what: string): string => {
+    const explorerSaid =
+      info === null ? (input.explorerSkipped ?? "The explorer didn't answer.")
+      : info.verified === null ? `The explorer has no record of ${what} yet.`
+      : `The explorer says ${what} isn't verified.`;
+    const sourcifySaid = sourcified === null ? "Sourcify didn't answer." : `Sourcify has no match for ${what}.`;
+    return `${explorerSaid} ${sourcifySaid}`;
+  };
+
+  const own = verdict(contract?.verified, sourcify.own);
+  if (own === null) return unknown(why(contract, sourcify.own, "this contract"));
+  if (own === false) {
+    return input.unverifiedFails
+      ? finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url })
+      : unknown(`Not verified on Blockscout or Sourcify. ${NOT_ON_ETHERSCAN}`);
+  }
+  // Verified: link where the source can be read, the explorer's page when it has it, else Sourcify's.
+  const ownUrl = contract?.verified === true ? url : sourcifyUrl(input.address);
+  if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: ownUrl });
+  if (logic.at === null || logic.why) return unknown(unvouchedLogic(logic), unvouchedUrl(input, logic, ownUrl));
+  const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
+  const runs = verdict(logic.info?.verified, sourcify.logic);
+  if (runs === null) {
+    return unknown(`This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked. ${why(logic.info, sourcify.logic, "it")}`, logicUrl);
+  }
+  if (runs === false) {
+    return input.unverifiedFails
+      ? finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl })
+      : unknown(`The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't verified on Blockscout or Sourcify. ${NOT_ON_ETHERSCAN}`, logicUrl);
+  }
+  return finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: ownUrl });
 }
 
 /**
@@ -721,6 +885,11 @@ export type ProxyResolution = {
    * not re-pointable, but "its logic can't be replaced" is a claim about the code that ends up
    * running, and whoever controls the address behind that DELEGATECALL controls exactly that. */
   logicDelegates: boolean;
+  /** The logic this token runs from somewhere else isn't EVM bytecode (`opaqueCode`), so it was never
+   * scored: an EIP-7702 delegated account, whose key can point it at other code at any time, or an
+   * Arbitrum Stylus program, which can't be scanned for a DELEGATECALL. Read for a clone: a clone of
+   * either can't be called "not upgradeable". */
+  logicOpaque: "eip7702" | "stylus" | null;
   /** The code this token runs can be replaced: one of its own proxy slots (EIP-1967's implementation
    * or beacon slot, or ZeppelinOS's implementation slot) is set, or it is a clone of a contract
    * whose is. THE value — `checkProxy`'s upgradeability `fail` and R1's block on the logic checks
@@ -776,6 +945,12 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     if (r.logicDelegates) {
       return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
     }
+    if (r.logicOpaque === "eip7702") {
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, an EIP-7702 delegated account, whose key can point it at other code at any time.`, { evidenceUrl: targetUrl });
+    }
+    if (r.logicOpaque === "stylus") {
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, an Arbitrum Stylus program (WebAssembly), whose code this check can't read, so whether it forwards its calls elsewhere can't be told.`, { evidenceUrl: targetUrl });
+    }
     return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
   }
   if (r.forwardsToUnidentifiedCode) {
@@ -805,6 +980,8 @@ export function checkHolders(
   holdersCount: number | null,
 ): Finding {
   const url = `${input.explorerBase}/token/${input.address}?tab=holders`;
+  // The explorer left out on purpose says why (`InspectInput.explorerSkipped`), rather than that it didn't answer.
+  if (page === null && input.explorerSkipped) return finding("holders", "unknown", "Couldn't check holder concentration", input.explorerSkipped, { evidenceUrl: url });
   if (page === null || !totalSupply) return finding("holders", "unknown", "Couldn't check holder concentration", "The explorer didn't answer, or total supply is unknown.", { evidenceUrl: url });
   const holders = page.holders;
   // totalSupply > 0 (just checked above) guarantees at least one holder exists, so an empty list
@@ -837,6 +1014,27 @@ export function checkHolders(
   const held = top.reduce((sum, h) => sum + h.value, 0n);
   const pct = Number((held * 10000n) / totalSupply) / 100;
   const detail = "Excludes burn addresses, liquidity pools and known lock contracts.";
+  // Where the chain has pools discovery can't see (`unscanned`: other DEXes, a second Slipstream factory), a contract in
+  // the list may be one of them, counted as a holder. That only pushes the figure up, so a pass stands. A fail needs the
+  // holders with no code, which no pool is, over half the supply on their own; short of that it is a warning saying why.
+  // A hooked v4 pool keeps its tokens in the PoolManager, left out above, so it isn't named as such a pool; but a hook
+  // with accounting of its own can keep reserves in the hook contract, which then counts as a holder like any contract.
+  const unseenPools = poolManager.length > 0 ? input.unscanned.filter((kind) => kind !== UNSCANNED_V4) : input.unscanned;
+  const hookReserves = poolManager.length > 0 && input.unscanned.includes(UNSCANNED_V4);
+  const noCode = Number((top.filter((h) => !h.isContract).reduce((sum, h) => sum + h.value, 0n) * 10000n) / totalSupply) / 100;
+  const mayBe = [
+    ...(unseenPools.length > 0 ? ["one of those pools"] : []),
+    ...(hookReserves ? ["a Uniswap v4 hook that keeps reserves of its own"] : []),
+  ];
+  const unread = unseenPools.length > 0 ? `On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", unseenPools)}, so a contract` : "A contract";
+  const overHalf = (title: string): Finding =>
+    mayBe.length === 0 || noCode > 50
+      ? finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" })
+      : finding(
+          "holders", "warn", title,
+          `${detail} ${unread} among these holders may be ${mayBe.join(", or ")}. The ones with no code hold ${formatPct(noCode)}.`,
+          { evidenceUrl: url },
+        );
   // Excluding pools, burn addresses and the token itself can leave a full page with fewer than ten
   // wallets to add up. Calling those "all N wallets" is a claim about the whole holder list that
   // this page can't support, and the figure is a floor: more holders can only push it up. A floor
@@ -845,7 +1043,7 @@ export function checkHolders(
   if (top.length < 10 && !listComplete) {
     const who = top.length === 1 ? "The top wallet holds" : `The top ${top.length} wallets hold`;
     const title = `${who} at least ${formatPct(pct)}`;
-    if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+    if (pct > 50) return overHalf(title);
     if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
     return finding("holders", "unknown", "Couldn't check holder concentration", `Excluding pools, burn addresses and lock contracts left ${top.length} of the ${holders.length} rows the explorer sent, and it doesn't confirm those are all the holders — so ${formatPct(pct)} is a floor, not the concentration.`, { evidenceUrl: url });
   }
@@ -856,7 +1054,7 @@ export function checkHolders(
     : top.length === 0 ? "No wallet holds any of the supply"
     : top.length === 1 ? `The only wallet holds ${formatPct(pct)}`
     : `All ${top.length} wallets hold ${formatPct(pct)}`;
-  if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+  if (pct > 50) return overHalf(title);
   if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
   return finding("holders", "pass", title, detail, { evidenceUrl: url });
 }
@@ -864,27 +1062,52 @@ export function checkHolders(
 const FACTORIES_SILENT =
   "Every call to the configured DEX contracts reverted, so no pool was found or ruled out — an address may hold no contract on this network.";
 
-/** What was looked at, named from the config so that the finding is true of exactly the pools that were scanned. */
-function noPoolFinding(dex: DexConfig): Finding {
+/** The kinds of pool `dex` reads, by name, in the order Uniswap v2, v3, v4, Slipstream, the classic pools. */
+const scannedVenues = (dex: DexConfig): string[] => {
+  const names = venueNames(dex);
+  return [...uniswapVersions(dex).map((v) => names[v]), ...(dex.aero ? [names.aero] : []), ...(dex.solidly ? [names.solidly] : [])];
+};
+
+/**
+ * What a chain's discovery can't see (`InspectInput.unscanned`), as the sentence that keeps "no pool" and "thin" from
+ * being said there; null where it sees every kind of pool there is (Arc).
+ */
+const unscannedNote = (input: InspectInput, what: "a pool" | "a deeper pool"): string | null =>
+  input.unscanned.length > 0 ? `On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", input.unscanned)}, so ${what} there can't be ruled out.` : null;
+
+/**
+ * What was looked at, named from the config so that the finding is true of exactly the pools that were scanned. Where the
+ * chain has pools discovery can't see (`unscanned`), finding none is no claim about the token: unknown, naming them.
+ */
+function noPoolFinding(input: InspectInput, dex: DexConfig): Finding {
   const uniswap = uniswapVersions(dex);
-  const title = dex.aero
-    ? `No ${uniswap.length > 0 ? "Uniswap or Aerodrome" : "Aerodrome"} pool found`
-    : `No Uniswap ${listWith("or", uniswap)} pool found`;
-  const venues = [...uniswap.map((v) => VENUE[v]), ...(dex.aero ? [VENUE.aero] : [])];
+  const names = venueNames(dex);
+  const others = [...(dex.aero ? [names.aero] : []), ...(dex.solidly ? [names.solidly] : [])];
+  const looked = `Looked at ${listWith("and", scannedVenues(dex))} pools against ${listWith("and", dex.quoteTokens.map((q) => q.symbol))}.`;
+  const unscanned = unscannedNote(input, "a pool");
+  if (unscanned) return finding("liquidity", "unknown", "No pool found where Inspector looks", `${looked} ${unscanned}`);
+  const title =
+    others.length > 0
+      ? `No ${listWith("or", [...(uniswap.length > 0 ? ["Uniswap"] : []), ...others])} pool found`
+      : `No Uniswap ${listWith("or", uniswap)} pool found`;
   const v4Caveat = dex.v4
     ? " Uniswap v4 pools are found by their standard hookless pool keys, so one with a hook or an unusual fee can be missed until an index lists it."
     : "";
-  return finding("liquidity", "warn", title, `Looked at ${listWith("and", venues)} pools against ${listWith("and", dex.quoteTokens.map((q) => q.symbol))}.${v4Caveat}`);
+  return finding("liquidity", "warn", title, `${looked}${v4Caveat}`);
 }
 
 /** What to say while a family of pool contracts never answered; null when every one did. */
 const silentNote = (scan: PoolScan): string | null =>
   scan.silent.length > 0 ? `${listWith("and", scan.silent)} didn't answer, so a pool there can't be ruled out.` : null;
 
-/** The kinds of pool a scan found, in the order v2, v3, v4, Aerodrome. */
-const foundVersions = (pools: readonly Pool[]): PoolVersion[] => (["v2", "v3", "v4", "aero"] as const).filter((v) => pools.some((p) => p.version === v));
+/** The kinds of pool a scan found, in the order v2, v3, v4, Slipstream, the classic pools. */
+const foundVersions = (pools: readonly Pool[]): PoolVersion[] =>
+  (["v2", "v3", "v4", "aero", "solidly"] as const).filter((v) => pools.some((p) => p.version === v));
 /** The same, by name. */
-const foundVenues = (pools: readonly Pool[]): string[] => foundVersions(pools).map((v) => VENUE[v]);
+const foundVenues = (dex: DexConfig, pools: readonly Pool[]): string[] => {
+  const names = venueNames(dex);
+  return foundVersions(pools).map((v) => names[v]);
+};
 
 /** The pool a finding is about: a liquid one, then an undecided one, then one that can't pay; the deepest within each. */
 const rank = (p: Pool): number => (p.liquid === true ? 2 : p.liquid === null ? 1 : 0);
@@ -901,9 +1124,10 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
   if (scan === null) return finding("liquidity", "unknown", "Couldn't read liquidity pools", "The network didn't answer the pool lookup.");
   if (!scan.factoriesAnswered) return finding("liquidity", "unknown", "Couldn't read liquidity pools", FACTORIES_SILENT);
   const pools = scan.pools;
+  const names = venueNames(dex);
   // A family that never answered can't be ruled out, so "no pool" and "thin" wait for it. A liquid pool found elsewhere doesn't.
   const silent = silentNote(scan);
-  if (pools.length === 0) return silent ? finding("liquidity", "unknown", "Couldn't read liquidity pools", silent) : noPoolFinding(dex);
+  if (pools.length === 0) return silent ? finding("liquidity", "unknown", "Couldn't read liquidity pools", silent) : noPoolFinding(input, dex);
   const best = bestPool(pools);
   const units = wholeUnits(best.depth);
   const url = `${input.explorerBase}/address/${best.address}`;
@@ -914,27 +1138,37 @@ export function checkLiquidity(input: InspectInput, scan: PoolScan | null): Find
           `The v4 quoter can pay out ${MIN_UNITS} ${best.quote} from this pool. ${units} ${best.quote} in range at the current price; liquidity outside the current tick range isn't counted. ${pools.length} pool(s) found.`,
           { evidenceUrl: url },
         )
-      : finding("liquidity", "pass", `${units} ${best.quote} of liquidity on ${VENUE[best.version]}`, `${pools.length} pool(s) found.`, { evidenceUrl: url });
+      : finding("liquidity", "pass", `${units} ${best.quote} of liquidity on ${names[best.version]}`, `${pools.length} pool(s) found.`, { evidenceUrl: url });
   }
-  // A quote that couldn't decide is no evidence of "thin", and with nothing liquid, none of "liquid" either.
+  // A quote that couldn't decide is no evidence of "thin", and with nothing liquid, none of "liquid" either. Nor is a pool
+  // against a currency with no dollar rate yet (WETH, native ETH): what it holds may be worth anything.
   const undecided = pools.filter((p) => p.liquid === null);
   if (undecided.length > 0) {
+    const unpriced = undecided.filter((p) => p.undecided === "unpriced");
+    const unpricedQuotes = [...new Set(unpriced.map((p) => p.quote))];
     const why = [
       undecided.some((p) => p.undecided === "hook")
         ? `A Uniswap v4 pool has a hook, which can change what a swap pays, so a quote can't judge its liquidity.`
         : null,
-      undecided.some((p) => p.undecided !== "hook") ? `The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.` : null,
+      undecided.some((p) => p.undecided !== "hook" && p.undecided !== "unpriced") ? `The v4 quoter didn't answer for a Uniswap v4 pool, so it can't be called liquid or thin.` : null,
+      unpriced.length > 0 ? `Pools against ${listWith("and", unpricedQuotes)} were found, but they aren't priced yet.` : null,
       silent,
     ].filter((x): x is string => x !== null);
-    return finding("liquidity", "unknown", "Couldn't verify Uniswap v4 liquidity", why.join(" "), { evidenceUrl: `${input.explorerBase}/address/${undecided[0]!.address}` });
+    const title =
+      unpriced.length === 0 ? "Couldn't verify Uniswap v4 liquidity"
+      : unpriced.length === undecided.length ? "Couldn't price the pools found"
+      : "Couldn't verify the pools found";
+    return finding("liquidity", "unknown", title, why.join(" "), { evidenceUrl: `${input.explorerBase}/address/${undecided[0]!.address}` });
   }
   const deepest =
     best.version === "v4"
       ? `Deepest pool has ${units} ${best.quote} in range, and a ${MIN_UNITS} ${best.quote} swap can't be quoted.`
       : `Deepest pool holds ${units} ${best.quote}.`;
-  return silent
-    ? finding("liquidity", "unknown", "Couldn't read liquidity pools", `${silent} ${deepest}`, { evidenceUrl: url })
-    : finding("liquidity", "warn", "Thin liquidity", deepest, { evidenceUrl: url });
+  if (silent) return finding("liquidity", "unknown", "Couldn't read liquidity pools", `${silent} ${deepest}`, { evidenceUrl: url });
+  // Thin where Inspector looks is no claim where it doesn't.
+  const unscanned = unscannedNote(input, "a deeper pool");
+  if (unscanned) return finding("liquidity", "unknown", "Only thin pools found where Inspector looks", `${deepest} ${unscanned}`, { evidenceUrl: url });
+  return finding("liquidity", "warn", "Thin liquidity", deepest, { evidenceUrl: url });
 }
 
 /**
@@ -1007,7 +1241,8 @@ type IndexReading =
  *   stayed under the warning's lines, and why that is never a pass: a lock in a v4 pool can't be confirmed.
  */
 function unreadDetail(unread: Unread, reading: Exclude<IndexReading, { kind: "none" }>, input: InspectInput, scan: PoolScan): string {
-  const names = (versions: readonly PoolVersion[]) => listWith("and", versions.map((v) => VENUE[v]));
+  const venue = venueNames(input.dex);
+  const names = (versions: readonly PoolVersion[]) => listWith("and", versions.map((v) => venue[v]));
   let found: string;
   if (unread.kind === "only") {
     const unreadable = unread.versions.filter((v) => v !== "v4");
@@ -1018,7 +1253,7 @@ function unreadDetail(unread: Unread, reading: Exclude<IndexReading, { kind: "no
           ? `Only ${names(unread.versions)} pools were found, and Inspector doesn't read the positions in them.`
           : `Only ${names(unread.versions)} pools were found, and Inspector doesn't read the positions in the ${names(unreadable)} ones.`;
   } else if (unread.kind === "rival") {
-    found = `The deepest pool is ${unread.version === "aero" ? "an" : "a"} ${VENUE[unread.version]} pool, and Inspector doesn't read the positions in it.`;
+    found = `The deepest pool is ${article(venue[unread.version])} ${venue[unread.version]} pool, and Inspector doesn't read the positions in it.`;
   } else {
     found = "A Uniswap v4 pool that may hold more than this v2 pair sits beside it.";
   }
@@ -1035,11 +1270,16 @@ function unreadDetail(unread: Unread, reading: Exclude<IndexReading, { kind: "no
             ? [`${n === 1 ? "1 holder of this token's liquidity wasn't" : `${n.toLocaleString("en-US")} holders of this token's liquidity weren't`} classified, more than this check reads, and what ${n === 1 ? "it holds" : "they hold"} isn't counted as a wallet's.`]
             : []),
           "That isn't a pass: Inspector can't confirm a lock in a Uniswap v4 pool.",
-          // Every holder the warning counts as neither a wallet's nor burned or locked (`HolderClass`) is named in these
-          // words: holders whose code wasn't read above, v3 and Aerodrome pools in what was found, and here a contract, a
-          // wallet behind a removal hook and, where the lock contracts aren't vetted, v2 LP that isn't burned.
+          // The holders the warning counts as neither a wallet's nor burned or locked (`HolderClass`) that these words name:
+          // holders whose code wasn't read (above), and here a contract, a wallet behind a removal hook and, where the lock
+          // contracts aren't vetted and a v2 pair was found, v2 LP that isn't burned. Not every one is named: the quote in a
+          // Uniswap v3 or Aerodrome pool counts in the bids as nobody's ("venue"), and the first sentence names such a pool
+          // only when it is the deepest pool, or when only pools other than Uniswap v2 were found.
           `${input.knownLockers.length === 0 ? "It recognizes no lock contracts yet, and it counts a position held by a contract" : "It counts a position held by a contract other than a lock contract it recognizes"}, or a wallet's position in a pool whose hook runs when liquidity is removed, as neither locked nor withdrawable.`,
-          ...(input.lockersVetted ? [] : [`It counts v2 LP that isn't burned or in a known lock contract the same way, as the lock contracts on ${input.chain.name} aren't recognized yet.`]),
+          // Only where there is v2 LP to count: without a v2 pair the sentence would be about LP that isn't there.
+          ...(input.lockersVetted || !scan.pools.some((p) => p.version === "v2")
+            ? []
+            : [`It counts v2 LP that isn't burned or in a known lock contract the same way, as the lock contracts on ${input.chain.name} aren't recognized yet.`]),
         ];
       }
       case "blocked":
@@ -1424,32 +1664,51 @@ type Unread = { kind: "only"; versions: PoolVersion[] } | { kind: "rival"; versi
 
 /**
  * lp-lock without the position index: only Uniswap v2 has LP tokens to count, and a pool of another kind that may hold
- * more than the pair keeps a burned pair from passing. This is the check as it stood before the index, kept for the
- * inspections that have none (testnet, a browser that couldn't fetch it) and for a token with no v2 or v4 pool. Its
- * finding is word for word what it always said; `unread` says which positions an unknown rests on (`Unread`), null for
- * every other answer.
+ * more than the pair keeps a burned pair from passing, as do the pools a chain's discovery can't see (`unscanned`). This
+ * is the check as it stood before the index, kept for the inspections that have none (testnet, a browser that couldn't
+ * fetch it, every chain but Arc) and for a token with no v2 or v4 pool. On Arc its finding is word for word what it
+ * always said; `unread` says which positions an unknown rests on (`Unread`), null for every other answer.
  */
 async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<{ finding: Finding; unread: Unread | null }> {
+  const venue = venueNames(input.dex);
+  const unknown = (detail: string, extra: Partial<Finding> = {}) => finding("lp-lock", "unknown", "Couldn't check liquidity locks", detail, { fixAppId: null, ...extra });
   const v2 = scan.pools.filter((p) => p.version === "v2");
   if (v2.length === 0) {
     // Only v2 has LP tokens to count. Positions in v3, v4 and Aerodrome pools are NFTs or entries in the PoolManager, and
-    // reading who holds them needs an index.
+    // reading who holds them needs an index. The classic pools' LP tokens are plain ERC-20s, which Inspector doesn't read.
+    const found = foundVenues(input.dex!, scan.pools);
     const why = !scan.factoriesAnswered
       ? FACTORIES_SILENT
       : scan.pools.length === 0
         ? (silentNote(scan) ?? "No pool was found.")
-        : `Only ${listWith("and", foundVenues(scan.pools))} pools were found, and liquidity positions in them can't be read without an index yet.`;
+        : scan.pools.some((p) => p.version === "solidly")
+          ? `Only ${listWith("and", found)} pools were found, and Inspector doesn't read who holds the liquidity in them yet.`
+          : `Only ${listWith("and", found)} pools were found, and liquidity positions in them can't be read without an index yet.`;
     const unread: Unread | null = scan.factoriesAnswered && scan.pools.length > 0 ? { kind: "only", versions: foundVersions(scan.pools) } : null;
     // A "fix" button doesn't belong on something we couldn't check.
-    return { finding: finding("lp-lock", "unknown", "Couldn't check liquidity locks", why, { fixAppId: null }), unread };
+    return { finding: unknown(why), unread };
+  }
+  /** "WETH isn't", "WETH and ETH aren't": the unpriced quotes among `pools`, as the subject of "priced yet". */
+  const notPriced = (pools: readonly Pool[]) => {
+    const symbols = [...new Set(pools.filter((p) => !priced(p)).map((p) => p.quote))];
+    return `${listWith("and", symbols)} ${symbols.length === 1 ? "isn't" : "aren't"} priced yet`;
+  };
+  // Which pair holds the most is a question of dollars, so it has an answer only when every pair's depth means the same
+  // thing: a pair against a currency with no rate yet (WETH) can't be ranked beside one against USDC.
+  if (v2.some((p) => !comparable(p, v2[0]!))) {
+    const quotes = [...new Set(v2.map((p) => p.quote))];
+    return { finding: unknown(`This token has ${UNISWAP.v2} pairs against ${listWith("and", quotes)}, and ${notPriced(v2)}, so which one holds the most can't be told.`), unread: null };
   }
   const pair = v2.reduce((a, b) => (b.depth > a.depth ? b : a));
   // A pool whose positions can't be read might hold more than the pair. A v3 or Aerodrome pool is one when it is deeper; a v4
   // pool's figure is only what sits in its current range, so it can't be ranked. It is no rival only when it decisively can't
-  // pay 1,000 units and the pair can: a pair that can't pay them either may still be the shallower of the two.
-  const others = scan.pools.filter((p) => p.version !== "v2" && p.version !== "v4" && p.depth > pair.depth);
+  // pay 1,000 units and the pair can: a pair that can't pay them either may still be the shallower of the two. A pool whose
+  // depth can't be set against the pair's (one of the two is against a currency with no rate yet) may be deeper too.
+  const others = scan.pools.filter((p) => p.version !== "v2" && p.version !== "v4" && comparable(p, pair) && p.depth > pair.depth);
   const rival = others.length > 0 ? others.reduce((a, b) => (b.depth > a.depth ? b : a)) : null;
-  const v4Rival = scan.pools.some((p) => p.version === "v4" && (p.liquid !== false || pair.depth < MIN_DEPTH));
+  const unranked = scan.pools.find((p) => p.version !== "v2" && p.version !== "v4" && !comparable(p, pair)) ?? null;
+  const pairPays = priced(pair) && pair.depth >= MIN_DEPTH;
+  const v4Rival = scan.pools.some((p) => p.version === "v4" && (p.liquid !== false || !pairPays));
   const read = (fn: string, args: unknown[] = []) => input.reader.read(pair.address, erc20Abi, fn, args) as Promise<bigint>;
   const supply = await read("totalSupply");
   const url = `${input.explorerBase}/token/${pair.address}?tab=holders`;
@@ -1461,12 +1720,30 @@ async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<
   const balances = await Promise.all(safe.map((a) => catchReverted(read("balanceOf", [a]), 0n)));
   const locked = balances.reduce((s, b) => s + b, 0n);
   const pct = Number((locked * 10000n) / supply) / 100;
-  if (pct >= 95 && (rival || v4Rival)) {
+  if (pct >= 95 && (rival || unranked || v4Rival)) {
+    if (!rival && unranked) {
+      const name = venue[unranked.version];
+      return {
+        finding: unknown(`${capitalized(article(name))} ${name} pool against ${unranked.quote} sits beside this ${UNISWAP.v2} pair against ${pair.quote}, and ${notPriced([unranked, pair])}, so which holds more can't be told.`),
+        unread: null,
+      };
+    }
+    // A classic pool's LP is a plain ERC-20, not a position: what isn't read there is who holds it, as where no v2 pair is
+    // found. No index reads it either, so that unknown rests on no `Unread` positions.
+    if (rival?.version === "solidly") {
+      return { finding: unknown(`The deepest pool is ${article(venue.solidly)} ${venue.solidly} pool, and Inspector doesn't read who holds the liquidity in it yet.`), unread: null };
+    }
     const detail = rival
-      ? `The deepest pool is ${rival.version === "aero" ? "an" : "a"} ${VENUE[rival.version]} position, which can't be read without an index yet.`
+      ? `The deepest pool is ${article(venue[rival.version])} ${venue[rival.version]} position, which can't be read without an index yet.`
       : "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.";
     const unread: Unread = rival ? { kind: "rival", version: rival.version } : { kind: "v4-rival" };
-    return { finding: finding("lp-lock", "unknown", "Couldn't check liquidity locks", detail, { fixAppId: null }), unread };
+    return { finding: unknown(detail), unread };
+  }
+  // Where the chain has pools discovery can't see (`unscanned`), one of them may hold more than this pair, burned or not,
+  // however deep the pair is: "no deeper pool" is no more a claim there than "thin" is (see `checkLiquidity`).
+  const unscanned = pct >= 95 ? unscannedNote(input, "a deeper pool") : null;
+  if (unscanned) {
+    return { finding: unknown(`${formatPct(pct)} of the v2 LP supply can't be withdrawn. ${unscanned}`, { evidenceUrl: url }), unread: null };
   }
   // "Isn't locked" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
   // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
@@ -1527,21 +1804,21 @@ const SOLD_BACK_REVERTED = "selling straight back, in the same transaction and f
 const capitalized = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
 
 /** A pool as a finding names it: "Uniswap v3 0x1234…abcd", or for v4 its pool id, "hooked Uniswap v4 pool 0x1234…abcd". */
-function poolName(pool: Pool): string {
-  if (pool.version !== "v4") return `${VENUE[pool.version]} ${shortAddress(pool.address)}`;
+function poolName(pool: Pool, names: VenueNames): string {
+  if (pool.version !== "v4") return `${names[pool.version]} ${shortAddress(pool.address)}`;
   const hooks = pool.key && BigInt(pool.key.hooks) !== 0n ? "hooked" : "hookless";
-  return `${hooks} ${VENUE.v4} pool ${shortAddress(pool.poolId ?? pool.address)}`;
+  return `${hooks} ${UNISWAP.v4} pool ${shortAddress(pool.poolId ?? pool.address)}`;
 }
 
 /** The fallback pool as a finding names it: "the Uniswap v2 pair (0x1234…abcd)", "the hookless Uniswap v4 pool (0x…)". */
 const fallbackName = (pool: Pool): string =>
-  pool.version === "v2" ? `the ${VENUE.v2} pair (${shortAddress(pool.address)})` : `the hookless ${VENUE.v4} pool (${shortAddress(pool.poolId ?? pool.address)})`;
+  pool.version === "v2" ? `the ${UNISWAP.v2} pair (${shortAddress(pool.address)})` : `the hookless ${UNISWAP.v4} pool (${shortAddress(pool.poolId ?? pool.address)})`;
 
 /** Why a sell into `pool` can revert on the pool's own account (`poolCanRefuseSell`). */
-const poolRefusal = (pool: Pool): string =>
+const poolRefusal = (pool: Pool, names: VenueNames): string =>
   pool.version === "v4"
     ? "The pool's hook runs inside every swap and can refuse one the token itself would allow."
-    : `${VENUE[pool.version]} pools refuse a token that arrives short (a transfer tax), so a tax alone reverts this sell.`;
+    : `${names[pool.version]} pools refuse a token that arrives short (a transfer tax), so a tax alone reverts this sell.`;
 
 /** Why a second round trip the RPC didn't complete wasn't measured. */
 const rpcNote = (attempt: TradeAttempt): string =>
@@ -1561,18 +1838,18 @@ const rpcNote = (attempt: TradeAttempt): string =>
  * - tokens bought there that the pool would give nothing back for, so no sell was sent: undecided;
  * - a sell there that went through and brought nothing back.
  */
-function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label: string, at: { evidenceUrl: string }): Finding {
+function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label: string, at: { evidenceUrl: string }, names: VenueNames): Finding {
   const { pool } = run;
   const paid = usdcAmount(run.amount);
   if (!poolCanRefuseSell(pool)) {
-    return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${VENUE[pool.version]} went through. ${capitalized(SOLD_BACK_REVERTED)}.`, at);
+    return finding("trade", "fail", "Can't be sold", `Buying with ${paid} USDC on ${names[pool.version]} went through. ${capitalized(SOLD_BACK_REVERTED)}.`, at);
   }
-  const deepestPool = `${label} (${poolName(pool)})`;
+  const deepestPool = `${label} (${poolName(pool, names)})`;
   const warnTitle = `Can't be sold into ${label}`;
-  const first = `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool)}`;
+  const first = `Buying with ${paid} USDC from ${deepestPool} went through. ${capitalized(SOLD_BACK_REVERTED)}. ${poolRefusal(pool, names)}`;
   const second = run.second;
   const fail = (detail: string, title = "Can't be sold") => finding("trade", "fail", title, detail, at);
-  if (!second) return fail(`${first} It has no ${VENUE.v2} or hookless ${VENUE.v4} USDC pool that trades to try selling into instead.`);
+  if (!second) return fail(`${first} It has no ${UNISWAP.v2} or hookless ${UNISWAP.v4} USDC pool that trades to try selling into instead.`);
   const other = fallbackName(second.pool);
   if (buyDidNotTrade(second)) {
     const how = second.kind === "ran" && second.result.status === STATUS.buyReverted ? "reverted" : "got nothing";
@@ -1581,7 +1858,7 @@ function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label:
   if (second.kind === "no-answer" || second.kind === "call-failed" || second.kind === "timed-out") {
     return finding(
       "trade", "warn", warnTitle,
-      `Selling into ${deepestPool} reverted; a round trip on ${other} couldn't be completed (${rpcNote(second)}), so selling it elsewhere wasn't shown either way. ${poolRefusal(pool)} ${SIMULATED}`,
+      `Selling into ${deepestPool} reverted; a round trip on ${other} couldn't be completed (${rpcNote(second)}), so selling it elsewhere wasn't shown either way. ${poolRefusal(pool, names)} ${SIMULATED}`,
       at,
     );
   }
@@ -1609,7 +1886,7 @@ function sellRevertedFinding(run: Extract<TradeAttempt, { kind: "ran" }>, label:
   const back = `${usdcAmount(toSix(r.spent))} USDC came back as ${usdcAmount(toSix(r.received))}`;
   return finding(
     "trade", "warn", warnTitle,
-    `Selling into ${deepestPool} reverted; selling into ${other} went through (${back}). ${poolRefusal(pool)} ${SIMULATED}`,
+    `Selling into ${deepestPool} reverted; selling into ${other} went through (${back}). ${poolRefusal(pool, names)} ${SIMULATED}`,
     at,
   );
 }
@@ -1639,11 +1916,12 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
     return finding("trade", "unknown", TRADE_UNKNOWN, why);
   }
   const { attempts } = run;
+  const names = venueNames(input.dex);
   const many = attempts.length > 1;
   const measured = new Set<Pool>(attempts.map((a) => a.pool));
   const each = attempts.map((attempt) => {
     const f = attemptFinding(input, attempt, poolLabel(attempt.pool, scan));
-    return { attempt, f: many ? { ...f, detail: `${poolName(attempt.pool)}: ${f.detail}` } : f };
+    return { attempt, f: many ? { ...f, detail: `${poolName(attempt.pool, names)}: ${f.detail}` } : f };
   });
   // A pool that couldn't trade on its own account (the simulator found it can't serve the buy, or it paid nothing out) is
   // left out: nothing the token does brings that about, and anyone can make such a pool. Everything else counts, a buy
@@ -1652,7 +1930,7 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   const counted = each.filter((e) => !ignored.includes(e));
   const ignoredNote =
     ignored.length > 0
-      ? ` ${capitalized(listWith("and", ignored.map((e) => poolName(e.attempt.pool))))} couldn't trade on ${ignored.length === 1 ? "its" : "their"} own account (no liquidity at ${ignored.length === 1 ? "its" : "their"} price, or nothing for the amount), so ${ignored.length === 1 ? "it doesn't" : "they don't"} count.`
+      ? ` ${capitalized(listWith("and", ignored.map((e) => poolName(e.attempt.pool, names))))} couldn't trade on ${ignored.length === 1 ? "its" : "their"} own account (no liquidity at ${ignored.length === 1 ? "its" : "their"} price, or nothing for the amount), so ${ignored.length === 1 ? "it doesn't" : "they don't"} count.`
       : "";
   if (counted.length === 0) return { ...each[0]!.f, detail: `${each[0]!.f.detail}${many ? ignoredNote : ""}` };
 
@@ -1668,7 +1946,7 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   const f = worst.f;
   const unknownNote =
     unknown.length > 0
-      ? ` ${capitalized(listWith("and", unknown.map((e) => poolName(e.attempt.pool))))} couldn't be measured (${listWith("and", unknown.map((e) => lowerFirst(e.f.detail.replace(/^[^:]*: /, "").replace(/\.$/, ""))))}).`
+      ? ` ${capitalized(listWith("and", unknown.map((e) => poolName(e.attempt.pool, names))))} couldn't be measured (${listWith("and", unknown.map((e) => lowerFirst(e.f.detail.replace(/^[^:]*: /, "").replace(/\.$/, ""))))}).`
       : "";
   const allNote = many && f.status === "pass" && unknown.length === 0 ? ` Round trips in all ${counted.length} pools counted went through; the worst is shown.` : "";
 
@@ -1687,14 +1965,14 @@ export async function checkTrade(input: InspectInput, scan: PoolScan | null): Pr
   const deeper = scan.pools.filter((p) => !countedPools.has(p) && !otherLive.includes(p) && p.tradable !== false && orderDepth(p) > shallowest);
   const notes = [
     thin
-      ? ` It was measured on ${thin.liquid === null ? "a pool whose liquidity is undecided" : "a thin pool"} (${poolName(thin)}, ${usdcAmount(thin.depth)} ${thin.quote}${thin.version === "v4" ? " in range" : ""}).`
+      ? ` It was measured on ${thin.liquid === null ? "a pool whose liquidity is undecided" : "a thin pool"} (${poolName(thin, names)}, ${usdcAmount(thin.depth)} ${thin.quote}${thin.version === "v4" ? " in range" : ""}).`
       : "",
     tooMany ? ` It has ${run.candidates} pools to try; ${attempts.length} were tried.` : "",
     otherLive.length > 0
-      ? ` ${capitalized(listWith("and", otherLive.map((p) => `${untriedName(p, setup)} (${p.liquid === true ? "liquid" : "liquidity undecided"})`)))} ${otherLive.length === 1 ? "wasn't" : "weren't"} traded against.`
+      ? ` ${capitalized(listWith("and", otherLive.map((p) => `${untriedName(p, setup, names)} (${p.liquid === true ? "liquid" : "liquidity undecided"})`)))} ${otherLive.length === 1 ? "wasn't" : "weren't"} traded against.`
       : "",
     deeper.length > 0
-      ? ` ${capitalized(listWith("and", deeper.map((p) => untriedName(p, setup))))}, deeper than a pool measured, ${deeper.length === 1 ? "wasn't" : "weren't"} measured.`
+      ? ` ${capitalized(listWith("and", deeper.map((p) => untriedName(p, setup, names))))}, deeper than a pool measured, ${deeper.length === 1 ? "wasn't" : "weren't"} measured.`
       : "",
   ].join("");
   if (f.status === "pass" && (unknown.length > 0 || notes !== "")) {
@@ -1720,8 +1998,11 @@ function lossOf(attempt: TradeAttempt): bigint | null {
   return r.received >= r.spent ? 0n : ((r.spent - r.received) * 1_000_000n) / r.spent;
 }
 
-/** A pool never traded against, with what it trades against when that isn't the trade's currency (USDC): "Uniswap v3 0x1234…abcd (EURC)". */
-const untriedName = (p: Pool, setup: TradeSetup): string => (p.quote === setup.symbol ? poolName(p) : `${poolName(p)} (${p.quote})`);
+/**
+ * A pool never traded against, with what it trades against when that isn't the trade's currency (USDC): "Uniswap v3
+ * 0x1234…abcd (EURC)", "Uniswap v2 0x1234…abcd (WETH)".
+ */
+const untriedName = (p: Pool, setup: TradeSetup, names: VenueNames): string => (p.quote === setup.symbol ? poolName(p, names) : `${poolName(p, names)} (${p.quote})`);
 
 /**
  * What to call a pool measured: "its deepest pool" when the scan found none deeper; otherwise "a liquid pool" for one found
@@ -1735,8 +2016,9 @@ function poolLabel(pool: Pool, scan: PoolScan): string {
 /** The finding for one pool's round trip; `label` is what to call that pool ("its deepest pool"). */
 function attemptFinding(input: InspectInput, run: TradeAttempt, label: string): Finding {
   const { pool } = run;
+  const names = venueNames(input.dex);
   const at = { evidenceUrl: `${input.explorerBase}/address/${pool.address}` };
-  const venue = VENUE[pool.version];
+  const venue = names[pool.version];
   if (run.kind === "call-reverted") {
     return finding("trade", "unknown", TRADE_UNKNOWN, "The simulation reverted or ran out of its gas as a whole, which says nothing about selling.", at);
   }
@@ -1750,10 +2032,10 @@ function attemptFinding(input: InspectInput, run: TradeAttempt, label: string): 
     return finding("trade", "unknown", TRADE_UNKNOWN, "The simulation didn't answer in time.", at);
   }
   if (run.kind === "ran" && run.result.status === STATUS.amountOverLimit) {
-    return finding("trade", "unknown", TRADE_UNKNOWN, `One raw unit of the token costs more at the pool's price, on ${VENUE[pool.version]}, than the most the simulation buys with there, so it wasn't bought.`, at);
+    return finding("trade", "unknown", TRADE_UNKNOWN, `One raw unit of the token costs more at the pool's price, on ${venue}, than the most the simulation buys with there, so it wasn't bought.`, at);
   }
   if (run.kind === "ran" && run.result.status === STATUS.poolCantTrade) {
-    return finding("trade", "unknown", TRADE_UNKNOWN, `The pool on ${VENUE[pool.version]} can't serve a buy: it has no liquidity at its price, or gives nothing for the amount.`, at);
+    return finding("trade", "unknown", TRADE_UNKNOWN, `The pool on ${venue} can't serve a buy: it has no liquidity at its price, or gives nothing for the amount.`, at);
   }
   const { result } = run;
   const toSix = (raw: bigint) => toSixDecimals(raw, run.decimals);
@@ -1766,7 +2048,7 @@ function attemptFinding(input: InspectInput, run: TradeAttempt, label: string): 
     case STATUS.sellOutOfGas:
       return finding("trade", "unknown", TRADE_UNKNOWN, `Buying on ${venue} went through, and selling back used up all the gas the simulation gives it, which says nothing either way.`, at);
     case STATUS.sellReverted:
-      return sellRevertedFinding(run, label, at);
+      return sellRevertedFinding(run, label, at, names);
     case STATUS.ok:
       break;
     default:

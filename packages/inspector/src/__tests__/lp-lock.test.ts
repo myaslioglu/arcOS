@@ -1503,6 +1503,14 @@ describe("the words of an unknown that rests on positions the old check can't re
     );
   });
 
+  it("says nothing of v2 LP where the lock contracts aren't vetted but no v2 pair was found: there is no LP to count", async () => {
+    // Only a v4 pool (and pools of other kinds beside it): the unvetted sentence would be about LP that isn't there.
+    expect((await words(burnedV4, {}, { input: { lockersVetted: false } })).withIndex).toBe(ONLY_V4_READ);
+    expect((await words(burnedV4, { ...v3(5_000n), ...aero(5_000n) }, { input: { lockersVetted: false } })).withIndex).toBe(
+      `Only Uniswap v3, Uniswap v4 and Aerodrome pools were found, and Inspector doesn't read the positions in the Uniswap v3 and Aerodrome ones. ${READ} ${NO_PASS}`,
+    );
+  });
+
   it("leaves a warning's words as they were, whatever pools sit beside the one it is about", async () => {
     // The finding as the check gave it before these words changed (a19ac2c), word for word.
     const { input } = world([main([twoSided(7, 2_000n)])], { dex: everything, chain: { reads: { ...noPools(everything), ...burnedPair(2_000n), ...v3(9_000n), ...aero(1_000n) }, nftOwners: { 7: WALLET } } });

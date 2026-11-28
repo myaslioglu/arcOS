@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Report } from "@arcos/inspector";
 
+// A marker module that throws outside a server build; the routes' shared module (lib/inspect-route.ts) carries it.
+vi.mock("server-only", () => ({}));
+
 // The real module is server-only and opens an RPC client when it loads; these routes only need its answer.
-const { cachedInspection } = vi.hoisted(() => ({ cachedInspection: vi.fn<(address: string) => Promise<Report>>() }));
+const { cachedInspection } = vi.hoisted(() => ({ cachedInspection: vi.fn<(address: string, chain?: string) => Promise<Report>>() }));
 vi.mock("@/lib/inspect-server", () => ({
   cachedInspection,
   InspectorBusy: class InspectorBusy extends Error {
@@ -11,10 +14,10 @@ vi.mock("@/lib/inspect-server", () => ({
 }));
 
 import { InspectorBusy } from "@/lib/inspect-server";
-import { GET as inspectRoute } from "@/app/api/inspect/[address]/route";
-import { GET as badgeRoute } from "@/app/badge/[address]/route";
-import OgImage, * as ogRoute from "@/app/t/[address]/opengraph-image";
-import ProofPage, { generateMetadata } from "@/app/t/[address]/page";
+import { GET as inspectRoute } from "@/app/api/inspect/[target]/route";
+import { GET as badgeRoute } from "@/app/badge/[target]/route";
+import OgImage, * as ogRoute from "@/app/t/[target]/opengraph-image";
+import ProofPage, { generateMetadata } from "@/app/t/[target]/page";
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
 
@@ -34,7 +37,7 @@ const report = (degraded: boolean): Report => ({
   generatedAt: "2026-09-27T00:00:00.000Z",
 });
 
-const params = () => ({ params: Promise.resolve({ address: ADDRESS }) });
+const params = () => ({ params: Promise.resolve({ target: ADDRESS }) });
 const surfaces: [string, () => Promise<Response>][] = [
   ["/api/inspect", () => inspectRoute(new Request(`https://4rcos.test/api/inspect/${ADDRESS}`), params())],
   ["/badge", () => badgeRoute(new Request(`https://4rcos.test/badge/${ADDRESS}`), params())],

@@ -300,29 +300,113 @@ describe("perSecond", () => {
     };
   }
 
-  it("starts the first `limit` calls at once", async () => {
-    const c = fakeClock();
-    const turn = perSecond(4, c.now, c.sleep);
-    await Promise.all([turn(), turn(), turn(), turn()]);
-    expect(c.sleeps).toEqual([]);
+  /** A clock whose sleeps last until the test ends them: `wake()` ends the oldest, moving the clock on by its length. */
+  function manualClock() {
+    let t = 0;
+    const sleeping: (() => void)[] = [];
+    /** Lets every pending step and callback run. */
+    const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+    return {
+      now: () => t,
+      sleep: (ms: number) =>
+        new Promise<void>((resolve) =>
+          sleeping.push(() => {
+            t += ms;
+            resolve();
+          }),
+        ),
+      wake: async () => {
+        sleeping.shift()!();
+        await flush();
+      },
+      sleeping: () => sleeping.length,
+      flush,
+    };
+  }
+
+  // Through one queue alone, either one, it paces exactly as the single queue it was before it had two.
+  describe.each(["high", "low"] as const)("through `%s` alone", (queue) => {
+    it("starts the first `limit` calls at once", async () => {
+      const c = fakeClock();
+      const turn = perSecond(4, c.now, c.sleep)[queue];
+      await Promise.all([turn(), turn(), turn(), turn()]);
+      expect(c.sleeps).toEqual([]);
+    });
+
+    it("holds the next call until the oldest start in the window is a second old, in arrival order", async () => {
+      const c = fakeClock();
+      const turn = perSecond(4, c.now, c.sleep)[queue];
+      const started: [number, number][] = [];
+      await Promise.all([0, 1, 2, 3, 4, 5].map((i) => turn().then(() => started.push([i, c.now()]))));
+      expect(c.sleeps).toEqual([1000]);
+      expect(started).toEqual([[0, 0], [1, 0], [2, 0], [3, 0], [4, 1000], [5, 1000]]);
+    });
+
+    it("doesn't wait once the window has passed", async () => {
+      const c = fakeClock();
+      const turn = perSecond(2, c.now, c.sleep)[queue];
+      await turn();
+      await turn();
+      c.advance(1500);
+      await turn();
+      expect(c.sleeps).toEqual([]);
+    });
   });
 
-  it("holds the next call until the oldest start in the window is a second old, in arrival order", async () => {
+  it("gives every free turn to the first call waiting in `high` before any in `low`, each queue in its own order", async () => {
     const c = fakeClock();
-    const turn = perSecond(4, c.now, c.sleep);
-    const started: [number, number][] = [];
-    await Promise.all([0, 1, 2, 3, 4, 5].map((i) => turn().then(() => started.push([i, c.now()]))));
-    expect(c.sleeps).toEqual([1000]);
-    expect(started).toEqual([[0, 0], [1, 0], [2, 0], [3, 0], [4, 1000], [5, 1000]]);
+    const { high, low } = perSecond(2, c.now, c.sleep);
+    const started: string[] = [];
+    const note = (name: string) => () => void started.push(`${name}@${c.now()}`);
+    // Asked at once, `low` and `high` taking turns to ask.
+    await Promise.all([1, 2, 3].flatMap((i) => [low().then(note(`low ${i}`)), high().then(note(`high ${i}`))]));
+    expect(started).toEqual(["high 1@0", "high 2@0", "high 3@1000", "low 1@1000", "low 2@2000", "low 3@2000"]);
   });
 
-  it("doesn't wait once the window has passed", async () => {
-    const c = fakeClock();
-    const turn = perSecond(2, c.now, c.sleep);
-    await turn();
-    await turn();
-    c.advance(1500);
-    await turn();
-    expect(c.sleeps).toEqual([]);
+  it("puts a `high` call ahead of `low` calls asked before it: it waits only for the turns already given out", async () => {
+    const c = manualClock();
+    const { high, low } = perSecond(2, c.now, c.sleep);
+    const started: string[] = [];
+    const note = (name: string) => () => void started.push(`${name}@${c.now()}`);
+    const calls = [1, 2, 3, 4].map((i) => low().then(note(`low ${i}`)));
+    await c.flush();
+    // The window's two turns went to `low` at 0, and its third call waits for the next.
+    expect(started).toEqual(["low 1@0", "low 2@0"]);
+    expect(c.sleeping()).toBe(1);
+    calls.push(high().then(note("high 1")), high().then(note("high 2")));
+    while (c.sleeping() > 0) await c.wake();
+    await Promise.all(calls);
+    expect(started).toEqual(["low 1@0", "low 2@0", "high 1@1000", "high 2@1000", "low 3@2000", "low 4@2000"]);
+  });
+
+  it("keeps the window's rate whichever queue the calls wait in: `limit` starts a second, as through one queue", async () => {
+    const mixed = fakeClock();
+    const both = perSecond(3, mixed.now, mixed.sleep);
+    const times: number[] = [];
+    await Promise.all(Array.from({ length: 10 }, (_, i) => (i % 3 === 0 ? both.high : both.low)().then(() => times.push(mixed.now()))));
+    const single = fakeClock();
+    const one = perSecond(3, single.now, single.sleep).high;
+    const alone: number[] = [];
+    await Promise.all(Array.from({ length: 10 }, () => one().then(() => alone.push(single.now()))));
+    expect(times).toEqual([0, 0, 0, 1000, 1000, 1000, 2000, 2000, 2000, 3000]);
+    expect(times).toEqual(alone);
+    expect(mixed.sleeps).toEqual(single.sleeps);
+  });
+
+  it("never strands `low`: it waits while calls keep coming to `high`, and gets every turn once they stop", async () => {
+    const c = manualClock();
+    const { high, low } = perSecond(1, c.now, c.sleep);
+    const started: string[] = [];
+    const note = (name: string) => () => void started.push(`${name}@${c.now()}`);
+    const calls = [low().then(note("low 1")), low().then(note("low 2")), high().then(note("high 1"))];
+    for (const i of [2, 3]) {
+      await c.flush();
+      // One more `high` call while the next turn is still a second off.
+      calls.push(high().then(note(`high ${i}`)));
+      await c.wake();
+    }
+    while (c.sleeping() > 0) await c.wake();
+    await Promise.all(calls);
+    expect(started).toEqual(["high 1@0", "high 2@1000", "high 3@2000", "low 1@3000", "low 2@4000"]);
   });
 });
