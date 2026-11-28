@@ -29,6 +29,14 @@ describe("the real apps/web/apphosting.yaml", () => {
     expect(env).not.toHaveProperty("BLOCKSCOUT_API_KEY");
     expect(env).not.toHaveProperty("ARCOS_SESSION_SECRET");
     expect(env).not.toHaveProperty("TELEGRAM_WEBHOOK_SECRET");
+    expect(env).not.toHaveProperty("INSPECT_RPC_KEY");
+  });
+
+  it("switches the Inspector's other chains on at build and run time, and keeps their key a pinned runtime secret", () => {
+    const entries = parseEnv(fs.readFileSync(realFile, "utf8"));
+    expect(entries.find((e) => e.variable === "INSPECT_RPC_KEY")).toMatchObject({ secret: "INSPECT_RPC_KEY@1", availability: ["RUNTIME"] });
+    expect(entries.find((e) => e.variable === "NEXT_PUBLIC_INSPECT_CHAINS")).toMatchObject({ availability: ["BUILD", "RUNTIME"] });
+    expect(env.NEXT_PUBLIC_INSPECT_CHAINS).toBe("ethereum,base,arbitrum,optimism");
   });
 
   it("keeps the Telegram settings out of the build: the webhook secret is a pinned secret, the username a runtime value", () => {
@@ -76,6 +84,10 @@ describe("the real apps/web/apphosting.testnet.yaml, merged over apphosting.yaml
     expect(webhook.secret).toBeUndefined();
     const username = merged.find((e) => e.variable === "TELEGRAM_BOT_USERNAME");
     expect(username).toMatchObject({ value: "none", availability: ["RUNTIME"] });
+    // Without the Alchemy key the server sends none; the other chains are mainnet-only anyway.
+    const rpcKey = merged.find((e) => e.variable === "INSPECT_RPC_KEY");
+    expect(rpcKey).toMatchObject({ value: "none", availability: ["RUNTIME"] });
+    expect(rpcKey.secret).toBeUndefined();
   });
 
   it("changes only what differs from mainnet: every other value is the base file's", () => {
@@ -83,6 +95,7 @@ describe("the real apps/web/apphosting.testnet.yaml, merged over apphosting.yaml
     expect(testnet).toEqual([
       "ARCOS_SESSION_SECRET",
       "BLOCKSCOUT_API_KEY",
+      "INSPECT_RPC_KEY",
       "NEXT_PUBLIC_ARC_NETWORK",
       "NEXT_PUBLIC_FEE_RECIPIENT",
       "NEXT_PUBLIC_SITE_URL",

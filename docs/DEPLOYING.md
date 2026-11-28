@@ -291,7 +291,8 @@ machine signed in as the owner (`gcloud auth login`, `firebase login`), with `ex
    `scripts/apphosting-env.test.mjs` updated to match (it fails while the merged testnet file names a secret). One chain
    at a time: `base` here is an example. After the rollout, open https://4rcos.com/t/base/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
    (Base's USDC): it shows a report that names Base, and the Alchemy dashboard shows the requests. To add a chain, add
-   its slug to the value (`base,ethereum`); each change is a merge and a rollout.
+   its slug to the value (`base,ethereum`); each change is a merge and a rollout. On 2026-11-28 the owner chose to switch
+   the four on together (`ethereum,base,arbitrum,optimism`); taking one off is a merge that removes its slug.
 
    No chain may be switched on before the change to the Inspector window (`apps/web/src/apps/inspector/Window.tsx`)
    that reads the chain from its link has landed. Off Arc, the proof page's "Open in ArcOS" links to
