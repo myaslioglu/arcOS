@@ -4,7 +4,8 @@
  * A prop is a whole number or a short label, never an address: see event-validation.ts for the rules on a value.
  */
 export const EVENT_PROPS = {
-  inspect_run: ["passed", "total"],
+  /** An inspection the Inspector window ran, with the chain it read ("arc", "base"…). */
+  inspect_run: ["passed", "total", "chain"],
   fix_click: ["app"],
   proof_share: [],
   mint_success: ["mintable", "burnable"],

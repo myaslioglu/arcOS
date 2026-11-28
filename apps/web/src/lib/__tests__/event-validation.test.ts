@@ -7,7 +7,7 @@ const event = (name: unknown, props?: unknown) => validateEvent({ name, props })
 describe("the event list", () => {
   it("names the twelve events, each with only its own props", () => {
     expect(EVENT_PROPS).toEqual({
-      inspect_run: ["passed", "total"],
+      inspect_run: ["passed", "total", "chain"],
       fix_click: ["app"],
       proof_share: [],
       mint_success: ["mintable", "burnable"],
@@ -27,6 +27,7 @@ describe("the event list", () => {
 describe("validateEvent: the name", () => {
   it("counts each known event, with its own props", () => {
     expect(event("inspect_run", { passed: 5, total: 8 })).toEqual({ event: "inspect_run", props: { passed: 5, total: 8 } });
+    expect(event("inspect_run", { passed: 5, total: 9, chain: "base" })).toEqual({ event: "inspect_run", props: { passed: 5, total: 9, chain: "base" } });
     expect(event("fix_click", { app: "vault" })).toEqual({ event: "fix_click", props: { app: "vault" } });
     expect(event("proof_share")).toEqual({ event: "proof_share", props: {} });
     expect(event("mint_success", { mintable: 1, burnable: 0 })).toEqual({ event: "mint_success", props: { mintable: 1, burnable: 0 } });

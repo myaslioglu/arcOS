@@ -10,7 +10,8 @@ export const inspector: AppManifest = {
   window: { w: 540, h: 640 },
   load: () => import("./Window"),
   acceptsDrop: ["token"],
-  instanceKey: (p) => (p.token ?? "").toLowerCase(),
+  // One window per token on Arc, keyed as it always was, and one per token on each other chain ("base:0x…").
+  instanceKey: (p) => (p.chain && p.chain !== "arc" ? `${p.chain}:${(p.token ?? "").toLowerCase()}` : (p.token ?? "").toLowerCase()),
   requiresWallet: false,
   release: "r0",
   pinned: true,

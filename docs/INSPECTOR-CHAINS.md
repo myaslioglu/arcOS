@@ -15,11 +15,18 @@ settings and the owner's steps are in [DEPLOYING.md](DEPLOYING.md#the-inspectors
   answer 404; the API's body is `{ "error": "Not available on this network." }`.
 - Arc keeps its links. `/t/<address>`, `/badge/<address>` and `/api/inspect/<address>` are Arc's for good, and
   `/t/arc/<address>`, `/badge/arc/<address>` and `/api/inspect/arc/<address>` redirect to them permanently (308).
+- In the browser, a chain switched on appears in the Inspector window's Chain picker (mainnet only), in Ctrl K (a bare
+  address is offered on every chain the site reads, Arc's first; a pasted link on the chain it names) and in the
+  Terminal (`inspect <address> base`, `inspect base:0x…`). Until one is on, the window, Ctrl K and the Terminal look and
+  answer as they always have. The window reads these chains through `/api/inspect/<slug>/<address>`, shows the chain's
+  name and its other explorer, offers no Watchdog or Vault and Vesting buttons (they are Arc's), and shares
+  `/t/<slug>/<address>`.
 - Switch on one chain at a time. Watch the provider's dashboard and the explorer budget for a few days before the next.
 
 ## Where the reads go
 
-Every inspection on these chains runs on the site's server (`apps/web/src/lib/inspect-server.ts`). The browser never
+Every inspection on these chains runs on the site's server (`apps/web/src/lib/inspect-server.ts`), the window's
+included (`apps/web/src/apps/inspector/server-report.ts` asks the route and checks what comes back). The browser never
 reads these chains for the Inspector, so no key reaches it.
 
 | | Ethereum | Base | Arbitrum One | OP Mainnet |

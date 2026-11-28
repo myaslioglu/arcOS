@@ -259,6 +259,33 @@ test.describe("the chain routes", () => {
     expect(response.headers()["content-type"]).toMatch(/^image\/svg\+xml\b/);
   });
 
+  test("/#app:inspector has a Chain picker where another chain is on, and none where none is", async ({ page }) => {
+    await page.goto("/#app:inspector");
+    const win = page.getByRole("dialog", { name: "Inspector" });
+    await expect(win).toBeVisible();
+    const picker = win.getByRole("combobox", { name: "Chain" });
+    if ([...enabled].every((slug) => slug === "" || slug === "arc")) {
+      await expect(picker).toHaveCount(0);
+      return;
+    }
+    await expect(picker).toBeVisible();
+    await expect(picker.locator("option").first()).toHaveText("Arc");
+  });
+
+  test("/#app:inspector?chain=base reads Base through the site's server where Base is on, and says it isn't where it isn't", async ({ page }) => {
+    await page.goto(`/#app:inspector?chain=base&token=${BASE_USDC}`);
+    const win = page.getByRole("dialog", { name: /^Inspector/ });
+    await expect(win).toBeVisible();
+    if (!enabled.has("base")) {
+      await expect(win.getByText("Inspector doesn't read Base on this site.")).toBeVisible();
+      return;
+    }
+    // The server reads the chain when the test runs; a read that fails still shows one of the window's own messages.
+    const report = win.getByText("Open on Basescan");
+    const refused = win.getByText(/Inspector is busy|Too many requests|Couldn't reach the network|Couldn't read the report/);
+    await expect(report.or(refused)).toBeVisible({ timeout: 30_000 });
+  });
+
   test("/api/inspect/<chain>/<address> answers 404 for a chain the site doesn't read", async ({ request }) => {
     const response = await request.get(`/api/inspect/polygon/${ETHEREUM_USDC}`);
     expect(response.status()).toBe(404);

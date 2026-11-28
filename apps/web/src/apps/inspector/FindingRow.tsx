@@ -12,7 +12,11 @@ const ICON = {
 
 const FIX_LABEL = { vault: "Lock in Vault", vesting: "Vest in Vesting" } as const;
 
-export function FindingRow({ finding, onFix }: { finding: Finding; onFix: (app: "vault" | "vesting") => void }) {
+/**
+ * One finding. `showFix` (default true) offers Vault or Vesting where a finding names one: they are Arc's apps, so a report
+ * of another chain shows no fix button.
+ */
+export function FindingRow({ finding, onFix, showFix = true }: { finding: Finding; onFix: (app: "vault" | "vesting") => void; showFix?: boolean }) {
   return (
     <li className="flex items-start gap-3 border-b border-border py-2.5 last:border-0">
       <span className="mt-0.5">{ICON[finding.status]}</span>
@@ -20,7 +24,7 @@ export function FindingRow({ finding, onFix }: { finding: Finding; onFix: (app: 
         <p className="text-sm">{finding.title}</p>
         <p className="text-xs text-muted">{finding.detail}</p>
       </div>
-      {finding.fixAppId && finding.status !== "pass" && (
+      {showFix && finding.fixAppId && finding.status !== "pass" && (
         <button type="button" className="rounded-md border border-border-2 px-2 py-1 text-xs" onClick={() => onFix(finding.fixAppId!)}>
           {FIX_LABEL[finding.fixAppId]}
         </button>

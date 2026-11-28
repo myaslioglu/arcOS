@@ -137,20 +137,21 @@ nonces or hashes would close.
 ## Event counts
 
 The site counts a few things itself, so its maker can see whether they are used: an inspection run, a proof-page share,
-a mint, a drop, a swap, a bridge, a revoke, a click on a fix that isn't ready yet, and the name of a Terminal command.
-When one happens the page sends its name and a few small values (how many checks passed, how many recipients, which pair
-or chains, the command's name) to `/api/event` on this site, and that route writes one line to the host's logs, which on
+a mint, a drop, a swap, a bridge, a revoke, a click on a fix that isn't ready yet, Watchdog's button, a watch added and
+its Telegram link opened, and the name of a Terminal command. When one happens the page sends its name and a few small
+values (how many checks passed and which chain the inspection read, how many recipients or watches, which pair or
+chains, the command's name) to `/api/event` on this site, and that route writes one line to the host's logs, which on
 Firebase App Hosting is Cloud Logging. There are no cookies and no third-party script.
 
 The line holds the event's name and those values and nothing else: no address (a wallet's or a token's), no IP address,
 no user agent and nothing typed in the Terminal past a command's name. It has no visitor or session identifier, so a
-count says how often something happens and not who did it. The route takes only the nine event names, and for each only
-its own values, which are whole numbers up to 1,000,000 or labels of up to 32 letters, digits, dots, underscores and
-hyphens (an address is longer, so it can't pass); anything else is dropped. It ignores a body over 2 KB and a request
-whose `Origin` is another site, limits each client, and answers 204 to everything. The host keeps its own request log,
-as it does for any page, and these counts add nothing to it. They are also separate from what the services the page
-calls do on their own: WalletConnect and Reown (below), and Circle's App Kit behind Swap and Bridge, which by default
-sends its own usage and error reports to Circle.
+count says how often something happens and not who did it. The route takes only the twelve event names, and for each
+only its own values, which are whole numbers up to 1,000,000 or labels of up to 32 letters, digits, dots, underscores
+and hyphens (an address is longer, so it can't pass); anything else is dropped. It ignores a body over 2 KB and a
+request whose `Origin` is another site, limits each client, and answers 204 to everything. The host keeps its own
+request log, as it does for any page, and these counts add nothing to it. They are also separate from what the services
+the page calls do on their own: WalletConnect and Reown (below), and Circle's App Kit behind Swap and Bridge, which by
+default sends its own usage and error reports to Circle.
 
 ## Reading contracts anyone can deploy
 
@@ -185,6 +186,10 @@ The Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet only from the si
   chain id, and `sourcify.dev`. The only part a visitor chooses is the address, which must be a 20-byte hex address
   before anything is read, and the chain, which must be one switched on. CCIP-Read stays off, so a contract can't send
   the server anywhere.
+- **The window.** The Inspector window takes another chain's report from `/api/inspect/<chain>/<address>` on this site
+  (`apps/web/src/apps/inspector/server-report.ts`) and checks it before it shows any of it: a report of that token on
+  that chain, every finding one of the nine checks with a known status, evidence links `https` only, and no fix button.
+  The server's own words for a refusal are never shown; the window says what the status means.
 - **Spending.** Each chain's pages, card and badge take a turn from a per-client limiter (above), and the explorer reads
   for these chains have a daily budget per server instance ([docs/OPERATIONS.md](docs/OPERATIONS.md#the-inspectors-other-chains)).
   Walking many addresses costs a client its turns, not the site's quota.

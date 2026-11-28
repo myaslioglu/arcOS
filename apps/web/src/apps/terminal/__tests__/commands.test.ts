@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { explorerUrl } from "@arcos/chain";
 import type { AppManifest } from "@arcos/shell/core";
 import { COMMAND_NAMES, PLAIN_TRANSFER_GAS, complete, echo, parseCommand, runCommand, sanitize, type TermEnv } from "../commands";
@@ -156,6 +156,53 @@ describe("inspect", () => {
     expect(await texts("inspect 0x12", s.env)).toEqual(["That isn't an address."]);
     expect(await texts(`inspect ${OTHER}`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
     expect(s.opened).toEqual([{ appId: "inspector", params: { token: OTHER } }]);
+  });
+
+  it("names a chain the site doesn't read rather than open the address on Arc", async () => {
+    const s = setup();
+    expect(await texts(`inspect ${OTHER} base`, s.env)).toEqual(["Inspector doesn't read base on this site. Chains: arc."]);
+    expect(await texts(`inspect base:${OTHER}`, s.env)).toEqual(["Inspector doesn't read Base on this site."]);
+    expect(await texts(`inspect ${OTHER} arc`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+    expect(s.opened).toEqual([{ appId: "inspector", params: { token: OTHER } }]);
+  });
+});
+
+describe("inspect, once the site reads other chains", () => {
+  const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("lists the chains in its usage and in help", async () => {
+    const s = setup();
+    expect(await texts("inspect", s.env)).toEqual(["Usage: inspect <address> [chain]. Chains: arc, base."]);
+    const help = await texts("help", s.env);
+    expect(help[2]).toBe("inspect <address> [chain]  Opens Inspector on a token");
+    expect(help[8]).toBe("theme light|dark|system    Sets the theme");
+  });
+
+  it("opens Inspector on the chain named after the address, or before it, or in a pasted link", async () => {
+    const s = setup();
+    expect(await texts(`inspect ${BASE_USDC.toLowerCase()} base`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on Base."]);
+    expect(await texts(`inspect ${BASE_USDC} BASE`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on Base."]);
+    expect(await texts(`inspect base:${BASE_USDC}`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on Base."]);
+    expect(await texts(`inspect https://basescan.org/token/${BASE_USDC}`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on Base."]);
+    expect(await texts(`inspect ${OTHER}`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+    expect(s.opened).toEqual([
+      ...Array.from({ length: 4 }, () => ({ appId: "inspector", params: { chain: "base", token: BASE_USDC } })),
+      { appId: "inspector", params: { token: OTHER } },
+    ]);
+  });
+
+  it("refuses a chain the site doesn't read, and two chains at once, opening nothing", async () => {
+    const s = setup();
+    expect(await texts(`inspect ${OTHER} ethereum`, s.env)).toEqual(["Inspector doesn't read ethereum on this site. Chains: arc, base."]);
+    expect(await texts(`inspect eth:${OTHER}`, s.env)).toEqual(["Inspector doesn't read Ethereum on this site."]);
+    expect(await texts(`inspect base:${OTHER} arc`, s.env)).toEqual(["That names two chains."]);
+    expect(await texts(`inspect ${OTHER} ${"x".repeat(40)}`, s.env)).toEqual([`Inspector doesn't read ${"x".repeat(32)}… on this site. Chains: arc, base.`]);
+    expect(s.opened).toEqual([]);
   });
 });
 

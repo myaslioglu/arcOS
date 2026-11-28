@@ -2,6 +2,7 @@ import { formatGwei, getAddress, isAddress, type Address } from "viem";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
 import { roadmapEntries, type AppManifest, type ThemePreference } from "@arcos/shell/core";
 import { shortAddress } from "@/lib/format";
+import { anyChainName, chainName, inspectorParams, pickToken, siteChainBySlug, siteInspectChains } from "@/lib/inspect-chain-pick";
 
 /** One line of the scrollback. `href` is only ever an explorer link this module built from a checked address. */
 export type Line = { kind: "in" | "out" | "err"; text: string; href?: string };
@@ -78,13 +79,42 @@ type Command = {
   run: (args: string[], env: TermEnv) => Outcome | Promise<Outcome>;
 };
 
+/**
+ * `inspect <address> [chain]`, `inspect base:0x…`, or a pasted explorer or Uniswap link. The chain is one this site reads
+ * (Arc unless another is named); a chain it doesn't read is said by name, never inspected on Arc instead. While the site
+ * reads Arc alone, its usage and answers are the ones it always had.
+ */
+function inspectCommand(args: string[], env: TermEnv): Outcome {
+  const chains = siteInspectChains();
+  const listed = `Chains: ${chains.map((c) => c.slug).join(", ")}.`;
+  if (!args[0]) return err(chains.length > 1 ? `Usage: inspect <address> [chain]. ${listed}` : "Usage: inspect <address>");
+  const picked = pickToken(args[0]);
+  if (picked.kind === "none") return err(NOT_AN_ADDRESS);
+  if (picked.kind === "elsewhere") return err(`Inspector doesn't read ${anyChainName(picked.chain)} on this site.`);
+  let chain = picked.chain;
+  if (args[1] !== undefined) {
+    const named = siteChainBySlug(args[1]);
+    if (!named) return err(`Inspector doesn't read ${echo(args[1])} on this site. ${listed}`);
+    if (chain && chain.key !== named.key) return err("That names two chains.");
+    chain = named;
+  }
+  const target = chain ?? chains[0]!;
+  const token = getAddress(picked.address);
+  env.open("inspector", inspectorParams(target, token));
+  return out(target.key === "arc" ? `Opened Inspector for ${shortAddress(token)}.` : `Opened Inspector for ${shortAddress(token)} on ${chainName(target)}.`);
+}
+
 // Looked up with Array#find, never as object keys, so no typed name ever reaches a prototype.
 const COMMANDS: Command[] = [
   {
     name: "help",
     usage: "help",
     about: "Lists the commands",
-    run: () => out(...COMMANDS.map((c) => `${c.usage.padEnd(25)}${c.about}`)),
+    run: () => {
+      // Two spaces after the longest usage, and never less room than the 25 columns help has always had.
+      const width = Math.max(25, ...COMMANDS.map((c) => c.usage.length + 2));
+      return out(...COMMANDS.map((c) => `${c.usage.padEnd(width)}${c.about}`));
+    },
   },
   {
     name: "open",
@@ -101,15 +131,12 @@ const COMMANDS: Command[] = [
   },
   {
     name: "inspect",
-    usage: "inspect <address>",
-    about: "Opens Inspector on a token",
-    run: (args, env) => {
-      if (!args[0]) return err("Usage: inspect <address>");
-      const token = address(args[0]);
-      if (!token) return err(NOT_AN_ADDRESS);
-      env.open("inspector", { token });
-      return out(`Opened Inspector for ${shortAddress(token)}.`);
+    // The chain argument is offered once the site reads a chain besides Arc.
+    get usage() {
+      return siteInspectChains().length > 1 ? "inspect <address> [chain]" : "inspect <address>";
     },
+    about: "Opens Inspector on a token",
+    run: inspectCommand,
   },
   {
     name: "approvals",
