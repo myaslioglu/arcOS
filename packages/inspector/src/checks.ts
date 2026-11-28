@@ -649,9 +649,17 @@ const finding = (id: Finding["id"], status: Finding["status"], title: string, de
  * code, and otherwise says where the code that runs lives (`at`, `null` when the engine knows this
  * token forwards but couldn't identify where) and what the explorer has on it. A verified proxy in
  * front of unverified logic is the shape that made this matter: the reassuring line was true of 40
- * lines of forwarding code and false of everything behind it.
+ * lines of forwarding code and false of everything behind it. `slotsUnread` is for code whose proxy
+ * slots are the only sign of whether it forwards (an Arbitrum Stylus program, whose code can't be
+ * scanned) and couldn't be read: then it isn't known to forward at all, only not known not to.
  */
-export type LogicVerification = { at: Address | null; info: ContractInfo | null };
+export type LogicVerification = { at: Address | null; info: ContractInfo | null; slotsUnread?: true };
+
+/** Why `checkVerified` can't vouch for code it couldn't identify (`LogicVerification.at` null). */
+const unidentifiedLogic = (logic: LogicVerification): string =>
+  logic.slotsUnread
+    ? "This address's own source is verified, but its proxy slots couldn't be read, so whether it runs code from somewhere else can't be told."
+    : "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
 
 /**
  * What the second verification source (`InspectInput.verifyFallback`, Sourcify) said: about this address (`own`), and
@@ -687,9 +695,7 @@ export function checkVerified(
       : finding("verified", "unknown", "Couldn't check source verification", `The explorer says this contract isn't verified. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: url });
   }
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
-  if (logic.at === null) {
-    return finding("verified", "unknown", "Couldn't check source verification", "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", { evidenceUrl: url });
-  }
+  if (logic.at === null) return finding("verified", "unknown", "Couldn't check source verification", unidentifiedLogic(logic), { evidenceUrl: url });
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   if (logic.info === null || logic.info.verified === null) {
     return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
@@ -734,9 +740,7 @@ function checkVerifiedWithSourcify(input: InspectInput, contract: ContractInfo |
   // Verified: link where the source can be read, the explorer's page when it has it, else Sourcify's.
   const ownUrl = contract?.verified === true ? url : sourcifyUrl(input.address);
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: ownUrl });
-  if (logic.at === null) {
-    return unknown("This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", ownUrl);
-  }
+  if (logic.at === null) return unknown(unidentifiedLogic(logic), ownUrl);
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   const runs = verdict(logic.info?.verified, sourcify.logic);
   if (runs === null) {

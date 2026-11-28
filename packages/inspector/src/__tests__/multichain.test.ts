@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { UNISWAP_V4, inspectChain, type DexConfig } from "@arcos/chain";
-import { IMPL_SLOT, checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools, type SourcifyAnswers } from "../checks";
+import {
+  ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools,
+  type SourcifyAnswers,
+} from "../checks";
 import { chainInput } from "../chain-input";
 import type { ContractInfo, ExplorerSource, Holder } from "../explorer";
 import { inspect } from "../inspect";
@@ -579,6 +582,133 @@ describe("a whole inspection off Arc", () => {
       }
       // Whatever code the account points at runs, so no one contract's source is "the implementation it runs".
       expect(find(delegated, "verified")).toMatchObject({ status: "unknown", detail: expect.stringContaining("forwards its calls to code that couldn't be identified") });
+    });
+  });
+
+  // A Stylus program can be an ERC-1967 proxy itself. Its code can't be scanned for a call that forwards, so its proxy
+  // slots are all there is to go on: read, they say whether its own source is what runs.
+  describe("a Stylus program that is a proxy itself", () => {
+    const ARBITRUM = inspectChain("mainnet", "arbitrum")!;
+    const IMPL = "0x2222222222222222222222222222222222222222";
+    const ADMIN = "0x5555555555555555555555555555555555555555";
+    const STYLUS = `0xeff00000${"0a1b2c"}${"9d".repeat(8)}`;
+    const MINTABLE = "0x63a9059cbb6340c10f1900"; // PUSH4 transfer, PUSH4 mint(address,uint256), STOP: unverified, never read
+    const word = (address: string) => `0x${"00".repeat(12)}${address.slice(2)}` as `0x${string}`;
+    const PROXY_SLOTS = [IMPL_SLOT, BEACON_SLOT, ZEPPELINOS_IMPL_SLOT];
+    /**
+     * An inspection on Arbitrum One of TOKEN, holding `code` (a Stylus program unless told) over IMPL's mintable EVM code,
+     * with TOKEN's storage words by slot (an Error fails that read), and every storage read it made, as `address:slot`.
+     */
+    const onArbitrum = (storage: Record<string, `0x${string}` | Error>, { code = STYLUS, source = sourcify(false) } = {}) => {
+      const asked: string[] = [];
+      const reader: FakeReader = {
+        ...fakeChain({ code: { [TOKEN]: code, [IMPL]: MINTABLE }, reads: { [readKey(TOKEN, "totalSupply", [])]: 1000n } }),
+        getStorageAt: async (at, slot) => {
+          asked.push(`${at.toLowerCase()}:${slot}`);
+          const value = at.toLowerCase() === TOKEN ? storage[slot] : undefined;
+          if (value instanceof Error) throw value;
+          return value ?? null;
+        },
+      };
+      const report = inspect({ ...chainInput(ARBITRUM), dex: null, address: TOKEN, network: "mainnet", reader, explorer: explorer(true), verifyFallback: source });
+      return { asked, report };
+    };
+    const FORWARDS = "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
+
+    it("reads its proxy slots, and never passes its own source when they name other code, whatever Sourcify says", async () => {
+      for (const match of [false, true]) {
+        const source = sourcify(match);
+        const { asked, report } = onArbitrum({ [IMPL_SLOT]: word(IMPL) }, { source });
+        const r = await report;
+        expect(find(r, "verified"), `Sourcify ${match}`).toEqual({
+          id: "verified", status: "unknown", title: "Couldn't check source verification", detail: FORWARDS,
+          evidenceUrl: `https://arbitrum.blockscout.com/address/${TOKEN}?tab=contract`, fixAppId: null,
+        });
+        // What the slots hold, as for any proxy.
+        expect(find(r, "proxy"), `Sourcify ${match}`).toEqual({
+          id: "proxy", status: "fail", title: "Upgradeable proxy", detail: "Whoever controls the proxy admin can replace this contract's logic.",
+          evidenceUrl: `https://arbitrum.blockscout.com/address/${TOKEN}?tab=contract`, fixAppId: null,
+        });
+        // Its three proxy slots, then the admin slot of their layout. The implementation is never read as its logic.
+        expect(asked).toEqual([...PROXY_SLOTS, ADMIN_SLOT].map((slot) => `${TOKEN}:${slot}`));
+        expect(source.asked).toEqual([TOKEN]);
+        for (const id of ["ownership", "privileges", "prevrandao"] as const) expect(find(r, id).status, id).toBe("unknown");
+        expect(r.degraded).toBe(false);
+      }
+    });
+
+    it("names the admin its slot holds, and reads a ZeppelinOS-style or a beacon proxy the same way", async () => {
+      const admin = await onArbitrum({ [IMPL_SLOT]: word(IMPL), [ADMIN_SLOT]: word(ADMIN) }).report;
+      expect(find(admin, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable — admin 0x5555…5555", detail: `${ADMIN} holds the EIP-1967 admin slot and can replace this contract's logic.` });
+      const zeppelinos = onArbitrum({ [ZEPPELINOS_IMPL_SLOT]: word(IMPL), [ZEPPELINOS_ADMIN_SLOT]: word(ADMIN) });
+      expect(find(await zeppelinos.report, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable — admin 0x5555…5555", detail: `${ADMIN} holds the admin slot of this ZeppelinOS-style proxy and can replace this contract's logic.` });
+      expect(zeppelinos.asked.at(-1)).toBe(`${TOKEN}:${ZEPPELINOS_ADMIN_SLOT}`);
+      const beacon = await onArbitrum({ [BEACON_SLOT]: word(IMPL) }).report;
+      expect(find(beacon, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+      for (const r of [admin, await zeppelinos.report, beacon]) expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: FORWARDS });
+    });
+
+    it("can't vouch for its source when a slot couldn't be read, and doesn't say it forwards", async () => {
+      const failed = await onArbitrum({ [BEACON_SLOT]: new Error("ETIMEDOUT") }).report;
+      expect(find(failed, "verified")).toMatchObject({
+        status: "unknown",
+        detail: "This address's own source is verified, but its proxy slots couldn't be read, so whether it runs code from somewhere else can't be told.",
+      });
+      expect(find(failed, "proxy")).toEqual({
+        id: "proxy", status: "unknown", title: "Couldn't check if this contract is upgradeable",
+        detail: "This is an Arbitrum Stylus program (WebAssembly). Its EIP-1967 and ZeppelinOS proxy slots couldn't be read, and its code can't be, so whether it forwards its calls elsewhere can't be told.",
+        evidenceUrl: `https://arbitrum.blockscout.com/address/${TOKEN}?tab=contract`, fixAppId: null,
+      });
+      expect(failed.degraded).toBe(true);
+      // A malformed answer is no answer either, though nothing failed.
+      const malformed = await onArbitrum({ [IMPL_SLOT]: "0x01" }).report;
+      expect(find(malformed, "verified")).toMatchObject({ status: "unknown", detail: expect.stringContaining("its proxy slots couldn't be read") });
+      expect(find(malformed, "proxy")).toMatchObject({ status: "unknown", detail: expect.stringContaining("couldn't be read") });
+      expect(malformed.degraded).toBe(false);
+    });
+
+    it("keeps a plain Stylus program as it was: with every slot read and empty, its source is its own", async () => {
+      const { asked, report } = onArbitrum({});
+      const r = await report;
+      expect(find(r, "verified")).toMatchObject({ status: "pass", detail: "Anyone can read what this contract does." });
+      expect(find(r, "proxy")).toMatchObject({
+        status: "unknown",
+        detail: "This is an Arbitrum Stylus program (WebAssembly). Its EIP-1967 and ZeppelinOS proxy slots are empty, but its code can't be read, so whether it forwards its calls some other way can't be told.",
+      });
+      expect(asked).toEqual(PROXY_SLOTS.map((slot) => `${TOKEN}:${slot}`));
+    });
+
+    it("treats a proxy's Stylus implementation with slots of its own as a further proxy: never scored, never named as verified", async () => {
+      const asked: string[] = [];
+      const reader: FakeReader = {
+        ...fakeChain({ code: { [TOKEN]: PLAIN, [IMPL]: STYLUS }, reads: { [readKey(TOKEN, "totalSupply", [])]: 1000n } }),
+        getStorageAt: async (at, slot) => {
+          asked.push(`${at.toLowerCase()}:${slot}`);
+          return slot === IMPL_SLOT ? word(at.toLowerCase() === TOKEN ? IMPL : ADMIN) : null;
+        },
+      };
+      const r = await inspect({ ...chainInput(ARBITRUM), dex: null, address: TOKEN, network: "mainnet", reader, explorer: explorer(true), verifyFallback: sourcify(true) });
+      expect(asked).toEqual(expect.arrayContaining(PROXY_SLOTS.map((slot) => `${IMPL}:${slot}`)));
+      expect(find(r, "privileges")).toMatchObject({ status: "unknown", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." });
+      expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: FORWARDS });
+    });
+
+    it("reads no slot of an EIP-7702 delegated account, on Arc as off it: its key, not a slot, picks what it runs", async () => {
+      const delegated = `0xef0100${"ab".repeat(20)}`;
+      const offArc = onArbitrum({ [IMPL_SLOT]: word(IMPL) }, { code: delegated });
+      expect(find(await offArc.report, "proxy").detail).toBe("This address is an EIP-7702 delegated account: its key can point it at other code at any time, which this check can't follow.");
+      expect(offArc.asked).toEqual([]);
+      const asked: string[] = [];
+      const reader: FakeReader = {
+        ...fakeChain({ code: { [TOKEN]: delegated } }),
+        getStorageAt: async (at, slot) => {
+          asked.push(`${at.toLowerCase()}:${slot}`);
+          return null;
+        },
+      };
+      const arc = await inspect({ ...arcFields("mainnet"), address: TOKEN, network: "mainnet", reader, explorer: explorer(true), dex: null, knownLockers: [], explorerBase: "https://explorer.arc.io" });
+      expect(find(arc, "verified")).toMatchObject({ status: "unknown", title: "Couldn't check source verification" });
+      expect(asked).toEqual([]);
     });
   });
 });

@@ -320,13 +320,18 @@ below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table a
 
 - An EIP-7702 delegated account (an address whose code points at another contract's) and an Arbitrum Stylus program
   (WebAssembly) have no EVM bytecode of their own to scan. Ownership, privileges, proxy and `PREVRANDAO` read
-  "couldn't check" for them, and so does source verification for a delegated account, whose key can point it at other
-  code at any time. Holders, liquidity, the liquidity lock and the trade check run as for any token. This holds on
+  "couldn't check" for them, but for a Stylus program that is a proxy itself (below), and so does source verification
+  for a delegated account, whose key can point it at other code at any time. Holders, liquidity, the liquidity lock
+  and the trade check run as for any token. A Stylus program's EIP-1967 and ZeppelinOS proxy slots are read as any
+  contract's: they are all there is to go on, since its code can't be scanned for a call that forwards. With one of
+  them set, the proxy check fails as for any upgradeable proxy, naming the admin when its slot holds one, and source
+  verification reads "couldn't check", since the code that runs may be elsewhere; with one that can't be read, both
+  read "couldn't check". Only with every slot empty is a Stylus program's source checked as its own. This holds on
   every chain, Arc included: before, a delegated account on Arc read "Not a proxy", a pass about code its key can
   re-point, and its source verification and `PREVRANDAO` findings described the delegation, not the code it runs. A
   proxy or a clone whose implementation is a delegated account or a Stylus program isn't scanned either: its
   privileges and `PREVRANDAO` read "couldn't check", its ownership is never a pass, and a clone of one is never "not
-  upgradeable". A Stylus implementation's source is still checked, as its own.
+  upgradeable". A Stylus implementation's source is still checked, as its own, once its own proxy slots read empty.
 - It follows standard proxies one hop: EIP-1967 implementation and beacon slots, the older
   ZeppelinOS implementation and admin slots (Circle's FiatToken proxies, EURC among them), and
   EIP-1167 clones. A proxy behind a proxy, or one whose slots disagree, reads "unknown", not "clean".
