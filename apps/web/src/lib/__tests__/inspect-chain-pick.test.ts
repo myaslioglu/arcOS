@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { anyChainName, chainName, chainNamed, inspectorParams, notReadHere, pickToken, readsOtherChains, siteChain, siteChainBySlug, siteInspectChains } from "../inspect-chain-pick";
+import { parseInspectTarget } from "../inspect-target";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
@@ -124,6 +125,12 @@ describe("chainNamed", () => {
       "optimism",
       "optimism",
     ]);
+  });
+
+  it("names the chain `<name>:0x…` names, for every name tried", () => {
+    for (const name of ["arc", "ARC", "ethereum", "eth", "Base", "arbitrum", "arb1", "optimism", "OETH", "op", "polygon", "matic", "eip155"]) {
+      expect(chainNamed(name), name).toBe(parseInspectTarget(`${name}:${BASE_USDC}`)?.chain ?? null);
+    }
   });
 
   it("is null for any other name, and for anything that isn't a name", () => {

@@ -161,11 +161,11 @@ describe("inspect", () => {
   // The site reads Arc alone on the testnet site, whatever the flag says, and on the mainnet site with the flag unset.
   describe.each([
     ["testnet", "ethereum,base,arbitrum,optimism"],
-    ["mainnet", undefined],
-  ])("while the %s site reads Arc alone (flag %s)", (network, flag) => {
+    ["mainnet", ""],
+  ])("while the %s site reads Arc alone (NEXT_PUBLIC_INSPECT_CHAINS=%s)", (network, flag) => {
     beforeEach(() => {
       vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
-      vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", flag ?? "");
+      vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", flag);
     });
     afterEach(() => vi.unstubAllEnvs());
 

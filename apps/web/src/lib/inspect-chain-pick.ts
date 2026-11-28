@@ -50,8 +50,8 @@ export const anyChainName = (key: InspectChainKey): string => {
 /** What the Inspector says of a chain, by its name, that this site doesn't read. */
 export const notReadHere = (name: string): string => `Inspector doesn't read ${name} on this site.`;
 
-/** Any address, to read a name the way `<name>:0x…` reads it. */
-const ANY_ADDRESS = "0x0000000000000000000000000000000000000000";
+/** The address a name is read with, as `<name>:0x…`: an ordinary one, not the zero address, so only the name decides. */
+const ANY_ADDRESS = "0x1111111111111111111111111111111111111111";
 
 /**
  * The chain `name` names as the prefix of `<name>:0x…` does: a registry slug ("base") or the chain's ERC-3770 short name

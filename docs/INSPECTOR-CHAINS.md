@@ -24,8 +24,8 @@ settings and the owner's steps are in [DEPLOYING.md](DEPLOYING.md#the-inspectors
   site."), where it ignored it and opened the address on Arc; a window opened with a `chain` other than Arc's
   (`#app:inspector?chain=base&token=0x…`) says it doesn't read that chain, where it inspected the address on Arc; and
   the `inspect_run` count carries the chain ("arc"). Ctrl K is unchanged. The window reads these chains through
-  `/api/inspect/<slug>/<address>`, shows the chain's name and its other explorer, offers no Watchdog or Vault and
-  Vesting buttons (they are Arc's), and shares `/t/<slug>/<address>`.
+  `/api/inspect/<slug>/<address>`, shows the chain's name and its other explorer and when the server read the report,
+  offers no Watchdog or Vault and Vesting buttons (they are Arc's), and shares `/t/<slug>/<address>`.
 - Switch on one chain at a time. Watch the provider's dashboard and the explorer budget for a few days before the next.
 
 ## Where the reads go
