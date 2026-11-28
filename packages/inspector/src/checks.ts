@@ -666,9 +666,9 @@ const unvouchedLogic = (logic: LogicVerification): string =>
     : logic.why === "slot-not-followed"
       ? "This address's own source is verified, but its proxy slots name other code, which this check doesn't follow — so what it actually runs may be anything."
       : logic.why === "stylus" && logic.at === null
-        ? "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs."
+        ? "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source may not say what runs."
         : logic.why === "stylus"
-          ? `This proxy's own source is verified, but the code it runs (${logic.at}) is an Arbitrum Stylus program, whose code can't be read, so whether that program runs its own source or forwards again can't be told.`
+          ? `This proxy's own source is verified, but the code it runs (${logic.at}) is an Arbitrum Stylus program, whose code can't be read, so whether that program runs its own source or forwards again can't be told.${logic.info?.verified === false ? " The explorer says that program isn't verified, either." : ""}`
           : "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
 
 /** Where a finding about code no source vouches for links: the code it names, else this address's page. */

@@ -327,7 +327,7 @@ below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table a
   proxy check fails as for any upgradeable proxy, naming the admin when its slot holds one; with one that can't be
   read, it reads "couldn't check". Its source verification reads "couldn't check" in every case, even with every slot
   empty: a proxy can keep its implementation in an ordinary storage field (OpenZeppelin's Stylus proxy does), so a
-  program's own verified source doesn't say what runs. The finding says why: a slot couldn't be read, a set slot names
+  program's own verified source may not say what runs. The finding says why: a slot couldn't be read, a set slot names
   code this check doesn't follow, or nothing rules forwarding out. This holds on
   every chain, Arc included: before, a delegated account on Arc read "Not a proxy", a pass about code its key can
   re-point, and its source verification and `PREVRANDAO` findings described the delegation, not the code it runs. A

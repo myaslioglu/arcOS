@@ -550,7 +550,7 @@ describe("a whole inspection off Arc", () => {
   it("never vouches for an Arbitrum Stylus program's source, and reads its logic as unreadable", async () => {
     for (const match of [false, true]) {
       const r = await run("0xeff00000aabbccddeeff", { explorer: explorer(true), verifyFallback: sourcify(match) });
-      expect(find(r, "verified"), `Sourcify ${match}`).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs." });
+      expect(find(r, "verified"), `Sourcify ${match}`).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source may not say what runs." });
     }
     const r = await run("0xeff00000aabbccddeeff", { explorer: explorer(true), verifyFallback: sourcify(false) });
     for (const id of ["ownership", "privileges", "proxy", "prevrandao"] as const) expect(find(r, id).status, id).toBe("unknown");
@@ -589,6 +589,15 @@ describe("a whole inspection off Arc", () => {
         detail: `This proxy's own source is verified, but the code it runs (${IMPL}) is an Arbitrum Stylus program, whose code can't be read, so whether that program runs its own source or forwards again can't be told.`,
         evidenceUrl: `https://arbitrum.blockscout.com/address/${IMPL}?tab=contract`, fixAppId: null,
       });
+      // When the explorer says the program isn't verified, the finding says that too, and is still no fail off Arc.
+      const chain = fakeChain({ code: { [TOKEN]: PLAIN, [IMPL]: STYLUS }, reads: { [readKey(TOKEN, "totalSupply", [])]: 1000n } });
+      const reader: FakeReader = { ...chain, getStorageAt: async (at, slot) => (slot === IMPL_SLOT && at.toLowerCase() === TOKEN ? (`0x${"00".repeat(12)}${IMPL.slice(2)}` as `0x${string}`) : null) };
+      const unverifiedLogic: ExplorerSource = {
+        ...explorer(true),
+        contract: async (at) => ({ verified: at.toLowerCase() === TOKEN, name: null, abi: null, proxyType: null, implementations: [] }),
+      };
+      const u = await inspect({ ...chainInput(ARBITRUM), dex: null, address: TOKEN, network: "mainnet", reader, explorer: unverifiedLogic, verifyFallback: sourcify(false) });
+      expect(find(u, "verified")).toMatchObject({ status: "unknown", detail: expect.stringContaining("The explorer says that program isn't verified, either.") });
     });
 
     it("never calls a clone of a Stylus program or of an EIP-7702 delegated account 'not upgradeable'", async () => {
@@ -700,11 +709,11 @@ describe("a whole inspection off Arc", () => {
       // over unverified code that can mint, it reads exactly as a plain program does, so neither can pass.
       for (const match of [false, true]) {
         const { report } = onArbitrum({ "0x0000000000000000000000000000000000000000000000000000000000000000": word(IMPL) }, { source: sourcify(match) });
-        expect(find(await report, "verified"), `Sourcify ${match}`).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs." });
+        expect(find(await report, "verified"), `Sourcify ${match}`).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source may not say what runs." });
       }
       const { asked, report } = onArbitrum({});
       const r = await report;
-      expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs." });
+      expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source may not say what runs." });
       expect(find(r, "proxy")).toMatchObject({
         status: "unknown",
         detail: "This is an Arbitrum Stylus program (WebAssembly). Its EIP-1967 and ZeppelinOS proxy slots are empty, but its code can't be read, so whether it forwards its calls some other way can't be told.",

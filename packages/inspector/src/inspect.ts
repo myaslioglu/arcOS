@@ -477,7 +477,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * a call that forwards again, and may keep a further implementation in any storage slot, so its source never vouches
    * for what runs, whatever the explorer or Sourcify say about it. */
   const logicVerification: LogicVerification =
-    logicOpaque === "stylus" ? { at: logicAt, info: null, why: "stylus" } : { at: verifiedLogicAt, info: logicContract };
+    logicOpaque === "stylus" ? { at: logicAt, info: logicContract, why: "stylus" } : { at: verifiedLogicAt, info: logicContract };
   const findings = await Promise.all([
     // `logicAt` is where the code that runs WOULD live; it is only the code this engine actually
     // scored when `logicCode` came back with something. An implementation that turned out to be a
