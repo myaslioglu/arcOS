@@ -4,15 +4,25 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
 import { isAddress } from "viem";
-import { INSPECT_CHAINS, activeChain, activeNetwork, arcInspectChain, chainExplorerUrl, explorerUrl, otherExplorerUrl, type Address, type InspectChain } from "@arcos/chain";
+import { activeChain, activeNetwork, arcInspectChain, chainExplorerUrl, explorerUrl, otherExplorerUrl, type Address } from "@arcos/chain";
 import { NotAContract, inspect } from "@arcos/inspector";
 import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
 import { fetchIndexedExtras } from "@/lib/indexed-pools";
 import { inspectInput } from "@/lib/inspect-input";
-import { chainName, inspectorParams, notReadHere, pickToken, readsOtherChains, siteChainBySlug, siteInspectChains } from "@/lib/inspect-chain-pick";
+import {
+  chainName,
+  inspectorChain,
+  inspectorParams,
+  notReadHere,
+  pickToken,
+  readsOtherChains,
+  registryChainBySlug,
+  siteChainBySlug,
+  siteInspectChains,
+} from "@/lib/inspect-chain-pick";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
-import { NAME_DISCLOSURE, passLine } from "@/lib/proof";
+import { NAME_DISCLOSURE, passLine, readAtLine } from "@/lib/proof";
 import { FindingRow } from "./FindingRow";
 import { inspector } from "./manifest";
 import { NOT_HERE, ServerReportError, serverReport } from "./server-report";
@@ -20,24 +30,17 @@ import { NOT_HERE, ServerReportError, serverReport } from "./server-report";
 /** Arc's placeholder, as it always was: its USDC. Another chain's is that chain's USDC. */
 const ARC_PLACEHOLDER = "0x3600000000000000000000000000000000000000";
 
-/**
- * The chain the window's params name: Arc when they name none (or "arc"), the chain a slug names when this site reads it,
- * and null for any other slug, which the window says it doesn't read rather than inspect the address on Arc instead.
- */
-function chainOf(slug: string | undefined): InspectChain | null {
-  if (slug === undefined || slug === "arc") return arcInspectChain(activeNetwork());
-  return siteChainBySlug(slug);
-}
-
 export default function InspectorWindow({ winId, params }: AppProps) {
   const arc = activeChain();
   const client = usePublicClient({ chainId: arc.id });
   const { open, notify, setTitle } = useDesktop();
-  const chain = chainOf(params.chain);
+  // The chain the params name, read as the instance key reads it (inspectorChain): null for one this site doesn't read.
+  const chain = inspectorChain(params.chain);
   const offArc = chain !== null && chain.key !== "arc";
   // The chain picker shows only once the site reads a chain besides Arc; until then the window is Arc's, as it always was.
   const choices = readsOtherChains() ? siteInspectChains() : [];
-  const [draft, setDraft] = useState(params.token ?? "");
+  // A chain the window refuses leaves the input empty: one click on Inspect never reads that address on Arc instead.
+  const [draft, setDraft] = useState(chain === null ? "" : (params.token ?? ""));
   const [draftChain, setDraftChain] = useState(chain?.slug ?? "arc");
   const token = chain && isAddress(params.token ?? "", { strict: false }) ? (params.token as Address) : null;
 
@@ -125,7 +128,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
   const errorText =
     error instanceof ServerReportError ? error.message : error instanceof NotAContract ? "No contract at that address." : "Couldn't reach the network. Try again.";
   // A slug in the params that names no chain this site reads: said by name when the registry knows it, never echoed.
-  const unknownChain = chain === null ? INSPECT_CHAINS.mainnet.find((c) => c.slug === params.chain) : undefined;
+  const unknownChain = chain === null ? registryChainBySlug(params.chain ?? "") : null;
 
   return (
     <div className={`flex h-full flex-col text-sm ${over ? "outline outline-2 outline-accent" : ""}`} {...dropProps}>
@@ -155,9 +158,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
       </form>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {chain === null && (
-          <p className="text-accent-3-text">{unknownChain ? `Inspector doesn't read ${chainName(unknownChain)} on this site.` : NOT_HERE}</p>
-        )}
+        {chain === null && <p className="text-accent-3-text">{unknownChain ? notReadHere(chainName(unknownChain)) : NOT_HERE}</p>}
         {chain !== null && !token && <p className="text-muted">Paste a token address, or drag a token here from Finder.</p>}
         {token && !report && !error && <p className="text-muted">{offArc ? "Asking the ArcOS server…" : "Reading the contract…"}</p>}
         {error && <p className="text-accent-3-text">{errorText}</p>}
@@ -233,10 +234,11 @@ export default function InspectorWindow({ winId, params }: AppProps) {
       {/* The investment disclaimer is fixed wording (see the global constraints) — the second
           sentence mirrors one line of the README's "What Inspector can and can't see", so the
           limit is stated where the findings are read, not only in the repo. Another chain's report
-          comes from the server's cache, which the last sentence says. */}
+          is the site's server's, which may have read it minutes before (from its own cache, then
+          the CDN's), so the last sentences say who read it and when, as the proof page does. */}
       <p className="border-t border-border px-4 py-2 text-xs text-faint">
         {"Automated analysis, not investment advice. Upgradeable contracts, and code Inspector can't read, are never reported as clean."}
-        {offArc && " Read by the ArcOS server; reports are kept up to 5 minutes."}
+        {offArc && report && ` Read by the ArcOS server. ${readAtLine(report)}.`}
       </p>
     </div>
   );

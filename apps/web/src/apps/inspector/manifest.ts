@@ -1,5 +1,6 @@
 import { ScanSearch } from "lucide-react";
 import type { AppManifest } from "@arcos/shell";
+import { inspectorKey } from "@/lib/inspect-chain-pick";
 
 export const inspector: AppManifest = {
   id: "inspector",
@@ -10,8 +11,9 @@ export const inspector: AppManifest = {
   window: { w: 540, h: 640 },
   load: () => import("./Window"),
   acceptsDrop: ["token"],
-  // One window per token on Arc, keyed as it always was, and one per token on each other chain ("base:0x…").
-  instanceKey: (p) => (p.chain && p.chain !== "arc" ? `${p.chain}:${(p.token ?? "").toLowerCase()}` : (p.token ?? "").toLowerCase()),
+  // One window per token on Arc, keyed as it always was, and one per token on each other chain ("base:0x…"), with the
+  // chain read as the window reads it: see inspectorKey.
+  instanceKey: inspectorKey,
   requiresWallet: false,
   release: "r0",
   pinned: true,

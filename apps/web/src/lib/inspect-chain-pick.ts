@@ -1,4 +1,4 @@
-import { CHAINS, INSPECT_CHAINS, activeNetwork, enabledInspectChains, type InspectChain, type InspectChainKey, type NetworkId } from "@arcos/chain";
+import { CHAINS, INSPECT_CHAINS, activeNetwork, arcInspectChain, enabledInspectChains, type InspectChain, type InspectChainKey, type NetworkId } from "@arcos/chain";
 import { parseInspectTarget } from "./inspect-target";
 
 /**
@@ -35,6 +35,9 @@ export const siteChain = (key: InspectChainKey): InspectChain | null => siteInsp
 /** The chain a slug names, as typed in any case, when this site reads it; null otherwise. */
 export const siteChainBySlug = (slug: string): InspectChain | null => siteInspectChains().find((c) => c.slug === slugOf(slug)) ?? null;
 
+/** The registry's chain a slug names, as typed in any case, whether or not this site reads it: for saying it doesn't. */
+export const registryChainBySlug = (slug: string): InspectChain | null => INSPECT_CHAINS.mainnet.find((c) => c.slug === slugOf(slug)) ?? null;
+
 /** A chain's name as the Inspector shows it: "Arc" on both of Arc's networks, else the registry's ("Base", "OP Mainnet"). */
 export const chainName = (chain: Pick<InspectChain, "key" | "name">): string => (chain.key === "arc" ? "Arc" : chain.name);
 
@@ -65,6 +68,28 @@ export function chainNamed(name: string): InspectChainKey | null {
 /** The params that open the Inspector on `token` on `chain`: Arc's carry the token alone, as they always have. */
 export const inspectorParams = (chain: Pick<InspectChain, "key" | "slug">, token: string): Record<string, string> =>
   chain.key === "arc" ? { token } : { chain: chain.slug, token };
+
+/**
+ * The chain an Inspector window's `chain` param names: Arc when there is none, the chain a slug names (in any case) when
+ * this site reads it, and null for anything else, which the window says it doesn't read rather than inspect the address
+ * on Arc instead. The window and its instance key (`inspectorKey`) both read the param through this.
+ */
+export function inspectorChain(slug: string | undefined): InspectChain | null {
+  return slug === undefined ? arcInspectChain(activeNetwork()) : siteChainBySlug(slug);
+}
+
+/**
+ * The Inspector's instance key for a window's params, read as the window reads them (`inspectorChain`): the token alone
+ * on Arc, as it always was, whether `chain` is absent, "arc" or "ARC"; the chain's slug and the token on any other chain
+ * ("base:0x…"); and the slug as typed, in lower case, for a chain the window refuses ("polygon:0x…", ":0x…" for an empty
+ * one). So a token on one chain is one window, and a window that refuses its chain never takes over one with a report.
+ */
+export function inspectorKey(params: Record<string, string>): string {
+  const token = (params.token ?? "").toLowerCase();
+  const chain = inspectorChain(params.chain);
+  if (chain?.key === "arc") return token;
+  return `${chain ? chain.slug : slugOf(params.chain ?? "")}:${token}`;
+}
 
 /** Arc's two networks by name, for saying the site doesn't read the other one. */
 const ARC_NETWORKS: Record<NetworkId, string> = { mainnet: "Arc mainnet", testnet: "Arc Testnet" };
