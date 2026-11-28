@@ -307,10 +307,11 @@ Watchdog, Finder and the token index stay Arc's. The nine checks are the same. W
 - "No pool found" and "thin liquidity" are never warnings there. Each chain has pools the scan can't see: hooked or
   unusual-fee v4 pools, which no index lists off Arc, pools on other DEXes, and on Base and OP Mainnet the Slipstream
   pools of other factories. So those answers read "couldn't check" and name what wasn't read.
-- The liquidity lock check passes a token when at least 95% of its deepest Uniswap v2 pair's LP is burned, with no
-  deeper pool of another kind beside it, as on Arc. Anything else reads "couldn't check": no lock contract is recognized
-  on these chains yet, so LP that isn't burned may sit in one. It never fails a token there. Uniswap v4 positions aren't
-  read; the position index is Arc's.
+- The liquidity lock check never passes or fails a token there: it reads "couldn't check". A Uniswap v2 pair whose LP is
+  at least 95% burned passes on Arc, but each of these chains has pools the scan can't see (above), and one of them may
+  hold more than the pair, however deep the pair is, so the detail names what wasn't read. LP that isn't burned may sit
+  in a lock contract, and none is recognized on these chains yet. Uniswap v4 positions aren't read; the position index
+  is Arc's.
 - The trade check trades in pools against USDC only. Its simulator gets its USDC through a state override of USDC's
   balance (storage slot 9 on all four chains). Pools against USDT, WETH or ETH and the classic pools are never traded
   through, but a liquid or undecided one keeps a pass to a warning, as a hooked or EURC pool does on Arc.
@@ -324,7 +325,12 @@ Watchdog, Finder and the token index stay Arc's. The nine checks are the same. W
 - An EIP-7702 delegated account (an address whose code points at another contract's) and an Arbitrum Stylus program
   (WebAssembly) have no EVM bytecode of their own to scan. Ownership, privileges, proxy and `PREVRANDAO` read
   "couldn't check" for them, and so does source verification for a delegated account, whose key can point it at other
-  code at any time. Holders, liquidity, the liquidity lock and the trade check run as for any token.
+  code at any time. Holders, liquidity, the liquidity lock and the trade check run as for any token. This holds on
+  every chain, Arc included: before, a delegated account on Arc read "Not a proxy", a pass about code its key can
+  re-point, and its source verification and `PREVRANDAO` findings described the delegation, not the code it runs. A
+  proxy or a clone whose implementation is a delegated account or a Stylus program isn't scanned either: its
+  privileges and `PREVRANDAO` read "couldn't check", its ownership is never a pass, and a clone of one is never "not
+  upgradeable". A Stylus implementation's source is still checked, as its own.
 - It follows standard proxies one hop: EIP-1967 implementation and beacon slots, the older
   ZeppelinOS implementation and admin slots (Circle's FiatToken proxies, EURC among them), and
   EIP-1167 clones. A proxy behind a proxy, or one whose slots disagree, reads "unknown", not "clean".
@@ -566,9 +572,14 @@ Watchdog, Finder and the token index stay Arc's. The nine checks are the same. W
   - Source verification never fails a token, since Etherscan isn't read: a contract verified only on Etherscan reads
     "couldn't check", and so does one verified nowhere.
   - No lock contract is recognized, so LP in a locker reads "couldn't check", the same as LP in a wallet. A fail needs a
-    vetted list of each chain's lockers.
+    vetted list of each chain's lockers. Burned LP reads "couldn't check" too, since a pool the scan can't see may hold
+    more: a pass needs those pools read.
   - Holder concentration counts an exchange's hot wallet or a bridge like any wallet. On a large token they can fill
     the top ten.
+  - Holder concentration leaves out the pools the scan finds, and no others: a pool it can't see (on another DEX, or of
+    Slipstream's second factory on Base and OP Mainnet) counts as a holder, so the share can read higher than it is and
+    warn where it shouldn't. Over half is a fail there only when the holders with no code, which no pool is, hold over
+    half on their own; when contracts make up the rest, it is a warning that says so.
   - Explorer reads come out of the same Blockscout plan as Arc's server pages, Revoke and the indexer. Each server
     instance has a daily share for these chains (300 reads by default, 50 to 75 inspections). Past it, until the UTC day
     ends, holder concentration reads "couldn't check" and source verification rests on Sourcify alone.

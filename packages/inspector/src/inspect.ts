@@ -336,6 +336,14 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
       logicGap = gap;
     }
   }
+  // Logic resolved from somewhere else may have no EVM bytecode to scan, as the token's own may not (`opaqueCode`): an
+  // EIP-7702 delegated account or an Arbitrum Stylus program behind a proxy or a clone. It is a gap, never scanned as
+  // EVM: a byte of WebAssembly, or of the address a delegation names, is no opcode.
+  const logicOpaque = logicCode === null ? null : opaqueCode(logicCode);
+  if (logicOpaque !== null) {
+    logicCode = null;
+    logicGap = logicOpaque === "eip7702" ? "logic-eip7702" : "logic-stylus";
+  }
 
   // The ONE value behind both `proxy`'s upgradeability fail and R1's block on the logic checks.
   const upgradeable = cloneOf === null ? topSlotsSet : cloneTargetIsProxy;
@@ -377,6 +385,10 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * whose behaviour is decided somewhere else, including a DELEGATECALL to an address that couldn't
    * be identified at all. */
   const forwardsCalls = runsOtherCode || forwardsToUnidentifiedCode;
+  /** The code that runs, where `verified` names it: code this engine read and scored, or a Stylus program, whose source
+   * is its own as a Stylus token's is (`opaqueInspection`). An address the engine refused to score (a further proxy, empty
+   * code, a delegated account whose key picks what runs) is never named as "the implementation it runs". */
+  const verifiedLogicAt = logicCode !== null || logicOpaque === "stylus" ? logicAt : null;
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -394,7 +406,7 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   // Sourcify, where the chain asks it: about this address, and about the code it runs when that was identified and read.
   const verification = input.verifyFallback ? askVerification(input.verifyFallback, markDegraded) : null;
   const sourcifyAsked: Promise<SourcifyAnswers | null> = verification
-    ? Promise.all([verification(address), forwardsCalls && logicAt && logicCode !== null ? verification(logicAt) : Promise.resolve(null)]).then(([own, logic]) => ({ own, logic }))
+    ? Promise.all([verification(address), forwardsCalls && verifiedLogicAt ? verification(verifiedLogicAt) : Promise.resolve(null)]).then(([own, logic]) => ({ own, logic }))
     : Promise.resolve(null);
 
   const [contract, logicContract, tokenInfo, holderPage, owner, poolScan, blockNumber, arcosTemplate, sourcify] = await Promise.all([
@@ -462,13 +474,14 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
     // scored when `logicCode` came back with something. An implementation that turned out to be a
     // proxy itself, or that points at empty code, is an address the engine explicitly refused to
     // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
-    // finding saying that code couldn't be identified is the report contradicting itself.
-    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: logicCode === null ? null : logicAt, info: logicContract } : null, arcosTemplate, sourcify)),
+    // finding saying that code couldn't be identified is the report contradicting itself. A Stylus
+    // program is the one exception (`verifiedLogicAt`): its code is identified, only not EVM.
+    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: verifiedLogicAt, info: logicContract } : null, arcosTemplate, sourcify)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
       if (cloneOf === null && topSlotsError) throw topSlotsError;
-      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, upgradeable, slotKind, admin });
+      return checkProxy(input, { cloneOf, cloneReadFailed, cloneTargetEmpty, targetSlotsRead, forwardsToUnidentifiedCode, logicDelegates, logicOpaque, upgradeable, slotKind, admin });
     }),
     guard("holders", () => checkHolders(input, holderPage, supply, poolScan, tokenInfo?.holdersCount ?? null)),
     guard("liquidity", () => checkLiquidity(input, poolScan)),

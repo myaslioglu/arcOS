@@ -499,8 +499,8 @@ revoked key (Alchemy answers 401, -32600 `Must be authenticated!`) costs one fai
 instance, and every read goes to the public RPC: the pages keep working, on an endpoint that promises no capacity.
 Without the secret, or with the value `none` (as on testnet), only the public RPCs are read.
 
-To rotate the key: create the new one at Alchemy, add it as a new version of the secret
-(`read -rsp 'Key: ' K; echo; printf %s "$K" | gcloud secrets versions add INSPECT_RPC_KEY --project arcos-c80cf --data-file=-; unset K`),
+To rotate the key: create the new one at Alchemy, add it as a new version of the secret (in bash, Cloud Shell's shell:
+`read -rsp 'Key: ' K; echo; printf %s "$K" | gcloud secrets versions add INSPECT_RPC_KEY --project arcos-c80cf --data-file=-; unset K`),
 bump the `@N` pin in `apps/web/apphosting.yaml` and let that merge roll out. Only then delete the old key at Alchemy and
 destroy the old version: an instance resolves its pinned version when it starts, so destroying a version a running
 rollout is pinned to stops new instances from starting.
@@ -517,9 +517,14 @@ the day's budget at once. Past the budget, an inspection runs without the explor
 "couldn't check" and source verification rests on Sourcify, and the report, the proof page, the badge's title and the
 social card say "The explorer wasn't asked: this server has used up today's explorer reads for chains other than Arc."
 Such a report isn't degraded, so it is kept 5 minutes. To change the budget, set `INSPECT_EXPLORER_DAILY_BUDGET` (a
-plain runtime value, a whole number from 0 to 1,000,000; 0 never asks the explorer for these chains) in
-`apps/web/apphosting.yaml`; anything else is ignored and the default applies. Without `BLOCKSCOUT_API_KEY` the explorer
-is never asked for these chains, and the reports say "this server has no key for it".
+plain runtime value, a whole number from 0 to 1,000,000) in `apps/web/apphosting.yaml`; anything else is ignored and the
+default applies. 0 switches these reads off: the explorer is never asked for these chains, and the reports say "The
+explorer wasn't asked: this server's explorer reads for chains other than Arc are switched off." Without
+`BLOCKSCOUT_API_KEY` the explorer is never asked for these chains, and the reports say "this server has no key for it".
+While the budget lasts, these chains' explorer reads wait in the same queue as Arc's (4 a second per instance), since
+the PRO API's limit is per key: with Arc's 8 inspections and these chains' 4 all reading the explorer at once, up to 72
+reads take about 18 seconds, past the 15-second deadline, so the inspections last in line, on any chain, answer "busy"
+until the queue is through. Once the day's budget is spent, these chains add nothing to it.
 
 **What it costs.** Alchemy prices requests in compute units (CU): 26 for an `eth_call`, 20 for `eth_getCode`,
 `eth_getStorageAt` or `eth_gasPrice`, 10 for `eth_blockNumber` (its pricing page, 2026-11-27). An uncached inspection
@@ -531,6 +536,11 @@ plan also caps throughput (300 CU a second on the same page; pay as you go, 10,0
 chain's public RPC for the next minute. With the key used for the measurements, a burst of 120 parallel `eth_call`s on Base
 all went through. Sourcify is free and needs no key. The explorer calls come out of the Blockscout plan, within the
 budget above.
+
+**At once.** Each instance runs at most 4 uncached inspections of these chains at a time, the four chains together, in
+a gate of their own (`apps/web/src/lib/inspect-server.ts`); the next one answers "busy". Arc keeps its own 8, as before
+there were other chains, so a few clients walking uncached pages of these chains, 30 a minute each, fill only theirs and
+never take one of Arc's slots. The explorer queue is still shared (above).
 
 **Signs to watch.** The provider's dashboard (requests and CU by chain) for cost. In Logs Explorer on the `arcos`
 service, the same lines as Arc's with the chain's slug before the error's name: `inspect failed base TypeError`, and

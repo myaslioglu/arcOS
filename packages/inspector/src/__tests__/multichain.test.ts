@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { UNISWAP_V4, inspectChain, type DexConfig } from "@arcos/chain";
-import { checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools, type SourcifyAnswers } from "../checks";
+import { IMPL_SLOT, checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools, type SourcifyAnswers } from "../checks";
 import { chainInput } from "../chain-input";
 import type { ContractInfo, ExplorerSource, Holder } from "../explorer";
 import { inspect } from "../inspect";
@@ -200,6 +200,33 @@ describe("holders off Arc", () => {
     expect(scan.pools.map((p) => p.address)).toEqual([PAIR, CLASSIC_POOL]);
     expect(checkHolders(input, { holders, complete: true }, 1_000n, scan, null)).toMatchObject({ status: "pass", title: "Top 10 wallets hold 10%" });
   });
+
+  it("fails over half only on holders with no code: a contract among them may be a pool the scan can't see", async () => {
+    const { input, scan } = await scanOf({});
+    const UNSEEN = "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a"; // a pair on another DEX, say
+    const wallet = (i: number) => `0x${(0xa0 + i).toString(16).repeat(20)}`;
+    const holders = (pool: bigint, each: bigint, wallets = 9): Holder[] => [
+      { address: UNSEEN, isContract: true, name: null, value: pool },
+      ...Array.from({ length: wallets }, (_, i) => ({ address: wallet(i), isContract: false, name: null, value: each })),
+    ];
+    const why = (noCode: string) =>
+      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee, Slipstream pools from other factories and pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold ${noCode}.`;
+    expect(checkHolders(input, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toEqual({
+      id: "holders",
+      status: "warn",
+      title: "Top 10 wallets hold 69%",
+      detail: why("9%"),
+      evidenceUrl: `https://base.blockscout.com/token/${TOKEN}?tab=holders`,
+      fixAppId: null,
+    });
+    // A floor over half, the same way: the PoolManager's row is left out, and the explorer doesn't say the list is whole.
+    const floor = [{ address: UNISWAP_V4.poolManager, isContract: true, name: null, value: 50n }, ...holders(600n, 10n, 8)];
+    expect(checkHolders(input, { holders: floor, complete: false }, 1_000n, scan, null)).toMatchObject({ status: "warn", title: "The top 9 wallets hold at least 68%", detail: why("8%") });
+    // Holders with no code over half on their own: no pool is among them, so it is the fail it always was.
+    expect(checkHolders(input, { holders: holders(100n, 60n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", title: "Top 10 wallets hold 64%", fixAppId: "vesting" });
+    // A chain that reads every kind of pool it has, as Arc does, fails on the contract's share too, as before.
+    expect(checkHolders({ ...input, unscanned: [] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", detail: "Excludes burn addresses, liquidity pools and known lock contracts." });
+  });
 });
 
 describe("lp-lock off Arc, where no lock contracts are vetted", () => {
@@ -207,14 +234,70 @@ describe("lp-lock off Arc, where no lock contracts are vetted", () => {
     const { input, scan } = await scanOf(reads, over);
     return checkLpLock(input, scan);
   };
+  /** The same on a chain that reads every kind of pool there is: Base's entry with nothing unscanned. */
+  const lpLockEverywhere = async (reads: Record<string, unknown>) => {
+    const input = onBase(fakeChain({ reads: { ...noPools(baseLike), ...reads } }), { unscanned: [] });
+    return checkLpLock(input, await findPools(input));
+  };
+  const BASE_UNSCANNED =
+    "On Base, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee, Slipstream pools from other factories and pools on other DEXes, so a deeper pool there can't be ruled out.";
 
-  it("passes a v2 pair against WETH whose LP is burned: a share of LP needs no price", async () => {
-    expect(await lpLock(pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n }))).toMatchObject({
+  it("never passes a burned v2 pair where the chain has pools it can't see: one of them may hold more", async () => {
+    expect(await lpLock(pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n }))).toEqual({
+      id: "lp-lock",
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: `100% of the v2 LP supply can't be withdrawn. ${BASE_UNSCANNED}`,
+      evidenceUrl: `https://base.blockscout.com/token/${PAIR}?tab=holders`,
+      fixAppId: null,
+    });
+  });
+
+  it("passes a burned v2 pair against WETH on a chain that reads every kind of pool: a share of LP needs no price", async () => {
+    expect(await lpLockEverywhere(pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n }))).toMatchObject({
       status: "pass",
       title: "Liquidity is burned or locked",
       detail: "100% of the v2 LP supply can't be withdrawn.",
       evidenceUrl: `https://base.blockscout.com/token/${PAIR}?tab=holders`,
     });
+  });
+
+  it("can't pass a token on a tiny burned pair beside a market the scan can't see, on Ethereum, however deep the pair", async () => {
+    // One Uniswap v2 USDC pair holding 50 USDC, its LP all at 0xdead; the token's real market is on another DEX or in a
+    // hooked v4 pool, which Ethereum's scan doesn't read. Liquidity says a deeper pool can't be ruled out, and so does lp-lock.
+    const ethereum = inspectChain("mainnet", "ethereum")!;
+    const [ethUsdc, ethUsdt, ethWeth] = ethereum.dex!.quoteTokens;
+    const dex: DexConfig = { quoteTokens: [ethUsdc!, ethUsdt!, ethWeth!], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4 };
+    const onEthereum = async (usdc: bigint) => {
+      const chain = fakeChain({
+        reads: {
+          ...noPools(dex),
+          [readKey(V2, "getPair", [TOKEN, ethUsdc!.address])]: PAIR,
+          ...v2PairReads(PAIR, ethUsdc!.address, TOKEN, usdc),
+          [readKey(PAIR, "totalSupply", [])]: 100n,
+          [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
+          [readKey(PAIR, "balanceOf", [DEAD])]: 100n,
+        },
+      });
+      const input: InspectInput = { ...chainInput(ethereum), dex, address: TOKEN, network: "mainnet", reader: chain, explorer: null };
+      const scan = await findPools(input);
+      return { lpLock: await checkLpLock(input, scan), liquidity: checkLiquidity(input, scan) };
+    };
+    const unscanned = "On Ethereum, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee and pools on other DEXes, so a deeper pool there can't be ruled out.";
+    const tiny = await onEthereum(50n * USDC_UNITS);
+    expect(tiny.liquidity).toMatchObject({ status: "unknown", detail: `Deepest pool holds 50 USDC. ${unscanned}` });
+    expect(tiny.lpLock).toEqual({
+      id: "lp-lock",
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: `100% of the v2 LP supply can't be withdrawn. ${unscanned}`,
+      evidenceUrl: `https://eth.blockscout.com/token/${PAIR}?tab=holders`,
+      fixAppId: null,
+    });
+    // A deep pair is no exception: a pool the scan can't see may be deeper still.
+    const deep = await onEthereum(5_000_000n * USDC_UNITS);
+    expect(deep.liquidity).toMatchObject({ status: "pass" });
+    expect(deep.lpLock).toMatchObject({ status: "unknown", detail: `100% of the v2 LP supply can't be withdrawn. ${unscanned}` });
   });
 
   it("never fails LP that isn't burned: it may sit in a lock contract nobody vetted", async () => {
@@ -245,10 +328,24 @@ describe("lp-lock off Arc, where no lock contracts are vetted", () => {
 
   it("ranks pools against the same unpriced quote by their depth, as it ranks dollars", async () => {
     const burned = pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n });
-    expect(await lpLock({ ...burned, ...v3Pool(WETH, ONE_WETH) })).toMatchObject({ status: "pass" });
+    // The shallower v3 pool is no rival: on Base it is what Base doesn't read that keeps the pair from passing.
+    expect(await lpLockEverywhere({ ...burned, ...v3Pool(WETH, ONE_WETH) })).toMatchObject({ status: "pass" });
+    expect(await lpLock({ ...burned, ...v3Pool(WETH, ONE_WETH) })).toMatchObject({ status: "unknown", detail: `100% of the v2 LP supply can't be withdrawn. ${BASE_UNSCANNED}` });
+    // A deeper one is said first, as the pool that may hold more.
     expect(await lpLock({ ...burned, ...v3Pool(WETH, 9n * ONE_WETH) })).toMatchObject({
       status: "unknown",
       detail: "The deepest pool is a Uniswap v3 position, which can't be read without an index yet.",
+    });
+  });
+
+  it("says it doesn't read who holds a deeper classic pool's liquidity, as a plain ERC-20 it is, not a position", async () => {
+    expect(await lpLock({ ...pair(PAIR, USDC, 2_000n * USDC_UNITS, { supply: 100n, burned: 100n }), ...classicPool(USDC, 10_000n * USDC_UNITS) })).toEqual({
+      id: "lp-lock",
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: "The deepest pool is an Aerodrome classic pool, and Inspector doesn't read who holds the liquidity in it yet.",
+      evidenceUrl: null,
+      fixAppId: null,
     });
   });
 
@@ -319,6 +416,28 @@ describe("source verification with Sourcify beside the explorer", () => {
     expect(verify(record(false), { own: false, logic: null }, null, { unverifiedFails: true })).toMatchObject({ status: "fail", title: "Source code isn't verified" });
   });
 
+  it("never fails off Arc on the explorer's 'not verified' alone either, when Sourcify isn't asked", async () => {
+    const alone = (contract: ContractInfo, logic: { at: `0x${string}`; info: ContractInfo } | null = null, over: Partial<InspectInput> = {}) =>
+      checkVerified(input(over), contract, logic, null, null);
+    const ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
+    expect(alone(record(false))).toEqual({
+      id: "verified",
+      status: "unknown",
+      title: "Couldn't check source verification",
+      detail: `The explorer says this contract isn't verified. ${ETHERSCAN}`,
+      evidenceUrl: CONTRACT_TAB,
+      fixAppId: null,
+    });
+    expect(alone(record(true), { at: IMPL, info: record(false) })).toMatchObject({
+      status: "unknown",
+      detail: `The proxy's own source is verified, but the explorer says the implementation it runs (${IMPL}) isn't. ${ETHERSCAN}`,
+      evidenceUrl: `https://base.blockscout.com/address/${IMPL}?tab=contract`,
+    });
+    // Where the chain allows a fail, as Arc does, the explorer's word is enough, as it always was.
+    expect(alone(record(false), null, { unverifiedFails: true })).toMatchObject({ status: "fail", title: "Source code isn't verified" });
+    expect(alone(record(true), { at: IMPL, info: record(false) }, { unverifiedFails: true })).toMatchObject({ status: "fail", title: "The code this proxy runs isn't verified" });
+  });
+
   it("says what each source did when they can't decide", async () => {
     const detail = (contract: ContractInfo | null, own: boolean | null, over: Partial<InspectInput> = {}) => verify(contract, { own, logic: null }, null, over).detail;
     expect(detail(null, false)).toBe("The explorer didn't answer. Sourcify has no match for this contract.");
@@ -372,6 +491,14 @@ describe("a whole inspection off Arc", () => {
     expect(r).toMatchObject({ chain: "base", chainId: 8453, degraded: false });
   });
 
+  it("never fails source verification when no second source is given", async () => {
+    const r = await run(PLAIN, { explorer: explorer(false) });
+    expect(find(r, "verified")).toMatchObject({
+      status: "unknown",
+      detail: "The explorer says this contract isn't verified. Etherscan wasn't checked, and many contracts are verified there only.",
+    });
+  });
+
   it("marks the report degraded when Sourcify couldn't answer, and the finding unknown", async () => {
     const r = await run(PLAIN, { explorer: explorer(false), verifyFallback: sourcify(new Error("down")) });
     expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: "The explorer says this contract isn't verified. Sourcify didn't answer." });
@@ -404,6 +531,56 @@ describe("a whole inspection off Arc", () => {
     for (const id of ["ownership", "privileges", "proxy", "prevrandao"] as const) expect(find(r, id).status, id).toBe("unknown");
     expect(find(r, "prevrandao").detail).toBe("This is an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.");
   });
+
+  describe("logic behind a proxy or a clone that isn't EVM bytecode", () => {
+    const ARBITRUM = inspectChain("mainnet", "arbitrum")!;
+    const IMPL = "0x2222222222222222222222222222222222222222";
+    // A Stylus program: its prefix, then WebAssembly, whose bytes include 0x44 (PREVRANDAO) and 0xf4 (DELEGATECALL) as data.
+    const STYLUS = `0xeff00000${"0a1b2c44f4"}${"9d".repeat(8)}44`;
+    const clone = (target: string) => `0x363d3d373d3d3d363d73${target.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+    /** An inspection on Arbitrum One of TOKEN with `code`, the EIP-1967 implementation slot of each address in `impl`. */
+    const onArbitrum = (code: Record<string, string>, impl: Record<string, string> = {}, source = sourcify(false)) => {
+      const chain = fakeChain({ code, reads: { [readKey(TOKEN, "totalSupply", [])]: 1000n } });
+      const reader: FakeReader = {
+        ...chain,
+        getStorageAt: async (at, slot) => (slot === IMPL_SLOT && impl[at.toLowerCase()] ? (`0x${"00".repeat(12)}${impl[at.toLowerCase()]!.slice(2)}` as `0x${string}`) : null),
+      };
+      return inspect({ ...chainInput(ARBITRUM), dex: null, address: TOKEN, network: "mainnet", reader, explorer: explorer(true), verifyFallback: source });
+    };
+    const STYLUS_LOGIC = "This contract runs an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.";
+
+    it("never scans a proxy's Stylus implementation as EVM, and checks the program's source as its own", async () => {
+      const source = sourcify(false);
+      const r = await onArbitrum({ [TOKEN]: PLAIN, [IMPL]: STYLUS }, { [TOKEN]: IMPL }, source);
+      // Scanned as EVM, the 0x44 in the WebAssembly read "Uses PREVRANDAO, always 1 on Arbitrum".
+      expect(find(r, "prevrandao")).toEqual({ id: "prevrandao", status: "unknown", title: "Couldn't read the contract's logic", detail: STYLUS_LOGIC, evidenceUrl: null, fixAppId: null });
+      expect(find(r, "privileges")).toMatchObject({ status: "unknown", detail: STYLUS_LOGIC });
+      expect(find(r, "ownership")).toMatchObject({ status: "unknown" });
+      expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+      expect(source.asked).toEqual([TOKEN, IMPL]);
+      expect(find(r, "verified")).toMatchObject({ status: "pass", detail: `Both this proxy and the implementation it runs (${IMPL}) are verified.` });
+    });
+
+    it("never calls a clone of a Stylus program or of an EIP-7702 delegated account 'not upgradeable'", async () => {
+      const stylus = await onArbitrum({ [TOKEN]: clone(IMPL), [IMPL]: STYLUS });
+      expect(find(stylus, "proxy")).toMatchObject({
+        status: "unknown",
+        title: "Couldn't check if this clone is upgradeable",
+        detail: `This is an EIP-1167 clone of ${IMPL}, an Arbitrum Stylus program (WebAssembly), whose code this check can't read, so whether it forwards its calls elsewhere can't be told.`,
+      });
+      expect(find(stylus, "prevrandao")).toMatchObject({ status: "unknown", detail: STYLUS_LOGIC });
+      const delegated = await onArbitrum({ [TOKEN]: clone(IMPL), [IMPL]: `0xef0100${"44".repeat(20)}` });
+      expect(find(delegated, "proxy")).toMatchObject({
+        status: "unknown",
+        detail: `This is an EIP-1167 clone of ${IMPL}, an EIP-7702 delegated account, whose key can point it at other code at any time.`,
+      });
+      for (const id of ["privileges", "prevrandao"] as const) {
+        expect(find(delegated, id).detail, id).toBe("This contract runs the code of an EIP-7702 delegated account, whose key can point it at other code at any time, so its logic can't be read.");
+      }
+      // Whatever code the account points at runs, so no one contract's source is "the implementation it runs".
+      expect(find(delegated, "verified")).toMatchObject({ status: "unknown", detail: expect.stringContaining("forwards its calls to code that couldn't be identified") });
+    });
+  });
 });
 
 describe("Arc, untouched by any of it", () => {
@@ -417,6 +594,12 @@ describe("Arc, untouched by any of it", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+
+  it("still passes a burned v2 pair on Arc, which reads every kind of pool it has", async () => {
+    const chain = fakeChain({ reads: { ...noPools(baseLike), ...pair(PAIR, USDC, 5_000n * USDC_UNITS, { supply: 100n, burned: 100n }) } });
+    const input = { ...arcFields("mainnet"), address: TOKEN, network: "mainnet", reader: chain, explorer: null, dex: baseLike, knownLockers: [], explorerBase: "https://explorer.arc.io" } as InspectInput;
+    expect(await checkLpLock(input, await findPools(input))).toMatchObject({ status: "pass", title: "Liquidity is burned or locked", detail: "100% of the v2 LP supply can't be withdrawn." });
   });
 
   it("passes an unscanned-free registry entry, so 'no pool' and 'thin' stay what they were", () => {

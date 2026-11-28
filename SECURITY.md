@@ -178,8 +178,9 @@ The Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet only from the si
   only `server-rpc.ts` imports (a test pins both, and that no `NEXT_PUBLIC_` name holds a key). It is sent in the
   `Authorization: Bearer` header to the provider's fixed hosts (`eth-mainnet`, `base-mainnet`, `arb-mainnet` and
   `opt-mainnet.g.alchemy.com`), never in a URL: viem writes the URL into its error messages, and the routes log an
-  error's name only. The deploy's bundle scan (`scripts/scan-bundle.mjs`) looks for the strings in its secret list in
-  both the browser and the server build; the key's line in that list is one of the owner's steps
+  error's name only. Being read at runtime only, the key is in no build. The deploy's bundle scan
+  (`scripts/scan-bundle.mjs`) looks for the strings in its secret list in both the browser and the server build, and a
+  line there for a key put into an Alchemy URL at build time, never the key itself, is an optional owner step
   ([docs/DEPLOYING.md](docs/DEPLOYING.md#the-inspectors-other-chains)). Without the key, or with the value `none`, the
   server reads each chain's public RPC.
 - **Where requests go.** Every host is fixed in code: the provider, each chain's public RPC, Blockscout's PRO API by
@@ -195,7 +196,9 @@ The Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet only from the si
   network.
 - **Spending.** Each chain's pages, card and badge take a turn from a per-client limiter (above), and the explorer reads
   for these chains have a daily budget per server instance ([docs/OPERATIONS.md](docs/OPERATIONS.md#the-inspectors-other-chains)).
-  Walking many addresses costs a client its turns, not the site's quota.
+  Walking many addresses costs a client its turns, not the site's quota. At most 4 uncached inspections of these chains
+  run at once in an instance, in a gate apart from Arc's 8, so that walk can fill these chains' gate but never takes one
+  of Arc's slots.
 
 ## Connecting a phone wallet
 

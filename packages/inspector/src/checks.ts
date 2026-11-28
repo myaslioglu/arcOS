@@ -6,7 +6,8 @@
  *   chain but Arc), a match there is as good as the explorer's "verified", and "not verified" needs
  *   both: the explorer's explicit `false` and no match on Sourcify. Even that is a `fail` only where
  *   the chain allows one (`unverifiedFails`, Arc alone): elsewhere Etherscan, which isn't read, may
- *   hold the source, so it is unknown. See `checkVerifiedWithSourcify`.
+ *   hold the source, so it is unknown, whether Sourcify was asked or not. See
+ *   `checkVerifiedWithSourcify`.
  * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next
  *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
  *   whether anyone controls it can't be told either way; or there's no owner function but the
@@ -17,7 +18,8 @@
  *   renounced Ownable leaves the roles untouched, so it's reported as role-based admin (a warn).
  * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone, or an
  *   EIP-1967 or ZeppelinOS-style proxy, whose implementation is unreachable, points at empty code,
- *   is itself a proxy, or can't be picked out because its slots name two candidates); or
+ *   is itself a proxy, can't be picked out because its slots name two candidates, or isn't EVM
+ *   bytecode: an EIP-7702 delegated account or an Arbitrum Stylus program); or
  *   privileged functions were found but the owner is unknown, or there's no owner function at all
  *   (can't tell if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's
  *   bytecode and ABI, never on its own trampoline, which has no dispatcher and so would look
@@ -32,7 +34,9 @@
  *   upgradeable proxy is a fail ("Clone of an upgradeable proxy"), not a pass; a clone whose
  *   target's own proxy slots couldn't be read is unknown, because an unread slot is not an unset
  *   one; code that delegates calls (DELEGATECALL) but resolves to no known clone target or proxy
- *   slot is unknown, not "not a proxy".
+ *   slot is unknown, not "not a proxy"; so is a clone of an EIP-7702 delegated account (its key can
+ *   point it at other code) or of an Arbitrum Stylus program (its code can't be scanned for a
+ *   DELEGATECALL), never "not upgradeable".
  * - holders: the explorer didn't answer, total supply is unknown, or the holder list came back
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
@@ -41,7 +45,9 @@
  *   the explorer confirms neither (through `next_page_params` nor through its own holders-count)
  *   that they are every holder there is, since a share added up from an unknown fraction of the
  *   holders is a floor, not a concentration figure — a floor can still be a warn or a fail, but
- *   never a pass.
+ *   never a pass. On a chain with pools discovery can't see (`unscanned`), such a pool is counted
+ *   as a holder, so over half is a fail there only when the holders with no code (no pool is one)
+ *   hold over half on their own; otherwise it is a warn that says so.
  * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
  *   or every pool contract reverted (an address with no contract code does that, and inside a
  *   multicall answers 0x), which is never reported as "no pool found" — that would be a claim about
@@ -60,9 +66,10 @@
  *   (no evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain whose lock
  *   contracts aren't vetted (`lockersVetted`), where the rest may sit in one. A pool or pair whose depth can't be set
  *   against the judged pair's (one is against a currency with no dollar rate yet, WETH) may be the deeper one: unknown
- *   too, as are v2 pairs against both kinds of quote, since which holds the most can't be told. One thing it doesn't
- *   see, as before: a wallet's token-only range in a Uniswap v3 or Aerodrome pool beside a burned v2 pair holds no quote,
- *   so the pair still passes.
+ *   too, as are v2 pairs against both kinds of quote, since which holds the most can't be told. So is a burned pair,
+ *   however deep, on a chain with pools discovery can't see (`unscanned`: every chain but Arc), since one of those may
+ *   hold more: there lp-lock never passes. One thing it doesn't see, as before: a wallet's token-only range in a Uniswap
+ *   v3 or Aerodrome pool beside a burned v2 pair holds no quote, so the pair still passes.
  * - lp-lock with the position index adds WARNINGS for Uniswap v4 liquidity, and nothing else: never a pass, never a
  *   fail (`tallyLiquidity`, lp-path.ts, `lpLockByPath`). Every pass, every fail and every unknown is the old check's,
  *   and so are its words, but for one thing. Three of its unknowns say positions "can't be read without an index yet"
@@ -210,15 +217,19 @@ const FORWARDS_TO_UNIDENTIFIED_DETAIL =
  * Why the engine has no logic code to score. A proxy's own bytecode is a trampoline with no
  * function dispatcher, so scoring it would read "nothing privileged here" off the proxy instead of
  * off the code that actually runs — every one of these is `unknown`, never a pass. `null` means the
- * logic code WAS read.
+ * logic code WAS read. The last two are logic that was found but isn't EVM bytecode (`opaqueCode`):
+ * an EIP-7702 delegated account or an Arbitrum Stylus program behind a proxy or a clone, never
+ * scanned as EVM.
  */
-export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous";
+export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous" | "logic-eip7702" | "logic-stylus";
 
 const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
   "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
   "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
   "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
   "logic-ambiguous": { title: "Couldn't read the contract's logic", detail: "This proxy's slots name two different places its logic could live — both of EIP-1967's slots, or an EIP-1967 slot and the ZeppelinOS one — and only its own bytecode decides which it runs, so which code to read can't be told." },
+  "logic-eip7702": { title: "Couldn't read the contract's logic", detail: "This contract runs the code of an EIP-7702 delegated account, whose key can point it at other code at any time, so its logic can't be read." },
+  "logic-stylus": { title: "Couldn't read the contract's logic", detail: "This contract runs an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read." },
 };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -649,6 +660,9 @@ export type LogicVerification = { at: Address | null; info: ContractInfo | null 
  */
 export type SourcifyAnswers = { own: boolean | null; logic: boolean | null };
 
+/** Why "not verified" is no fail off Arc (`unverifiedFails`): the source may be on Etherscan, which Inspector doesn't read. */
+const NOT_ON_ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
+
 export function checkVerified(
   input: InspectInput,
   contract: ContractInfo | null,
@@ -666,7 +680,12 @@ export function checkVerified(
   }
   if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", input.explorerSkipped ?? "The explorer didn't answer.", { evidenceUrl: url });
   if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });
-  if (!contract.verified) return finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
+  // A "not verified" is a fail only where the chain allows one (`unverifiedFails`, Arc), with a second source or without.
+  if (!contract.verified) {
+    return input.unverifiedFails
+      ? finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url })
+      : finding("verified", "unknown", "Couldn't check source verification", `The explorer says this contract isn't verified. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: url });
+  }
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
   if (logic.at === null) {
     return finding("verified", "unknown", "Couldn't check source verification", "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", { evidenceUrl: url });
@@ -675,9 +694,10 @@ export function checkVerified(
   if (logic.info === null || logic.info.verified === null) {
     return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
   }
-  return logic.info.verified
-    ? finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url })
-    : finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl });
+  if (logic.info.verified) return finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url });
+  return input.unverifiedFails
+    ? finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl })
+    : finding("verified", "unknown", "Couldn't check source verification", `The proxy's own source is verified, but the explorer says the implementation it runs (${logic.at}) isn't. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: logicUrl });
 }
 
 /**
@@ -703,7 +723,6 @@ function checkVerifiedWithSourcify(input: InspectInput, contract: ContractInfo |
     const sourcifySaid = sourcified === null ? "Sourcify didn't answer." : `Sourcify has no match for ${what}.`;
     return `${explorerSaid} ${sourcifySaid}`;
   };
-  const NOT_ON_ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
 
   const own = verdict(contract?.verified, sourcify.own);
   if (own === null) return unknown(why(contract, sourcify.own, "this contract"));
@@ -848,6 +867,11 @@ export type ProxyResolution = {
    * not re-pointable, but "its logic can't be replaced" is a claim about the code that ends up
    * running, and whoever controls the address behind that DELEGATECALL controls exactly that. */
   logicDelegates: boolean;
+  /** The logic this token runs from somewhere else isn't EVM bytecode (`opaqueCode`), so it was never
+   * scored: an EIP-7702 delegated account, whose key can point it at other code at any time, or an
+   * Arbitrum Stylus program, which can't be scanned for a DELEGATECALL. Read for a clone: a clone of
+   * either can't be called "not upgradeable". */
+  logicOpaque: "eip7702" | "stylus" | null;
   /** The code this token runs can be replaced: one of its own proxy slots (EIP-1967's implementation
    * or beacon slot, or ZeppelinOS's implementation slot) is set, or it is a clone of a contract
    * whose is. THE value — `checkProxy`'s upgradeability `fail` and R1's block on the logic checks
@@ -902,6 +926,12 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     }
     if (r.logicDelegates) {
       return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
+    }
+    if (r.logicOpaque === "eip7702") {
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, an EIP-7702 delegated account, whose key can point it at other code at any time.`, { evidenceUrl: targetUrl });
+    }
+    if (r.logicOpaque === "stylus") {
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, an Arbitrum Stylus program (WebAssembly), whose code this check can't read, so whether it forwards its calls elsewhere can't be told.`, { evidenceUrl: targetUrl });
     }
     return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
   }
@@ -966,6 +996,18 @@ export function checkHolders(
   const held = top.reduce((sum, h) => sum + h.value, 0n);
   const pct = Number((held * 10000n) / totalSupply) / 100;
   const detail = "Excludes burn addresses, liquidity pools and known lock contracts.";
+  // Where the chain has pools discovery can't see (`unscanned`: other DEXes, a second Slipstream factory), a contract in
+  // the list may be one of them, counted as a holder. That only pushes the figure up, so a pass stands. A fail needs the
+  // holders with no code, which no pool is, over half the supply on their own; short of that it is a warning saying why.
+  const noCode = Number((top.filter((h) => !h.isContract).reduce((sum, h) => sum + h.value, 0n) * 10000n) / totalSupply) / 100;
+  const overHalf = (title: string): Finding =>
+    input.unscanned.length === 0 || noCode > 50
+      ? finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" })
+      : finding(
+          "holders", "warn", title,
+          `${detail} On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", input.unscanned)}, so a contract among these holders may be one of those pools. The ones with no code hold ${formatPct(noCode)}.`,
+          { evidenceUrl: url },
+        );
   // Excluding pools, burn addresses and the token itself can leave a full page with fewer than ten
   // wallets to add up. Calling those "all N wallets" is a claim about the whole holder list that
   // this page can't support, and the figure is a floor: more holders can only push it up. A floor
@@ -974,7 +1016,7 @@ export function checkHolders(
   if (top.length < 10 && !listComplete) {
     const who = top.length === 1 ? "The top wallet holds" : `The top ${top.length} wallets hold`;
     const title = `${who} at least ${formatPct(pct)}`;
-    if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+    if (pct > 50) return overHalf(title);
     if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
     return finding("holders", "unknown", "Couldn't check holder concentration", `Excluding pools, burn addresses and lock contracts left ${top.length} of the ${holders.length} rows the explorer sent, and it doesn't confirm those are all the holders — so ${formatPct(pct)} is a floor, not the concentration.`, { evidenceUrl: url });
   }
@@ -985,7 +1027,7 @@ export function checkHolders(
     : top.length === 0 ? "No wallet holds any of the supply"
     : top.length === 1 ? `The only wallet holds ${formatPct(pct)}`
     : `All ${top.length} wallets hold ${formatPct(pct)}`;
-  if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+  if (pct > 50) return overHalf(title);
   if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
   return finding("holders", "pass", title, detail, { evidenceUrl: url });
 }
@@ -1595,10 +1637,10 @@ type Unread = { kind: "only"; versions: PoolVersion[] } | { kind: "rival"; versi
 
 /**
  * lp-lock without the position index: only Uniswap v2 has LP tokens to count, and a pool of another kind that may hold
- * more than the pair keeps a burned pair from passing. This is the check as it stood before the index, kept for the
- * inspections that have none (testnet, a browser that couldn't fetch it) and for a token with no v2 or v4 pool. Its
- * finding is word for word what it always said; `unread` says which positions an unknown rests on (`Unread`), null for
- * every other answer.
+ * more than the pair keeps a burned pair from passing, as do the pools a chain's discovery can't see (`unscanned`). This
+ * is the check as it stood before the index, kept for the inspections that have none (testnet, a browser that couldn't
+ * fetch it, every chain but Arc) and for a token with no v2 or v4 pool. On Arc its finding is word for word what it
+ * always said; `unread` says which positions an unknown rests on (`Unread`), null for every other answer.
  */
 async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<{ finding: Finding; unread: Unread | null }> {
   const venue = venueNames(input.dex);
@@ -1659,11 +1701,22 @@ async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<
         unread: null,
       };
     }
+    // A classic pool's LP is a plain ERC-20, not a position: what isn't read there is who holds it, as where no v2 pair is
+    // found. No index reads it either, so that unknown rests on no `Unread` positions.
+    if (rival?.version === "solidly") {
+      return { finding: unknown(`The deepest pool is ${article(venue.solidly)} ${venue.solidly} pool, and Inspector doesn't read who holds the liquidity in it yet.`), unread: null };
+    }
     const detail = rival
       ? `The deepest pool is ${article(venue[rival.version])} ${venue[rival.version]} position, which can't be read without an index yet.`
       : "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.";
     const unread: Unread = rival ? { kind: "rival", version: rival.version } : { kind: "v4-rival" };
     return { finding: unknown(detail), unread };
+  }
+  // Where the chain has pools discovery can't see (`unscanned`), one of them may hold more than this pair, burned or not,
+  // however deep the pair is: "no deeper pool" is no more a claim there than "thin" is (see `checkLiquidity`).
+  const unscanned = pct >= 95 ? unscannedNote(input, "a deeper pool") : null;
+  if (unscanned) {
+    return { finding: unknown(`${formatPct(pct)} of the v2 LP supply can't be withdrawn. ${unscanned}`, { evidenceUrl: url }), unread: null };
   }
   // "Isn't locked" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
   // true on Arc). Where they aren't, LP that isn't burned may still sit in one.

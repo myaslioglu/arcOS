@@ -49,26 +49,28 @@ reads these chains for the Inspector, so no key reaches it.
   (a timeout, an HTTP error, a wrong key's 401) is skipped for 60 seconds by every call in that server instance, and
   the next one is asked. Without the key (or with the value `none`) only the public RPC is read.
 - **Explorer.** Blockscout's PRO API, with the site's `BLOCKSCOUT_API_KEY`, while the day's explorer budget lasts
-  ([OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains)). Without the key, or past the budget, the explorer isn't
-  asked: holder concentration reads "couldn't check", and so does source verification unless Sourcify has a match. The
-  report says why ("The explorer wasn't asked: ..."), and so do the proof page, the badge's title and the social card.
+  ([OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains)). Without the key, past the budget, or with a budget of 0
+  (switched off), the explorer isn't asked: holder concentration reads "couldn't check", and so does source verification
+  unless Sourcify has a match. The report says why ("The explorer wasn't asked: ..."), and so do the proof page, the
+  badge's title and the social card.
 - **Sourcify.** `sourcify.dev/server/v2/contract/<chain id>/<address>`, free and keyless, 5 seconds a request: one for
   the token, and one for the code a proxy runs.
 - **Cache and limits.** A report is kept 5 minutes in each server instance (30 seconds when degraded), keyed by chain and
   address, so Arc's report of an address is never Base's. In each instance, a client gets 30 `/api/inspect` calls a
   minute, every chain and Arc together, and another 30 a minute for `/t` (with its card) and `/badge` on these chains
-  together. Arc's `/t` and `/badge` have no limit, as before. At most 8 uncached inspections run at once in an instance,
-  every chain together; the next one answers "busy".
+  together. Arc's `/t` and `/badge` have no limit, as before. At most 4 uncached inspections of these chains run at once
+  in an instance, the four chains together; the next one answers "busy". Arc keeps its own 8, as before, and
+  inspections of these chains never take one of them.
 
 ## How each check decides
 
 | Check | What runs | Reads "couldn't check" when |
 |---|---|---|
 | Source verification | Blockscout and Sourcify. Either one saying verified is a pass; a proxy needs the code it runs verified too, by either. | Neither says verified. Both saying "not verified" is no fail here: Etherscan isn't read, and many contracts are verified there only. Also when one says no and the other can't answer. |
-| Ownership, privileges, proxy | As on Arc. | As on Arc (logic that can't be read, `DELEGATECALL` to code that can't be identified), and always for an EIP-7702 delegated account or an Arbitrum Stylus program, whose code isn't EVM bytecode to scan. |
-| Holder concentration | Blockscout's holder list, leaving out the token, burn addresses, every pool the scan found (any quote, any venue, the classic pools included) and Uniswap v4's PoolManager. | The explorer wasn't asked or didn't answer; fewer than ten rows it doesn't confirm are all; the pool scan failed. |
+| Ownership, privileges, proxy | As on Arc. | As on Arc (logic that can't be read, `DELEGATECALL` to code that can't be identified), and always for an EIP-7702 delegated account or an Arbitrum Stylus program, whose code isn't EVM bytecode to scan. Behind a proxy or a clone, on Arc too, such code is logic that can't be read, and a clone of it is never "not upgradeable". |
+| Holder concentration | Blockscout's holder list, leaving out the token, burn addresses, every pool the scan found (any quote, any venue, the classic pools included) and Uniswap v4's PoolManager. A pool the scan can't see counts as a holder, so over half is a fail only when the holders with no code hold over half on their own, and a warning otherwise. | The explorer wasn't asked or didn't answer; fewer than ten rows it doesn't confirm are all; the pool scan failed. |
 | Liquidity | Pools against USDC and USDT (counted 1:1 with the dollar) on Uniswap v2, v3 and hookless v4, Slipstream, and the classic pools by balance. Pools against WETH and native ETH are found and named, never priced. | Only pools against WETH or ETH were found; no pool or only thin ones were found, since each chain has pools the scan can't see (below). |
-| Liquidity lock | Uniswap v2 LP tokens: a pass when at least 95% of the deepest pair's LP is burned. | Anything else: no lock contract is recognized on these chains yet, so LP that isn't burned may sit in one, and it is never a fail. Also when a pair against WETH sits beside one against USDC, since which holds more can't be told. |
+| Liquidity lock | Uniswap v2 LP tokens, read as on Arc, but never a pass or a fail here. | Always. A pair whose LP is at least 95% burned may sit beside a deeper pool the scan can't see (each chain has some, below), however deep the pair is, so it is no pass; LP that isn't burned may sit in a lock contract, and none is recognized on these chains yet, so it is no fail. Also when a pair against WETH sits beside one against USDC, since which holds more can't be told. |
 | PREVRANDAO | The opcode scan, with each chain's wording (below). | The logic can't be read. |
 | Trade | Pools against USDC only, funded by a state override of USDC's balance at storage slot 9. Pools against USDT, WETH or ETH, hooked v4 pools and classic pools are never traded through, but a liquid or undecided one keeps a pass to a warning. | No USDC pool; the RPC won't run the simulation. |
 
@@ -327,8 +329,11 @@ What decided the unknowns and warnings:
 ```sh
 # Each chain through its public RPC:
 npm run test:live -w @arcos/inspector -- chains
-# Through Alchemy: the key in the shell that runs the suite only, never in a file the repo tracks.
-INSPECT_RPC_KEY=... npm run test:live -w @arcos/inspector -- chains
+# Through Alchemy, the key read at a silent prompt (bash, Cloud Shell's shell), never typed into a command line, where
+# shell history would keep it:
+read -rsp 'Alchemy key: ' K; echo; INSPECT_RPC_KEY="$K" npm run test:live -w @arcos/inspector -- chains; unset K
+# ...or from a file of your own outside the repository, readable by you alone (chmod 600):
+INSPECT_RPC_KEY="$(cat ~/.inspect_rpc_key)" npm run test:live -w @arcos/inspector -- chains
 # Any other endpoint, one chain at a time:
 LIVE_RPC_BASE=https://... npm run test:live -w @arcos/inspector -- chains
 ```
