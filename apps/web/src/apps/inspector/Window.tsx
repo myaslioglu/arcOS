@@ -53,11 +53,15 @@ export default function InspectorWindow({ winId, params }: AppProps) {
     // trackEvent lives INSIDE queryFn on purpose: queryFn only runs on a genuine network fetch,
     // never on a cache hit — so reopening a window onto an already-cached report never re-fires
     // the analytics event.
-    queryFn: async () => {
+    queryFn: async (context) => {
       if (offArc) {
-        // Another chain is read by this site's server, never from the browser: /api/inspect/<chain>/<address>.
-        const r = await serverReport(chain, token!);
-        trackEvent("inspect_run", { passed: r.passed, total: r.total, chain: chain.slug });
+        // Another chain is read by this site's server, never from the browser: /api/inspect/<chain>/<address>. Only this
+        // branch reads React Query's signal: reading it is what has React Query end the request when the window closes,
+        // and Arc's inspection, which never reads it, runs on into the cache as it always has.
+        const { signal } = context;
+        const r = await serverReport(chain, token!, { signal });
+        // An answer that came after the window let the request go is no inspection anyone saw, so it isn't counted.
+        if (!signal.aborted) trackEvent("inspect_run", { passed: r.passed, total: r.total, chain: chain.slug });
         return r;
       }
       // The index's pools for the token (hooked v4 pools among them) and its v4 pools' positions, from the site; only

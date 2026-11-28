@@ -12,7 +12,9 @@ import type { Report } from "@arcos/inspector";
  * run its queryFn), so nothing here reads the chain, and the addresses are test fixtures.
  */
 
-type Query = { queryKey: unknown[]; enabled: boolean; queryFn: () => Promise<unknown> };
+/** React Query's context, as the window's queryFn reads it: its signal ends when the window closes. */
+type QueryContext = { signal: AbortSignal };
+type Query = { queryKey: unknown[]; enabled: boolean; queryFn: (context?: QueryContext) => Promise<unknown> };
 const state = vi.hoisted(() => ({
   report: undefined as Report | undefined,
   error: null as unknown,
@@ -31,7 +33,7 @@ vi.mock("@tanstack/react-query", () => ({
     return { data: state.report, error: state.error };
   },
 }));
-vi.mock("@arcos/inspector", () => ({ NotAContract: class NotAContract extends Error {}, inspect: state.inspect }));
+vi.mock("@arcos/inspector", () => ({ NotAContract: class NotAContract extends Error {}, inspect: state.inspect, DEADLINE_MS: 15_000 }));
 vi.mock("@arcos/shell", () => ({
   useDesktop: () => ({ open: state.open, notify: state.notify, setTitle: state.setTitle }),
   useDropTarget: () => ({ over: false, props: {} }),
@@ -157,7 +159,16 @@ describe("Inspector while the site reads Arc alone", () => {
     const view = await mounted({ token: TOKEN });
     expect(state.query?.queryKey).toEqual(["inspect", 5042, TOKEN.toLowerCase()]);
     expect(state.setTitle).toHaveBeenLastCalledWith("w-1", "Inspector — WDG");
-    await expect(state.query!.queryFn()).resolves.toBe(report);
+    // Arc's inspection never reads React Query's signal, so closing its window lets it run on into the cache, as before.
+    let signalRead = false;
+    const context = {
+      get signal() {
+        signalRead = true;
+        return new AbortController().signal;
+      },
+    };
+    await expect(state.query!.queryFn(context)).resolves.toBe(report);
+    expect(signalRead).toBe(false);
     expect(state.trackEvent).toHaveBeenCalledTimes(1);
     expect(state.trackEvent).toHaveBeenCalledWith("inspect_run", { passed: 0, total: 0, chain: "arc" });
     await view.done();
@@ -205,9 +216,33 @@ describe("Inspector once the site reads other chains", () => {
     expect(view.host.textContent).not.toContain("Read by the ArcOS server");
     expect(state.query?.queryKey).toEqual(["inspect", 8453, BASE_USDC.toLowerCase()]);
     expect(state.query?.enabled).toBe(true);
-    await expect(state.query!.queryFn()).resolves.toMatchObject({ chain: "base", address: BASE_USDC });
-    expect(fetchFn).toHaveBeenCalledWith(`/api/inspect/base/${BASE_USDC}`, { headers: { accept: "application/json" } });
-    expect(state.trackEvent).toHaveBeenCalledWith("inspect_run", { passed: 0, total: 0, chain: "base" });
+    const open = new AbortController();
+    await expect(state.query!.queryFn({ signal: open.signal })).resolves.toMatchObject({ chain: "base", address: BASE_USDC });
+    expect(fetchFn).toHaveBeenCalledWith(`/api/inspect/base/${BASE_USDC}`, { headers: { accept: "application/json" }, signal: expect.any(AbortSignal) });
+    // Counted from the findings it shows: one, a fail.
+    expect(state.trackEvent).toHaveBeenCalledWith("inspect_run", { passed: 0, total: 1, chain: "base" });
+    await view.done();
+  });
+
+  it("ends the server's request with the window, and counts no inspection the window let go of", async () => {
+    state.report = undefined;
+    // A fetch that ends with its signal, as the browser's does.
+    const fetchFn = vi.fn<typeof fetch>(
+      (_input, init) => new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true })),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+    const view = await mounted({ chain: "base", token: BASE_USDC });
+    const closed = new AbortController();
+    const pending = state.query!.queryFn({ signal: closed.signal });
+    closed.abort();
+    await expect(pending).rejects.toBe(closed.signal.reason);
+    expect(fetchFn.mock.lastCall![1]!.signal!.aborted).toBe(true);
+    // An answer that comes anyway, after the window let the request go (a browser without AbortSignal.any).
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => Response.json(onBase)));
+    const late = new AbortController();
+    late.abort();
+    await state.query!.queryFn({ signal: late.signal }).catch(() => null);
+    expect(state.trackEvent).not.toHaveBeenCalled();
     await view.done();
   });
 

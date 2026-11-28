@@ -188,8 +188,11 @@ The Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet only from the si
   the server anywhere.
 - **The window.** The Inspector window takes another chain's report from `/api/inspect/<chain>/<address>` on this site
   (`apps/web/src/apps/inspector/server-report.ts`) and checks it before it shows any of it: a report of that token on
-  that chain, every finding one of the nine checks with a known status, evidence links `https` only, and no fix button.
-  The server's own words for a refusal are never shown; the window says what the status means.
+  that chain, every finding one of the nine checks with a known status and each check at most once, evidence links
+  `https` only, and no fix button. The counts it shows are counted from those findings, never taken from the answer.
+  The server's own words for a refusal are never shown; the window says what the status means. The request ends when
+  the window closes, or after 25 seconds (the server's 15-second deadline and 10 more), which the window words as the
+  network.
 - **Spending.** Each chain's pages, card and badge take a turn from a per-client limiter (above), and the explorer reads
   for these chains have a daily budget per server instance ([docs/OPERATIONS.md](docs/OPERATIONS.md#the-inspectors-other-chains)).
   Walking many addresses costs a client its turns, not the site's quota.
