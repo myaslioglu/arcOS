@@ -6,7 +6,8 @@
  *   chain but Arc), a match there is as good as the explorer's "verified", and "not verified" needs
  *   both: the explorer's explicit `false` and no match on Sourcify. Even that is a `fail` only where
  *   the chain allows one (`unverifiedFails`, Arc alone): elsewhere Etherscan, which isn't read, may
- *   hold the source, so it is unknown. See `checkVerifiedWithSourcify`.
+ *   hold the source, so it is unknown, whether Sourcify was asked or not. See
+ *   `checkVerifiedWithSourcify`.
  * - ownership: owner()/getOwner() failed at the network level (a revert just means "try the next
  *   name"); or there's no owner function and the contract's logic code couldn't be read at all, so
  *   whether anyone controls it can't be told either way; or there's no owner function but the
@@ -657,6 +658,9 @@ export type LogicVerification = { at: Address | null; info: ContractInfo | null 
  */
 export type SourcifyAnswers = { own: boolean | null; logic: boolean | null };
 
+/** Why "not verified" is no fail off Arc (`unverifiedFails`): the source may be on Etherscan, which Inspector doesn't read. */
+const NOT_ON_ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
+
 export function checkVerified(
   input: InspectInput,
   contract: ContractInfo | null,
@@ -674,7 +678,12 @@ export function checkVerified(
   }
   if (contract === null) return finding("verified", "unknown", "Couldn't check source verification", input.explorerSkipped ?? "The explorer didn't answer.", { evidenceUrl: url });
   if (contract.verified === null) return finding("verified", "unknown", "Couldn't check source verification", "The explorer has no record of this contract yet.", { evidenceUrl: url });
-  if (!contract.verified) return finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url });
+  // A "not verified" is a fail only where the chain allows one (`unverifiedFails`, Arc), with a second source or without.
+  if (!contract.verified) {
+    return input.unverifiedFails
+      ? finding("verified", "fail", "Source code isn't verified", "Only bytecode is public, so its behaviour can't be read directly.", { evidenceUrl: url })
+      : finding("verified", "unknown", "Couldn't check source verification", `The explorer says this contract isn't verified. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: url });
+  }
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
   if (logic.at === null) {
     return finding("verified", "unknown", "Couldn't check source verification", "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", { evidenceUrl: url });
@@ -683,9 +692,10 @@ export function checkVerified(
   if (logic.info === null || logic.info.verified === null) {
     return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
   }
-  return logic.info.verified
-    ? finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url })
-    : finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl });
+  if (logic.info.verified) return finding("verified", "pass", "Source code is verified", `Both this proxy and the implementation it runs (${logic.at}) are verified.`, { evidenceUrl: url });
+  return input.unverifiedFails
+    ? finding("verified", "fail", "The code this proxy runs isn't verified", `The proxy's own source is verified, but the implementation it runs (${logic.at}) isn't — only its bytecode is public.`, { evidenceUrl: logicUrl })
+    : finding("verified", "unknown", "Couldn't check source verification", `The proxy's own source is verified, but the explorer says the implementation it runs (${logic.at}) isn't. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: logicUrl });
 }
 
 /**
@@ -711,7 +721,6 @@ function checkVerifiedWithSourcify(input: InspectInput, contract: ContractInfo |
     const sourcifySaid = sourcified === null ? "Sourcify didn't answer." : `Sourcify has no match for ${what}.`;
     return `${explorerSaid} ${sourcifySaid}`;
   };
-  const NOT_ON_ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
 
   const own = verdict(contract?.verified, sourcify.own);
   if (own === null) return unknown(why(contract, sourcify.own, "this contract"));

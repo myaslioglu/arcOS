@@ -248,8 +248,9 @@ export type InspectInput = {
   /** The prevrandao check's warning on this chain. */
   prevrandao: PrevrandaoCopy;
   /**
-   * An explorer's explicit "not verified" (Blockscout's `is_verified: false`, and no match in `verifyFallback`) is a fail.
-   * Where it isn't (every chain but Arc: Etherscan, which isn't read, holds sources Blockscout may not), it is unknown.
+   * An explorer's explicit "not verified" (Blockscout's `is_verified: false`, and no match in `verifyFallback` when one is
+   * asked) is a fail. Where it isn't (every chain but Arc: Etherscan, which isn't read, holds sources Blockscout may not),
+   * it is unknown, whether `verifyFallback` is given or not.
    */
   unverifiedFails: boolean;
   /**

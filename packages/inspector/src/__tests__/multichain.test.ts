@@ -389,6 +389,28 @@ describe("source verification with Sourcify beside the explorer", () => {
     expect(verify(record(false), { own: false, logic: null }, null, { unverifiedFails: true })).toMatchObject({ status: "fail", title: "Source code isn't verified" });
   });
 
+  it("never fails off Arc on the explorer's 'not verified' alone either, when Sourcify isn't asked", async () => {
+    const alone = (contract: ContractInfo, logic: { at: `0x${string}`; info: ContractInfo } | null = null, over: Partial<InspectInput> = {}) =>
+      checkVerified(input(over), contract, logic, null, null);
+    const ETHERSCAN = "Etherscan wasn't checked, and many contracts are verified there only.";
+    expect(alone(record(false))).toEqual({
+      id: "verified",
+      status: "unknown",
+      title: "Couldn't check source verification",
+      detail: `The explorer says this contract isn't verified. ${ETHERSCAN}`,
+      evidenceUrl: CONTRACT_TAB,
+      fixAppId: null,
+    });
+    expect(alone(record(true), { at: IMPL, info: record(false) })).toMatchObject({
+      status: "unknown",
+      detail: `The proxy's own source is verified, but the explorer says the implementation it runs (${IMPL}) isn't. ${ETHERSCAN}`,
+      evidenceUrl: `https://base.blockscout.com/address/${IMPL}?tab=contract`,
+    });
+    // Where the chain allows a fail, as Arc does, the explorer's word is enough, as it always was.
+    expect(alone(record(false), null, { unverifiedFails: true })).toMatchObject({ status: "fail", title: "Source code isn't verified" });
+    expect(alone(record(true), { at: IMPL, info: record(false) }, { unverifiedFails: true })).toMatchObject({ status: "fail", title: "The code this proxy runs isn't verified" });
+  });
+
   it("says what each source did when they can't decide", async () => {
     const detail = (contract: ContractInfo | null, own: boolean | null, over: Partial<InspectInput> = {}) => verify(contract, { own, logic: null }, null, over).detail;
     expect(detail(null, false)).toBe("The explorer didn't answer. Sourcify has no match for this contract.");
@@ -440,6 +462,14 @@ describe("a whole inspection off Arc", () => {
     expect(source.asked).toEqual([TOKEN]);
     expect(find(r, "verified")).toMatchObject({ status: "pass", evidenceUrl: `https://repo.sourcify.dev/8453/${TOKEN}` });
     expect(r).toMatchObject({ chain: "base", chainId: 8453, degraded: false });
+  });
+
+  it("never fails source verification when no second source is given", async () => {
+    const r = await run(PLAIN, { explorer: explorer(false) });
+    expect(find(r, "verified")).toMatchObject({
+      status: "unknown",
+      detail: "The explorer says this contract isn't verified. Etherscan wasn't checked, and many contracts are verified there only.",
+    });
   });
 
   it("marks the report degraded when Sourcify couldn't answer, and the finding unknown", async () => {
