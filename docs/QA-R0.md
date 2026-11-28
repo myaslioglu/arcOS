@@ -215,9 +215,10 @@ text matches this if it happens to come up while running the rest of this sectio
     transaction" with the link. If `NEXT_PUBLIC_FEE_RECIPIENT` was set, check that address's
     **USDC** balance (the input token of this USDC → EURC swap — App Kit takes the custom fee on a
     same-chain swap out of the amount in, before the trade, never on top of it) increased by about
-    0.0018 USDC on a 1 USDC swap (0.20% of the 1 USDC in, minus Circle's 10% share of that custom
-    fee — i.e. `NEXT_PUBLIC_FEE_RECIPIENT` keeps 90% of it). The swap's estimate shows the same: its
-    developer fee is in the input token, with `basis: "inputAmount"`.
+    0.0018 USDC on a 1 USDC swap: 0.20% of the 1 USDC in, minus the 10% that Arc keeps
+    (https://docs.arc.io/app-kit/concepts/swap-fees), so `NEXT_PUBLIC_FEE_RECIPIENT` keeps 90% of
+    it. The swap's estimate lists the full 0.002 USDC as its developer fee, in the input token with
+    `basis: "inputAmount"`; if the balance rose by the full 0.002 USDC, note it.
 41. Close the Swap window mid-swap (right after clicking Swap, before it resolves) and reopen it:
     "Swapping `<amount>` `<tokenIn>` → `<tokenOut>`…" is there — or the result, once it lands — not
     a blank form. This is the session store surviving the window unmounting, the same pattern Drop
