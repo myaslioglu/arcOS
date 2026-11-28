@@ -572,6 +572,10 @@ below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table a
     more: a pass needs those pools read.
   - Holder concentration counts an exchange's hot wallet or a bridge like any wallet. On a large token they can fill
     the top ten.
+  - Holder concentration leaves out the pools the scan finds, and no others: a pool it can't see (on another DEX, or of
+    Slipstream's second factory on Base and OP Mainnet) counts as a holder, so the share can read higher than it is and
+    warn where it shouldn't. Over half is a fail there only when the holders with no code, which no pool is, hold over
+    half on their own; when contracts make up the rest, it is a warning that says so.
   - Explorer reads come out of the same Blockscout plan as Arc's server pages, Revoke and the indexer. Each server
     instance has a daily share for these chains (300 reads by default, 50 to 75 inspections). Past it, until the UTC day
     ends, holder concentration reads "couldn't check" and source verification rests on Sourcify alone.

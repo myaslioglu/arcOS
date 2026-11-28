@@ -200,6 +200,33 @@ describe("holders off Arc", () => {
     expect(scan.pools.map((p) => p.address)).toEqual([PAIR, CLASSIC_POOL]);
     expect(checkHolders(input, { holders, complete: true }, 1_000n, scan, null)).toMatchObject({ status: "pass", title: "Top 10 wallets hold 10%" });
   });
+
+  it("fails over half only on holders with no code: a contract among them may be a pool the scan can't see", async () => {
+    const { input, scan } = await scanOf({});
+    const UNSEEN = "0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a"; // a pair on another DEX, say
+    const wallet = (i: number) => `0x${(0xa0 + i).toString(16).repeat(20)}`;
+    const holders = (pool: bigint, each: bigint, wallets = 9): Holder[] => [
+      { address: UNSEEN, isContract: true, name: null, value: pool },
+      ...Array.from({ length: wallets }, (_, i) => ({ address: wallet(i), isContract: false, name: null, value: each })),
+    ];
+    const why = (noCode: string) =>
+      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee, Slipstream pools from other factories and pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold ${noCode}.`;
+    expect(checkHolders(input, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toEqual({
+      id: "holders",
+      status: "warn",
+      title: "Top 10 wallets hold 69%",
+      detail: why("9%"),
+      evidenceUrl: `https://base.blockscout.com/token/${TOKEN}?tab=holders`,
+      fixAppId: null,
+    });
+    // A floor over half, the same way: the PoolManager's row is left out, and the explorer doesn't say the list is whole.
+    const floor = [{ address: UNISWAP_V4.poolManager, isContract: true, name: null, value: 50n }, ...holders(600n, 10n, 8)];
+    expect(checkHolders(input, { holders: floor, complete: false }, 1_000n, scan, null)).toMatchObject({ status: "warn", title: "The top 9 wallets hold at least 68%", detail: why("8%") });
+    // Holders with no code over half on their own: no pool is among them, so it is the fail it always was.
+    expect(checkHolders(input, { holders: holders(100n, 60n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", title: "Top 10 wallets hold 64%", fixAppId: "vesting" });
+    // A chain that reads every kind of pool it has, as Arc does, fails on the contract's share too, as before.
+    expect(checkHolders({ ...input, unscanned: [] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", detail: "Excludes burn addresses, liquidity pools and known lock contracts." });
+  });
 });
 
 describe("lp-lock off Arc, where no lock contracts are vetted", () => {

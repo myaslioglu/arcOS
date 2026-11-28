@@ -45,7 +45,9 @@
  *   the explorer confirms neither (through `next_page_params` nor through its own holders-count)
  *   that they are every holder there is, since a share added up from an unknown fraction of the
  *   holders is a floor, not a concentration figure — a floor can still be a warn or a fail, but
- *   never a pass.
+ *   never a pass. On a chain with pools discovery can't see (`unscanned`), such a pool is counted
+ *   as a holder, so over half is a fail there only when the holders with no code (no pool is one)
+ *   hold over half on their own; otherwise it is a warn that says so.
  * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
  *   or every pool contract reverted (an address with no contract code does that, and inside a
  *   multicall answers 0x), which is never reported as "no pool found" — that would be a claim about
@@ -994,6 +996,18 @@ export function checkHolders(
   const held = top.reduce((sum, h) => sum + h.value, 0n);
   const pct = Number((held * 10000n) / totalSupply) / 100;
   const detail = "Excludes burn addresses, liquidity pools and known lock contracts.";
+  // Where the chain has pools discovery can't see (`unscanned`: other DEXes, a second Slipstream factory), a contract in
+  // the list may be one of them, counted as a holder. That only pushes the figure up, so a pass stands. A fail needs the
+  // holders with no code, which no pool is, over half the supply on their own; short of that it is a warning saying why.
+  const noCode = Number((top.filter((h) => !h.isContract).reduce((sum, h) => sum + h.value, 0n) * 10000n) / totalSupply) / 100;
+  const overHalf = (title: string): Finding =>
+    input.unscanned.length === 0 || noCode > 50
+      ? finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" })
+      : finding(
+          "holders", "warn", title,
+          `${detail} On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", input.unscanned)}, so a contract among these holders may be one of those pools. The ones with no code hold ${formatPct(noCode)}.`,
+          { evidenceUrl: url },
+        );
   // Excluding pools, burn addresses and the token itself can leave a full page with fewer than ten
   // wallets to add up. Calling those "all N wallets" is a claim about the whole holder list that
   // this page can't support, and the figure is a floor: more holders can only push it up. A floor
@@ -1002,7 +1016,7 @@ export function checkHolders(
   if (top.length < 10 && !listComplete) {
     const who = top.length === 1 ? "The top wallet holds" : `The top ${top.length} wallets hold`;
     const title = `${who} at least ${formatPct(pct)}`;
-    if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+    if (pct > 50) return overHalf(title);
     if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
     return finding("holders", "unknown", "Couldn't check holder concentration", `Excluding pools, burn addresses and lock contracts left ${top.length} of the ${holders.length} rows the explorer sent, and it doesn't confirm those are all the holders — so ${formatPct(pct)} is a floor, not the concentration.`, { evidenceUrl: url });
   }
@@ -1013,7 +1027,7 @@ export function checkHolders(
     : top.length === 0 ? "No wallet holds any of the supply"
     : top.length === 1 ? `The only wallet holds ${formatPct(pct)}`
     : `All ${top.length} wallets hold ${formatPct(pct)}`;
-  if (pct > 50) return finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" });
+  if (pct > 50) return overHalf(title);
   if (pct > 25) return finding("holders", "warn", title, detail, { evidenceUrl: url });
   return finding("holders", "pass", title, detail, { evidenceUrl: url });
 }
