@@ -389,11 +389,10 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
    * whose behaviour is decided somewhere else, including a DELEGATECALL to an address that couldn't
    * be identified at all. */
   const forwardsCalls = runsOtherCode || forwardsToUnidentifiedCode;
-  /** The code that runs, where `verified` names it: code this engine read and scored, or a Stylus program, whose source
-   * is its own as a Stylus token's is once its proxy slots read empty (`vet` read them; `opaqueInspection`). An address
-   * the engine refused to score (a further proxy, empty code, a delegated account whose key picks what runs) is never
-   * named as "the implementation it runs". */
-  const verifiedLogicAt = logicCode !== null || logicOpaque === "stylus" ? logicAt : null;
+  /** The code that runs, where `verified` names it: code this engine read and scored. An address the engine refused to
+   * score (a further proxy, empty code, a delegated account whose key picks what runs) is never named as "the
+   * implementation it runs", and a Stylus program is named only to say no source vouches for it (`logicVerification`). */
+  const verifiedLogicAt = logicCode !== null ? logicAt : null;
 
   const selectors = extractSelectors(logicCode ?? "0x");
 
@@ -474,14 +473,19 @@ export async function inspect(rawInput: InspectInput): Promise<Report> {
   const gate = (f: Finding): Finding => gateLogicPass(input, f, blockFor(false));
   const gateOpcodes = (f: Finding): Finding => gateLogicPass(input, f, blockFor(true));
 
+  /** What `verified` reads about the code that runs, for code that forwards: a Stylus implementation can't be scanned for
+   * a call that forwards again, and may keep a further implementation in any storage slot, so its source never vouches
+   * for what runs, whatever the explorer or Sourcify say about it. */
+  const logicVerification: LogicVerification =
+    logicOpaque === "stylus" ? { at: logicAt, info: null, why: "stylus" } : { at: verifiedLogicAt, info: logicContract };
   const findings = await Promise.all([
     // `logicAt` is where the code that runs WOULD live; it is only the code this engine actually
     // scored when `logicCode` came back with something. An implementation that turned out to be a
     // proxy itself, or that points at empty code, is an address the engine explicitly refused to
     // score — naming it as "the implementation it runs (…) is verified" next to a `privileges`
     // finding saying that code couldn't be identified is the report contradicting itself. A Stylus
-    // program is the one exception (`verifiedLogicAt`): its code is identified, only not EVM.
-    guard("verified", () => checkVerified(input, contract, forwardsCalls ? { at: verifiedLogicAt, info: logicContract } : null, arcosTemplate, sourcify)),
+    // program is named only to say why no source vouches for it (`logicVerification`).
+    guard("verified", () => checkVerified(input, contract, forwardsCalls ? logicVerification : null, arcosTemplate, sourcify)),
     guard("ownership", () => checkOwnership(input, owner, found)).then(gate),
     guard("privileges", () => checkPrivileges(input, found, logicGap, owner)).then(gate),
     guard("proxy", () => {
@@ -562,12 +566,13 @@ const STYLUS_SLOTS_UNREAD =
  * run. The market checks (holders, liquidity, lp-lock, trade) run as for any token.
  *
  * A Stylus program can be a proxy itself (an ERC-1967 one, say), so its proxy slots are read as any contract's
- * (`readProxySlots`); they are all there is to go on, since its code can't be scanned for a call that forwards. With
- * every slot read and empty, its source is checked as its own, and the proxy check stays unknown. With one set, the proxy
- * check says so as it does for any proxy (`checkProxy`, naming the admin when its slot holds one), and source
- * verification is unknown: the code that runs may be elsewhere, and is not followed. With a slot that couldn't be read,
- * both are unknown. A delegated account's slots aren't read: its key, not a slot, picks the code it runs, so no one
- * contract's source is its own.
+ * (`readProxySlots`). With one set, the proxy check says so as it does for any proxy (`checkProxy`, naming the admin
+ * when its slot holds one). Its own source never vouches for what runs: its code can't be scanned for a call that
+ * forwards, and a proxy can keep its implementation in any storage slot, not only the standard ones read here
+ * (OpenZeppelin's Stylus proxy keeps it in an ordinary field). So source verification is unknown in every case, saying
+ * why: a slot couldn't be read, a set slot names code that isn't followed, or nothing rules forwarding out. With every
+ * slot read and empty, the proxy check stays unknown too. A delegated account's slots aren't read: its key, not a slot,
+ * picks the code it runs, so no one contract's source is its own.
  */
 async function opaqueInspection(input: InspectInput, kind: "eip7702" | "stylus", degraded: () => boolean, markDegraded: () => void): Promise<Report> {
   const { reader, explorer, address } = input;
@@ -614,10 +619,12 @@ async function opaqueInspection(input: InspectInput, kind: "eip7702" | "stylus",
   ]);
   const unknownCode = (id: CheckId, title: string, detail: string, evidence: string | null): Finding => ({ id, status: "unknown", title, detail, evidenceUrl: evidence, fixAppId: null });
   const contractUrl = `${input.explorerBase}/address/${address}?tab=contract`;
-  // A Stylus program whose slots couldn't be read, or name other code, may not run its own code: its own source then
-  // vouches for nothing, as for an EVM proxy whose logic couldn't be identified (`LogicVerification`).
+  // A Stylus program's own source vouches for nothing about what runs (see above); its slots only say why.
   const logic: LogicVerification | null =
-    slots === null || (slots.read && slotKind === null) ? null : slots.read ? { at: null, info: null } : { at: null, info: null, slotsUnread: true };
+    slots === null ? null
+    : !slots.read ? { at: null, info: null, why: "slots-unread" }
+    : slotKind !== null ? { at: null, info: null, why: "slot-not-followed" }
+    : { at: null, info: null, why: "stylus" };
   const proxy = (): Finding => {
     if (slots !== null && !slots.read) return unknownCode("proxy", "Couldn't check if this contract is upgradeable", STYLUS_SLOTS_UNREAD, contractUrl);
     if (slotKind === null) return unknownCode("proxy", "Couldn't check if this contract is upgradeable", words.proxy, contractUrl);
