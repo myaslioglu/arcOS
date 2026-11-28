@@ -650,17 +650,30 @@ const finding = (id: Finding["id"], status: Finding["status"], title: string, de
  * code, and otherwise says where the code that runs lives (`at`, `null` when the engine knows this
  * token forwards but couldn't identify where) and what the explorer has on it. A verified proxy in
  * front of unverified logic is the shape that made this matter: the reassuring line was true of 40
- * lines of forwarding code and false of everything behind it. `slotsUnread` is for code whose proxy
- * slots are the only sign of whether it forwards (an Arbitrum Stylus program, whose code can't be
- * scanned) and couldn't be read: then it isn't known to forward at all, only not known not to.
+ * lines of forwarding code and false of everything behind it. `why` is for code no source can vouch
+ * for though it may be identified, all of it an Arbitrum Stylus program's or behind one: "slots-unread",
+ * proxy slots that are the only sign of whether it forwards and couldn't be read; "slot-not-followed",
+ * a set proxy slot naming code this check doesn't follow; "stylus", code that is a Stylus program (`at`,
+ * or this address itself when `at` is null), which can't be scanned for a call that forwards and may
+ * keep an implementation in any storage slot, so its source never says for sure what runs.
  */
-export type LogicVerification = { at: Address | null; info: ContractInfo | null; slotsUnread?: true };
+export type LogicVerification = { at: Address | null; info: ContractInfo | null; why?: "slots-unread" | "slot-not-followed" | "stylus" };
 
-/** Why `checkVerified` can't vouch for code it couldn't identify (`LogicVerification.at` null). */
-const unidentifiedLogic = (logic: LogicVerification): string =>
-  logic.slotsUnread
+/** Why `checkVerified` can't vouch for the code that runs: `why`, or that the code couldn't be identified (`at` null). */
+const unvouchedLogic = (logic: LogicVerification): string =>
+  logic.why === "slots-unread"
     ? "This address's own source is verified, but its proxy slots couldn't be read, so whether it runs code from somewhere else can't be told."
-    : "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
+    : logic.why === "slot-not-followed"
+      ? "This address's own source is verified, but its proxy slots name other code, which this check doesn't follow — so what it actually runs may be anything."
+      : logic.why === "stylus" && logic.at === null
+        ? "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs."
+        : logic.why === "stylus"
+          ? `This proxy's own source is verified, but the code it runs (${logic.at}) is an Arbitrum Stylus program, whose code can't be read, so whether that program runs its own source or forwards again can't be told.`
+          : "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
+
+/** Where a finding about code no source vouches for links: the code it names, else this address's page. */
+const unvouchedUrl = (input: InspectInput, logic: LogicVerification, own: string): string =>
+  logic.at === null ? own : `${input.explorerBase}/address/${logic.at}?tab=contract`;
 
 /**
  * What the second verification source (`InspectInput.verifyFallback`, Sourcify) said: about this address (`own`), and
@@ -696,7 +709,7 @@ export function checkVerified(
       : finding("verified", "unknown", "Couldn't check source verification", `The explorer says this contract isn't verified. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: url });
   }
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
-  if (logic.at === null) return finding("verified", "unknown", "Couldn't check source verification", unidentifiedLogic(logic), { evidenceUrl: url });
+  if (logic.at === null || logic.why) return finding("verified", "unknown", "Couldn't check source verification", unvouchedLogic(logic), { evidenceUrl: unvouchedUrl(input, logic, url) });
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   if (logic.info === null || logic.info.verified === null) {
     return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
@@ -741,7 +754,7 @@ function checkVerifiedWithSourcify(input: InspectInput, contract: ContractInfo |
   // Verified: link where the source can be read, the explorer's page when it has it, else Sourcify's.
   const ownUrl = contract?.verified === true ? url : sourcifyUrl(input.address);
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: ownUrl });
-  if (logic.at === null) return unknown(unidentifiedLogic(logic), ownUrl);
+  if (logic.at === null || logic.why) return unknown(unvouchedLogic(logic), unvouchedUrl(input, logic, ownUrl));
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   const runs = verdict(logic.info?.verified, sourcify.logic);
   if (runs === null) {
@@ -1004,15 +1017,22 @@ export function checkHolders(
   // Where the chain has pools discovery can't see (`unscanned`: other DEXes, a second Slipstream factory), a contract in
   // the list may be one of them, counted as a holder. That only pushes the figure up, so a pass stands. A fail needs the
   // holders with no code, which no pool is, over half the supply on their own; short of that it is a warning saying why.
-  // A hooked v4 pool is never such a holder: every v4 pool's tokens are the PoolManager's, left out above.
+  // A hooked v4 pool keeps its tokens in the PoolManager, left out above, so it isn't named as such a pool; but a hook
+  // with accounting of its own can keep reserves in the hook contract, which then counts as a holder like any contract.
   const unseenPools = poolManager.length > 0 ? input.unscanned.filter((kind) => kind !== UNSCANNED_V4) : input.unscanned;
+  const hookReserves = poolManager.length > 0 && input.unscanned.includes(UNSCANNED_V4);
   const noCode = Number((top.filter((h) => !h.isContract).reduce((sum, h) => sum + h.value, 0n) * 10000n) / totalSupply) / 100;
+  const mayBe = [
+    ...(unseenPools.length > 0 ? ["one of those pools"] : []),
+    ...(hookReserves ? ["a Uniswap v4 hook that keeps reserves of its own"] : []),
+  ];
+  const unread = unseenPools.length > 0 ? `On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", unseenPools)}, so a contract` : "A contract";
   const overHalf = (title: string): Finding =>
-    unseenPools.length === 0 || noCode > 50
+    mayBe.length === 0 || noCode > 50
       ? finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" })
       : finding(
           "holders", "warn", title,
-          `${detail} On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", unseenPools)}, so a contract among these holders may be one of those pools. The ones with no code hold ${formatPct(noCode)}.`,
+          `${detail} ${unread} among these holders may be ${mayBe.join(", or ")}. The ones with no code hold ${formatPct(noCode)}.`,
           { evidenceUrl: url },
         );
   // Excluding pools, burn addresses and the token itself can leave a full page with fewer than ten

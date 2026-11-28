@@ -212,9 +212,10 @@ describe("holders off Arc", () => {
       { address: UNSEEN, isContract: true, name: null, value: pool },
       ...Array.from({ length: wallets }, (_, i) => ({ address: wallet(i), isContract: false, name: null, value: each })),
     ];
-    // Hooked v4 pools aren't named: every v4 pool's tokens are the PoolManager's, never a row of their own.
+    // Hooked v4 pools aren't named as pools: their tokens are the PoolManager's, never a row of their own. A hook with
+    // accounting of its own can keep reserves in the hook contract, though, so a contract may be one of those.
     const why = (noCode: string) =>
-      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read Slipstream pools from other factories and pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold ${noCode}.`;
+      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read Slipstream pools from other factories and pools on other DEXes, so a contract among these holders may be one of those pools, or a Uniswap v4 hook that keeps reserves of its own. The ones with no code hold ${noCode}.`;
     expect(checkHolders(input, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toEqual({
       id: "holders",
       status: "warn",
@@ -230,12 +231,22 @@ describe("holders off Arc", () => {
     expect(checkHolders(input, { holders: holders(100n, 60n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", title: "Top 10 wallets hold 64%", fixAppId: "vesting" });
     // A chain that reads every kind of pool it has, as Arc does, fails on the contract's share too, as before.
     expect(checkHolders({ ...input, unscanned: [] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", detail: "Excludes burn addresses, liquidity pools and known lock contracts." });
-    // So does one whose only unseen pools are hooked v4 pools: none of them can be the contract.
-    expect(checkHolders({ ...input, unscanned: [UNSCANNED_V4] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail" });
+    // One whose only unseen pools are hooked v4 pools warns too: a hook may keep reserves of its own.
+    expect(checkHolders({ ...input, unscanned: [UNSCANNED_V4] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({
+      status: "warn",
+      detail: "Excludes burn addresses, liquidity pools and known lock contracts. A contract among these holders may be a Uniswap v4 hook that keeps reserves of its own. The ones with no code hold 9%.",
+    });
+    // Without a v4 PoolManager there, a hooked v4 pool can only be a pool the scan can't see, named as one.
+    const withoutV4 = { ...input.dex! };
+    delete withoutV4.v4;
+    const noV4 = { ...input, dex: withoutV4, unscanned: [UNSCANNED_V4] };
+    expect(checkHolders(noV4, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null).detail).toBe(
+      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read ${UNSCANNED_V4}, so a contract among these holders may be one of those pools. The ones with no code hold 9%.`,
+    );
     // Ethereum's entry, as registered: other DEXes are all a contract among the holders may be.
     const ethereum = { ...input, ...chainInput(inspectChain("mainnet", "ethereum")!), dex: baseLike };
     expect(checkHolders(ethereum, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null).detail).toBe(
-      "Excludes burn addresses, liquidity pools and known lock contracts. On Ethereum, Inspector doesn't yet read pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold 9%.",
+      "Excludes burn addresses, liquidity pools and known lock contracts. On Ethereum, Inspector doesn't yet read pools on other DEXes, so a contract among these holders may be one of those pools, or a Uniswap v4 hook that keeps reserves of its own. The ones with no code hold 9%.",
     );
   });
 });
@@ -536,9 +547,12 @@ describe("a whole inspection off Arc", () => {
     expect(r.findings.map((f) => f.id)).toEqual(["verified", "ownership", "privileges", "proxy", "holders", "liquidity", "lp-lock", "prevrandao", "trade"]);
   });
 
-  it("checks an Arbitrum Stylus program's source as its own, and its logic as unreadable", async () => {
+  it("never vouches for an Arbitrum Stylus program's source, and reads its logic as unreadable", async () => {
+    for (const match of [false, true]) {
+      const r = await run("0xeff00000aabbccddeeff", { explorer: explorer(true), verifyFallback: sourcify(match) });
+      expect(find(r, "verified"), `Sourcify ${match}`).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs." });
+    }
     const r = await run("0xeff00000aabbccddeeff", { explorer: explorer(true), verifyFallback: sourcify(false) });
-    expect(find(r, "verified")).toMatchObject({ status: "pass" });
     for (const id of ["ownership", "privileges", "proxy", "prevrandao"] as const) expect(find(r, id).status, id).toBe("unknown");
     expect(find(r, "prevrandao").detail).toBe("This is an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.");
   });
@@ -560,7 +574,7 @@ describe("a whole inspection off Arc", () => {
     };
     const STYLUS_LOGIC = "This contract runs an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.";
 
-    it("never scans a proxy's Stylus implementation as EVM, and checks the program's source as its own", async () => {
+    it("never scans a proxy's Stylus implementation as EVM, and never vouches for the program's source", async () => {
       const source = sourcify(false);
       const r = await onArbitrum({ [TOKEN]: PLAIN, [IMPL]: STYLUS }, { [TOKEN]: IMPL }, source);
       // Scanned as EVM, the 0x44 in the WebAssembly read "Uses PREVRANDAO, always 1 on Arbitrum".
@@ -568,8 +582,13 @@ describe("a whole inspection off Arc", () => {
       expect(find(r, "privileges")).toMatchObject({ status: "unknown", detail: STYLUS_LOGIC });
       expect(find(r, "ownership")).toMatchObject({ status: "unknown" });
       expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
-      expect(source.asked).toEqual([TOKEN, IMPL]);
-      expect(find(r, "verified")).toMatchObject({ status: "pass", detail: `Both this proxy and the implementation it runs (${IMPL}) are verified.` });
+      // The program may forward again through any storage slot, so Sourcify isn't asked about it, and nothing passes.
+      expect(source.asked).toEqual([TOKEN]);
+      expect(find(r, "verified")).toEqual({
+        id: "verified", status: "unknown", title: "Couldn't check source verification",
+        detail: `This proxy's own source is verified, but the code it runs (${IMPL}) is an Arbitrum Stylus program, whose code can't be read, so whether that program runs its own source or forwards again can't be told.`,
+        evidenceUrl: `https://arbitrum.blockscout.com/address/${IMPL}?tab=contract`, fixAppId: null,
+      });
     });
 
     it("never calls a clone of a Stylus program or of an EIP-7702 delegated account 'not upgradeable'", async () => {
@@ -622,6 +641,7 @@ describe("a whole inspection off Arc", () => {
       return { asked, report };
     };
     const FORWARDS = "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
+    const NOT_FOLLOWED = "This address's own source is verified, but its proxy slots name other code, which this check doesn't follow — so what it actually runs may be anything.";
 
     it("reads its proxy slots, and never passes its own source when they name other code, whatever Sourcify says", async () => {
       for (const match of [false, true]) {
@@ -629,7 +649,7 @@ describe("a whole inspection off Arc", () => {
         const { asked, report } = onArbitrum({ [IMPL_SLOT]: word(IMPL) }, { source });
         const r = await report;
         expect(find(r, "verified"), `Sourcify ${match}`).toEqual({
-          id: "verified", status: "unknown", title: "Couldn't check source verification", detail: FORWARDS,
+          id: "verified", status: "unknown", title: "Couldn't check source verification", detail: NOT_FOLLOWED,
           evidenceUrl: `https://arbitrum.blockscout.com/address/${TOKEN}?tab=contract`, fixAppId: null,
         });
         // What the slots hold, as for any proxy.
@@ -653,7 +673,7 @@ describe("a whole inspection off Arc", () => {
       expect(zeppelinos.asked.at(-1)).toBe(`${TOKEN}:${ZEPPELINOS_ADMIN_SLOT}`);
       const beacon = await onArbitrum({ [BEACON_SLOT]: word(IMPL) }).report;
       expect(find(beacon, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
-      for (const r of [admin, await zeppelinos.report, beacon]) expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: FORWARDS });
+      for (const r of [admin, await zeppelinos.report, beacon]) expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: NOT_FOLLOWED });
     });
 
     it("can't vouch for its source when a slot couldn't be read, and doesn't say it forwards", async () => {
@@ -675,10 +695,16 @@ describe("a whole inspection off Arc", () => {
       expect(malformed.degraded).toBe(false);
     });
 
-    it("keeps a plain Stylus program as it was: with every slot read and empty, its source is its own", async () => {
+    it("never vouches for a Stylus program with every slot empty either: it may keep its implementation in an ordinary field", async () => {
+      // OpenZeppelin's Stylus proxy keeps its implementation in storage slot 0 and forwards from its fallback: verified and
+      // over unverified code that can mint, it reads exactly as a plain program does, so neither can pass.
+      for (const match of [false, true]) {
+        const { report } = onArbitrum({ "0x0000000000000000000000000000000000000000000000000000000000000000": word(IMPL) }, { source: sourcify(match) });
+        expect(find(await report, "verified"), `Sourcify ${match}`).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs." });
+      }
       const { asked, report } = onArbitrum({});
       const r = await report;
-      expect(find(r, "verified")).toMatchObject({ status: "pass", detail: "Anyone can read what this contract does." });
+      expect(find(r, "verified")).toMatchObject({ status: "unknown", detail: "This address's own source is verified, but it is an Arbitrum Stylus program, whose code can't be read: it may forward its calls to other code, since a proxy can keep its implementation in any storage slot, so its source doesn't say what runs." });
       expect(find(r, "proxy")).toMatchObject({
         status: "unknown",
         detail: "This is an Arbitrum Stylus program (WebAssembly). Its EIP-1967 and ZeppelinOS proxy slots are empty, but its code can't be read, so whether it forwards its calls some other way can't be told.",
