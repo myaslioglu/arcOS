@@ -19,6 +19,14 @@ describe("parseInspectTarget", () => {
     expect(parseInspectTarget(`polygon:${LOWER}`)).toBeNull();
   });
 
+  it("names no chain for a key every object inherits, in a prefix, a host or a Uniswap path", () => {
+    for (const name of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+      expect(parseInspectTarget(`${name}:${LOWER}`), name).toBeNull();
+      expect(parseInspectTarget(`https://${name}/token/${LOWER}`), name).toBeNull();
+      expect(parseInspectTarget(`https://app.uniswap.org/explore/tokens/${name}/${LOWER}`), name).toBeNull();
+    }
+  });
+
   it("reads CAIP-10, eip155:<chain id>:<address>, Arc's two networks included", () => {
     for (const [id, chain] of [[1, "ethereum"], [8453, "base"], [42161, "arbitrum"], [10, "optimism"], [5042, "arc"], [5042002, "arc"]] as const) {
       expect(parseInspectTarget(`eip155:${id}:${LOWER}`), String(id)).toEqual({ address: CHECKSUMMED, chain });

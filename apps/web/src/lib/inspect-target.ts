@@ -44,6 +44,10 @@ const OWN_HOSTS = new Set(["4rcos.com", "testnet.4rcos.com"]);
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
+/** A table's own entry for `key`, never one it inherits: "constructor:0x…" or a host named "toString" names no chain. */
+const own = <K extends string | number>(table: Record<K, InspectChainKey>, key: K): InspectChainKey | undefined =>
+  Object.hasOwn(table, key) ? table[key] : undefined;
+
 const asAddress = (text: string | undefined): Address | null =>
   text !== undefined && ADDRESS.test(text) && isAddress(text, { strict: false }) ? getAddress(text) : null;
 
@@ -79,13 +83,13 @@ export function parseInspectTarget(input: string): InspectTarget | null {
 
   const caip = /^eip155:(\d{1,12}):(0x[0-9a-fA-F]{40})$/i.exec(text);
   if (caip) {
-    const chain = CHAIN_IDS[Number(caip[1])];
+    const chain = own(CHAIN_IDS, Number(caip[1]));
     const address = asAddress(caip[2]);
     return chain && address ? { address, chain } : null;
   }
   const prefixed = /^([a-z0-9]{2,16}):(0x[0-9a-fA-F]{40})$/i.exec(text);
   if (prefixed) {
-    const chain = PREFIXES[prefixed[1]!.toLowerCase()];
+    const chain = own(PREFIXES, prefixed[1]!.toLowerCase());
     const address = asAddress(prefixed[2]);
     return chain && address ? { address, chain } : null;
   }
@@ -95,14 +99,14 @@ export function parseInspectTarget(input: string): InspectTarget | null {
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
   const parts = url.pathname.split("/").filter(Boolean);
 
-  const explorer = EXPLORERS[host];
+  const explorer = own(EXPLORERS, host);
   if (explorer) {
     const at = parts.findIndex((p) => p === "token" || p === "address");
     const address = at >= 0 ? asAddress(parts[at + 1]) : null;
     return address ? { address, chain: explorer } : null;
   }
   if (host === "app.uniswap.org" && parts[0] === "explore" && parts[1] === "tokens") {
-    const chain = UNISWAP_CHAINS[parts[2]?.toLowerCase() ?? ""];
+    const chain = own(UNISWAP_CHAINS, parts[2]?.toLowerCase() ?? "");
     const address = asAddress(parts[3]);
     return chain && address ? { address, chain } : null;
   }
