@@ -7,8 +7,8 @@
  * verification, holder concentration) say so and read unknown, and everything else runs as usual.
  *
  * Soft: whether there is budget left is asked when an inspection starts, and every request it then sends is counted.
- * Inspections already running can take the count past the budget by what they still send (at most the 8 that run at
- * once, about 6 requests each). Pure: no "server-only", so its timing can be unit-tested.
+ * Inspections already running can take the count past the budget by what they still send (at most the 4 that run at
+ * once off Arc, about 6 requests each). Pure: no "server-only", so its timing can be unit-tested.
  */
 
 /**
@@ -29,6 +29,8 @@ export function explorerDailyBudget(raw: string | undefined = process.env.INSPEC
 }
 
 export type DailyBudget = {
+  /** Today's limit, as the setting reads now: 0 means the explorer is never asked. */
+  limit(): number;
   /** Calls left today (UTC), never below 0. */
   remaining(): number;
   /** Counts one call. */
@@ -51,6 +53,7 @@ export function dailyBudget(limit: () => number = () => explorerDailyBudget(), n
     }
   };
   return {
+    limit: () => limit(),
     remaining: () => {
       today();
       return Math.max(0, limit() - spent);
@@ -76,8 +79,21 @@ export function budgetedFetch(budget: DailyBudget, fetchFn: typeof fetch = fetch
   };
 }
 
-/** What the explorer-based findings say when the budget left the explorer out of an inspection. */
+/** What the explorer-based findings say when the budget left the explorer out of an inspection: today's is spent... */
 export const BUDGET_SPENT = "The explorer wasn't asked: this server has used up today's explorer reads for chains other than Arc.";
+
+/** ...or it is 0 (`INSPECT_EXPLORER_DAILY_BUDGET`), which switches those reads off rather than using them up. */
+export const BUDGET_OFF = "The explorer wasn't asked: this server's explorer reads for chains other than Arc are switched off.";
 
 /** ...and when the server has no key for the explorer's PRO API (a dev server, CI), which is the only way it reads these chains. */
 export const NO_EXPLORER_KEY = "The explorer wasn't asked: this server has no key for it.";
+
+/**
+ * Why an inspection off Arc leaves the explorer out, as its findings say it, or undefined when it asks the explorer: the
+ * server has no PRO key (`hasKey` false), the budget is 0, or today's is spent.
+ */
+export function explorerSkipReason(hasKey: boolean, budget: DailyBudget): string | undefined {
+  if (!hasKey) return NO_EXPLORER_KEY;
+  if (budget.limit() === 0) return BUDGET_OFF;
+  return budget.remaining() <= 0 ? BUDGET_SPENT : undefined;
+}

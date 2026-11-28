@@ -37,16 +37,18 @@ reads these chains for the Inspector, so no key reaches it.
   (a timeout, an HTTP error, a wrong key's 401) is skipped for 60 seconds by every call in that server instance, and
   the next one is asked. Without the key (or with the value `none`) only the public RPC is read.
 - **Explorer.** Blockscout's PRO API, with the site's `BLOCKSCOUT_API_KEY`, while the day's explorer budget lasts
-  ([OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains)). Without the key, or past the budget, the explorer isn't
-  asked: holder concentration reads "couldn't check", and so does source verification unless Sourcify has a match. The
-  report says why ("The explorer wasn't asked: ..."), and so do the proof page, the badge's title and the social card.
+  ([OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains)). Without the key, past the budget, or with a budget of 0
+  (switched off), the explorer isn't asked: holder concentration reads "couldn't check", and so does source verification
+  unless Sourcify has a match. The report says why ("The explorer wasn't asked: ..."), and so do the proof page, the
+  badge's title and the social card.
 - **Sourcify.** `sourcify.dev/server/v2/contract/<chain id>/<address>`, free and keyless, 5 seconds a request: one for
   the token, and one for the code a proxy runs.
 - **Cache and limits.** A report is kept 5 minutes in each server instance (30 seconds when degraded), keyed by chain and
   address, so Arc's report of an address is never Base's. In each instance, a client gets 30 `/api/inspect` calls a
   minute, every chain and Arc together, and another 30 a minute for `/t` (with its card) and `/badge` on these chains
-  together. Arc's `/t` and `/badge` have no limit, as before. At most 8 uncached inspections run at once in an instance,
-  every chain together; the next one answers "busy".
+  together. Arc's `/t` and `/badge` have no limit, as before. At most 4 uncached inspections of these chains run at once
+  in an instance, the four chains together; the next one answers "busy". Arc keeps its own 8, as before, and
+  inspections of these chains never take one of them.
 
 ## How each check decides
 
