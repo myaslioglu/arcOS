@@ -521,9 +521,10 @@ plain runtime value, a whole number from 0 to 1,000,000) in `apps/web/apphosting
 default applies. 0 switches these reads off: the explorer is never asked for these chains, and the reports say "The
 explorer wasn't asked: this server's explorer reads for chains other than Arc are switched off." Without
 `BLOCKSCOUT_API_KEY` the explorer is never asked for these chains, and the reports say "this server has no key for it".
-While the budget lasts, these chains' explorer reads wait in the same queue as Arc's (4 a second per instance): with
-Arc's 8 inspections and these chains' 4 all reading at once, the last in line can pass their deadline before every read
-is sent, and their explorer-based checks read "couldn't check" in a degraded report, kept 30 seconds.
+While the budget lasts, these chains' explorer reads wait in the same queue as Arc's (4 a second per instance), since
+the PRO API's limit is per key: with Arc's 8 inspections and these chains' 4 all reading the explorer at once, up to 72
+reads take about 18 seconds, past the 15-second deadline, so the inspections last in line, on any chain, answer "busy"
+until the queue is through. Once the day's budget is spent, these chains add nothing to it.
 
 **What it costs.** Alchemy prices requests in compute units (CU): 26 for an `eth_call`, 20 for `eth_getCode`,
 `eth_getStorageAt` or `eth_gasPrice`, 10 for `eth_blockNumber` (its pricing page, 2026-11-27). An uncached inspection
@@ -538,8 +539,8 @@ budget above.
 
 **At once.** Each instance runs at most 4 uncached inspections of these chains at a time, the four chains together, in
 a gate of their own (`apps/web/src/lib/inspect-server.ts`); the next one answers "busy". Arc keeps its own 8, as before
-there were other chains, so a few clients walking uncached pages of these chains, 30 a minute each, fill only theirs:
-Arc's pages never answer "busy" for them.
+there were other chains, so a few clients walking uncached pages of these chains, 30 a minute each, fill only theirs and
+never take one of Arc's slots. The explorer queue is still shared (above).
 
 **Signs to watch.** The provider's dashboard (requests and CU by chain) for cost. In Logs Explorer on the `arcos`
 service, the same lines as Arc's with the chain's slug before the error's name: `inspect failed base TypeError`, and

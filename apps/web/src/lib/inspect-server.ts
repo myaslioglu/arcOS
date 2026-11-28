@@ -70,8 +70,8 @@ const chainsGate = processGlobal("inspect.chainsGate", () => inFlightGate(CHAINS
 // each request then gets at most 8 s, and none is still sent once its inspection's deadline has
 // passed (see explorer-fetch.ts in @arcos/inspector). The PRO API's limit is per key, across chains, so
 // every chain waits in the same queue. With the other chains' 4 running too, which ask the explorer only while their
-// daily budget lasts (below), it is 12 × 6 calls, about 18 s: the last in line send nothing past their deadline, and
-// their explorer-based checks read unknown, in a degraded report kept 30 s.
+// daily budget lasts (below), it is 12 × 6 calls, about 18 s: the inspections last in line, on whichever chain, then
+// run out of time and answer "busy" (InspectionTimeout) until the queue is through. Only the gates are apart.
 const explorerTurn = explorerPacer();
 
 // The explorer calls inspections off Arc may make in a UTC day, per process (explorer-budget.ts). Arc's aren't counted.
