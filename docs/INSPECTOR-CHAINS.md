@@ -1,8 +1,11 @@
 # Inspector on other chains
 
 What the Inspector reads on Ethereum, Base, Arbitrum One and OP Mainnet, how each check decides there, and what was
-measured to set it up. Arc is unchanged: its rules are in the [README](../README.md#how-inspector-decides-things). The
-settings and the owner's steps are in [DEPLOYING.md](DEPLOYING.md#the-inspectors-other-chains), and what it costs is in
+measured to set it up. Arc is unchanged, except for EIP-7702 delegated accounts and the proxies, beacon proxies and
+clones whose implementation is one, which read "couldn't check" where the delegation used to be scanned as code (the
+[README](../README.md#what-inspector-can-and-cant-see) says what changed). Arc's rules are in the
+[README](../README.md#how-inspector-decides-things). The settings and the owner's steps are in
+[DEPLOYING.md](DEPLOYING.md#the-inspectors-other-chains), and what it costs is in
 [OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains).
 
 ## Switching a chain on
@@ -66,9 +69,9 @@ reads these chains for the Inspector, so no key reaches it.
 
 | Check | What runs | Reads "couldn't check" when |
 |---|---|---|
-| Source verification | Blockscout and Sourcify. Either one saying verified is a pass; a proxy needs the code it runs verified too, by either. | Neither says verified. Both saying "not verified" is no fail here: Etherscan isn't read, and many contracts are verified there only. Also when one says no and the other can't answer. |
-| Ownership, privileges, proxy | As on Arc. | As on Arc (logic that can't be read, `DELEGATECALL` to code that can't be identified), and always for an EIP-7702 delegated account or an Arbitrum Stylus program, whose code isn't EVM bytecode to scan. Behind a proxy or a clone, on Arc too, such code is logic that can't be read, and a clone of it is never "not upgradeable". |
-| Holder concentration | Blockscout's holder list, leaving out the token, burn addresses, every pool the scan found (any quote, any venue, the classic pools included) and Uniswap v4's PoolManager. A pool the scan can't see counts as a holder, so over half is a fail only when the holders with no code hold over half on their own, and a warning otherwise. | The explorer wasn't asked or didn't answer; fewer than ten rows it doesn't confirm are all; the pool scan failed. |
+| Source verification | Blockscout and Sourcify. Either one saying verified is a pass; a proxy needs the code it runs verified too, by either. | Neither says verified. Both saying "not verified" is no fail here: Etherscan isn't read, and many contracts are verified there only. Also when one says no and the other can't answer, and for an Arbitrum Stylus program with a proxy slot that is set or can't be read, since the code it runs may be elsewhere. |
+| Ownership, privileges, proxy | As on Arc. | As on Arc (logic that can't be read, `DELEGATECALL` to code that can't be identified), and always for an EIP-7702 delegated account or an Arbitrum Stylus program, whose code isn't EVM bytecode to scan, but for a Stylus program's proxy check when one of its proxy slots is set: that is a fail, as for any upgradeable proxy. Behind a proxy or a clone, on Arc too, such code is logic that can't be read, and a clone of it is never "not upgradeable". |
+| Holder concentration | Blockscout's holder list, leaving out the token, burn addresses, every pool the scan found (any quote, any venue, the classic pools included) and Uniswap v4's PoolManager. A pool the scan can't see, on another DEX or of another Slipstream factory, counts as a holder (a hooked v4 pool never does: its tokens are the PoolManager's), so over half is a fail only when the holders with no code hold over half on their own, and a warning otherwise, naming those pools. | The explorer wasn't asked or didn't answer; fewer than ten rows it doesn't confirm are all; the pool scan failed. |
 | Liquidity | Pools against USDC and USDT (counted 1:1 with the dollar) on Uniswap v2, v3 and hookless v4, Slipstream, and the classic pools by balance. Pools against WETH and native ETH are found and named, never priced. | Only pools against WETH or ETH were found; no pool or only thin ones were found, since each chain has pools the scan can't see (below). |
 | Liquidity lock | Uniswap v2 LP tokens, read as on Arc, but never a pass or a fail here. | Always. A pair whose LP is at least 95% burned may sit beside a deeper pool the scan can't see (each chain has some, below), however deep the pair is, so it is no pass; LP that isn't burned may sit in a lock contract, and none is recognized on these chains yet, so it is no fail. Also when a pair against WETH sits beside one against USDC, since which holds more can't be told. |
 | PREVRANDAO | The opcode scan, with each chain's wording (below). | The logic can't be read. |

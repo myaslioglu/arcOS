@@ -13,10 +13,11 @@ describe("server-rpc", () => {
     expect(serverRpcClient()).toBe(serverRpcClient());
   });
 
-  it("hands every route the Inspector's explorer pacer", () => {
+  it("hands every route the Inspector's explorer pacer, both of its queues", () => {
     const pacer = explorerPacer();
-    expect(processGlobal("inspect.explorerPacer", () => () => Promise.resolve())).toBe(pacer);
+    expect(processGlobal("inspect.explorerQueues", () => ({ high: () => Promise.resolve(), low: () => Promise.resolve() }))).toBe(pacer);
     expect(explorerPacer()).toBe(pacer);
+    expect(pacer.high).not.toBe(pacer.low);
   });
 
   it("keeps one RPC client for Revoke too, separate from the Inspector's", () => {

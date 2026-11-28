@@ -324,13 +324,25 @@ Watchdog, Finder and the token index stay Arc's. The nine checks are the same. W
 
 - An EIP-7702 delegated account (an address whose code points at another contract's) and an Arbitrum Stylus program
   (WebAssembly) have no EVM bytecode of their own to scan. Ownership, privileges, proxy and `PREVRANDAO` read
-  "couldn't check" for them, and so does source verification for a delegated account, whose key can point it at other
-  code at any time. Holders, liquidity, the liquidity lock and the trade check run as for any token. This holds on
+  "couldn't check" for them, but for a Stylus program that is a proxy itself (below), and so does source verification
+  for a delegated account, whose key can point it at other code at any time. Holders, liquidity, the liquidity lock
+  and the trade check run as for any token. A Stylus program's EIP-1967 and ZeppelinOS proxy slots are read as any
+  contract's: they are all there is to go on, since its code can't be scanned for a call that forwards. With one of
+  them set, the proxy check fails as for any upgradeable proxy, naming the admin when its slot holds one, and source
+  verification reads "couldn't check", since the code that runs may be elsewhere; with one that can't be read, both
+  read "couldn't check". Only with every slot empty is a Stylus program's source checked as its own. This holds on
   every chain, Arc included: before, a delegated account on Arc read "Not a proxy", a pass about code its key can
   re-point, and its source verification and `PREVRANDAO` findings described the delegation, not the code it runs. A
-  proxy or a clone whose implementation is a delegated account or a Stylus program isn't scanned either: its
-  privileges and `PREVRANDAO` read "couldn't check", its ownership is never a pass, and a clone of one is never "not
-  upgradeable". A Stylus implementation's source is still checked, as its own.
+  proxy, a beacon proxy or a clone whose implementation is a delegated account or a Stylus program isn't scanned
+  either: its privileges and `PREVRANDAO` read "couldn't check", and so does its ownership, unless
+  `owner()`/`getOwner()` names a wallet or a contract, which is a warning as before; a clone of one is never "not
+  upgradeable"; and its source verification never passes on a delegated account, whose key picks the code that runs. A
+  Stylus implementation's source is still checked, as its own, once its own proxy slots read empty. On Arc, where such
+  an implementation can be a delegated account but never a Stylus program, this is a change too: the 23 bytes of the
+  delegation used to be scanned as if they were the code that runs. Ownership could read "Ownership is renounced" or
+  warn that control can be restored by an upgrade, privileges and `PREVRANDAO` could pass, warn or fail, source
+  verification passed or failed on the delegated account's record, and a clone read "Minimal proxy — not upgradeable".
+  All of these now read "couldn't check".
 - It follows standard proxies one hop: EIP-1967 implementation and beacon slots, the older
   ZeppelinOS implementation and admin slots (Circle's FiatToken proxies, EURC among them), and
   EIP-1167 clones. A proxy behind a proxy, or one whose slots disagree, reads "unknown", not "clean".

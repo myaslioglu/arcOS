@@ -69,10 +69,12 @@ const chainsGate = processGlobal("inspect.chainsGate", () => inFlightGate(CHAINS
 // server process on Arc, 8 inspections × 6 calls at 4 a second, is about 12 s, still inside the 15 s deadline;
 // each request then gets at most 8 s, and none is still sent once its inspection's deadline has
 // passed (see explorer-fetch.ts in @arcos/inspector). The PRO API's limit is per key, across chains, so
-// every chain waits in the same queue. With the other chains' 4 running too, which ask the explorer only while their
-// daily budget lasts (below), it is 12 × 6 calls, about 18 s: the inspections last in line, on whichever chain, then
-// run out of time and answer "busy" (InspectionTimeout) until the queue is through. Only the gates are apart.
-const explorerTurn = explorerPacer();
+// every chain's calls share one window of 4 a second, in two queues (`explorerPacer` in server-rpc.ts): Arc's, always
+// served first, and the other chains', which ask the explorer only while their daily budget lasts (below). The other
+// chains' 4 inspections running beside Arc's 8 add to Arc's worst case only the turns already given out in the last
+// second, about 1 s at most, and never their 24 calls. Theirs wait behind Arc's: with both gates full, 12 × 6 calls
+// take about 18 s, so the last of theirs in line run out of time and answer "busy" (InspectionTimeout).
+const explorerTurns = explorerPacer();
 
 // The explorer calls inspections off Arc may make in a UTC day, per process (explorer-budget.ts). Arc's aren't counted.
 const explorerBudget = processGlobal("inspect.explorerBudget", () => dailyBudget());
@@ -92,7 +94,8 @@ export function cachedInspection(address: Address, chainKey: InspectChainKey = "
       // Blockscout's PRO API for the chain, the only explorer the server reads off Arc, while today's budget lasts.
       const explorerApi = proExplorerApi(chain.chainId, process.env.BLOCKSCOUT_API_KEY);
       const explorerSkipped = explorerSkipReason(explorerApi !== undefined, explorerBudget);
-      const fetchFn = explorerFetch(explorerTurn, controller.signal, budgetedFetch(explorerBudget));
+      // Behind Arc's reads in the explorer's queues (see `explorerTurns`).
+      const fetchFn = explorerFetch(explorerTurns.low, controller.signal, budgetedFetch(explorerBudget));
       // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
       const deadlineAt = Date.now() + DEADLINE_MS;
       const input = inspectInputFor(chain, address, inspectRpcClient(chain), {
@@ -124,7 +127,7 @@ async function arcInspection(address: Address): Promise<Report> {
   // 15 s deadline starts after them.
   const { extraPools, extraPoolsTruncated, v4Positions } = await indexedExtrasFor(address);
   const controller = new AbortController();
-  const fetchFn = explorerFetch(explorerTurn, controller.signal);
+  const fetchFn = explorerFetch(explorerTurns.high, controller.signal);
   // The trade check fits its round trips inside the same deadline (DEADLINE_MS from now, as withDeadline counts it).
   const deadlineAt = Date.now() + DEADLINE_MS;
   return withDeadline(inspect(inspectInput(address, client, fetchFn, explorerApi, extraPools, deadlineAt, v4Positions, extraPoolsTruncated)), controller, DEADLINE_MS);

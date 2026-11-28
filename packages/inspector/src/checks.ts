@@ -46,8 +46,9 @@
  *   that they are every holder there is, since a share added up from an unknown fraction of the
  *   holders is a floor, not a concentration figure — a floor can still be a warn or a fail, but
  *   never a pass. On a chain with pools discovery can't see (`unscanned`), such a pool is counted
- *   as a holder, so over half is a fail there only when the holders with no code (no pool is one)
- *   hold over half on their own; otherwise it is a warn that says so.
+ *   as a holder (a hooked v4 pool never is: its tokens are the PoolManager's, which is left out),
+ *   so over half is a fail there only when the holders with no code (no pool is one) hold over
+ *   half on their own; otherwise it is a warn that says so, naming the kinds of pool it may be.
  * - liquidity: no DEX is configured for this network, pool discovery failed at the network level,
  *   or every pool contract reverted (an address with no contract code does that, and inside a
  *   multicall answers 0x), which is never reported as "no pool found" — that would be a claim about
@@ -177,7 +178,7 @@
  * running NOW and stand unchanged.
  */
 import { parseAbi } from "viem";
-import { BURN_ADDRESSES, type Address, type DexConfig, type DexQuote } from "@arcos/chain";
+import { BURN_ADDRESSES, UNSCANNED_V4, type Address, type DexConfig, type DexQuote } from "@arcos/chain";
 import { usesOpcode } from "./bytecode";
 import { SEVERE, type Privilege, type PrivilegeCategory } from "./privileges";
 import type { ContractInfo, HolderPage } from "./explorer";
@@ -649,9 +650,17 @@ const finding = (id: Finding["id"], status: Finding["status"], title: string, de
  * code, and otherwise says where the code that runs lives (`at`, `null` when the engine knows this
  * token forwards but couldn't identify where) and what the explorer has on it. A verified proxy in
  * front of unverified logic is the shape that made this matter: the reassuring line was true of 40
- * lines of forwarding code and false of everything behind it.
+ * lines of forwarding code and false of everything behind it. `slotsUnread` is for code whose proxy
+ * slots are the only sign of whether it forwards (an Arbitrum Stylus program, whose code can't be
+ * scanned) and couldn't be read: then it isn't known to forward at all, only not known not to.
  */
-export type LogicVerification = { at: Address | null; info: ContractInfo | null };
+export type LogicVerification = { at: Address | null; info: ContractInfo | null; slotsUnread?: true };
+
+/** Why `checkVerified` can't vouch for code it couldn't identify (`LogicVerification.at` null). */
+const unidentifiedLogic = (logic: LogicVerification): string =>
+  logic.slotsUnread
+    ? "This address's own source is verified, but its proxy slots couldn't be read, so whether it runs code from somewhere else can't be told."
+    : "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.";
 
 /**
  * What the second verification source (`InspectInput.verifyFallback`, Sourcify) said: about this address (`own`), and
@@ -687,9 +696,7 @@ export function checkVerified(
       : finding("verified", "unknown", "Couldn't check source verification", `The explorer says this contract isn't verified. ${NOT_ON_ETHERSCAN}`, { evidenceUrl: url });
   }
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: url });
-  if (logic.at === null) {
-    return finding("verified", "unknown", "Couldn't check source verification", "This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", { evidenceUrl: url });
-  }
+  if (logic.at === null) return finding("verified", "unknown", "Couldn't check source verification", unidentifiedLogic(logic), { evidenceUrl: url });
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   if (logic.info === null || logic.info.verified === null) {
     return finding("verified", "unknown", "Couldn't check source verification", `This proxy's own source is verified, but whether ${logic.at} — the implementation it runs — is verified couldn't be checked.`, { evidenceUrl: logicUrl });
@@ -734,9 +741,7 @@ function checkVerifiedWithSourcify(input: InspectInput, contract: ContractInfo |
   // Verified: link where the source can be read, the explorer's page when it has it, else Sourcify's.
   const ownUrl = contract?.verified === true ? url : sourcifyUrl(input.address);
   if (logic === null) return finding("verified", "pass", "Source code is verified", "Anyone can read what this contract does.", { evidenceUrl: ownUrl });
-  if (logic.at === null) {
-    return unknown("This address's own source is verified, but it forwards its calls to code that couldn't be identified — so what it actually runs may be anything.", ownUrl);
-  }
+  if (logic.at === null) return unknown(unidentifiedLogic(logic), ownUrl);
   const logicUrl = `${input.explorerBase}/address/${logic.at}?tab=contract`;
   const runs = verdict(logic.info?.verified, sourcify.logic);
   if (runs === null) {
@@ -999,13 +1004,15 @@ export function checkHolders(
   // Where the chain has pools discovery can't see (`unscanned`: other DEXes, a second Slipstream factory), a contract in
   // the list may be one of them, counted as a holder. That only pushes the figure up, so a pass stands. A fail needs the
   // holders with no code, which no pool is, over half the supply on their own; short of that it is a warning saying why.
+  // A hooked v4 pool is never such a holder: every v4 pool's tokens are the PoolManager's, left out above.
+  const unseenPools = poolManager.length > 0 ? input.unscanned.filter((kind) => kind !== UNSCANNED_V4) : input.unscanned;
   const noCode = Number((top.filter((h) => !h.isContract).reduce((sum, h) => sum + h.value, 0n) * 10000n) / totalSupply) / 100;
   const overHalf = (title: string): Finding =>
-    input.unscanned.length === 0 || noCode > 50
+    unseenPools.length === 0 || noCode > 50
       ? finding("holders", "fail", title, detail, { evidenceUrl: url, fixAppId: "vesting" })
       : finding(
           "holders", "warn", title,
-          `${detail} On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", input.unscanned)}, so a contract among these holders may be one of those pools. The ones with no code hold ${formatPct(noCode)}.`,
+          `${detail} On ${input.chain.name}, Inspector doesn't yet read ${listWith("and", unseenPools)}, so a contract among these holders may be one of those pools. The ones with no code hold ${formatPct(noCode)}.`,
           { evidenceUrl: url },
         );
   // Excluding pools, burn addresses and the token itself can leave a full page with fewer than ten
