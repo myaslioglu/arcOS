@@ -1,8 +1,11 @@
 # Inspector on other chains
 
 What the Inspector reads on Ethereum, Base, Arbitrum One and OP Mainnet, how each check decides there, and what was
-measured to set it up. Arc is unchanged: its rules are in the [README](../README.md#how-inspector-decides-things). The
-settings and the owner's steps are in [DEPLOYING.md](DEPLOYING.md#the-inspectors-other-chains), and what it costs is in
+measured to set it up. Arc is unchanged, except for EIP-7702 delegated accounts and the proxies, beacon proxies and
+clones whose implementation is one, which read "couldn't check" where the delegation used to be scanned as code (the
+[README](../README.md#what-inspector-can-and-cant-see) says what changed). Arc's rules are in the
+[README](../README.md#how-inspector-decides-things). The settings and the owner's steps are in
+[DEPLOYING.md](DEPLOYING.md#the-inspectors-other-chains), and what it costs is in
 [OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains).
 
 ## Switching a chain on
