@@ -17,7 +17,8 @@
  *   renounced Ownable leaves the roles untouched, so it's reported as role-based admin (a warn).
  * - privileges: the contract's logic code couldn't be read (see `LogicGap` — a clone, or an
  *   EIP-1967 or ZeppelinOS-style proxy, whose implementation is unreachable, points at empty code,
- *   is itself a proxy, or can't be picked out because its slots name two candidates); or
+ *   is itself a proxy, can't be picked out because its slots name two candidates, or isn't EVM
+ *   bytecode: an EIP-7702 delegated account or an Arbitrum Stylus program); or
  *   privileged functions were found but the owner is unknown, or there's no owner function at all
  *   (can't tell if they're reachable either way). A proxy is always judged on its IMPLEMENTATION's
  *   bytecode and ABI, never on its own trampoline, which has no dispatcher and so would look
@@ -32,7 +33,9 @@
  *   upgradeable proxy is a fail ("Clone of an upgradeable proxy"), not a pass; a clone whose
  *   target's own proxy slots couldn't be read is unknown, because an unread slot is not an unset
  *   one; code that delegates calls (DELEGATECALL) but resolves to no known clone target or proxy
- *   slot is unknown, not "not a proxy".
+ *   slot is unknown, not "not a proxy"; so is a clone of an EIP-7702 delegated account (its key can
+ *   point it at other code) or of an Arbitrum Stylus program (its code can't be scanned for a
+ *   DELEGATECALL), never "not upgradeable".
  * - holders: the explorer didn't answer, total supply is unknown, or the holder list came back
  *   empty — which is never treated as "0% concentration" once total supply is known to be non-zero
  *   (a non-zero supply guarantees at least one holder exists), regardless of what the explorer's own
@@ -211,15 +214,19 @@ const FORWARDS_TO_UNIDENTIFIED_DETAIL =
  * Why the engine has no logic code to score. A proxy's own bytecode is a trampoline with no
  * function dispatcher, so scoring it would read "nothing privileged here" off the proxy instead of
  * off the code that actually runs — every one of these is `unknown`, never a pass. `null` means the
- * logic code WAS read.
+ * logic code WAS read. The last two are logic that was found but isn't EVM bytecode (`opaqueCode`):
+ * an EIP-7702 delegated account or an Arbitrum Stylus program behind a proxy or a clone, never
+ * scanned as EVM.
  */
-export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous";
+export type LogicGap = "logic-unreadable" | "logic-empty" | "logic-unidentified" | "logic-ambiguous" | "logic-eip7702" | "logic-stylus";
 
 const LOGIC_GAP: Record<LogicGap, { title: string; detail: string }> = {
   "logic-unreadable": { title: "Couldn't read the contract's logic", detail: "This contract runs another contract's code, and that code couldn't be read." },
   "logic-empty": { title: "Couldn't read the contract's logic", detail: "This contract forwards its calls to an address that has no contract code at all, so there's no logic to read." },
   "logic-unidentified": { title: "Couldn't read the contract's logic", detail: "This contract's logic sits behind a further proxy, so the code that actually runs couldn't be identified." },
   "logic-ambiguous": { title: "Couldn't read the contract's logic", detail: "This proxy's slots name two different places its logic could live — both of EIP-1967's slots, or an EIP-1967 slot and the ZeppelinOS one — and only its own bytecode decides which it runs, so which code to read can't be told." },
+  "logic-eip7702": { title: "Couldn't read the contract's logic", detail: "This contract runs the code of an EIP-7702 delegated account, whose key can point it at other code at any time, so its logic can't be read." },
+  "logic-stylus": { title: "Couldn't read the contract's logic", detail: "This contract runs an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read." },
 };
 
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -849,6 +856,11 @@ export type ProxyResolution = {
    * not re-pointable, but "its logic can't be replaced" is a claim about the code that ends up
    * running, and whoever controls the address behind that DELEGATECALL controls exactly that. */
   logicDelegates: boolean;
+  /** The logic this token runs from somewhere else isn't EVM bytecode (`opaqueCode`), so it was never
+   * scored: an EIP-7702 delegated account, whose key can point it at other code at any time, or an
+   * Arbitrum Stylus program, which can't be scanned for a DELEGATECALL. Read for a clone: a clone of
+   * either can't be called "not upgradeable". */
+  logicOpaque: "eip7702" | "stylus" | null;
   /** The code this token runs can be replaced: one of its own proxy slots (EIP-1967's implementation
    * or beacon slot, or ZeppelinOS's implementation slot) is set, or it is a clone of a contract
    * whose is. THE value — `checkProxy`'s upgradeability `fail` and R1's block on the logic checks
@@ -903,6 +915,12 @@ export function checkProxy(input: InspectInput, r: ProxyResolution): Finding {
     }
     if (r.logicDelegates) {
       return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, which can't be re-pointed — but the code it runs delegates calls to an address this check couldn't identify, and whoever controls that address controls what this token does.`, { evidenceUrl: targetUrl });
+    }
+    if (r.logicOpaque === "eip7702") {
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, an EIP-7702 delegated account, whose key can point it at other code at any time.`, { evidenceUrl: targetUrl });
+    }
+    if (r.logicOpaque === "stylus") {
+      return finding("proxy", "unknown", "Couldn't check if this clone is upgradeable", `This is an EIP-1167 clone of ${r.cloneOf}, an Arbitrum Stylus program (WebAssembly), whose code this check can't read, so whether it forwards its calls elsewhere can't be told.`, { evidenceUrl: targetUrl });
     }
     return finding("proxy", "pass", "Minimal proxy — not upgradeable", `An EIP-1167 clone of ${r.cloneOf}; its logic can't be replaced.`, { evidenceUrl: targetUrl });
   }

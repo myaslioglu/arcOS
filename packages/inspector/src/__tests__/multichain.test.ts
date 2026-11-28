@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { UNISWAP_V4, inspectChain, type DexConfig } from "@arcos/chain";
-import { checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools, type SourcifyAnswers } from "../checks";
+import { IMPL_SLOT, checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools, type SourcifyAnswers } from "../checks";
 import { chainInput } from "../chain-input";
 import type { ContractInfo, ExplorerSource, Holder } from "../explorer";
 import { inspect } from "../inspect";
@@ -473,6 +473,56 @@ describe("a whole inspection off Arc", () => {
     expect(find(r, "verified")).toMatchObject({ status: "pass" });
     for (const id of ["ownership", "privileges", "proxy", "prevrandao"] as const) expect(find(r, id).status, id).toBe("unknown");
     expect(find(r, "prevrandao").detail).toBe("This is an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.");
+  });
+
+  describe("logic behind a proxy or a clone that isn't EVM bytecode", () => {
+    const ARBITRUM = inspectChain("mainnet", "arbitrum")!;
+    const IMPL = "0x2222222222222222222222222222222222222222";
+    // A Stylus program: its prefix, then WebAssembly, whose bytes include 0x44 (PREVRANDAO) and 0xf4 (DELEGATECALL) as data.
+    const STYLUS = `0xeff00000${"0a1b2c44f4"}${"9d".repeat(8)}44`;
+    const clone = (target: string) => `0x363d3d373d3d3d363d73${target.slice(2)}5af43d82803e903d91602b57fd5bf3`;
+    /** An inspection on Arbitrum One of TOKEN with `code`, the EIP-1967 implementation slot of each address in `impl`. */
+    const onArbitrum = (code: Record<string, string>, impl: Record<string, string> = {}, source = sourcify(false)) => {
+      const chain = fakeChain({ code, reads: { [readKey(TOKEN, "totalSupply", [])]: 1000n } });
+      const reader: FakeReader = {
+        ...chain,
+        getStorageAt: async (at, slot) => (slot === IMPL_SLOT && impl[at.toLowerCase()] ? (`0x${"00".repeat(12)}${impl[at.toLowerCase()]!.slice(2)}` as `0x${string}`) : null),
+      };
+      return inspect({ ...chainInput(ARBITRUM), dex: null, address: TOKEN, network: "mainnet", reader, explorer: explorer(true), verifyFallback: source });
+    };
+    const STYLUS_LOGIC = "This contract runs an Arbitrum Stylus program (WebAssembly), not EVM bytecode, so its logic can't be read.";
+
+    it("never scans a proxy's Stylus implementation as EVM, and checks the program's source as its own", async () => {
+      const source = sourcify(false);
+      const r = await onArbitrum({ [TOKEN]: PLAIN, [IMPL]: STYLUS }, { [TOKEN]: IMPL }, source);
+      // Scanned as EVM, the 0x44 in the WebAssembly read "Uses PREVRANDAO, always 1 on Arbitrum".
+      expect(find(r, "prevrandao")).toEqual({ id: "prevrandao", status: "unknown", title: "Couldn't read the contract's logic", detail: STYLUS_LOGIC, evidenceUrl: null, fixAppId: null });
+      expect(find(r, "privileges")).toMatchObject({ status: "unknown", detail: STYLUS_LOGIC });
+      expect(find(r, "ownership")).toMatchObject({ status: "unknown" });
+      expect(find(r, "proxy")).toMatchObject({ status: "fail", title: "Upgradeable proxy" });
+      expect(source.asked).toEqual([TOKEN, IMPL]);
+      expect(find(r, "verified")).toMatchObject({ status: "pass", detail: `Both this proxy and the implementation it runs (${IMPL}) are verified.` });
+    });
+
+    it("never calls a clone of a Stylus program or of an EIP-7702 delegated account 'not upgradeable'", async () => {
+      const stylus = await onArbitrum({ [TOKEN]: clone(IMPL), [IMPL]: STYLUS });
+      expect(find(stylus, "proxy")).toMatchObject({
+        status: "unknown",
+        title: "Couldn't check if this clone is upgradeable",
+        detail: `This is an EIP-1167 clone of ${IMPL}, an Arbitrum Stylus program (WebAssembly), whose code this check can't read, so whether it forwards its calls elsewhere can't be told.`,
+      });
+      expect(find(stylus, "prevrandao")).toMatchObject({ status: "unknown", detail: STYLUS_LOGIC });
+      const delegated = await onArbitrum({ [TOKEN]: clone(IMPL), [IMPL]: `0xef0100${"44".repeat(20)}` });
+      expect(find(delegated, "proxy")).toMatchObject({
+        status: "unknown",
+        detail: `This is an EIP-1167 clone of ${IMPL}, an EIP-7702 delegated account, whose key can point it at other code at any time.`,
+      });
+      for (const id of ["privileges", "prevrandao"] as const) {
+        expect(find(delegated, id).detail, id).toBe("This contract runs the code of an EIP-7702 delegated account, whose key can point it at other code at any time, so its logic can't be read.");
+      }
+      // Whatever code the account points at runs, so no one contract's source is "the implementation it runs".
+      expect(find(delegated, "verified")).toMatchObject({ status: "unknown", detail: expect.stringContaining("forwards its calls to code that couldn't be identified") });
+    });
   });
 });
 
