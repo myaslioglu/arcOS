@@ -7,7 +7,7 @@
 # (MergeEnvVars in GoogleCloudPlatform/buildpacks, pkg/firebase/apphostingschema). scripts/apphosting-env.mjs
 # --environment testnet merges the two files the same way for the deploy workflow's testnet bundle.
 #
-# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the five mainnet-only items
+# A merge can replace an item but not remove one, and App Hosting refuses an empty value, so the six mainnet-only items
 # are replaced by the value `none`:
 # - NEXT_PUBLIC_FEE_RECIPIENT: `none` is not an address, so Swap and Bridge add no platform fee (feeRecipient() in
 #   src/lib/appkit.ts).
@@ -24,6 +24,10 @@
 # - TELEGRAM_BOT_USERNAME: the bot's username in apphosting.yaml. `none` is not one, so /api/telegram/link answers 503
 #   and no testnet wallet is ever linked to the mainnet bot. Watches are mainnet-only anyway: /api/watches answers 404
 #   on testnet, with the other routes over the token index.
+# - INSPECT_RPC_KEY: a secret in apphosting.yaml, the Alchemy key for the Inspector's other chains. Replaced by `none`,
+#   the backend needs no access to it, and the server sends no key (src/lib/rpc-urls.ts). RUNTIME only, as in
+#   apphosting.yaml. NEXT_PUBLIC_INSPECT_CHAINS is left as apphosting.yaml has it: those chains exist on mainnet only,
+#   so the testnet site reads none of them whatever it names (src/lib/inspect-route.ts).
 # Public values only: nothing here is a secret.
 
 env:
@@ -55,6 +59,10 @@ env:
     availability:
       - RUNTIME
   - variable: TELEGRAM_BOT_USERNAME
+    value: none
+    availability:
+      - RUNTIME
+  - variable: INSPECT_RPC_KEY
     value: none
     availability:
       - RUNTIME

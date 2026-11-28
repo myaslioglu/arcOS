@@ -62,6 +62,22 @@ env:
     value: arcoscombot
     availability:
       - RUNTIME
+  # INSPECT_RPC_KEY is a Secret Manager secret: the Alchemy key the server reads Ethereum, Base, Arbitrum One and OP
+  # Mainnet through (src/lib/rpc-urls.ts), sent in the Authorization header, never in a URL. Runtime only and pinned to a
+  # version. It has to exist, with access granted to this backend, before a rollout of this file (docs/DEPLOYING.md,
+  # "The Inspector's other chains"). Without it the server reads each chain's public RPC only.
+  - variable: INSPECT_RPC_KEY
+    secret: INSPECT_RPC_KEY@1
+    availability:
+      - RUNTIME
+  # NEXT_PUBLIC_INSPECT_CHAINS names the chains the Inspector reads besides Arc, by slug, separated by commas. It is
+  # public: it names chains, nothing more. Unset or empty, none is read and their routes answer 404
+  # (src/lib/inspect-route.ts). The four were switched on together, at the owner's decision of 2026-11-28.
+  - variable: NEXT_PUBLIC_INSPECT_CHAINS
+    value: ethereum,base,arbitrum,optimism
+    availability:
+      - BUILD
+      - RUNTIME
   # ARCOS_TRUSTED_HOPS is deliberately unset. It is a server-only setting for the rate limits (lib/rate-limit.ts): how many
   # entries, counted from the right of X-Forwarded-For, belong to the site's own proxies. Unset it is 0, and each client is
   # keyed by the rightmost entry, the one the nearest proxy added. If a Google load balancer in front of App Hosting adds
