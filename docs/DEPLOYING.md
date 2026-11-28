@@ -224,8 +224,8 @@ The explorer reads use the existing `BLOCKSCOUT_API_KEY`, by chain id; nothing n
 ### Owner steps
 
 Once, before the pull request that names `INSPECT_RPC_KEY` in `apphosting.yaml` merges: a merge rolls out, and a rollout
-whose pinned secret is missing fails. From a machine signed in as the owner (`gcloud auth login`, `firebase login`),
-with `export PROJECT_ID=arcos-c80cf`:
+whose pinned secret is missing fails. In bash, the shell Cloud Shell runs (the `read -rsp` line below is bash's), on a
+machine signed in as the owner (`gcloud auth login`, `firebase login`), with `export PROJECT_ID=arcos-c80cf`:
 
 1. **The key.** In the Alchemy dashboard (https://dashboard.alchemy.com/apps), create an app for the site, apart from any
    key used for development, with Ethereum, Base, Arbitrum and OP Mainnet (mainnet each) enabled for it, and copy its
@@ -256,13 +256,24 @@ with `export PROJECT_ID=arcos-c80cf`:
 
    The testnet backend needs nothing: it reads the value `none` (see [The testnet site](#the-testnet-site)).
 
-4. **The bundle scan.** Add a line that matches the key to the secret `BUNDLE_DENY_PATTERNS`
-   ([What the setup holds](#what-the-setup-holds)): the key itself, if it holds only letters, digits, `-` and `_`. The
-   deploy then fails if the key ever shows up in a built bundle, browser or server, and prints only the line's number.
-   GitHub never shows a secret's value again, so set the whole list anew from your own copy, with the line added, where
-   the secret is kept (Settings, Secrets and variables, Actions; or Settings, Environments, `production`).
+4. **The bundle scan (optional).** Only for an owner who keeps their own copy of the list in the secret
+   `BUNDLE_DENY_PATTERNS` ([What the setup holds](#what-the-setup-holds)): GitHub never shows a secret's value again, so
+   the list can only be set anew whole, from that copy, where the secret is kept (Settings, Secrets and variables,
+   Actions; or Settings, Environments, `production`). Add this line to it, as it is, and not the key:
 
-5. **The pull request that switches a chain on** (not before steps 2 and 3) adds to `apphosting.yaml`:
+   ```text
+   g\.alchemy\.com/v2/[A-Za-z0-9_-]{16,}
+   ```
+
+   The key itself isn't needed there. It is a runtime secret, which the server reads as requests come in, and it is
+   never part of a build, so no bundle can hold it; written into the list it would only be one more plain copy of it.
+   What a build could hold is a key put into an Alchemy URL (`https://base-mainnet.g.alchemy.com/v2/` and the key) at
+   build time, and the line catches that: the deploy then fails, whether the URL is in the browser's bundle or the
+   server's, and prints only the line's number. No build holds one now: the server's Alchemy URLs end at `/v2`, and App
+   Kit's public endpoints are `*.g.alchemy.com/public`. Without a copy of the list, leave this step out.
+
+5. **The pull request that switches a chain on** (not before steps 2 and 3, and not before the Inspector window reads
+   the chain its links carry) adds to `apphosting.yaml`:
 
    ```yaml
    - variable: INSPECT_RPC_KEY
@@ -281,6 +292,11 @@ with `export PROJECT_ID=arcos-c80cf`:
    at a time: `base` here is an example. After the rollout, open https://4rcos.com/t/base/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
    (Base's USDC): it shows a report that names Base, and the Alchemy dashboard shows the requests. To add a chain, add
    its slug to the value (`base,ethereum`); each change is a merge and a rollout.
+
+   No chain may be switched on before the change to the Inspector window (`apps/web/src/apps/inspector/Window.tsx`)
+   that reads the chain from its link has landed. Off Arc, the proof page's "Open in ArcOS" links to
+   `/#app:inspector?chain=<slug>&token=<address>` (`apps/web/src/lib/proof-view.tsx`), and a window that ignores
+   `chain=` inspects that address on Arc instead.
 
 To rotate the key, see [OPERATIONS.md](OPERATIONS.md#the-inspectors-other-chains): add a new version, bump the `@N` pin,
 roll out, and only then revoke the old key and destroy its version.

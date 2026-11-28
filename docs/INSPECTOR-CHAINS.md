@@ -317,8 +317,11 @@ What decided the unknowns and warnings:
 ```sh
 # Each chain through its public RPC:
 npm run test:live -w @arcos/inspector -- chains
-# Through Alchemy: the key in the shell that runs the suite only, never in a file the repo tracks.
-INSPECT_RPC_KEY=... npm run test:live -w @arcos/inspector -- chains
+# Through Alchemy, the key read at a silent prompt (bash, Cloud Shell's shell), never typed into a command line, where
+# shell history would keep it:
+read -rsp 'Alchemy key: ' K; echo; INSPECT_RPC_KEY="$K" npm run test:live -w @arcos/inspector -- chains; unset K
+# ...or from a file of your own outside the repository, readable by you alone (chmod 600):
+INSPECT_RPC_KEY="$(cat ~/.inspect_rpc_key)" npm run test:live -w @arcos/inspector -- chains
 # Any other endpoint, one chain at a time:
 LIVE_RPC_BASE=https://... npm run test:live -w @arcos/inspector -- chains
 ```

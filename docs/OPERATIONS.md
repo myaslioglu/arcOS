@@ -499,8 +499,8 @@ revoked key (Alchemy answers 401, -32600 `Must be authenticated!`) costs one fai
 instance, and every read goes to the public RPC: the pages keep working, on an endpoint that promises no capacity.
 Without the secret, or with the value `none` (as on testnet), only the public RPCs are read.
 
-To rotate the key: create the new one at Alchemy, add it as a new version of the secret
-(`read -rsp 'Key: ' K; echo; printf %s "$K" | gcloud secrets versions add INSPECT_RPC_KEY --project arcos-c80cf --data-file=-; unset K`),
+To rotate the key: create the new one at Alchemy, add it as a new version of the secret (in bash, Cloud Shell's shell:
+`read -rsp 'Key: ' K; echo; printf %s "$K" | gcloud secrets versions add INSPECT_RPC_KEY --project arcos-c80cf --data-file=-; unset K`),
 bump the `@N` pin in `apps/web/apphosting.yaml` and let that merge roll out. Only then delete the old key at Alchemy and
 destroy the old version: an instance resolves its pinned version when it starts, so destroying a version a running
 rollout is pinned to stops new instances from starting.
