@@ -170,7 +170,8 @@ function Form() {
             decimals={decimalsIn}
             symbol={pair.tokenIn}
             // USDC is also Arc's gas token, so "Max" leaves a little of it for the approval and the swap. The platform fee
-            // is taken from what the swap pays out, not added to what it spends, so it doesn't count here.
+            // comes out of the amount in (App Kit takes it from the input token before the trade), not on top of it,
+            // so it doesn't count here.
             max={{ reserveUnits: pair.tokenIn === "USDC" ? ARC_GAS_RESERVE_UNITS : 0n }}
             disabled={sessionActive}
             onMax={setAmountIn}
