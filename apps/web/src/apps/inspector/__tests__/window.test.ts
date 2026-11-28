@@ -383,6 +383,12 @@ describe("Inspector's windows", () => {
     expect(inspector.instanceKey!({ chain: "base", token: "0xAbC" })).toBe("base:0xabc");
   });
 
+  it("never lets an Arc window's token take over another chain's window", () => {
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    expect(inspector.instanceKey!({ token: "base:0xAbC" })).toBe("arc:base:0xabc");
+    expect(inspector.instanceKey!({ chain: "arc", token: "base:0xAbC" })).not.toBe(key("base"));
+  });
+
   it("reads the chain as the window does: Arc however it is spelled, and a refused chain never in Arc's window", () => {
     expect(["arc", "ARC", " Arc "].map(key)).toEqual(["0xabc", "0xabc", "0xabc"]);
     expect(key("")).toBe(":0xabc");

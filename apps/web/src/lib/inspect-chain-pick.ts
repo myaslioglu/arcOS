@@ -83,11 +83,13 @@ export function inspectorChain(slug: string | undefined): InspectChain | null {
  * on Arc, as it always was, whether `chain` is absent, "arc" or "ARC"; the chain's slug and the token on any other chain
  * ("base:0x…"); and the slug as typed, in lower case, for a chain the window refuses ("polygon:0x…", ":0x…" for an empty
  * one). So a token on one chain is one window, and a window that refuses its chain never takes over one with a report.
+ * An Arc token with a ":" in it (a crafted "token=base:0x…", which nothing in the UI makes) is keyed under "arc:", so
+ * it can't take over another chain's window either.
  */
 export function inspectorKey(params: Record<string, string>): string {
   const token = (params.token ?? "").toLowerCase();
   const chain = inspectorChain(params.chain);
-  if (chain?.key === "arc") return token;
+  if (chain?.key === "arc") return token.includes(":") ? `arc:${token}` : token;
   return `${chain ? chain.slug : slugOf(params.chain ?? "")}:${token}`;
 }
 
