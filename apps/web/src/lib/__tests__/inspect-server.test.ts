@@ -4,15 +4,22 @@ import type { ExtraPool, InspectInput, Report, V4PositionIndex } from "@arcos/in
 // A marker module that throws outside a server build.
 vi.mock("server-only", () => ({}));
 
-// The index's answer, and the engine itself: these tests only check what cachedInspection hands the engine.
-const { indexedExtrasFor, inspect } = vi.hoisted(() => ({
+// The index's answer, and the engine itself: these tests only check what cachedInspection hands the engine. The
+// explorer's fetch is the real one, watched for the queue each inspection waits in.
+const { indexedExtrasFor, inspect, explorerFetch } = vi.hoisted(() => ({
   indexedExtrasFor: vi.fn<(token: string) => Promise<{ extraPools: ExtraPool[]; v4Positions?: V4PositionIndex }>>(),
   inspect: vi.fn<(input: InspectInput) => Promise<Report>>(),
+  explorerFetch: vi.fn<(turn: () => Promise<void>, inspection: AbortSignal, fetchFn?: typeof fetch) => typeof fetch>(),
 }));
 vi.mock("../indexed-pools-server", () => ({ indexedExtrasFor }));
-vi.mock("@arcos/inspector", async (original) => ({ ...(await original<typeof import("@arcos/inspector")>()), inspect }));
+vi.mock("@arcos/inspector", async (original) => {
+  const real = await original<typeof import("@arcos/inspector")>();
+  explorerFetch.mockImplementation(real.explorerFetch);
+  return { ...real, inspect, explorerFetch };
+});
 
 import { cachedInspection } from "../inspect-server";
+import { explorerPacer } from "../server-rpc";
 
 const KEY = {
   currency0: "0x0000000000000000000000000000000000000000",
@@ -161,5 +168,28 @@ describe("the gates on uncached inspections", () => {
     await expect(cachedInspection(fresh(), "base")).rejects.toMatchObject({ name: "InspectorBusy" });
     release();
     await Promise.all([...arc, ...base]);
+  });
+});
+
+describe("the explorer's queues", () => {
+  let n = 0;
+  /** A fresh address per call: the report cache is one per process, for every case in this file. */
+  const fresh = () => `0x00000000000000000000000000000000000d${(++n).toString(16).padStart(4, "0")}` as `0x${string}`;
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  // The PRO API's limit is per key, so every chain's explorer reads share one pacer; Arc's must never wait behind theirs.
+  it("puts Arc's explorer reads in the pacer's first queue, and the other chains' in its second", async () => {
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base,ethereum");
+    indexedExtrasFor.mockResolvedValue({ extraPools: [] });
+    inspect.mockResolvedValue({ degraded: false } as Report);
+    explorerFetch.mockClear();
+    await cachedInspection(fresh());
+    await cachedInspection(fresh(), "base");
+    await cachedInspection(fresh(), "ethereum");
+    const { high, low } = explorerPacer();
+    expect(explorerFetch).toHaveBeenCalledTimes(3);
+    expect(explorerFetch.mock.calls.map(([turn]) => (turn === high ? "high" : turn === low ? "low" : "neither"))).toEqual(["high", "low", "low"]);
   });
 });

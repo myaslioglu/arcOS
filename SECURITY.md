@@ -190,7 +190,7 @@ The Inspector reads Ethereum, Base, Arbitrum One and OP Mainnet only from the si
   for these chains have a daily budget per server instance ([docs/OPERATIONS.md](docs/OPERATIONS.md#the-inspectors-other-chains)).
   Walking many addresses costs a client its turns, not the site's quota. At most 4 uncached inspections of these chains
   run at once in an instance, in a gate apart from Arc's 8, so that walk can fill these chains' gate but never takes one
-  of Arc's slots.
+  of Arc's slots, and its explorer reads wait behind Arc's, which always get the next turn first.
 
 ## Connecting a phone wallet
 

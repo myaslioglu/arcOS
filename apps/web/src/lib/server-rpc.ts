@@ -3,7 +3,7 @@ import { defineChain, type PublicClient } from "viem";
 import { activeChain, activeNetwork, arcInspectChain, type InspectChain } from "@arcos/chain";
 import { arcOutOfGasIsNodeAnswer, endpointHealth, inspectionClient, outOfGasIsNodeAnswerFor } from "@arcos/inspector";
 import { processGlobal } from "./process-global";
-import { perSecond } from "./rate-limit";
+import { perSecond, type PacedTurns } from "./rate-limit";
 import { inspectRpcEndpoints } from "./rpc-urls";
 
 /**
@@ -46,11 +46,14 @@ export function inspectRpcClient(chain: InspectChain): PublicClient {
 
 /**
  * The explorer pacer every server route shares, one per process: at most 4 explorer requests start in any second
- * (Blockscout's free tier allows 5). Inspections and Revoke's lookups wait their turn in the same queue, and Revoke
- * runs only a couple of lookups at once (see approvals-server.ts), so it can't crowd inspections out.
+ * (Blockscout's free tier allows 5), whichever chain they read, since the PRO API's limit is per key. It has two queues
+ * over that one window (`perSecond`). What reads Arc waits in `high`: inspections and Revoke's lookups, in one queue as
+ * before there were other chains, and Revoke runs only a couple of lookups at once (see approvals-server.ts), so it can't
+ * crowd inspections out. Inspections of the other chains wait in `low`, which gets a turn only when nothing of Arc's
+ * waits, so a burst of them never puts Arc's reads behind theirs.
  */
-export function explorerPacer(): () => Promise<void> {
-  return processGlobal("inspect.explorerPacer", () => perSecond(4));
+export function explorerPacer(): PacedTurns {
+  return processGlobal("inspect.explorerQueues", () => perSecond(4));
 }
 
 /**
