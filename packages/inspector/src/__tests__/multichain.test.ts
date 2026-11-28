@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { UNISWAP_V4, inspectChain, type DexConfig } from "@arcos/chain";
+import { UNISWAP_V4, UNSCANNED_V4, inspectChain, type DexConfig } from "@arcos/chain";
 import {
   ADMIN_SLOT, BEACON_SLOT, IMPL_SLOT, ZEPPELINOS_ADMIN_SLOT, ZEPPELINOS_IMPL_SLOT, checkHolders, checkLiquidity, checkLpLock, checkTrade, checkVerified, findPools,
   type SourcifyAnswers,
@@ -212,8 +212,9 @@ describe("holders off Arc", () => {
       { address: UNSEEN, isContract: true, name: null, value: pool },
       ...Array.from({ length: wallets }, (_, i) => ({ address: wallet(i), isContract: false, name: null, value: each })),
     ];
+    // Hooked v4 pools aren't named: every v4 pool's tokens are the PoolManager's, never a row of their own.
     const why = (noCode: string) =>
-      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee, Slipstream pools from other factories and pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold ${noCode}.`;
+      `Excludes burn addresses, liquidity pools and known lock contracts. On Base, Inspector doesn't yet read Slipstream pools from other factories and pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold ${noCode}.`;
     expect(checkHolders(input, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toEqual({
       id: "holders",
       status: "warn",
@@ -229,6 +230,13 @@ describe("holders off Arc", () => {
     expect(checkHolders(input, { holders: holders(100n, 60n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", title: "Top 10 wallets hold 64%", fixAppId: "vesting" });
     // A chain that reads every kind of pool it has, as Arc does, fails on the contract's share too, as before.
     expect(checkHolders({ ...input, unscanned: [] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail", detail: "Excludes burn addresses, liquidity pools and known lock contracts." });
+    // So does one whose only unseen pools are hooked v4 pools: none of them can be the contract.
+    expect(checkHolders({ ...input, unscanned: [UNSCANNED_V4] }, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null)).toMatchObject({ status: "fail" });
+    // Ethereum's entry, as registered: other DEXes are all a contract among the holders may be.
+    const ethereum = { ...input, ...chainInput(inspectChain("mainnet", "ethereum")!), dex: baseLike };
+    expect(checkHolders(ethereum, { holders: holders(600n, 10n), complete: true }, 1_000n, scan, null).detail).toBe(
+      "Excludes burn addresses, liquidity pools and known lock contracts. On Ethereum, Inspector doesn't yet read pools on other DEXes, so a contract among these holders may be one of those pools. The ones with no code hold 9%.",
+    );
   });
 });
 

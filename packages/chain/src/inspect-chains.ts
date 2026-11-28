@@ -155,8 +155,12 @@ const V3_FEE_TIERS = [100, 500, 3000, 10000];
 /** Slipstream's tick spacings on Base and OP Mainnet, as both factories' `tickSpacings()` answered them, sorted. */
 const SLIPSTREAM_TICK_SPACINGS = [1, 10, 50, 100, 200, 2000];
 
-/** Where a chain's discovery stops, besides what a chain adds of its own. No index lists hooked v4 pools off Arc. */
-const UNSCANNED_V4 = "Uniswap v4 pools with a hook or an unusual fee";
+/**
+ * Where a chain's discovery stops, besides what a chain adds of its own. No index lists hooked v4 pools off Arc. A v4
+ * pool holds none of its tokens itself, the PoolManager holds them all, so holder concentration, which leaves the
+ * PoolManager out, never names these among the pools a holder may be (`checkHolders` in @arcos/inspector).
+ */
+export const UNSCANNED_V4 = "Uniswap v4 pools with a hook or an unusual fee";
 const UNSCANNED_OTHER_DEXES = "pools on other DEXes";
 const UNSCANNED_OTHER_SLIPSTREAM = "Slipstream pools from other factories";
 
