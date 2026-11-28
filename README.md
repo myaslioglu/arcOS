@@ -290,8 +290,12 @@ Inspector can also read Ethereum, Base, Arbitrum One and OP Mainnet, each once i
 (`NEXT_PUBLIC_INSPECT_CHAINS`, [docs/DEPLOYING.md](docs/DEPLOYING.md#the-inspectors-other-chains)). Until then their
 pages answer 404. Their reports come from the site's server: `/t/<chain>/<address>`, `/badge/<chain>/<address>` and
 `/api/inspect/<chain>/<address>`, where `<chain>` is `ethereum`, `base`, `arbitrum` or `optimism`. Arc's links don't
-change: `/t/<address>` is Arc's, and `/t/arc/<address>` redirects to it. The nine checks are the same. What differs is
-below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table and what was measured.
+change: `/t/<address>` is Arc's, and `/t/arc/<address>` redirects to it. Once a chain is on, the Inspector window has a
+Chain picker (a pasted Etherscan, Basescan, Arbiscan, Blockscout or Uniswap link picks it too), Ctrl K offers a pasted
+address on every chain the site reads, and the Terminal takes `inspect <address> base` or `inspect base:0x…`. The
+window asks the site's server for those chains' reports, the same reports the proof page and the badge show. Radar,
+Watchdog, Finder and the token index stay Arc's. The nine checks are the same. What differs is below;
+[docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table and what was measured.
 
 - Source verification asks Blockscout and Sourcify. Either one saying verified is a pass, and a proxy needs the code it
   runs verified too, by either. Both saying "not verified" reads "couldn't check", not a fail: Inspector doesn't read
@@ -598,11 +602,11 @@ below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table a
 
 ## Event counts
 
-The site counts a few of its own events (an inspection, a mint, a drop, a swap, a bridge, a revoke, the name of a Terminal
-command) so its maker can see what is used. The page sends each one's name and a few small values to `/api/event`, which
-writes one line to the host's logs. There are no cookies and no third-party script, and the line holds no address, IP
-address or user agent and nothing typed past a command's name. It says how often something happens, not who did it. The
-details are in [SECURITY.md](./SECURITY.md#event-counts).
+The site counts a few of its own events (an inspection and the chain it read, a mint, a drop, a swap, a bridge, a
+revoke, a watch, the name of a Terminal command) so its maker can see what is used. The page sends each one's name and a
+few small values to `/api/event`, which writes one line to the host's logs. There are no cookies and no third-party
+script, and the line holds no address, IP address or user agent and nothing typed past a command's name. It says how
+often something happens, not who did it. The details are in [SECURITY.md](./SECURITY.md#event-counts).
 
 ## How Stats counts
 

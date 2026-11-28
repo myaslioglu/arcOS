@@ -6,28 +6,46 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Report } from "@arcos/inspector";
 
 /**
- * The Inspector window's "Watch with Watchdog" button: it opens the Watchdog app on the report's token through the
- * desktop, never by importing the app, and only on the mainnet site. The report comes from a React Query stub, so
- * nothing here reads the chain, and the address is a test fixture.
+ * The Inspector window: its "Watch with Watchdog" button, which opens the Watchdog app on the report's token through the
+ * desktop, never by importing the app, and only on the mainnet site; and its chain picker, which shows once the site
+ * reads a chain besides Arc. The report comes from a React Query stub (which keeps the query's options, so a test can
+ * run its queryFn), so nothing here reads the chain, and the addresses are test fixtures.
  */
 
+/** React Query's context, as the window's queryFn reads it: its signal ends when the window closes. */
+type QueryContext = { signal: AbortSignal };
+type Query = { queryKey: unknown[]; enabled: boolean; queryFn: (context?: QueryContext) => Promise<unknown> };
 const state = vi.hoisted(() => ({
   report: undefined as Report | undefined,
+  error: null as unknown,
+  query: undefined as Query | undefined,
   open: vi.fn<(appId: string, params?: Record<string, string>) => boolean>(() => true),
+  notify: vi.fn<(message: string, kind?: string) => void>(),
+  setTitle: vi.fn<(winId: string, title: string) => void>(),
   trackEvent: vi.fn<(name: string, props?: Record<string, string | number>) => void>(),
+  // Arc's inspection, which runs in the browser: it answers the report the test set.
+  inspect: vi.fn(async () => state.report),
 }));
 vi.mock("wagmi", () => ({ usePublicClient: () => undefined }));
-vi.mock("@tanstack/react-query", () => ({ useQuery: () => ({ data: state.report, error: null }) }));
-vi.mock("@arcos/inspector", () => ({ NotAContract: class NotAContract extends Error {}, inspect: vi.fn() }));
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: (options: Query) => {
+    state.query = options;
+    return { data: state.report, error: state.error };
+  },
+}));
+vi.mock("@arcos/inspector", () => ({ NotAContract: class NotAContract extends Error {}, inspect: state.inspect, DEADLINE_MS: 15_000 }));
 vi.mock("@arcos/shell", () => ({
-  useDesktop: () => ({ open: state.open, notify: vi.fn(), setTitle: vi.fn() }),
+  useDesktop: () => ({ open: state.open, notify: state.notify, setTitle: state.setTitle }),
   useDropTarget: () => ({ over: false, props: {} }),
   dropParams: (item: { address: string }) => ({ token: item.address }),
 }));
 vi.mock("@/lib/indexed-pools", () => ({ fetchIndexedExtras: vi.fn(async () => ({ extraPools: [] })) }));
+vi.mock("@/lib/inspect-input", () => ({ inspectInput: vi.fn(() => ({})) }));
 vi.mock("@/lib/analytics", () => ({ trackEvent: state.trackEvent }));
 
 import InspectorWindow from "../Window";
+import { inspector } from "../manifest";
+import { BUSY, ServerReportError } from "../server-report";
 
 const TOKEN = "0x470f09ae20163d5e243f6530fb328912a8fcb099";
 const report = {
@@ -49,10 +67,18 @@ const render = () => renderToStaticMarkup(createElement(InspectorWindow, props))
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "mainnet");
   state.report = report;
+  state.error = null;
+  state.query = undefined;
   state.open.mockClear();
+  state.notify.mockClear();
+  state.setTitle.mockClear();
   state.trackEvent.mockClear();
+  state.inspect.mockClear();
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 describe("Inspector's Watch with Watchdog button", () => {
   it("stands next to Share proof page on the mainnet site", () => {
@@ -84,5 +110,306 @@ describe("Inspector's Watch with Watchdog button", () => {
     expect(state.open).toHaveBeenCalledWith("watchdog", { token: TOKEN });
     await act(async () => root.unmount());
     host.remove();
+  });
+});
+
+/** The window mounted for real, for clicks and typing; `done` unmounts it. */
+async function mounted(params: Record<string, string>) {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  await act(async () => root.render(createElement(InspectorWindow, { winId: "w-1", params })));
+  return {
+    host,
+    button: (text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === text)!,
+    done: async () => {
+      await act(async () => root.unmount());
+      host.remove();
+    },
+  };
+}
+
+/** What typing or pasting `value` into an input does: React reads the input event. */
+function type(input: HTMLInputElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const onBase = {
+  ...report,
+  address: BASE_USDC,
+  chain: "base",
+  chainId: 8453,
+  token: { name: "USD Coin", symbol: "USDC", decimals: 6, totalSupply: "1000" },
+  findings: [{ id: "holders", status: "fail", title: "Top 10 wallets hold 80%", detail: "Excludes pools.", evidenceUrl: null, fixAppId: "vesting" }],
+  blockNumber: "1",
+  generatedAt: "2026-11-28T00:00:00.000Z",
+} as unknown as Report;
+
+describe("Inspector while the site reads Arc alone", () => {
+  it("has no chain picker, Arc's placeholder and Arc's footer, on mainnet with the flag unset", () => {
+    const html = render();
+    expect(html).not.toContain("<select");
+    expect(html).toContain('placeholder="0x3600000000000000000000000000000000000000"');
+    expect(html).not.toContain("Read by the ArcOS server");
+  });
+
+  it("keeps Arc's query and title, and counts the inspection with its chain, Arc", async () => {
+    const view = await mounted({ token: TOKEN });
+    expect(state.query?.queryKey).toEqual(["inspect", 5042, TOKEN.toLowerCase()]);
+    expect(state.setTitle).toHaveBeenLastCalledWith("w-1", "Inspector — WDG");
+    // Arc's inspection never reads React Query's signal, so closing its window lets it run on into the cache, as before.
+    let signalRead = false;
+    const context = {
+      get signal() {
+        signalRead = true;
+        return new AbortController().signal;
+      },
+    };
+    await expect(state.query!.queryFn(context)).resolves.toBe(report);
+    expect(signalRead).toBe(false);
+    expect(state.trackEvent).toHaveBeenCalledTimes(1);
+    expect(state.trackEvent).toHaveBeenCalledWith("inspect_run", { passed: 0, total: 0, chain: "arc" });
+    await view.done();
+  });
+
+  it("says a chain it doesn't read is not read here, and never inspects the address on Arc instead", () => {
+    const html = renderToStaticMarkup(createElement(InspectorWindow, { winId: "w-1", params: { chain: "base", token: BASE_USDC } }));
+    expect(html).toContain("Inspector doesn&#x27;t read Base on this site.");
+    expect(state.query?.enabled).toBe(false);
+    const upper = renderToStaticMarkup(createElement(InspectorWindow, { winId: "w-1", params: { chain: "ETHEREUM", token: BASE_USDC } }));
+    expect(upper).toContain("Inspector doesn&#x27;t read Ethereum on this site.");
+    const other = renderToStaticMarkup(createElement(InspectorWindow, { winId: "w-1", params: { chain: "<b>x</b>", token: BASE_USDC } }));
+    expect(other).toContain("Inspector doesn&#x27;t read that chain on this site.");
+    expect(other).not.toContain("<b>x</b>");
+  });
+
+  it("leaves the input empty when it refuses the chain, so one click on Inspect can't read the address on Arc", async () => {
+    state.report = undefined;
+    const view = await mounted({ chain: "base", token: BASE_USDC });
+    expect(view.host.querySelector("input")!.value).toBe("");
+    await act(async () => view.button("Inspect").click());
+    expect(state.notify).toHaveBeenCalledWith("That isn't an address.", "warn");
+    expect(state.open).not.toHaveBeenCalled();
+    await view.done();
+  });
+});
+
+describe("Inspector once the site reads other chains", () => {
+  beforeEach(() => vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base"));
+
+  it("offers a Chain picker, Arc first, on the mainnet site only", () => {
+    state.report = undefined;
+    const html = render();
+    expect(html).toMatch(/<select[^>]*aria-label="Chain"[^>]*>(?:<option value="arc"[^>]*>Arc<\/option>)<option value="base">Base<\/option><\/select>/);
+    vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", "testnet");
+    expect(render()).not.toContain("<select");
+  });
+
+  it("reads another chain's report from this site's server, and counts it with its chain", async () => {
+    state.report = undefined;
+    const fetchFn = vi.fn<typeof fetch>(async () => Response.json(onBase));
+    vi.stubGlobal("fetch", fetchFn);
+    const view = await mounted({ chain: "base", token: BASE_USDC });
+    expect(view.host.textContent).toContain("Asking the ArcOS server…");
+    expect(view.host.textContent).not.toContain("Read by the ArcOS server");
+    expect(state.query?.queryKey).toEqual(["inspect", 8453, BASE_USDC.toLowerCase()]);
+    expect(state.query?.enabled).toBe(true);
+    const open = new AbortController();
+    await expect(state.query!.queryFn({ signal: open.signal })).resolves.toMatchObject({ chain: "base", address: BASE_USDC });
+    expect(fetchFn).toHaveBeenCalledWith(`/api/inspect/base/${BASE_USDC}`, { headers: { accept: "application/json" }, signal: expect.any(AbortSignal) });
+    // Counted from the findings it shows: one, a fail.
+    expect(state.trackEvent).toHaveBeenCalledWith("inspect_run", { passed: 0, total: 1, chain: "base" });
+    await view.done();
+  });
+
+  it("ends the server's request with the window, and counts no inspection the window let go of", async () => {
+    state.report = undefined;
+    // A fetch that ends with its signal, as the browser's does.
+    const fetchFn = vi.fn<typeof fetch>(
+      (_input, init) => new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true })),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+    const view = await mounted({ chain: "base", token: BASE_USDC });
+    const closed = new AbortController();
+    const pending = state.query!.queryFn({ signal: closed.signal });
+    closed.abort();
+    await expect(pending).rejects.toBe(closed.signal.reason);
+    expect(fetchFn.mock.lastCall![1]!.signal!.aborted).toBe(true);
+    // An answer that comes anyway, after the window let the request go (a browser without AbortSignal.any).
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => Response.json(onBase)));
+    const late = new AbortController();
+    late.abort();
+    await state.query!.queryFn({ signal: late.signal }).catch(() => null);
+    expect(state.trackEvent).not.toHaveBeenCalled();
+    await view.done();
+  });
+
+  it("shows another chain's report with its name, its explorers and the server's footer, and no Watchdog or fix button", async () => {
+    state.report = onBase;
+    const view = await mounted({ chain: "base", token: BASE_USDC });
+    const text = view.host.textContent!;
+    expect(state.setTitle).toHaveBeenLastCalledWith("w-1", "Inspector — USDC - Base");
+    expect(text).toContain("Open on Basescan");
+    // When the server read it, as the proof page says it: a report can be older than the server's own 5 minutes.
+    expect(text).toContain("Read by the ArcOS server. Read at block 1 · 2026-11-28 00:00 UTC.");
+    expect(text).not.toContain("minutes");
+    expect(text).toContain("Automated analysis, not investment advice.");
+    expect(text).not.toContain("Watch with Watchdog");
+    expect(text).not.toContain("Vest in Vesting");
+    const links = [...view.host.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(links).toContain(`https://base.blockscout.com/token/${BASE_USDC}`);
+    expect(links).toContain(`https://basescan.org/token/${BASE_USDC}`);
+    expect((view.host.querySelector("select") as HTMLSelectElement).value).toBe("base");
+    await view.done();
+  });
+
+  it("shares the chain's proof page", async () => {
+    state.report = onBase;
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const view = await mounted({ chain: "base", token: BASE_USDC });
+    await act(async () => view.button("Share proof page").click());
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/t/base/${BASE_USDC}`);
+    await view.done();
+  });
+
+  it("keeps Arc's report Arc's: the Watchdog button, the fix button and the bare proof link", async () => {
+    state.report = { ...report, findings: [{ id: "holders", status: "fail", title: "Top 10 wallets hold 80%", detail: "x", evidenceUrl: null, fixAppId: "vesting" }] } as unknown as Report;
+    const view = await mounted({ token: TOKEN });
+    expect(view.host.textContent).toContain("Watch with Watchdog");
+    expect(view.host.textContent).toContain("Vest in Vesting");
+    expect(view.host.textContent).not.toContain("Read by the ArcOS server");
+    await view.done();
+  });
+
+  it("counts an inspection on Arc with its chain, Arc", async () => {
+    const view = await mounted({ token: TOKEN });
+    await expect(state.query!.queryFn()).resolves.toBe(report);
+    expect(state.trackEvent).toHaveBeenCalledWith("inspect_run", { passed: 0, total: 0, chain: "arc" });
+    await view.done();
+  });
+
+  it("leaves the input empty when it refuses the chain, and keeps the address when it reads it", async () => {
+    state.report = undefined;
+    let view = await mounted({ chain: "ethereum", token: BASE_USDC });
+    expect(view.host.textContent).toContain("Inspector doesn't read Ethereum on this site.");
+    expect(view.host.querySelector("input")!.value).toBe("");
+    expect((view.host.querySelector("select") as HTMLSelectElement).value).toBe("arc");
+    await act(async () => view.button("Inspect").click());
+    expect(state.notify).toHaveBeenCalledWith("That isn't an address.", "warn");
+    expect(state.open).not.toHaveBeenCalled();
+    await view.done();
+    view = await mounted({ chain: "base", token: BASE_USDC });
+    expect(view.host.querySelector("input")!.value).toBe(BASE_USDC);
+    await view.done();
+  });
+
+  it("fills the address and picks the chain from a pasted link, then opens that chain's Inspector", async () => {
+    state.report = undefined;
+    const view = await mounted({});
+    const input = view.host.querySelector("input")!;
+    const select = view.host.querySelector("select") as HTMLSelectElement;
+    await act(async () => type(input, `https://basescan.org/token/${BASE_USDC}`));
+    expect(input.value).toBe(BASE_USDC);
+    expect(select.value).toBe("base");
+    expect(input.getAttribute("placeholder")).toBe(BASE_USDC);
+    await act(async () => view.button("Inspect").click());
+    expect(state.open).toHaveBeenCalledWith("inspector", { chain: "base", token: BASE_USDC });
+    await view.done();
+  });
+
+  it("opens a bare address on the chain picked, and Arc's as it always has", async () => {
+    state.report = undefined;
+    const view = await mounted({});
+    const input = view.host.querySelector("input")!;
+    const select = view.host.querySelector("select") as HTMLSelectElement;
+    await act(async () => type(input, TOKEN));
+    await act(async () => view.button("Inspect").click());
+    expect(state.open).toHaveBeenLastCalledWith("inspector", { token: TOKEN });
+    await act(async () => {
+      select.value = "base";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => view.button("Inspect").click());
+    expect(state.open).toHaveBeenLastCalledWith("inspector", { chain: "base", token: TOKEN });
+    await view.done();
+  });
+
+  it("says so when a link names a chain the site doesn't read, and opens nothing", async () => {
+    state.report = undefined;
+    const view = await mounted({});
+    const input = view.host.querySelector("input")!;
+    await act(async () => type(input, `https://etherscan.io/token/${BASE_USDC}`));
+    await act(async () => view.button("Inspect").click());
+    expect(state.notify).toHaveBeenCalledWith("Inspector doesn't read Ethereum on this site.", "warn");
+    expect(state.open).not.toHaveBeenCalled();
+    await view.done();
+  });
+
+  it("says so when a link is the testnet's, rather than read the address on mainnet's Arc", async () => {
+    state.report = undefined;
+    const view = await mounted({});
+    const input = view.host.querySelector("input")!;
+    const select = view.host.querySelector("select") as HTMLSelectElement;
+    const link = `https://testnet.4rcos.com/t/${BASE_USDC}`;
+    await act(async () => type(input, link));
+    expect(input.value).toBe(link);
+    expect(select.value).toBe("arc");
+    await act(async () => view.button("Inspect").click());
+    expect(state.notify).toHaveBeenCalledWith("Inspector doesn't read Arc Testnet on this site.", "warn");
+    expect(state.open).not.toHaveBeenCalled();
+    await view.done();
+  });
+
+  it("words the server's refusals in the window's own words, and anything else as the network", () => {
+    state.report = undefined;
+    const html = () => renderToStaticMarkup(createElement(InspectorWindow, { winId: "w-1", params: { chain: "base", token: BASE_USDC } }));
+    state.error = new ServerReportError(BUSY);
+    expect(html()).toContain("Inspector is busy. Try again in a few seconds.");
+    state.error = new Error("https://node.example/v2/secret");
+    expect(html()).toContain("Couldn&#x27;t reach the network. Try again.");
+    expect(html()).not.toContain("node.example");
+  });
+});
+
+describe("Inspector's windows", () => {
+  const key = (chain?: string) => inspector.instanceKey!({ ...(chain === undefined ? {} : { chain }), token: "0xAbC" });
+
+  it("keeps one per token on Arc, keyed as it always was, and one per token on each other chain", () => {
+    expect(inspector.instanceKey!({ token: "0xAbC" })).toBe("0xabc");
+    expect(inspector.instanceKey!({ chain: "arc", token: "0xAbC" })).toBe("0xabc");
+    expect(inspector.instanceKey!({ chain: "base", token: "0xAbC" })).toBe("base:0xabc");
+  });
+
+  it("never lets an Arc window's token take over another chain's window", () => {
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    expect(inspector.instanceKey!({ token: "base:0xAbC" })).toBe("arc:base:0xabc");
+    expect(inspector.instanceKey!({ chain: "arc", token: "base:0xAbC" })).not.toBe(key("base"));
+  });
+
+  it("reads the chain as the window does: Arc however it is spelled, and a refused chain never in Arc's window", () => {
+    expect(["arc", "ARC", " Arc "].map(key)).toEqual(["0xabc", "0xabc", "0xabc"]);
+    expect(key("")).toBe(":0xabc");
+    expect(key("Polygon")).toBe("polygon:0xabc");
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    expect(["base", "BASE", " base "].map(key)).toEqual(["base:0xabc", "base:0xabc", "base:0xabc"]);
+  });
+
+  it("agrees with the window on every input: Arc's key where it reads Arc, the chain's where it reads that chain", () => {
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base");
+    state.report = undefined;
+    const token = BASE_USDC.toLowerCase();
+    for (const chain of [undefined, "arc", "ARC", " arc ", "", " ", "base", "Base", "ethereum", "polygon", "constructor"]) {
+      const params = { ...(chain === undefined ? {} : { chain }), token };
+      renderToStaticMarkup(createElement(InspectorWindow, { winId: "w-1", params }));
+      // The chain id the window's query reads: Arc's, Base's, or none for a chain it refuses.
+      const read = state.query!.queryKey[1];
+      const got = inspector.instanceKey!(params);
+      expect(got === token, JSON.stringify(chain)).toBe(read === 5042);
+      expect(got === `base:${token}`, JSON.stringify(chain)).toBe(read === 8453);
+      expect(read === undefined, JSON.stringify(chain)).toBe(got !== token && got !== `base:${token}`);
+    }
   });
 });
