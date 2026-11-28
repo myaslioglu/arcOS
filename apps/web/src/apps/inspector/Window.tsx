@@ -9,7 +9,7 @@ import { NotAContract, inspect } from "@arcos/inspector";
 import { dropParams, useDesktop, useDropTarget, type AppProps } from "@arcos/shell";
 import { fetchIndexedExtras } from "@/lib/indexed-pools";
 import { inspectInput } from "@/lib/inspect-input";
-import { anyChainName, chainName, inspectorParams, pickToken, readsOtherChains, siteChainBySlug, siteInspectChains } from "@/lib/inspect-chain-pick";
+import { chainName, inspectorParams, notReadHere, pickToken, readsOtherChains, siteChainBySlug, siteInspectChains } from "@/lib/inspect-chain-pick";
 import { trackEvent } from "@/lib/analytics";
 import { shortAddress } from "@/lib/format";
 import { NAME_DISCLOSURE, passLine } from "@/lib/proof";
@@ -95,7 +95,7 @@ export default function InspectorWindow({ winId, params }: AppProps) {
       return open("inspector", { token: value });
     }
     const picked = pickToken(value);
-    if (picked.kind === "elsewhere") return notify(`Inspector doesn't read ${anyChainName(picked.chain)} on this site.`, "warn");
+    if (picked.kind === "elsewhere") return notify(notReadHere(picked.name), "warn");
     if (picked.kind === "none") return notify("That isn't an address.", "warn");
     const target = picked.chain ?? siteChainBySlug(draftChain) ?? arcInspectChain(activeNetwork());
     // A bare address keeps what was typed, as it always has; a link gives the address it names.

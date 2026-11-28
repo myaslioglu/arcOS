@@ -267,6 +267,21 @@ describe("Inspector once the site reads other chains", () => {
     await view.done();
   });
 
+  it("says so when a link is the testnet's, rather than read the address on mainnet's Arc", async () => {
+    state.report = undefined;
+    const view = await mounted({});
+    const input = view.host.querySelector("input")!;
+    const select = view.host.querySelector("select") as HTMLSelectElement;
+    const link = `https://testnet.4rcos.com/t/${BASE_USDC}`;
+    await act(async () => type(input, link));
+    expect(input.value).toBe(link);
+    expect(select.value).toBe("arc");
+    await act(async () => view.button("Inspect").click());
+    expect(state.notify).toHaveBeenCalledWith("Inspector doesn't read Arc Testnet on this site.", "warn");
+    expect(state.open).not.toHaveBeenCalled();
+    await view.done();
+  });
+
   it("words the server's refusals in the window's own words, and anything else as the network", () => {
     state.report = undefined;
     const html = () => renderToStaticMarkup(createElement(InspectorWindow, { winId: "w-1", params: { chain: "base", token: BASE_USDC } }));

@@ -158,12 +158,53 @@ describe("inspect", () => {
     expect(s.opened).toEqual([{ appId: "inspector", params: { token: OTHER } }]);
   });
 
-  it("names a chain the site doesn't read rather than open the address on Arc", async () => {
-    const s = setup();
-    expect(await texts(`inspect ${OTHER} base`, s.env)).toEqual(["Inspector doesn't read base on this site. Chains: arc."]);
-    expect(await texts(`inspect base:${OTHER}`, s.env)).toEqual(["Inspector doesn't read Base on this site."]);
-    expect(await texts(`inspect ${OTHER} arc`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
-    expect(s.opened).toEqual([{ appId: "inspector", params: { token: OTHER } }]);
+  // The site reads Arc alone on the testnet site, whatever the flag says, and on the mainnet site with the flag unset.
+  describe.each([
+    ["testnet", "ethereum,base,arbitrum,optimism"],
+    ["mainnet", undefined],
+  ])("while the %s site reads Arc alone (flag %s)", (network, flag) => {
+    beforeEach(() => {
+      vi.stubEnv("NEXT_PUBLIC_ARC_NETWORK", network);
+      vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", flag ?? "");
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("reads an address only, as it always has: a link or a chain prefix isn't one", async () => {
+      const s = setup();
+      for (const text of [
+        `base:${OTHER}`,
+        `arc:${OTHER}`,
+        `eip155:5042:${OTHER}`,
+        `eip155:5042002:${OTHER}`,
+        `https://explorer.arc.io/token/${OTHER}`,
+        `https://explorer.testnet.arc.io/token/${OTHER}`,
+        `https://4rcos.com/t/${OTHER}`,
+        `https://testnet.4rcos.com/t/${OTHER}`,
+        `https://basescan.org/token/${OTHER}`,
+      ]) {
+        expect(await texts(`inspect ${text}`, s.env), text).toEqual(["That isn't an address."]);
+      }
+      expect(s.opened).toEqual([]);
+    });
+
+    it("refuses a chain other than Arc named after the address, by the registry's name, and ignores any other word", async () => {
+      const s = setup();
+      expect(await texts(`inspect ${OTHER} base`, s.env)).toEqual(["Inspector doesn't read Base on this site."]);
+      expect(await texts(`inspect ${OTHER} ETH`, s.env)).toEqual(["Inspector doesn't read Ethereum on this site."]);
+      expect(await texts(`inspect ${OTHER} optimism extra`, s.env)).toEqual(["Inspector doesn't read OP Mainnet on this site."]);
+      expect(s.opened).toEqual([]);
+      expect(await texts(`inspect ${OTHER} arc`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+      expect(await texts(`inspect ${OTHER} ARC`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+      expect(await texts(`inspect ${OTHER} foo`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+      expect(await texts(`inspect ${OTHER} constructor`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+      expect(s.opened).toEqual(Array.from({ length: 4 }, () => ({ appId: "inspector", params: { token: OTHER } })));
+    });
+
+    it("keeps its usage and help line", async () => {
+      const s = setup();
+      expect(await texts("inspect", s.env)).toEqual(["Usage: inspect <address>"]);
+      expect((await texts("help", s.env))[2]).toBe("inspect <address>        Opens Inspector on a token");
+    });
   });
 });
 
@@ -198,11 +239,38 @@ describe("inspect, once the site reads other chains", () => {
 
   it("refuses a chain the site doesn't read, and two chains at once, opening nothing", async () => {
     const s = setup();
-    expect(await texts(`inspect ${OTHER} ethereum`, s.env)).toEqual(["Inspector doesn't read ethereum on this site. Chains: arc, base."]);
+    expect(await texts(`inspect ${OTHER} ethereum`, s.env)).toEqual(["Inspector doesn't read Ethereum on this site. Chains: arc, base."]);
+    expect(await texts(`inspect ${OTHER} eth`, s.env)).toEqual(["Inspector doesn't read Ethereum on this site. Chains: arc, base."]);
     expect(await texts(`inspect eth:${OTHER}`, s.env)).toEqual(["Inspector doesn't read Ethereum on this site."]);
     expect(await texts(`inspect base:${OTHER} arc`, s.env)).toEqual(["That names two chains."]);
     expect(await texts(`inspect ${OTHER} ${"x".repeat(40)}`, s.env)).toEqual([`Inspector doesn't read ${"x".repeat(32)}… on this site. Chains: arc, base.`]);
+    expect(await texts(`inspect ${OTHER} constructor`, s.env)).toEqual(["Inspector doesn't read constructor on this site. Chains: arc, base."]);
+    expect(await texts(`inspect constructor:${OTHER}`, s.env)).toEqual(["That isn't an address."]);
     expect(s.opened).toEqual([]);
+  });
+
+  it("takes after the address the names the prefix takes", async () => {
+    vi.stubEnv("NEXT_PUBLIC_INSPECT_CHAINS", "base,ethereum,optimism");
+    const s = setup();
+    expect(await texts(`inspect ${BASE_USDC} eth`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on Ethereum."]);
+    expect(await texts(`inspect ${BASE_USDC} OETH`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on OP Mainnet."]);
+    expect(await texts(`inspect eth:${BASE_USDC} ethereum`, s.env)).toEqual(["Opened Inspector for 0x8335…2913 on Ethereum."]);
+    expect(s.opened).toEqual([
+      { appId: "inspector", params: { chain: "ethereum", token: BASE_USDC } },
+      { appId: "inspector", params: { chain: "optimism", token: BASE_USDC } },
+      { appId: "inspector", params: { chain: "ethereum", token: BASE_USDC } },
+    ]);
+  });
+
+  it("refuses a link or chain id of Arc's other network, never reading the address on mainnet's Arc", async () => {
+    const s = setup();
+    for (const text of [`https://testnet.4rcos.com/t/${OTHER}`, `https://explorer.testnet.arc.io/token/${OTHER}`, `eip155:5042002:${OTHER}`]) {
+      expect(await texts(`inspect ${text}`, s.env), text).toEqual(["Inspector doesn't read Arc Testnet on this site."]);
+    }
+    expect(s.opened).toEqual([]);
+    expect(await texts(`inspect https://4rcos.com/t/${OTHER}`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+    expect(await texts(`inspect eip155:5042:${OTHER}`, s.env)).toEqual(["Opened Inspector for 0x2222…2222."]);
+    expect(s.opened).toEqual(Array.from({ length: 2 }, () => ({ appId: "inspector", params: { token: OTHER } })));
   });
 });
 

@@ -59,4 +59,10 @@ describe("quickActions once the site reads other chains", () => {
     expect(quickActions("mint")).toEqual([]);
     expect(quickActions("0x123")).toEqual([]);
   });
+
+  it("offers nothing for a link or chain id of the testnet, never the address on mainnet's Arc", () => {
+    expect(quickActions(`https://testnet.4rcos.com/t/${BASE_USDC}`)).toEqual([]);
+    expect(quickActions(`https://explorer.testnet.arc.io/token/${BASE_USDC}`)).toEqual([]);
+    expect(quickActions(`eip155:5042002:${BASE_USDC}`)).toEqual([]);
+  });
 });

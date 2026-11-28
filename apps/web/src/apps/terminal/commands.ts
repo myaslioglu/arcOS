@@ -2,7 +2,18 @@ import { formatGwei, getAddress, isAddress, type Address } from "viem";
 import { explorerUrl, formatUsdc } from "@arcos/chain";
 import { roadmapEntries, type AppManifest, type ThemePreference } from "@arcos/shell/core";
 import { shortAddress } from "@/lib/format";
-import { anyChainName, chainName, inspectorParams, pickToken, siteChainBySlug, siteInspectChains } from "@/lib/inspect-chain-pick";
+import {
+  anyChainName,
+  chainName,
+  chainNamed,
+  inspectorParams,
+  notReadHere,
+  pickToken,
+  readsOtherChains,
+  siteChain,
+  siteInspectChains,
+  type PickedToken,
+} from "@/lib/inspect-chain-pick";
 
 /** One line of the scrollback. `href` is only ever an explorer link this module built from a checked address. */
 export type Line = { kind: "in" | "out" | "err"; text: string; href?: string };
@@ -79,24 +90,41 @@ type Command = {
   run: (args: string[], env: TermEnv) => Outcome | Promise<Outcome>;
 };
 
+/** An address as `inspect` has always read one, naming no chain: what it reads while the site reads Arc alone. */
+const bareAddress = (text: string): PickedToken => (address(text) ? { kind: "token", address: text, chain: null } : { kind: "none" });
+
 /**
- * `inspect <address> [chain]`, `inspect base:0x…`, or a pasted explorer or Uniswap link. The chain is one this site reads
- * (Arc unless another is named); a chain it doesn't read is said by name, never inspected on Arc instead. While the site
- * reads Arc alone, its usage and answers are the ones it always had.
+ * `inspect <address> [chain]`, `inspect base:0x…`, or a pasted explorer, Uniswap or proof-page link. The chain is one this
+ * site reads (Arc unless another is named); a chain it doesn't read is said by name, never inspected on Arc instead. The
+ * chain after the address takes the names the prefix does ("base", "eth").
+ *
+ * While the site reads Arc alone, the usage is `inspect <address>` and only an address is read, as before there were
+ * other chains: a link or `base:0x…` is "That isn't an address." One answer differs: a chain other than Arc named after
+ * the address (`inspect 0x… base`) is refused, where it used to be ignored and the address opened on Arc. Anything else
+ * after the address is ignored, as it always was.
  */
 function inspectCommand(args: string[], env: TermEnv): Outcome {
   const chains = siteInspectChains();
+  const others = readsOtherChains();
   const listed = `Chains: ${chains.map((c) => c.slug).join(", ")}.`;
-  if (!args[0]) return err(chains.length > 1 ? `Usage: inspect <address> [chain]. ${listed}` : "Usage: inspect <address>");
-  const picked = pickToken(args[0]);
+  if (!args[0]) return err(others ? `Usage: inspect <address> [chain]. ${listed}` : "Usage: inspect <address>");
+  const picked = others ? pickToken(args[0]) : bareAddress(args[0]);
   if (picked.kind === "none") return err(NOT_AN_ADDRESS);
-  if (picked.kind === "elsewhere") return err(`Inspector doesn't read ${anyChainName(picked.chain)} on this site.`);
+  if (picked.kind === "elsewhere") return err(notReadHere(picked.name));
   let chain = picked.chain;
   if (args[1] !== undefined) {
-    const named = siteChainBySlug(args[1]);
-    if (!named) return err(`Inspector doesn't read ${echo(args[1])} on this site. ${listed}`);
-    if (chain && chain.key !== named.key) return err("That names two chains.");
-    chain = named;
+    const key = chainNamed(args[1]);
+    const named = key ? siteChain(key) : null;
+    if (named) {
+      if (chain && chain.key !== named.key) return err("That names two chains.");
+      chain = named;
+    } else if (key) {
+      // A chain the registry knows, by the registry's name ("Ethereum"), as the window says it.
+      return err(others ? `${notReadHere(anyChainName(key))} ${listed}` : notReadHere(anyChainName(key)));
+    } else if (others) {
+      return err(`${notReadHere(echo(args[1]))} ${listed}`);
+    }
+    // While the site reads Arc alone, a word after the address that names no chain is ignored, as it always was.
   }
   const target = chain ?? chains[0]!;
   const token = getAddress(picked.address);
@@ -133,7 +161,7 @@ const COMMANDS: Command[] = [
     name: "inspect",
     // The chain argument is offered once the site reads a chain besides Arc.
     get usage() {
-      return siteInspectChains().length > 1 ? "inspect <address> [chain]" : "inspect <address>";
+      return readsOtherChains() ? "inspect <address> [chain]" : "inspect <address>";
     },
     about: "Opens Inspector on a token",
     run: inspectCommand,

@@ -17,10 +17,15 @@ settings and the owner's steps are in [DEPLOYING.md](DEPLOYING.md#the-inspectors
   `/t/arc/<address>`, `/badge/arc/<address>` and `/api/inspect/arc/<address>` redirect to them permanently (308).
 - In the browser, a chain switched on appears in the Inspector window's Chain picker (mainnet only), in Ctrl K (a bare
   address is offered on every chain the site reads, Arc's first; a pasted link on the chain it names) and in the
-  Terminal (`inspect <address> base`, `inspect base:0x…`). Until one is on, the window, Ctrl K and the Terminal look and
-  answer as they always have. The window reads these chains through `/api/inspect/<slug>/<address>`, shows the chain's
-  name and its other explorer, offers no Watchdog or Vault and Vesting buttons (they are Arc's), and shares
-  `/t/<slug>/<address>`.
+  Terminal (`inspect <address> base`, `inspect base:0x…`). A link or chain id of Arc's other network (a
+  `testnet.4rcos.com` link on the mainnet site) is refused, never read on this one. Until a chain is on, the window,
+  Ctrl K and the Terminal read a pasted address only, as before, and three things differ from then: the Terminal
+  refuses a chain other than Arc named after the address (`inspect 0x… base`: "Inspector doesn't read Base on this
+  site."), where it ignored it and opened the address on Arc; a window opened with a `chain` other than Arc's
+  (`#app:inspector?chain=base&token=0x…`) says it doesn't read that chain, where it inspected the address on Arc; and
+  the `inspect_run` count carries the chain ("arc"). Ctrl K is unchanged. The window reads these chains through
+  `/api/inspect/<slug>/<address>`, shows the chain's name and its other explorer, offers no Watchdog or Vault and
+  Vesting buttons (they are Arc's), and shares `/t/<slug>/<address>`.
 - Switch on one chain at a time. Watch the provider's dashboard and the explorer budget for a few days before the next.
 
 ## Where the reads go
