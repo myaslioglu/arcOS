@@ -303,10 +303,11 @@ below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table a
 - "No pool found" and "thin liquidity" are never warnings there. Each chain has pools the scan can't see: hooked or
   unusual-fee v4 pools, which no index lists off Arc, pools on other DEXes, and on Base and OP Mainnet the Slipstream
   pools of other factories. So those answers read "couldn't check" and name what wasn't read.
-- The liquidity lock check passes a token when at least 95% of its deepest Uniswap v2 pair's LP is burned, with no
-  deeper pool of another kind beside it, as on Arc. Anything else reads "couldn't check": no lock contract is recognized
-  on these chains yet, so LP that isn't burned may sit in one. It never fails a token there. Uniswap v4 positions aren't
-  read; the position index is Arc's.
+- The liquidity lock check never passes or fails a token there: it reads "couldn't check". A Uniswap v2 pair whose LP is
+  at least 95% burned passes on Arc, but each of these chains has pools the scan can't see (above), and one of them may
+  hold more than the pair, however deep the pair is, so the detail names what wasn't read. LP that isn't burned may sit
+  in a lock contract, and none is recognized on these chains yet. Uniswap v4 positions aren't read; the position index
+  is Arc's.
 - The trade check trades in pools against USDC only. Its simulator gets its USDC through a state override of USDC's
   balance (storage slot 9 on all four chains). Pools against USDT, WETH or ETH and the classic pools are never traded
   through, but a liquid or undecided one keeps a pass to a warning, as a hooked or EURC pool does on Arc.
@@ -562,7 +563,8 @@ below; [docs/INSPECTOR-CHAINS.md](docs/INSPECTOR-CHAINS.md) has the full table a
   - Source verification never fails a token, since Etherscan isn't read: a contract verified only on Etherscan reads
     "couldn't check", and so does one verified nowhere.
   - No lock contract is recognized, so LP in a locker reads "couldn't check", the same as LP in a wallet. A fail needs a
-    vetted list of each chain's lockers.
+    vetted list of each chain's lockers. Burned LP reads "couldn't check" too, since a pool the scan can't see may hold
+    more: a pass needs those pools read.
   - Holder concentration counts an exchange's hot wallet or a bridge like any wallet. On a large token they can fill
     the top ten.
   - Explorer reads come out of the same Blockscout plan as Arc's server pages, Revoke and the indexer. Each server

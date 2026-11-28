@@ -207,14 +207,70 @@ describe("lp-lock off Arc, where no lock contracts are vetted", () => {
     const { input, scan } = await scanOf(reads, over);
     return checkLpLock(input, scan);
   };
+  /** The same on a chain that reads every kind of pool there is: Base's entry with nothing unscanned. */
+  const lpLockEverywhere = async (reads: Record<string, unknown>) => {
+    const input = onBase(fakeChain({ reads: { ...noPools(baseLike), ...reads } }), { unscanned: [] });
+    return checkLpLock(input, await findPools(input));
+  };
+  const BASE_UNSCANNED =
+    "On Base, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee, Slipstream pools from other factories and pools on other DEXes, so a deeper pool there can't be ruled out.";
 
-  it("passes a v2 pair against WETH whose LP is burned: a share of LP needs no price", async () => {
-    expect(await lpLock(pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n }))).toMatchObject({
+  it("never passes a burned v2 pair where the chain has pools it can't see: one of them may hold more", async () => {
+    expect(await lpLock(pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n }))).toEqual({
+      id: "lp-lock",
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: `100% of the v2 LP supply can't be withdrawn. ${BASE_UNSCANNED}`,
+      evidenceUrl: `https://base.blockscout.com/token/${PAIR}?tab=holders`,
+      fixAppId: null,
+    });
+  });
+
+  it("passes a burned v2 pair against WETH on a chain that reads every kind of pool: a share of LP needs no price", async () => {
+    expect(await lpLockEverywhere(pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n }))).toMatchObject({
       status: "pass",
       title: "Liquidity is burned or locked",
       detail: "100% of the v2 LP supply can't be withdrawn.",
       evidenceUrl: `https://base.blockscout.com/token/${PAIR}?tab=holders`,
     });
+  });
+
+  it("can't pass a token on a tiny burned pair beside a market the scan can't see, on Ethereum, however deep the pair", async () => {
+    // One Uniswap v2 USDC pair holding 50 USDC, its LP all at 0xdead; the token's real market is on another DEX or in a
+    // hooked v4 pool, which Ethereum's scan doesn't read. Liquidity says a deeper pool can't be ruled out, and so does lp-lock.
+    const ethereum = inspectChain("mainnet", "ethereum")!;
+    const [ethUsdc, ethUsdt, ethWeth] = ethereum.dex!.quoteTokens;
+    const dex: DexConfig = { quoteTokens: [ethUsdc!, ethUsdt!, ethWeth!], v2Factory: V2, v3Factory: V3, v3FeeTiers: [3000], v4: UNISWAP_V4 };
+    const onEthereum = async (usdc: bigint) => {
+      const chain = fakeChain({
+        reads: {
+          ...noPools(dex),
+          [readKey(V2, "getPair", [TOKEN, ethUsdc!.address])]: PAIR,
+          ...v2PairReads(PAIR, ethUsdc!.address, TOKEN, usdc),
+          [readKey(PAIR, "totalSupply", [])]: 100n,
+          [readKey(PAIR, "balanceOf", [NATIVE])]: 0n,
+          [readKey(PAIR, "balanceOf", [DEAD])]: 100n,
+        },
+      });
+      const input: InspectInput = { ...chainInput(ethereum), dex, address: TOKEN, network: "mainnet", reader: chain, explorer: null };
+      const scan = await findPools(input);
+      return { lpLock: await checkLpLock(input, scan), liquidity: checkLiquidity(input, scan) };
+    };
+    const unscanned = "On Ethereum, Inspector doesn't yet read Uniswap v4 pools with a hook or an unusual fee and pools on other DEXes, so a deeper pool there can't be ruled out.";
+    const tiny = await onEthereum(50n * USDC_UNITS);
+    expect(tiny.liquidity).toMatchObject({ status: "unknown", detail: `Deepest pool holds 50 USDC. ${unscanned}` });
+    expect(tiny.lpLock).toEqual({
+      id: "lp-lock",
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: `100% of the v2 LP supply can't be withdrawn. ${unscanned}`,
+      evidenceUrl: `https://eth.blockscout.com/token/${PAIR}?tab=holders`,
+      fixAppId: null,
+    });
+    // A deep pair is no exception: a pool the scan can't see may be deeper still.
+    const deep = await onEthereum(5_000_000n * USDC_UNITS);
+    expect(deep.liquidity).toMatchObject({ status: "pass" });
+    expect(deep.lpLock).toMatchObject({ status: "unknown", detail: `100% of the v2 LP supply can't be withdrawn. ${unscanned}` });
   });
 
   it("never fails LP that isn't burned: it may sit in a lock contract nobody vetted", async () => {
@@ -245,10 +301,24 @@ describe("lp-lock off Arc, where no lock contracts are vetted", () => {
 
   it("ranks pools against the same unpriced quote by their depth, as it ranks dollars", async () => {
     const burned = pair(PAIR, WETH, 5n * ONE_WETH, { supply: 100n, burned: 100n });
-    expect(await lpLock({ ...burned, ...v3Pool(WETH, ONE_WETH) })).toMatchObject({ status: "pass" });
+    // The shallower v3 pool is no rival: on Base it is what Base doesn't read that keeps the pair from passing.
+    expect(await lpLockEverywhere({ ...burned, ...v3Pool(WETH, ONE_WETH) })).toMatchObject({ status: "pass" });
+    expect(await lpLock({ ...burned, ...v3Pool(WETH, ONE_WETH) })).toMatchObject({ status: "unknown", detail: `100% of the v2 LP supply can't be withdrawn. ${BASE_UNSCANNED}` });
+    // A deeper one is said first, as the pool that may hold more.
     expect(await lpLock({ ...burned, ...v3Pool(WETH, 9n * ONE_WETH) })).toMatchObject({
       status: "unknown",
       detail: "The deepest pool is a Uniswap v3 position, which can't be read without an index yet.",
+    });
+  });
+
+  it("says it doesn't read who holds a deeper classic pool's liquidity, as a plain ERC-20 it is, not a position", async () => {
+    expect(await lpLock({ ...pair(PAIR, USDC, 2_000n * USDC_UNITS, { supply: 100n, burned: 100n }), ...classicPool(USDC, 10_000n * USDC_UNITS) })).toEqual({
+      id: "lp-lock",
+      status: "unknown",
+      title: "Couldn't check liquidity locks",
+      detail: "The deepest pool is an Aerodrome classic pool, and Inspector doesn't read who holds the liquidity in it yet.",
+      evidenceUrl: null,
+      fixAppId: null,
     });
   });
 
@@ -417,6 +487,12 @@ describe("Arc, untouched by any of it", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+
+  it("still passes a burned v2 pair on Arc, which reads every kind of pool it has", async () => {
+    const chain = fakeChain({ reads: { ...noPools(baseLike), ...pair(PAIR, USDC, 5_000n * USDC_UNITS, { supply: 100n, burned: 100n }) } });
+    const input = { ...arcFields("mainnet"), address: TOKEN, network: "mainnet", reader: chain, explorer: null, dex: baseLike, knownLockers: [], explorerBase: "https://explorer.arc.io" } as InspectInput;
+    expect(await checkLpLock(input, await findPools(input))).toMatchObject({ status: "pass", title: "Liquidity is burned or locked", detail: "100% of the v2 LP supply can't be withdrawn." });
   });
 
   it("passes an unscanned-free registry entry, so 'no pool' and 'thin' stay what they were", () => {

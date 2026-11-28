@@ -60,9 +60,10 @@
  *   (no evidence to compute a locked share from), or less than 95% of it is burned or locked on a chain whose lock
  *   contracts aren't vetted (`lockersVetted`), where the rest may sit in one. A pool or pair whose depth can't be set
  *   against the judged pair's (one is against a currency with no dollar rate yet, WETH) may be the deeper one: unknown
- *   too, as are v2 pairs against both kinds of quote, since which holds the most can't be told. One thing it doesn't
- *   see, as before: a wallet's token-only range in a Uniswap v3 or Aerodrome pool beside a burned v2 pair holds no quote,
- *   so the pair still passes.
+ *   too, as are v2 pairs against both kinds of quote, since which holds the most can't be told. So is a burned pair,
+ *   however deep, on a chain with pools discovery can't see (`unscanned`: every chain but Arc), since one of those may
+ *   hold more: there lp-lock never passes. One thing it doesn't see, as before: a wallet's token-only range in a Uniswap
+ *   v3 or Aerodrome pool beside a burned v2 pair holds no quote, so the pair still passes.
  * - lp-lock with the position index adds WARNINGS for Uniswap v4 liquidity, and nothing else: never a pass, never a
  *   fail (`tallyLiquidity`, lp-path.ts, `lpLockByPath`). Every pass, every fail and every unknown is the old check's,
  *   and so are its words, but for one thing. Three of its unknowns say positions "can't be read without an index yet"
@@ -1595,10 +1596,10 @@ type Unread = { kind: "only"; versions: PoolVersion[] } | { kind: "rival"; versi
 
 /**
  * lp-lock without the position index: only Uniswap v2 has LP tokens to count, and a pool of another kind that may hold
- * more than the pair keeps a burned pair from passing. This is the check as it stood before the index, kept for the
- * inspections that have none (testnet, a browser that couldn't fetch it) and for a token with no v2 or v4 pool. Its
- * finding is word for word what it always said; `unread` says which positions an unknown rests on (`Unread`), null for
- * every other answer.
+ * more than the pair keeps a burned pair from passing, as do the pools a chain's discovery can't see (`unscanned`). This
+ * is the check as it stood before the index, kept for the inspections that have none (testnet, a browser that couldn't
+ * fetch it, every chain but Arc) and for a token with no v2 or v4 pool. On Arc its finding is word for word what it
+ * always said; `unread` says which positions an unknown rests on (`Unread`), null for every other answer.
  */
 async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<{ finding: Finding; unread: Unread | null }> {
   const venue = venueNames(input.dex);
@@ -1659,11 +1660,22 @@ async function lpLockWithoutIndex(input: InspectInput, scan: PoolScan): Promise<
         unread: null,
       };
     }
+    // A classic pool's LP is a plain ERC-20, not a position: what isn't read there is who holds it, as where no v2 pair is
+    // found. No index reads it either, so that unknown rests on no `Unread` positions.
+    if (rival?.version === "solidly") {
+      return { finding: unknown(`The deepest pool is ${article(venue.solidly)} ${venue.solidly} pool, and Inspector doesn't read who holds the liquidity in it yet.`), unread: null };
+    }
     const detail = rival
       ? `The deepest pool is ${article(venue[rival.version])} ${venue[rival.version]} position, which can't be read without an index yet.`
       : "A Uniswap v4 pool that may hold more than this v2 pair sits beside it, and positions in it can't be read without an index yet.";
     const unread: Unread = rival ? { kind: "rival", version: rival.version } : { kind: "v4-rival" };
     return { finding: unknown(detail), unread };
+  }
+  // Where the chain has pools discovery can't see (`unscanned`), one of them may hold more than this pair, burned or not,
+  // however deep the pair is: "no deeper pool" is no more a claim there than "thin" is (see `checkLiquidity`).
+  const unscanned = pct >= 95 ? unscannedNote(input, "a deeper pool") : null;
+  if (unscanned) {
+    return { finding: unknown(`${formatPct(pct)} of the v2 LP supply can't be withdrawn. ${unscanned}`, { evidenceUrl: url }), unread: null };
   }
   // "Isn't locked" says nothing holds it but wallets, so it needs the chain's lock contracts to be known (`lockersVetted`,
   // true on Arc). Where they aren't, LP that isn't burned may still sit in one.
